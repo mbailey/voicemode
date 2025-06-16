@@ -269,13 +269,22 @@ async def startup_initialization():
     logger.info("Service initialization complete")
 
 
-def get_tts_config(provider: Optional[str] = None, voice: Optional[str] = None, model: Optional[str] = None, instructions: Optional[str] = None):
+async def get_tts_config(provider: Optional[str] = None, voice: Optional[str] = None, model: Optional[str] = None, instructions: Optional[str] = None):
     """Get TTS configuration based on provider selection"""
     # Auto-detect provider based on voice if not specified
     if provider is None and voice:
         provider_info = get_provider_by_voice(voice)
         if provider_info:
             provider = provider_info["id"]
+    
+    # If no provider specified and PREFER_LOCAL is true, try local first
+    if provider is None and PREFER_LOCAL:
+        # Check if Kokoro is available
+        if await is_provider_available("kokoro"):
+            provider = "kokoro"
+            logger.info("Auto-selected Kokoro (local) as TTS provider")
+        else:
+            provider = "openai"
     
     # Default to environment configuration
     if provider is None:
@@ -318,6 +327,40 @@ def get_tts_config(provider: Optional[str] = None, voice: Optional[str] = None, 
             'voice': voice or provider_info.get("default_voice", TTS_VOICE),
             'instructions': instructions  # Pass through instructions for OpenAI
         }
+
+
+async def get_stt_config(provider: Optional[str] = None):
+    """Get STT configuration based on provider selection"""
+    # If no provider specified and PREFER_LOCAL is true, try local first
+    if provider is None and PREFER_LOCAL:
+        # Check if Whisper is available
+        if await is_provider_available("whisper-local"):
+            provider = "whisper-local"
+            logger.info("Auto-selected Whisper.cpp (local) as STT provider")
+        else:
+            provider = "openai-whisper"
+    
+    # Default to environment configuration
+    if provider is None:
+        # If STT_BASE_URL is set to something other than OpenAI, assume local
+        if STT_BASE_URL and "openai.com" not in STT_BASE_URL:
+            provider = "whisper-local"
+        else:
+            provider = "openai-whisper"
+    
+    # Get provider info from registry
+    provider_info = PROVIDERS.get(provider)
+    if not provider_info:
+        logger.warning(f"Unknown STT provider: {provider}, falling back to OpenAI")
+        provider = "openai-whisper"
+        provider_info = PROVIDERS["openai-whisper"]
+    
+    return {
+        'client_key': 'stt',
+        'base_url': provider_info.get("base_url", STT_BASE_URL),
+        'model': STT_MODEL,  # All providers use whisper-1 compatible model
+        'provider': provider
+    }
 
 
 def validate_emotion_request(tts_model: Optional[str], tts_instructions: Optional[str], tts_provider: Optional[str]) -> Optional[str]:
@@ -682,7 +725,7 @@ async def converse(
                 async with audio_operation_lock:
                     # Validate emotion request
                     validated_instructions = validate_emotion_request(tts_model, tts_instructions, tts_provider)
-                    tts_config = get_tts_config(tts_provider, voice, tts_model, validated_instructions)
+                    tts_config = await get_tts_config(tts_provider, voice, tts_model, validated_instructions)
                     success, tts_metrics = await text_to_speech(
                         text=message,
                         openai_clients=openai_clients,
@@ -734,7 +777,7 @@ async def converse(
                     tts_start = time.perf_counter()
                     # Validate emotion request
                     validated_instructions = validate_emotion_request(tts_model, tts_instructions, tts_provider)
-                    tts_config = get_tts_config(tts_provider, voice, tts_model, validated_instructions)
+                    tts_config = await get_tts_config(tts_provider, voice, tts_model, validated_instructions)
                     tts_success, tts_metrics = await text_to_speech(
                         text=message,
                         openai_clients=openai_clients,

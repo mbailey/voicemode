@@ -230,6 +230,7 @@ When LiveKit is configured, voice-mcp can automatically select the best transpor
 | `TTS_VOICE` | Voice for text-to-speech | `alloy` |
 | `TTS_MODEL` | TTS model to use | `tts-1` |
 | `STT_MODEL` | STT model to use | `whisper-1` |
+| `VOICE_MCP_PREFER_LOCAL` | Prefer local providers when available | `true` |
 | `LIVEKIT_URL` | LiveKit server URL | None |
 | `LIVEKIT_API_KEY` | LiveKit API key | None |
 | `LIVEKIT_API_SECRET` | LiveKit API secret | None |
@@ -257,6 +258,16 @@ export STT_BASE_URL="http://localhost:2022/v1"
 export TTS_BASE_URL="http://localhost:8880/v1"
 export TTS_VOICE="af_sky"
 ```
+
+### Automatic Provider Selection
+
+When `VOICE_MCP_PREFER_LOCAL=true` (default), voice-mcp automatically uses local services when available:
+
+- **Kokoro TTS** at `localhost:8880` - Used automatically if running
+- **Whisper.cpp** at `localhost:2022` - Used automatically if running
+- Falls back to OpenAI services if local providers are not available
+
+This means you can simply start Kokoro or Whisper.cpp and voice-mcp will use them without any configuration changes!
 
 ### API Routing and Proxies
 
