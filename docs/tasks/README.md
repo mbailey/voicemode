@@ -2,9 +2,9 @@
 
 ## High Priority
 
-- [ ] Provider Registry System - Unified configuration with provider metadata (cost, latency, privacy, features)
+- [x] Provider Registry System - Basic implementation with provider metadata and selection logic
 - [ ] Save Transcriptions - Add text saving alongside audio recordings in voice-mcp/transcriptions/
-- [ ] Fix existing status tools to use unified backend (kokoro_status, etc.)
+- [ ] Enhance provider registry with cost/latency/privacy metadata
 
 ## Medium Priority
 
@@ -29,6 +29,8 @@
 
 ## Recently Completed
 
+- [x] Provider Registry MVP - Basic registry with availability checking and selection logic
+- [x] Update default voices - alloy for OpenAI, af_sky for Kokoro
 - [x] Unified voice service status tool
 - [x] Auto-start Kokoro functionality
 - [x] Fixed health check endpoints for whisper.cpp and Kokoro
