@@ -181,6 +181,9 @@ AUTO_START_KOKORO = os.getenv("VOICE_MCP_AUTO_START_KOKORO", "").lower() in ("tr
 ALLOW_EMOTIONS = os.getenv("VOICE_ALLOW_EMOTIONS", "false").lower() in ("true", "1", "yes", "on")
 EMOTION_AUTO_UPGRADE = os.getenv("VOICE_EMOTION_AUTO_UPGRADE", "false").lower() in ("true", "1", "yes", "on")
 
+# Local provider preference configuration
+PREFER_LOCAL = os.getenv("VOICE_MCP_PREFER_LOCAL", "true").lower() in ("true", "1", "yes", "on")
+
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is required")
 
@@ -1615,6 +1618,63 @@ def main():
     logger.info(f"TTS: {TTS_BASE_URL} (model: {TTS_MODEL}, voice: {TTS_VOICE})")
     logger.info(f"LiveKit: {LIVEKIT_URL}")
     logger.info(f"Sample Rate: {SAMPLE_RATE}Hz")
+    
+    # Display startup voice status
+    async def display_startup_status():
+        """Display voice services status at startup"""
+        try:
+            await startup_initialization()
+            
+            # Check provider availability
+            statuses = []
+            
+            # Check local providers
+            if await is_provider_available("kokoro"):
+                statuses.append("✅ Kokoro TTS (local)")
+            else:
+                statuses.append("❌ Kokoro TTS (local)")
+            
+            if await is_provider_available("whisper.cpp"):
+                statuses.append("✅ Whisper.cpp STT (local)")
+            else:
+                statuses.append("❌ Whisper.cpp STT (local)")
+            
+            # Check cloud providers
+            if await is_provider_available("openai"):
+                statuses.append("✅ OpenAI (cloud)")
+            else:
+                statuses.append("❌ OpenAI (cloud)")
+            
+            # LiveKit check
+            try:
+                from livekit import api
+                import aiohttp
+                livekit_url = LIVEKIT_URL.replace('ws://', 'http://').replace('wss://', 'https://')
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"{livekit_url}/health", timeout=aiohttp.ClientTimeout(total=2)) as resp:
+                        if resp.status == 200:
+                            statuses.append("✅ LiveKit")
+                        else:
+                            statuses.append("❌ LiveKit")
+            except:
+                statuses.append("❌ LiveKit")
+            
+            logger.info("Voice Services: " + " | ".join(statuses))
+            
+            # Show local preference status
+            if PREFER_LOCAL:
+                logger.info("Local Provider Preference: ENABLED (will use local services when available)")
+            else:
+                logger.info("Local Provider Preference: DISABLED (will use cloud services)")
+                
+        except Exception as e:
+            logger.debug(f"Could not display startup status: {e}")
+    
+    # Run startup status check
+    try:
+        asyncio.run(display_startup_status())
+    except Exception as e:
+        logger.debug(f"Startup status check skipped: {e}")
     
     # Register cleanup handler
     def sync_cleanup():
