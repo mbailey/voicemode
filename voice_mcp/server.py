@@ -1560,7 +1560,7 @@ async def list_tts_voices(provider: Optional[str] = None) -> str:
 
 
 @mcp.prompt
-def voice_chat() -> str:
+def converse() -> str:
     """Start an interactive voice conversation.
     
     This prompt provides instructions for having a natural voice conversation
