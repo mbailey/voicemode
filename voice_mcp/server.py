@@ -1559,6 +1559,38 @@ async def list_tts_voices(provider: Optional[str] = None) -> str:
     return "\n".join(results)
 
 
+@mcp.prompt
+def voice_chat(
+    duration: int = 20,
+    voice: str = "alloy",
+    brief_responses: bool = True
+) -> str:
+    """Start an interactive voice conversation with customizable settings.
+    
+    This prompt provides instructions for having a natural voice conversation
+    using the voice-mcp tools. It's based on the voice-chat command.
+    
+    Args:
+        duration: How long to listen for responses (in seconds)
+        voice: TTS voice to use (e.g., 'alloy', 'nova', 'af_sky')
+        brief_responses: Whether to keep responses concise
+    
+    Returns:
+        Instructions for the LLM to conduct a voice conversation
+    """
+    instructions = [
+        "Using tools from voice-mcp, have an ongoing two-way conversation",
+        "End the chat when the user indicates they want to end it"
+    ]
+    
+    if brief_responses:
+        instructions.append("Keep your utterances brief unless a longer response is requested or necessary")
+    
+    instructions.append(f"Use voice '{voice}' and listen for up to {duration} seconds per response")
+    
+    return "\n".join(f"- {instruction}" for instruction in instructions)
+
+
 async def cleanup():
     """Cleanup function to close HTTP clients and resources"""
     await cleanup_clients(openai_clients)
