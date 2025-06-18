@@ -492,6 +492,46 @@ async def speech_to_text(audio_data: np.ndarray, save_audio: bool = False, audio
                 logger.error(f"Failed to clean up MP3 file: {e}")
 
 
+def play_audio_feedback(frequency: float, duration: float, volume: float = 0.3):
+    """Play a simple audio feedback tone"""
+    try:
+        # Generate a simple sine wave tone
+        sample_rate = SAMPLE_RATE
+        t = np.linspace(0, duration, int(sample_rate * duration), False)
+        wave = np.sin(2 * np.pi * frequency * t) * volume
+        
+        # Apply fade in/out to avoid clicks
+        fade_samples = int(sample_rate * 0.01)  # 10ms fade
+        if len(wave) > 2 * fade_samples:
+            wave[:fade_samples] *= np.linspace(0, 1, fade_samples)
+            wave[-fade_samples:] *= np.linspace(1, 0, fade_samples)
+        
+        # Convert to int16 for playback
+        wave_int16 = (wave * 32767).astype(np.int16)
+        
+        # Play the tone
+        sd.play(wave_int16, sample_rate)
+        sd.wait()
+        
+    except Exception as e:
+        # Don't fail the recording if audio feedback fails
+        logger.debug(f"Audio feedback failed: {e}")
+
+
+def play_recording_start_chime():
+    """Play a subtle chime to indicate recording has started"""
+    # Two ascending tones
+    play_audio_feedback(800, 0.1)  # First tone: 800Hz for 100ms
+    play_audio_feedback(1000, 0.1)  # Second tone: 1000Hz for 100ms
+
+
+def play_recording_end_chime():
+    """Play a subtle chime to indicate recording has ended"""
+    # Two descending tones
+    play_audio_feedback(1000, 0.1)  # First tone: 1000Hz for 100ms
+    play_audio_feedback(800, 0.1)  # Second tone: 800Hz for 100ms
+
+
 def record_audio(duration: float) -> np.ndarray:
     """Record audio from microphone"""
     logger.info(f"🎤 Recording audio for {duration}s...")
@@ -510,6 +550,9 @@ def record_audio(duration: float) -> np.ndarray:
     original_stderr = sys.stderr
     
     try:
+        # Play start chime to indicate recording is beginning
+        play_recording_start_chime()
+        
         samples_to_record = int(duration * SAMPLE_RATE)
         logger.debug(f"Recording {samples_to_record} samples...")
         
@@ -520,6 +563,9 @@ def record_audio(duration: float) -> np.ndarray:
             dtype=np.int16
         )
         sd.wait()
+        
+        # Play end chime to indicate recording has finished
+        play_recording_end_chime()
         
         flattened = recording.flatten()
         logger.info(f"✓ Recorded {len(flattened)} samples")
