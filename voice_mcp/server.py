@@ -184,6 +184,9 @@ EMOTION_AUTO_UPGRADE = os.getenv("VOICE_EMOTION_AUTO_UPGRADE", "false").lower() 
 # Local provider preference configuration
 PREFER_LOCAL = os.getenv("VOICE_MCP_PREFER_LOCAL", "true").lower() in ("true", "1", "yes", "on")
 
+# Microphone configuration
+MICROPHONE_CHIMES = os.getenv("VOICE_MCP_MICROPHONE_CHIMES", "true").lower() in ("true", "1", "yes", "on")
+
 if not OPENAI_API_KEY:
     raise ValueError("OPENAI_API_KEY is required")
 
@@ -550,8 +553,9 @@ def record_audio(duration: float) -> np.ndarray:
     original_stderr = sys.stderr
     
     try:
-        # Play start chime to indicate recording is beginning
-        play_recording_start_chime()
+        # Play start chime to indicate recording is beginning (if enabled)
+        if MICROPHONE_CHIMES:
+            play_recording_start_chime()
         
         samples_to_record = int(duration * SAMPLE_RATE)
         logger.debug(f"Recording {samples_to_record} samples...")
@@ -564,8 +568,9 @@ def record_audio(duration: float) -> np.ndarray:
         )
         sd.wait()
         
-        # Play end chime to indicate recording has finished
-        play_recording_end_chime()
+        # Play end chime to indicate recording has finished (if enabled)
+        if MICROPHONE_CHIMES:
+            play_recording_end_chime()
         
         flattened = recording.flatten()
         logger.info(f"✓ Recorded {len(flattened)} samples")

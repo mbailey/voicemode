@@ -141,6 +141,9 @@ export VOICE_MCP_DEBUG="true"
 
 # Save all audio (TTS output and STT input)
 export VOICE_MCP_SAVE_AUDIO="true"
+
+# Microphone settings
+export VOICE_MCP_MICROPHONE_CHIMES="true"  # Enable/disable recording chimes (default: true)
 ```
 
 ## Local STT/TTS Services
