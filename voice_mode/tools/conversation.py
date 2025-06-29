@@ -1169,7 +1169,7 @@ async def converse(
     logger.info(f"Converse: '{message[:50]}{'...' if len(message) > 50 else ''}' (wait_for_response: {wait_for_response})")
     
     # Check if FFmpeg is available
-    ffmpeg_available = getattr(config, 'FFMPEG_AVAILABLE', True)  # Default to True if not set
+    ffmpeg_available = getattr(voice_mode.config, 'FFMPEG_AVAILABLE', True)  # Default to True if not set
     if not ffmpeg_available:
         from ..utils.ffmpeg_check import get_install_instructions
         error_msg = (
