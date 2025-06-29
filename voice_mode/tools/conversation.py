@@ -1168,6 +1168,18 @@ async def converse(
     """
     logger.info(f"Converse: '{message[:50]}{'...' if len(message) > 50 else ''}' (wait_for_response: {wait_for_response})")
     
+    # Check if FFmpeg is available
+    ffmpeg_available = getattr(config, 'FFMPEG_AVAILABLE', True)  # Default to True if not set
+    if not ffmpeg_available:
+        from ..utils.ffmpeg_check import get_install_instructions
+        error_msg = (
+            "FFmpeg is required for voice features but is not installed.\n\n"
+            f"{get_install_instructions()}\n\n"
+            "Voice features cannot work without FFmpeg."
+        )
+        logger.error(error_msg)
+        return f"❌ Error: {error_msg}"
+    
     # Run startup initialization if needed
     await startup_initialization()
     
