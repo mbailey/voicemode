@@ -20,7 +20,11 @@ def main():
     """Run the VoiceMode MCP server."""
     from .config import setup_logging, EVENT_LOG_ENABLED, EVENT_LOG_DIR
     from .utils import initialize_event_logger
+    from .utils.ffmpeg_check import ensure_ffmpeg_or_exit
     from pathlib import Path
+    
+    # Check FFmpeg before setting up logging so the message is visible
+    ensure_ffmpeg_or_exit()
     
     # Set up logging
     logger = setup_logging()

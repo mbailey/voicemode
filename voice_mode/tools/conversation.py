@@ -524,17 +524,26 @@ async def _speech_to_text_internal(
         
         # Convert WAV to target format for upload
         logger.debug(f"Converting WAV to {export_format.upper()} for upload...")
-        audio = AudioSegment.from_wav(wav_file)
-        logger.debug(f"Audio loaded - Duration: {len(audio)}ms, Channels: {audio.channels}, Frame rate: {audio.frame_rate}")
-        
-        # Get export parameters for the format
-        export_params = get_format_export_params(export_format)
-        
-        with tempfile.NamedTemporaryFile(suffix=f'.{export_format}', delete=False) as export_file_obj:
-            export_file = export_file_obj.name
-            audio.export(export_file, **export_params)
-            upload_file = export_file
-            logger.debug(f"{export_format.upper()} created for STT upload: {upload_file}")
+        try:
+            audio = AudioSegment.from_wav(wav_file)
+            logger.debug(f"Audio loaded - Duration: {len(audio)}ms, Channels: {audio.channels}, Frame rate: {audio.frame_rate}")
+            
+            # Get export parameters for the format
+            export_params = get_format_export_params(export_format)
+            
+            with tempfile.NamedTemporaryFile(suffix=f'.{export_format}', delete=False) as export_file_obj:
+                export_file = export_file_obj.name
+                audio.export(export_file, **export_params)
+                upload_file = export_file
+                logger.debug(f"{export_format.upper()} created for STT upload: {upload_file}")
+        except Exception as e:
+            if "ffmpeg" in str(e).lower() or "avconv" in str(e).lower():
+                logger.error(f"Audio conversion failed - FFmpeg may not be installed: {e}")
+                from voice_mode.utils.ffmpeg_check import get_install_instructions
+                logger.error(f"\n{get_install_instructions()}")
+                raise RuntimeError("FFmpeg is required but not found. Please install FFmpeg and try again.") from e
+            else:
+                raise
         
         # Save debug file for upload version
         if DEBUG:
