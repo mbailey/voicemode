@@ -32,7 +32,7 @@ class WakeWordConfig:
     resume_command: str = "standby"
     sensitivity: float = 0.5
     sample_rate: int = 16000
-    chunk_duration: float = 5.0  # seconds
+    chunk_duration: float = 10.0  # seconds
     chunk_overlap: float = 0.5   # seconds
     context_seconds: float = 10.0
     local_stt_only: bool = True
@@ -281,11 +281,17 @@ class WakeWordDetectionService:
     def _process_audio_chunk(self, audio_chunk: np.ndarray):
         """Process a single audio chunk for wake word detection."""
         try:
+            # Log chunk processing
+            logger.debug(f"Processing audio chunk: {len(audio_chunk)} samples, max amplitude: {np.abs(audio_chunk).max():.4f}")
+            
             # Transcribe audio using provided STT callback
             text = self.stt_callback(audio_chunk)
             
             if not text or text.strip() == "":
+                logger.debug("No text from STT, continuing to listen...")
                 return
+            
+            logger.info(f"Wake word detector received text: '{text}'")
             
             # Add to text buffer
             with self.text_buffer_lock:

@@ -439,8 +439,8 @@ async def speech_to_text_with_failover(
                 logger.info(f"STT succeeded with {stt_config['provider']}")
                 return result
             else:
-                # Mark endpoint as unhealthy if it returned None
-                await provider_registry.mark_unhealthy('stt', base_url, 'STT returned no result')
+                # Don't mark as unhealthy - silence is a valid result
+                logger.debug(f"STT returned no result (possibly silent audio) for {stt_config['provider']}")
                 
         except Exception as e:
             last_error = str(e)
@@ -448,8 +448,11 @@ async def speech_to_text_with_failover(
             # Mark endpoint as unhealthy
             await provider_registry.mark_unhealthy('stt', base_url, str(e))
     
-    # All endpoints failed
-    logger.error(f"All STT endpoints failed. Last error: {last_error}")
+    # All endpoints failed or returned no result
+    if last_error:
+        logger.error(f"All STT endpoints failed. Last error: {last_error}")
+    else:
+        logger.debug("All STT endpoints returned no result (possibly silent audio)")
     return None
 
 
@@ -470,12 +473,14 @@ async def _speech_to_text_internal(
     wav_file = None
     export_file = None
     export_format = None
+    audio_path = None
+    duration = len(audio_data) / SAMPLE_RATE  # Calculate duration using global SAMPLE_RATE
     try:
         import tempfile
         
         # Check if input is silent
         if np.abs(audio_data).max() < 0.001:
-            logger.warning("Audio appears to be silent")
+            logger.debug("Audio appears to be silent")
             return None
         
         # Ensure audio is in the correct format
@@ -601,7 +606,7 @@ async def _speech_to_text_internal(
                     conversation_logger = get_conversation_logger()
                     conversation_logger.log_stt(
                         text=text,
-                        audio_file=audio_path.name if audio_path else None,
+                        audio_file=os.path.basename(audio_path) if audio_path else None,
                         duration_ms=int(duration * 1000) if duration else None,
                         model=stt_config.get('model'),
                         provider=stt_config.get('provider', 'openai'),
@@ -1236,28 +1241,70 @@ async def converse(
             def stt_callback_sync(audio_chunk: np.ndarray) -> str:
                 """Synchronous STT callback for wake word detection."""
                 try:
-                    # Use local STT for privacy (will use Whisper if available)
+                    # Log audio chunk info
+                    logger.info(f"Wake word STT: Processing {len(audio_chunk)} samples ({len(audio_chunk)/wake_config.sample_rate:.1f}s)")
+                    
+                    # Check for silence
+                    audio_max = np.abs(audio_chunk).max()
+                    if audio_max < 0.001:
+                        logger.debug("Wake word STT: Audio chunk is silent, skipping STT")
+                        return ""
+                    
                     # Run async operations in sync context
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     try:
-                        stt_client, stt_model, endpoint_info = loop.run_until_complete(get_stt_client())
-                        if not stt_client:
-                            logger.error("No STT available for wake word detection")
-                            return ""
-                        
-                        text = loop.run_until_complete(
-                            speech_to_text(audio_chunk, {
+                        if wake_config.local_stt_only:
+                            # Only use local STT (Whisper)
+                            logger.info("Wake word STT: Using local-only mode")
+                            
+                            # Get local STT client specifically
+                            local_url = 'http://127.0.0.1:2022/v1'
+                            stt_client, stt_model, endpoint_info = loop.run_until_complete(
+                                get_stt_client(base_url=local_url)
+                            )
+                            
+                            if not stt_client:
+                                logger.warning("Wake word STT: Local Whisper not available")
+                                return ""
+                            
+                            logger.info(f"Wake word STT: Sending to local Whisper at {local_url}")
+                            
+                            # Use internal STT implementation to avoid failover
+                            stt_config = {
                                 'client': stt_client,
                                 'model': stt_model,
-                                'base_url': endpoint_info.base_url
-                            }, sample_rate=wake_config.sample_rate)
-                        )
-                        return text or ""
+                                'base_url': local_url,
+                                'provider': 'whisper-local'
+                            }
+                            
+                            text = loop.run_until_complete(
+                                _speech_to_text_internal(
+                                    audio_chunk,
+                                    stt_config,
+                                    {'_temp_stt': stt_client}
+                                )
+                            )
+                            
+                            if text:
+                                logger.info(f"Wake word STT result: '{text}'")
+                            else:
+                                logger.debug("Wake word STT: No speech detected (silence is OK)")
+                            
+                            return text or ""
+                        else:
+                            # Use normal STT with failover
+                            logger.info("Wake word STT: Using normal mode with failover")
+                            text = loop.run_until_complete(
+                                speech_to_text(audio_chunk)
+                            )
+                            return text or ""
                     finally:
                         loop.close()
                 except Exception as e:
-                    logger.error(f"STT callback error: {e}")
+                    logger.error(f"Wake word STT callback error: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
                     return ""
             
             # Create wake word callback with threading coordination
