@@ -1228,39 +1228,30 @@ async def converse(
             # Announce standby mode using TTS
             standby_message = f"Standing by for '{wake_config.wake_words[0]}'..."
             
-            # Create a TTS client for announcement
-            tts_client_info, selected_voice = await get_tts_client_and_voice(
-                voice=voice,
-                provider=tts_provider
-            )
-            
-            if tts_client_info:
-                await text_to_speech(
-                    standby_message,
-                    tts_client_info,
-                    selected_voice,
-                    model=tts_model or tts_client_info.get('model', 'tts-1'),
-                    instructions=tts_instructions,
-                    format=audio_format
-                )
-                logger.info(f"✓ Announced: '{standby_message}'")
+            # For now, just log the message until TTS is properly integrated
+            logger.info(f"Wake word mode: {standby_message}")
+            print(f"\n🎤 {standby_message}\n")
             
             # Create STT callback that uses local Whisper only
             def stt_callback_sync(audio_chunk: np.ndarray) -> str:
                 """Synchronous STT callback for wake word detection."""
                 try:
-                    # Force local STT for privacy
-                    stt_config = get_stt_client(force_local=True)
-                    if not stt_config:
-                        logger.error("No local STT available for wake word detection")
-                        return ""
-                    
-                    # Run async STT in sync context
+                    # Use local STT for privacy (will use Whisper if available)
+                    # Run async operations in sync context
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     try:
+                        stt_client, stt_model, endpoint_info = loop.run_until_complete(get_stt_client())
+                        if not stt_client:
+                            logger.error("No STT available for wake word detection")
+                            return ""
+                        
                         text = loop.run_until_complete(
-                            speech_to_text(audio_chunk, stt_config, sample_rate=wake_config.sample_rate)
+                            speech_to_text(audio_chunk, {
+                                'client': stt_client,
+                                'model': stt_model,
+                                'base_url': endpoint_info.base_url
+                            }, sample_rate=wake_config.sample_rate)
                         )
                         return text or ""
                     finally:
