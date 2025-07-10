@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/mbailey-voicemode-badge.png)](https://mseep.ai/app/mbailey-voicemode)
+
 # Voice Mode
 
 > **Install via:** `uvx voice-mode` | `pip install voice-mode` | [getvoicemode.com](https://getvoicemode.com)
