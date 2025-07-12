@@ -1,5 +1,9 @@
 # Wake Word Detection Feature
 
+⚠️ **Status: Experimental - Not Yet Functional**
+
+This feature is currently in development and not working properly. The code has been implemented but requires debugging and fixes before it can be used reliably.
+
 ## Overview
 Implement always-listening mode with wake word detection for hands-free Voice Mode activation.
 
