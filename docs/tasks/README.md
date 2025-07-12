@@ -10,6 +10,7 @@
 
 ## The One Thing
 
+- [ ] [Wake Word Detection](./wake-word-detection/README.md) - Always-listening mode with "Hey Claude" activation for hands-free operation
 - [ ] [Claude.ai Web + LiveKit iOS Bridge](./claude-web-livekit-mobile-bridge/README.md) - Speak to Claude.ai through LiveKit iOS app
 
 ## High Priority
@@ -105,6 +106,7 @@
 ## Current Branches
 
 - `master` - Has unified status tool and auto-start
+- `feature/wake-word-detection` - Wake word detection feature (current)
 - `feature/provider-registry` - Provider registry design docs
 - `feature/emotional-tts` - Emotional TTS implementation (merged fixes)
 - `feature/response-duration-min-max` - Min/max duration control (implemented)
