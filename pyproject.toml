@@ -46,6 +46,7 @@ dependencies = [
     "livekit-agents>=0.10.2",
     "livekit-plugins-openai>=0.10.1",
     "livekit-plugins-silero>=0.6.5",
+    "click>=8.0.0",
 ]
 
 [project.optional-dependencies]
@@ -89,6 +90,7 @@ Issues = "https://github.com/mbailey/voicemode/issues"
 [project.scripts]
 voice-mode = "voice_mode.cli:voice_mode"
 voicemode = "voice_mode.cli:voice_mode"
+voice-mode-cli = "voice_mode.cli:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voice_mode"]
