@@ -62,18 +62,55 @@ if [[ -n "$FILTER_TYPE" ]]; then
     JQ_FILTER="select(.type == \"$FILTER_TYPE\")"
 fi
 
-# Format and display each line
+# Simple format that's more robust
 tail -f "$LOG_FILE" | while IFS= read -r line; do
-    echo "$line" | jq -C "$JQ_FILTER | {
-        time: (.timestamp | split(\"T\")[1] | split(\".\")[0]),
-        type: .type,
-        text: .text[0:80] + (if .text | length > 80 then \"...\" else \"\" end),
-        transport: .metadata.transport,
-        voice: .metadata.voice,
-        model: .metadata.model,
-        provider: .metadata.provider,
-        timing: .metadata.timing,
-        audio: (if .audio_file then \"🔊\" else \"\" end),
-        silence_detection: (if $SHOW_FULL and .metadata.silence_detection then .metadata.silence_detection else null end)
-    } | to_entries | map(select(.value != null)) | from_entries" 2>/dev/null || true
+    # Skip empty lines
+    [[ -z "$line" ]] && continue
+    
+    # Parse JSON and format, then strip quotes and add colors
+    formatted=$(echo "$line" | jq -C --arg filter "$FILTER_TYPE" --argjson full "$SHOW_FULL" '
+        # Apply filter if specified
+        if $filter != "" and .type != $filter then empty
+        else
+            # Extract just the time portion
+            (.timestamp | split("T")[1] | split(".")[0]) as $time |
+            
+            # Format transport info
+            (.metadata.transport // "local") as $transport |
+            (.metadata.provider // "?") as $provider |
+            
+            # Build transport display
+            (if $transport == "local" then "🎙️" 
+             elif $transport == "livekit" then "☁️"
+             else $transport end) as $transport_icon |
+            
+            # Format based on type
+            if .type == "stt" then
+                "[\($time)] 🎤 STT \($transport_icon) \(.text[0:80])\(if .text | length > 80 then "..." else "" end)" +
+                (if .metadata.timing then " [\(.metadata.timing)]" else "" end) +
+                (if $full and .metadata.silence_detection then " [VAD: \(.metadata.silence_detection.enabled)]" else "" end)
+            else
+                "[\($time)] 🔊 TTS \($transport_icon) \(.text[0:80])\(if .text | length > 80 then "..." else "" end)" +
+                (if .metadata.voice then " (\(.metadata.voice))" else "" end) +
+                (if .metadata.timing then " [\(.metadata.timing)]" else "" end) +
+                (if $full and $provider then " [\($provider)]" else "" end)
+            end
+        end
+    ' 2>/dev/null || true)
+    
+    # Strip quotes but keep colors by removing first and last character
+    if [[ -n "$formatted" ]] && [[ "$formatted" != "null" ]]; then
+        # Remove surrounding quotes
+        formatted="${formatted#\"}"
+        formatted="${formatted%\"}"
+        
+        # Apply color based on type
+        if [[ "$line" == *'"type":"stt"'* ]]; then
+            echo -e "\033[32m$formatted\033[0m"  # Green for STT
+        elif [[ "$line" == *'"type":"tts"'* ]]; then
+            echo -e "\033[33m$formatted\033[0m"  # Yellow for TTS
+        else
+            echo "$formatted"
+        fi
+    fi
 done

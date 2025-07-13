@@ -1507,33 +1507,32 @@ async def converse(
                         else:
                             event_logger.log_event(event_logger.STT_NO_SPEECH)
                     
-                    # Log STT immediately after it completes
-                    if response_text:
-                        try:
-                            # Format STT timing
-                            stt_timing_parts = []
-                            if 'record' in timings:
-                                stt_timing_parts.append(f"record {timings['record']:.1f}s")
-                            if 'stt' in timings:
-                                stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
-                            stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
-                            
-                            conversation_logger = get_conversation_logger()
-                            conversation_logger.log_stt(
-                                text=response_text,
-                                model='whisper-1',  # Default STT model
-                                provider='openai',
-                                audio_format='mp3',
-                                transport=transport,
-                                timing=stt_timing_str,
-                                silence_detection={
-                                    "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
-                                    "vad_aggressiveness": VAD_AGGRESSIVENESS,
-                                    "silence_threshold_ms": SILENCE_THRESHOLD_MS
-                                }
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to log STT to JSONL: {e}")
+                    # Log STT immediately after it completes (even if no speech detected)
+                    try:
+                        # Format STT timing
+                        stt_timing_parts = []
+                        if 'record' in timings:
+                            stt_timing_parts.append(f"record {timings['record']:.1f}s")
+                        if 'stt' in timings:
+                            stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
+                        stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
+                        
+                        conversation_logger = get_conversation_logger()
+                        conversation_logger.log_stt(
+                            text=response_text if response_text else "[no speech detected]",
+                            model='whisper-1',  # Default STT model
+                            provider='openai',
+                            audio_format='mp3',
+                            transport=transport,
+                            timing=stt_timing_str,
+                            silence_detection={
+                                "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
+                                "vad_aggressiveness": VAD_AGGRESSIVENESS,
+                                "silence_threshold_ms": SILENCE_THRESHOLD_MS
+                            }
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to log STT to JSONL: {e}")
                 
                 # Calculate total time (use tts_total instead of sub-metrics)
                 main_timings = {k: v for k, v in timings.items() if k in ['tts_total', 'record', 'stt']}
