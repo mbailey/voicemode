@@ -3,6 +3,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "flask",
+#     "voice-mode",
 # ]
 # ///
 """
@@ -26,6 +27,15 @@ import time
 from collections import defaultdict
 
 from flask import Flask, render_template_string, jsonify, send_file, request
+
+# Import the exchanges library
+try:
+    from voice_mode.exchanges import ExchangeReader, ConversationGrouper
+except ImportError:
+    # Fallback for development
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from voice_mode.exchanges import ExchangeReader, ConversationGrouper
 
 app = Flask(__name__)
 
@@ -112,44 +122,46 @@ def find_matching_audio(transcription: Dict) -> Optional[str]:
     return None
 
 def read_jsonl_exchanges() -> List[Dict[str, Any]]:
-    """Read exchanges from JSONL log files."""
-    exchanges = []
+    """Read exchanges from JSONL log files using the exchanges library."""
+    reader = ExchangeReader(BASE_DIR)
+    exchanges_list = []
     
-    if not LOGS_DIR.exists():
-        return exchanges
+    # Read all exchanges using the library
+    for exchange in reader._read_all():
+        # Convert Exchange object to the format expected by the browser
+        exchange_dict = {
+            "filepath": str(reader.logs_dir),
+            "filename": f"{exchange.type}_{exchange.timestamp.isoformat().replace(':', '-')}.txt",
+            "metadata": {
+                "file_timestamp": exchange.timestamp.isoformat(),
+                "project_path": exchange.project_path,
+                "conversation_id": exchange.conversation_id,
+                "model": exchange.metadata.model if exchange.metadata else None,
+                "voice": exchange.metadata.voice if exchange.metadata else None,
+                "provider": exchange.metadata.provider if exchange.metadata else None,
+                "timing": exchange.metadata.timing if exchange.metadata else None,
+                "transport": exchange.metadata.transport if exchange.metadata else None,
+                "audio_format": exchange.metadata.audio_format if exchange.metadata else None,
+            },
+            "transcript": exchange.text,
+            "type": exchange.type,
+            "audio_path": exchange.audio_file,
+            "version": exchange.version,
+            "duration_ms": exchange.duration_ms
+        }
+        
+        # Add additional v2 metadata if available
+        if exchange.metadata:
+            if exchange.metadata.silence_detection:
+                exchange_dict["metadata"]["silence_detection"] = exchange.metadata.silence_detection
+            if exchange.metadata.emotion:
+                exchange_dict["metadata"]["emotion"] = exchange.metadata.emotion
+            if exchange.metadata.language:
+                exchange_dict["metadata"]["language"] = exchange.metadata.language
+        
+        exchanges_list.append(exchange_dict)
     
-    # Read all JSONL files
-    for jsonl_file in sorted(LOGS_DIR.glob("exchanges_*.jsonl")):
-        try:
-            with open(jsonl_file, 'r') as f:
-                for line in f:
-                    if line.strip():
-                        try:
-                            entry = json.loads(line)
-                            # Convert JSONL format to exchange format
-                            exchange = {
-                                "filepath": str(jsonl_file),
-                                "filename": f"{entry['type']}_{entry['timestamp'].replace(':', '-')}.txt",
-                                "metadata": {
-                                    "file_timestamp": entry.get("timestamp"),
-                                    "project_path": entry.get("project_path"),
-                                    "conversation_id": entry.get("conversation_id"),
-                                    "model": entry.get("metadata", {}).get("model"),
-                                    "voice": entry.get("metadata", {}).get("voice"),
-                                    "provider": entry.get("metadata", {}).get("provider"),
-                                    "timing": entry.get("metadata", {}).get("timing"),
-                                },
-                                "transcript": entry.get("text", ""),
-                                "type": entry.get("type", "unknown"),
-                                "audio_path": entry.get("audio_file")
-                            }
-                            exchanges.append(exchange)
-                        except json.JSONDecodeError:
-                            continue
-        except Exception as e:
-            print(f"Error reading JSONL file {jsonl_file}: {e}")
-    
-    return exchanges
+    return exchanges_list
 
 def get_all_exchanges() -> List[Dict]:
     """Get all exchanges from both transcription files and JSONL logs."""
@@ -200,8 +212,10 @@ def group_by_project(exchanges: List[Dict]) -> Dict[str, List[Dict]]:
     
     return grouped
 
-def group_exchanges_into_conversations(exchanges: List[Dict], gap_minutes: int = 5) -> List[Dict[str, any]]:
-    """Group exchanges into conversations based on conversation_id or time gaps.
+def group_exchanges_into_conversations(exchanges: List[Dict], gap_minutes: int = 5) -> List[Dict[str, Any]]:
+    """Group exchanges into conversations based on conversation_id.
+    
+    Uses the exchanges library's conversation grouping functionality.
     
     Args:
         exchanges: List of exchange dictionaries
@@ -213,80 +227,83 @@ def group_exchanges_into_conversations(exchanges: List[Dict], gap_minutes: int =
     if not exchanges:
         return []
     
-    # First, try to group by conversation_id
-    conversations_by_id = defaultdict(list)
-    exchanges_without_id = []
+    # Convert exchange dictionaries back to Exchange objects for the grouper
+    from voice_mode.exchanges.models import Exchange, ExchangeMetadata
     
-    for exchange in exchanges:
-        conv_id = exchange["metadata"].get("conversation_id")
-        if conv_id:
-            conversations_by_id[conv_id].append(exchange)
-        else:
-            exchanges_without_id.append(exchange)
-    
-    # Convert conversation_id groups to conversation format
-    conversations = []
-    for conv_id, conv_exchanges in conversations_by_id.items():
-        sorted_exch = sorted(conv_exchanges, key=lambda x: x["metadata"].get("file_timestamp", ""))
-        conversations.append({
-            "exchanges": sorted_exch,
-            "start_time": sorted_exch[0]["metadata"].get("file_timestamp", ""),
-            "end_time": sorted_exch[-1]["metadata"].get("file_timestamp", ""),
-            "project": sorted_exch[0]["metadata"].get("project_path", "Unknown Project"),
-            "conversation_id": conv_id
-        })
-    
-    # Then handle exchanges without conversation_id using time-based grouping
-    if exchanges_without_id:
-        sorted_exchanges = sorted(exchanges_without_id, key=lambda x: x["metadata"].get("file_timestamp", ""))
-        
-        current_conversation = {
-            "exchanges": [sorted_exchanges[0]],
-            "start_time": sorted_exchanges[0]["metadata"].get("file_timestamp", ""),
-            "project": sorted_exchanges[0]["metadata"].get("project_path", "Unknown Project")
-        }
-        
-        for i in range(1, len(sorted_exchanges)):
-            exchange = sorted_exchanges[i]
-            prev_exchange = sorted_exchanges[i-1]
+    exchange_objects = []
+    for ex_dict in exchanges:
+        try:
+            # Create metadata object if present
+            metadata = None
+            if ex_dict.get("metadata"):
+                metadata = ExchangeMetadata(
+                    voice_mode_version="2.12.0",  # Default version
+                    model=ex_dict["metadata"].get("model"),
+                    voice=ex_dict["metadata"].get("voice"),
+                    provider=ex_dict["metadata"].get("provider"),
+                    timing=ex_dict["metadata"].get("timing"),
+                    transport=ex_dict["metadata"].get("transport"),
+                    audio_format=ex_dict["metadata"].get("audio_format"),
+                    silence_detection=ex_dict["metadata"].get("silence_detection"),
+                    language=ex_dict["metadata"].get("language"),
+                    emotion=ex_dict["metadata"].get("emotion")
+                )
             
-            # Parse timestamps
-            try:
-                current_time = datetime.fromisoformat(exchange["metadata"].get("file_timestamp", ""))
-                prev_time = datetime.fromisoformat(prev_exchange["metadata"].get("file_timestamp", ""))
-                time_diff = (current_time - prev_time).total_seconds() / 60  # Convert to minutes
-                
-                # Check if same project and within time gap
-                same_project = exchange["metadata"].get("project_path") == prev_exchange["metadata"].get("project_path")
-                
-                if same_project and time_diff <= gap_minutes:
-                    # Add to current conversation
-                    current_conversation["exchanges"].append(exchange)
-                else:
-                    # Start new conversation
-                    current_conversation["end_time"] = prev_exchange["metadata"].get("file_timestamp", "")
-                    conversations.append(current_conversation)
-                    
-                    current_conversation = {
-                        "exchanges": [exchange],
-                        "start_time": exchange["metadata"].get("file_timestamp", ""),
-                        "project": exchange["metadata"].get("project_path", "Unknown Project")
-                    }
-            except:
-                # If timestamp parsing fails, start new conversation
-                current_conversation["end_time"] = prev_exchange["metadata"].get("file_timestamp", "")
-                conversations.append(current_conversation)
-                
-                current_conversation = {
-                    "exchanges": [exchange],
-                    "start_time": exchange["metadata"].get("file_timestamp", ""),
-                    "project": exchange["metadata"].get("project_path", "Unknown Project")
-                }
+            # Parse timestamp
+            timestamp = datetime.fromisoformat(ex_dict["metadata"]["file_timestamp"])
+            
+            exchange = Exchange(
+                version=ex_dict.get("version", 1),
+                timestamp=timestamp,
+                conversation_id=ex_dict["metadata"].get("conversation_id", ""),
+                type=ex_dict["type"],
+                text=ex_dict["transcript"],
+                project_path=ex_dict["metadata"].get("project_path"),
+                audio_file=ex_dict.get("audio_path"),
+                duration_ms=ex_dict.get("duration_ms"),
+                metadata=metadata
+            )
+            exchange_objects.append(exchange)
+        except Exception as e:
+            print(f"Error converting exchange: {e}")
+            continue
     
-        # Add last conversation
-        if current_conversation["exchanges"]:
-            current_conversation["end_time"] = current_conversation["exchanges"][-1]["metadata"].get("file_timestamp", "")
-            conversations.append(current_conversation)
+    # Use the library's grouper
+    grouper = ConversationGrouper(gap_minutes=gap_minutes)
+    conversations_dict = grouper.group_exchanges(exchange_objects)
+    
+    # Convert back to the format expected by the browser
+    conversations = []
+    for conv in conversations_dict.values():
+        # Convert exchanges back to dict format
+        conv_exchanges = []
+        for ex in conv.exchanges:
+            ex_dict = {
+                "filepath": "",
+                "filename": f"{ex.type}_{ex.timestamp.isoformat().replace(':', '-')}.txt",
+                "metadata": {
+                    "file_timestamp": ex.timestamp.isoformat(),
+                    "project_path": ex.project_path,
+                    "conversation_id": ex.conversation_id,
+                    "model": ex.metadata.model if ex.metadata else None,
+                    "voice": ex.metadata.voice if ex.metadata else None,
+                    "provider": ex.metadata.provider if ex.metadata else None,
+                    "timing": ex.metadata.timing if ex.metadata else None,
+                    "transport": ex.metadata.transport if ex.metadata else None,
+                },
+                "transcript": ex.text,
+                "type": ex.type,
+                "audio_path": ex.audio_file
+            }
+            conv_exchanges.append(ex_dict)
+        
+        conversations.append({
+            "exchanges": conv_exchanges,
+            "start_time": conv.start_time.isoformat(),
+            "end_time": conv.end_time.isoformat(),
+            "project": conv.project_path or "Unknown Project",
+            "conversation_id": conv.id
+        })
     
     # Calculate conversation summaries
     for conv in conversations:
@@ -630,6 +647,18 @@ HTML_TEMPLATE = """
                         {% else %}
                             <strong>{{ conv.filename }}</strong>
                         {% endif %}
+                        {% if conv.metadata.provider %}
+                            | Provider: {{ conv.metadata.provider }}
+                        {% endif %}
+                        {% if conv.metadata.model %}
+                            | Model: {{ conv.metadata.model }}
+                        {% endif %}
+                        {% if conv.metadata.voice %}
+                            | Voice: {{ conv.metadata.voice }}
+                        {% endif %}
+                        {% if conv.metadata.transport %}
+                            | Transport: {{ conv.metadata.transport }}
+                        {% endif %}
                         {% if conv.metadata.timing %}
                             | {{ conv.metadata.timing }}
                         {% endif %}
@@ -672,6 +701,18 @@ HTML_TEMPLATE = """
                         <strong>{{ conv.metadata.file_timestamp|format_timestamp }}</strong>
                     {% else %}
                         <strong>{{ conv.filename }}</strong>
+                    {% endif %}
+                    {% if conv.metadata.provider %}
+                        | Provider: {{ conv.metadata.provider }}
+                    {% endif %}
+                    {% if conv.metadata.model %}
+                        | Model: {{ conv.metadata.model }}
+                    {% endif %}
+                    {% if conv.metadata.voice %}
+                        | Voice: {{ conv.metadata.voice }}
+                    {% endif %}
+                    {% if conv.metadata.transport %}
+                        | Transport: {{ conv.metadata.transport }}
                     {% endif %}
                     {% if conv.metadata.timing %}
                         | {{ conv.metadata.timing }}
@@ -748,6 +789,18 @@ HTML_TEMPLATE = """
                     <div class="metadata" onclick="toggleExchange(this.parentElement)">
                         <span class="type-badge type-{{ exchange.type }}">{{ exchange.type|upper }}</span>
                         <strong>{{ exchange.metadata.file_timestamp|format_timestamp }}</strong>
+                        {% if exchange.metadata.provider %}
+                            | {{ exchange.metadata.provider }}
+                        {% endif %}
+                        {% if exchange.metadata.model %}
+                            | {{ exchange.metadata.model }}
+                        {% endif %}
+                        {% if exchange.metadata.voice %}
+                            | {{ exchange.metadata.voice }}
+                        {% endif %}
+                        {% if exchange.metadata.transport %}
+                            | [{{ exchange.metadata.transport }}]
+                        {% endif %}
                         {% if exchange.metadata.timing %}
                             | {{ exchange.metadata.timing }}
                         {% endif %}
