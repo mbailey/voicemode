@@ -29,12 +29,14 @@ from collections import defaultdict
 from flask import Flask, render_template_string, jsonify, send_file, request
 
 # Import the exchanges library
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 try:
     from voice_mode.exchanges import ExchangeReader, ConversationGrouper
 except ImportError:
-    # Fallback for development
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+    # If still fails, try without the path modification
+    sys.path.pop(0)
     from voice_mode.exchanges import ExchangeReader, ConversationGrouper
 
 app = Flask(__name__)
