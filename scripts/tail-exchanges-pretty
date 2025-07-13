@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Pretty-print voice-mode exchange logs with full v2 schema support
+
+set -euo pipefail
+
+# Default to today's log file
+LOG_DIR="${HOME}/.voicemode/logs"
+TODAY=$(date +%Y-%m-%d)
+LOG_FILE="${LOG_DIR}/exchanges_${TODAY}.jsonl"
+
+# Parse command line options
+SHOW_FULL=false
+FILTER_TYPE=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -f|--full)
+            SHOW_FULL=true
+            shift
+            ;;
+        --stt)
+            FILTER_TYPE="stt"
+            shift
+            ;;
+        --tts)
+            FILTER_TYPE="tts"
+            shift
+            ;;
+        -h|--help)
+            echo "Usage: $(basename "$0") [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  -f, --full    Show full metadata including silence detection"
+            echo "  --stt         Show only STT (speech-to-text) entries"
+            echo "  --tts         Show only TTS (text-to-speech) entries"
+            echo "  -h, --help    Show this help message"
+            exit 0
+            ;;
+        *)
+            LOG_FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+# Check if log file exists
+if [[ ! -f "$LOG_FILE" ]]; then
+    echo "No exchanges log found at: $LOG_FILE"
+    echo ""
+    echo "Available logs:"
+    ls -la "$LOG_DIR"/exchanges_*.jsonl 2>/dev/null || echo "  No exchange logs found"
+    exit 1
+fi
+
+echo "📊 Tailing exchanges log: $LOG_FILE"
+echo "   Press Ctrl+C to stop"
+echo ""
+
+# Build jq filter based on options
+JQ_FILTER='.'
+if [[ -n "$FILTER_TYPE" ]]; then
+    JQ_FILTER="select(.type == \"$FILTER_TYPE\")"
+fi
+
+# Format and display each line
+tail -f "$LOG_FILE" | while IFS= read -r line; do
+    echo "$line" | jq -C "$JQ_FILTER | {
+        time: (.timestamp | split(\"T\")[1] | split(\".\")[0]),
+        type: .type,
+        text: .text[0:80] + (if .text | length > 80 then \"...\" else \"\" end),
+        transport: .metadata.transport,
+        voice: .metadata.voice,
+        model: .metadata.model,
+        provider: .metadata.provider,
+        timing: .metadata.timing,
+        audio: (if .audio_file then \"🔊\" else \"\" end),
+        silence_detection: (if $SHOW_FULL and .metadata.silence_detection then .metadata.silence_detection else null end)
+    } | to_entries | map(select(.value != null)) | from_entries" 2>/dev/null || true
+done

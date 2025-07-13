@@ -1484,25 +1484,34 @@ async def converse(
                 main_timings = {k: v for k, v in timings.items() if k in ['tts_total', 'record', 'stt']}
                 total_time = sum(main_timings.values())
                 
-                # Format timing string
-                timing_parts = []
+                # Format timing strings separately for TTS and STT
+                tts_timing_parts = []
+                stt_timing_parts = []
                 
-                # Detailed breakdown
+                # TTS timings
                 if 'ttfa' in timings:
-                    timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
+                    tts_timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
                 if 'tts_gen' in timings:
-                    timing_parts.append(f"tts_gen {timings['tts_gen']:.1f}s")
+                    tts_timing_parts.append(f"gen {timings['tts_gen']:.1f}s")
                 if 'tts_play' in timings:
-                    timing_parts.append(f"tts_play {timings['tts_play']:.1f}s")
-                if 'tts_total' in timings:
-                    timing_parts.append(f"tts_total {timings['tts_total']:.1f}s")
-                if 'record' in timings:
-                    timing_parts.append(f"record {timings['record']:.1f}s")
-                if 'stt' in timings:
-                    timing_parts.append(f"stt {timings['stt']:.1f}s")
+                    tts_timing_parts.append(f"play {timings['tts_play']:.1f}s")
                 
-                timing_str = ", ".join(timing_parts)
-                timing_str += f", total {total_time:.1f}s"
+                # STT timings
+                if 'record' in timings:
+                    stt_timing_parts.append(f"record {timings['record']:.1f}s")
+                if 'stt' in timings:
+                    stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
+                
+                tts_timing_str = ", ".join(tts_timing_parts) if tts_timing_parts else None
+                stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
+                
+                # Keep combined timing for backward compatibility in result message
+                all_timing_parts = []
+                if tts_timing_parts:
+                    all_timing_parts.extend(tts_timing_parts)
+                if stt_timing_parts:
+                    all_timing_parts.extend(stt_timing_parts)
+                timing_str = ", ".join(all_timing_parts) + f", total {total_time:.1f}s"
                 
                 # Track statistics for full conversation interaction
                 actual_response = response_text or "[no speech detected]"
@@ -1547,7 +1556,7 @@ async def converse(
                             model=tts_model,
                             voice=voice,
                             provider=tts_provider if tts_provider else 'openai',
-                            timing=timing_str,
+                            timing=tts_timing_str,
                             audio_format=audio_format,
                             transport=transport
                         )
@@ -1559,6 +1568,7 @@ async def converse(
                             provider='openai',
                             audio_format='mp3',
                             transport=transport,
+                            timing=stt_timing_str,
                             silence_detection={
                                 "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
                                 "vad_aggressiveness": VAD_AGGRESSIVENESS,

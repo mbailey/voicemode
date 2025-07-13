@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# View recent voice-mode exchanges in a readable format
+
+set -euo pipefail
+
+# Default to today's log file
+LOG_DIR="${HOME}/.voicemode/logs"
+TODAY=$(date +%Y-%m-%d)
+LOG_FILE="${LOG_DIR}/exchanges_${TODAY}.jsonl"
+LINES=20
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -n|--lines)
+            LINES="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $(basename "$0") [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  -n, --lines N    Show last N exchanges (default: 20)"
+            echo "  -h, --help       Show this help message"
+            exit 0
+            ;;
+        *)
+            LOG_FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+# Check if log file exists
+if [[ ! -f "$LOG_FILE" ]]; then
+    echo "No exchanges log found at: $LOG_FILE"
+    exit 1
+fi
+
+echo "📝 Last $LINES exchanges from: $LOG_FILE"
+echo ""
+
+# Show the last N lines with pretty formatting
+tail -n "$LINES" "$LOG_FILE" | jq -C '{
+    "🕐 Time": (.timestamp | split("T")[1] | split(".")[0]),
+    "📢 Type": (if .type == "stt" then "🎤 STT" else "🔊 TTS" end),
+    "💬 Text": .text[0:100] + (if .text | length > 100 then "..." else "" end),
+    "🚀 Transport": .metadata.transport,
+    "🎭 Voice": .metadata.voice,
+    "⏱️ Timing": .metadata.timing
+} | to_entries | map(select(.value != null)) | from_entries'

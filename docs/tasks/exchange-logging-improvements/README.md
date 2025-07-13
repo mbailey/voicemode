@@ -26,10 +26,14 @@ The exchanges log (`~/.voicemode/logs/exchanges_YYYY-MM-DD.jsonl`) currently cap
 4. **Silence Detection Settings** - If VAD was enabled and its parameters
 
 ### Medium Priority
-5. **Error/Retry Information** - If request failed and was retried
-6. **User/Session Info** - Optional user identifier if available
-7. **Temperature/Model Settings** - For providers that support these
-8. **Audio Duration** - Length of audio files
+5. **Timing Metrics Attribution** - Split timing between STT and TTS entries
+   - STT should have: record time, STT processing time
+   - TTS should have: TTFA, generation time, playback time
+   - Remove total time from individual entries
+6. **Error/Retry Information** - If request failed and was retried
+7. **User/Session Info** - Optional user identifier if available
+8. **Temperature/Model Settings** - For providers that support these
+9. **Audio Duration** - Length of audio files
 
 ### Low Priority
 9. **Cost Estimation** - Based on provider and usage
@@ -55,6 +59,7 @@ The exchanges log (`~/.voicemode/logs/exchanges_YYYY-MM-DD.jsonl`) currently cap
 - [x] ~~Add transport type to all exchanges~~ - Added to both STT and TTS
 - [x] ~~Log silence detection configuration~~ - Added to STT metadata
 - [x] ~~Create schema documentation for exchange format~~ - Updated docs/specs/conversation-logging-jsonl.md for v2
+- [x] ~~Split timing metrics between STT and TTS~~ - Each entry now has its relevant timings only
 - [ ] Update conversation browser to support new fields
 - [ ] Review all code that reads exchange logs
 - [x] ~~Implement backward-compatible format (keep version 1)~~ - Updated to version 2, None fields are filtered
@@ -72,8 +77,9 @@ The exchanges log (`~/.voicemode/logs/exchanges_YYYY-MM-DD.jsonl`) currently cap
 - Support for conversation export/import
 - Foundation for advanced features (voice cloning detection, quality analysis)
 
-## Example Enhanced Exchange Record
+## Example Enhanced Exchange Records
 
+### STT Entry
 ```json
 {
   "version": 2,
@@ -89,11 +95,34 @@ The exchanges log (`~/.voicemode/logs/exchanges_YYYY-MM-DD.jsonl`) currently cap
     "provider": "openai",
     "audio_format": "mp3",
     "transport": "local",  // IMPLEMENTED
+    "timing": "record 3.2s, stt 1.4s",  // IMPLEMENTED - STT timings only
     "silence_detection": {  // IMPLEMENTED
       "enabled": true,
       "vad_aggressiveness": 2,
       "silence_threshold_ms": 1000
     }
+  }
+}
+```
+
+### TTS Entry
+```json
+{
+  "version": 2,
+  "timestamp": "2025-07-12T13:47:45.123456+10:00",
+  "conversation_id": "conv_20250712_114301_pr6r6s",
+  "type": "tts",
+  "text": "I'm doing well, thank you! How can I help you today?",
+  "project_path": "/home/m/Code/github.com/mbailey/voicemode",
+  "audio_file": "20250712_134745_123_pr6r6s_tts.mp3",
+  "metadata": {
+    "voice_mode_version": "2.12.0",
+    "model": "tts-1",
+    "voice": "alloy",  // Already logged
+    "provider": "openai",
+    "audio_format": "pcm",
+    "transport": "local",  // IMPLEMENTED
+    "timing": "ttfa 1.2s, gen 2.3s, play 5.6s"  // IMPLEMENTED - TTS timings only
   }
 }
 ```

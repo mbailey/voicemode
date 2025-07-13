@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Tail voice-mode exchange logs in a readable format
+
+set -euo pipefail
+
+# Default to today's log file
+LOG_DIR="${HOME}/.voicemode/logs"
+TODAY=$(date +%Y-%m-%d)
+LOG_FILE="${LOG_DIR}/exchanges_${TODAY}.jsonl"
+
+# Check if log file exists
+if [[ ! -f "$LOG_FILE" ]]; then
+    echo "No exchanges log found for today at: $LOG_FILE"
+    echo "Available logs:"
+    ls -la "$LOG_DIR"/exchanges_*.jsonl 2>/dev/null || echo "  No exchange logs found"
+    exit 1
+fi
+
+# Colors for different fields
+COLOR_RESET='\033[0m'
+COLOR_TIME='\033[36m'      # Cyan
+COLOR_TYPE_STT='\033[32m'  # Green
+COLOR_TYPE_TTS='\033[33m'  # Yellow
+COLOR_TEXT='\033[37m'      # White
+COLOR_META='\033[90m'      # Gray
+COLOR_TRANSPORT='\033[35m' # Magenta
+
+echo "Tailing exchanges log: $LOG_FILE"
+echo "Press Ctrl+C to stop"
+echo "---"
+
+# Tail the file and format each line
+tail -f "$LOG_FILE" | while IFS= read -r line; do
+    # Parse JSON and format output
+    echo "$line" | jq -r '
+        # Extract timestamp (just time portion)
+        (.timestamp | split("T")[1] | split(".")[0]) as $time |
+        
+        # Format type with color
+        (if .type == "stt" then "STT" else "TTS" end) as $type |
+        
+        # Extract key metadata
+        (.metadata.transport // "local") as $transport |
+        (.metadata.voice // "") as $voice |
+        (.metadata.model // "") as $model |
+        
+        # Build output
+        "[\($time)] \($type) [\($transport)] \(.text)" +
+        (if $voice != "" then " (voice: \($voice))" else "" end) +
+        (if .metadata.timing != null then " [\(.metadata.timing)]" else "" end)
+    ' | while IFS= read -r formatted; do
+        # Apply colors based on content
+        if [[ "$formatted" == *"STT"* ]]; then
+            echo -e "${COLOR_TIME}$(echo "$formatted" | cut -d' ' -f1)${COLOR_RESET} ${COLOR_TYPE_STT}STT${COLOR_RESET} ${COLOR_TRANSPORT}$(echo "$formatted" | cut -d' ' -f3)${COLOR_RESET} ${COLOR_TEXT}$(echo "$formatted" | cut -d' ' -f4-)${COLOR_RESET}"
+        else
+            echo -e "${COLOR_TIME}$(echo "$formatted" | cut -d' ' -f1)${COLOR_RESET} ${COLOR_TYPE_TTS}TTS${COLOR_RESET} ${COLOR_TRANSPORT}$(echo "$formatted" | cut -d' ' -f3)${COLOR_RESET} ${COLOR_TEXT}$(echo "$formatted" | cut -d' ' -f4-)${COLOR_RESET}"
+        fi
+    done
+done

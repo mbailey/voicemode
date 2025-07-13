@@ -12,7 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - STT audio filenames now properly linked in JSONL logs
   - Transport type (local/livekit/speak-only) tracked for all exchanges
   - Silence detection configuration logged for STT exchanges
+  - Split timing metrics between STT and TTS entries for accurate attribution
 - Updated exchange format to version 2 (backward compatible)
+- Scripts for viewing exchange logs:
+  - `scripts/tail-exchanges` - Simple colored tail with formatting
+  - `scripts/tail-exchanges-pretty` - Advanced viewer with filtering options
+  - `scripts/view-exchanges` - View last N exchanges without tailing
 
 ### Fixed
 - Fixed undefined `audio_path` variable in STT logging

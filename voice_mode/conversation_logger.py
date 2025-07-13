@@ -184,6 +184,7 @@ class ConversationLogger:
             "language": kwargs.get("language"),
             "audio_format": kwargs.get("audio_format"),
             "transport": kwargs.get("transport"),
+            "timing": kwargs.get("timing"),
             "silence_detection": kwargs.get("silence_detection"),
             "error": kwargs.get("error"),
         }
