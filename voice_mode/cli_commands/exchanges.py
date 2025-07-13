@@ -17,6 +17,16 @@ from voice_mode.exchanges import (
     ConversationGrouper,
     ExchangeStats
 )
+from voice_mode.completion import (
+    complete_conversation_ids,
+    complete_dates,
+    complete_providers,
+    complete_voices,
+    complete_transports,
+    complete_models,
+    complete_output_files,
+    complete_search_patterns
+)
 
 
 @click.group()
@@ -38,8 +48,11 @@ def exchanges():
               help='Tail specific date (default: today)')
 @click.option('--transport', 
               type=click.Choice(['local', 'livekit', 'speak-only', 'all']),
+              shell_complete=complete_transports,
               help='Filter by transport type')
-@click.option('--provider', help='Filter by provider')
+@click.option('--provider', 
+              shell_complete=complete_providers,
+              help='Filter by provider')
 def tail(format, stt, tts, full, no_color, date, transport, provider):
     """Real-time following of exchange logs."""
     reader = ExchangeReader()
@@ -88,10 +101,13 @@ def tail(format, stt, tts, full, no_color, date, transport, provider):
 @exchanges.command()
 @click.option('-n', '--lines', type=int, default=20,
               help='Number of exchanges to show')
-@click.option('-c', '--conversation', help='Show specific conversation')
+@click.option('-c', '--conversation', 
+              shell_complete=complete_conversation_ids,
+              help='Show specific conversation')
 @click.option('--today', is_flag=True, help="Show today's exchanges")
 @click.option('--yesterday', is_flag=True, help="Show yesterday's exchanges")
 @click.option('-d', '--date', type=click.DateTime(formats=['%Y-%m-%d']),
+              shell_complete=complete_dates,
               help='Show specific date')
 @click.option('-f', '--format', 
               type=click.Choice(['simple', 'pretty', 'json']), 
@@ -140,7 +156,7 @@ def view(lines, conversation, today, yesterday, date, format, reverse, no_color)
 
 
 @exchanges.command()
-@click.argument('query')
+@click.argument('query', shell_complete=complete_search_patterns)
 @click.option('-n', '--max-results', type=int, default=50,
               help='Maximum results to show')
 @click.option('-d', '--days', type=int, default=7,
@@ -333,8 +349,11 @@ def stats(days, by_hour, by_provider, by_transport, timing, conversations,
 
 
 @exchanges.command()
-@click.option('-c', '--conversation', help='Export specific conversation')
+@click.option('-c', '--conversation', 
+              shell_complete=complete_conversation_ids,
+              help='Export specific conversation')
 @click.option('-d', '--date', type=click.DateTime(formats=['%Y-%m-%d']),
+              shell_complete=complete_dates,
               help='Export date range')
 @click.option('--days', type=int, help='Export last N days')
 @click.option('--format', 
@@ -344,6 +363,7 @@ def stats(days, by_hour, by_provider, by_transport, timing, conversations,
 @click.option('--include-audio', is_flag=True, 
               help='Include audio files (creates zip)')
 @click.option('--output', '-o', type=click.Path(),
+              shell_complete=complete_output_files,
               help='Output file/directory')
 def export(conversation, date, days, format, include_audio, output):
     """Export conversations in various formats."""

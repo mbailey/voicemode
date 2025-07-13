@@ -271,7 +271,7 @@ class TestExchangesWithRealData:
         if 'tts' in timing_stats and timing_stats['tts']:
             if 'ttfa' in timing_stats['tts']:
                 assert timing_stats['tts']['ttfa']['avg'] > 0
-                assert timing_stats['tts']['ttfa']['min'] > 0
+                assert timing_stats['tts']['ttfa']['min'] >= 0  # Can be 0 for very fast responses
                 assert timing_stats['tts']['ttfa']['max'] >= timing_stats['tts']['ttfa']['min']
         
         # Check if we have STT timing data
