@@ -5,7 +5,7 @@ Exchange reader for voice mode conversation logs.
 import json
 import logging
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, List, Optional, Union, Dict
 import subprocess
@@ -72,8 +72,17 @@ class ExchangeReader:
         
         while current_date <= end_date:
             for exchange in self.read_date(current_date):
-                # Filter by exact timestamp
-                if start <= exchange.timestamp <= end:
+                # Filter by exact timestamp - ensure timezone compatibility
+                ex_time = exchange.timestamp
+                if ex_time.tzinfo is None:
+                    # Make exchange timestamp timezone-aware if it's naive
+                    ex_time = ex_time.replace(tzinfo=timezone.utc)
+                elif start.tzinfo is None:
+                    # Make start/end timezone-aware if they're naive
+                    start = start.replace(tzinfo=timezone.utc)
+                    end = end.replace(tzinfo=timezone.utc)
+                
+                if start <= ex_time <= end:
                     yield exchange
             
             current_date += timedelta(days=1)
