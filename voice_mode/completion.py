@@ -290,7 +290,7 @@ _voice_mode_cli_completion() {{
     
     # Main commands
     if [[ ${{COMP_CWORD}} -eq 1 ]]; then
-        opts="completion exchanges"
+        opts="completion conversations exchanges"
         COMPREPLY=( $(compgen -W "${{opts}}" -- ${{cur}}) )
         return 0
     fi
@@ -379,6 +379,7 @@ _voice_mode_cli() {{
 _voice_mode_cli_commands() {{
     local commands
     commands=(
+        'conversations:List conversations with summary information'
         'exchanges:Manage and view conversation exchange logs'
         'completion:Install shell completion'
     )
@@ -501,6 +502,7 @@ def generate_fish_completion_script(conversation_ids, providers, voices, models,
 # TODO: Implement version check notification for outdated completion scripts
 
 # Main commands
+complete -c voice-mode-cli -f -a "conversations" -d "List conversations with summary information"
 complete -c voice-mode-cli -f -a "exchanges" -d "Manage and view conversation exchange logs"
 complete -c voice-mode-cli -f -a "completion" -d "Install shell completion"
 

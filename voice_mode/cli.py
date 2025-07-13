@@ -21,10 +21,12 @@ def cli():
 
 # Import subcommand groups
 from voice_mode.cli_commands import exchanges as exchanges_cmd
+from voice_mode.cli_commands import conversations as conversations_cmd
 from voice_mode.completion import install_completion_command
 
 # Add subcommands
 cli.add_command(exchanges_cmd.exchanges)
+cli.add_command(conversations_cmd.conversations)
 cli.add_command(install_completion_command())
 
 
