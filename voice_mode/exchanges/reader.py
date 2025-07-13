@@ -154,7 +154,8 @@ class ExchangeReader:
         Yields:
             Exchange objects from recent days
         """
-        end_date = datetime.now()
+        from datetime import timezone
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=days)
         
         yield from self.read_range(start_date, end_date)

@@ -101,3 +101,7 @@ site/
 
 # Generated documentation files
 docs/README_PROCESSED.md
+
+# Test files
+test_preferences.py
+testdir/
