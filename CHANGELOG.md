@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Enhanced exchange logging with new metadata fields:
+  - STT audio filenames now properly linked in JSONL logs
+  - Transport type (local/livekit/speak-only) tracked for all exchanges
+  - Silence detection configuration logged for STT exchanges
+- Updated exchange format to version 2 (backward compatible)
+
+### Fixed
+- Fixed undefined `audio_path` variable in STT logging
+- Fixed incorrect hardcoded audio format in STT logs (now uses actual format)
+
+### Documentation
+- Updated conversation-logging-jsonl.md specification for version 2 schema
+
 ## [2.12.0] - 2025-07-06
 
 ### Fixed

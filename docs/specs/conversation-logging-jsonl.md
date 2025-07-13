@@ -4,6 +4,11 @@
 
 A conversation-focused logging system for voice-mode that tracks all utterances (STT and TTS) in a structured, append-only format using JSON Lines (JSONL). This enables real-time conversation tracking, efficient processing, and seamless integration with the conversation browser.
 
+## Version History
+
+- **Version 1**: Initial schema with basic fields
+- **Version 2**: Added transport type and silence detection configuration (backward compatible)
+
 ## File Format
 
 ### Structure
@@ -18,7 +23,7 @@ Each line represents a single utterance with the following structure:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "timestamp": "2024-06-28T10:30:45.123Z",
   "conversation_id": "conv_20240628_103045_abc123",
   "type": "stt|tts",
@@ -32,7 +37,13 @@ Each line represents a single utterance with the following structure:
     "voice": "alloy",
     "timing": "ttfa 1.2s, tts_gen 2.3s, total 5.6s",
     "provider": "openai|kokoro|whisper",
-    "audio_format": "mp3|pcm|wav"
+    "audio_format": "mp3|pcm|wav",
+    "transport": "local",
+    "silence_detection": {
+      "enabled": true,
+      "vad_aggressiveness": 2,
+      "silence_threshold_ms": 1000
+    }
   }
 }
 ```
@@ -40,7 +51,7 @@ Each line represents a single utterance with the following structure:
 ### Field Definitions
 
 #### Required Fields
-- **version**: Schema version number (currently 1)
+- **version**: Schema version number (currently 2)
 - **timestamp**: ISO 8601 timestamp of when the utterance started
 - **conversation_id**: Unique identifier for the conversation
 - **type**: Either "stt" (speech-to-text) or "tts" (text-to-speech)
@@ -62,6 +73,11 @@ Each line represents a single utterance with the following structure:
 - **language**: Language code if detected/specified (e.g., "en", "es", "fr")
 - **emotion**: Emotional tone if using emotional TTS
 - **error**: Error message if utterance failed
+- **transport**: Transport method used ("local", "livekit", "speak-only") - v2+
+- **silence_detection**: Object with VAD settings (STT only) - v2+
+  - **enabled**: Whether silence detection was active
+  - **vad_aggressiveness**: VAD aggressiveness level (0-3)
+  - **silence_threshold_ms**: Silence threshold in milliseconds
 
 ## Conversation ID Generation
 

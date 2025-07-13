@@ -372,16 +372,17 @@ async def text_to_speech_with_failover(
     return False, None, None
 
 
-async def speech_to_text(audio_data: np.ndarray, save_audio: bool = False, audio_dir: Optional[Path] = None) -> Optional[str]:
+async def speech_to_text(audio_data: np.ndarray, save_audio: bool = False, audio_dir: Optional[Path] = None, transport: str = "local") -> Optional[str]:
     """Convert audio to text with automatic failover"""
     # Use the new failover implementation
-    return await speech_to_text_with_failover(audio_data, save_audio, audio_dir)
+    return await speech_to_text_with_failover(audio_data, save_audio, audio_dir, transport)
 
 
 async def speech_to_text_with_failover(
     audio_data: np.ndarray, 
     save_audio: bool = False, 
-    audio_dir: Optional[Path] = None
+    audio_dir: Optional[Path] = None,
+    transport: str = "local"
 ) -> Optional[str]:
     """
     Speech to text with automatic failover to next available endpoint.
@@ -496,6 +497,9 @@ async def _speech_to_text_internal(
             except Exception as e:
                 logger.error(f"Failed to save debug WAV: {e}")
         
+        # Initialize audio_path for JSONL logging
+        audio_path = None
+        
         # Save audio file if audio saving is enabled
         if save_audio and audio_dir:
             try:
@@ -602,7 +606,13 @@ async def _speech_to_text_internal(
                         duration_ms=int(duration * 1000) if duration else None,
                         model=stt_config.get('model'),
                         provider=stt_config.get('provider', 'openai'),
-                        audio_format='mp3'  # STT uploads are always mp3
+                        audio_format=export_format,  # Use actual format from conversion
+                        transport=transport,
+                        silence_detection={
+                            "enabled": not DISABLE_SILENCE_DETECTION,
+                            "vad_aggressiveness": VAD_AGGRESSIVENESS,
+                            "silence_threshold_ms": SILENCE_THRESHOLD_MS
+                        }
                     )
                 except Exception as e:
                     logger.error(f"Failed to log STT to JSONL: {e}")
@@ -1327,7 +1337,8 @@ async def converse(
                             voice=voice,
                             provider=tts_provider if tts_provider else 'openai',
                             timing=timing_str,
-                            audio_format=audio_format
+                            audio_format=audio_format,
+                            transport="speak-only"
                         )
                     except Exception as e:
                         logger.error(f"Failed to log TTS to JSONL: {e}")
@@ -1459,7 +1470,7 @@ async def converse(
                         event_logger.log_event(event_logger.STT_START)
                     
                     stt_start = time.perf_counter()
-                    response_text = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None)
+                    response_text = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
                     timings['stt'] = time.perf_counter() - stt_start
                     
                     # Log STT complete
@@ -1537,7 +1548,8 @@ async def converse(
                             voice=voice,
                             provider=tts_provider if tts_provider else 'openai',
                             timing=timing_str,
-                            audio_format=audio_format
+                            audio_format=audio_format,
+                            transport=transport
                         )
                         
                         # Log the STT response
@@ -1545,7 +1557,13 @@ async def converse(
                             text=response_text,
                             model='whisper-1',  # Default STT model
                             provider='openai',
-                            audio_format='mp3'
+                            audio_format='mp3',
+                            transport=transport,
+                            silence_detection={
+                                "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
+                                "vad_aggressiveness": VAD_AGGRESSIVENESS,
+                                "silence_threshold_ms": SILENCE_THRESHOLD_MS
+                            }
                         )
                     except Exception as e:
                         logger.error(f"Failed to log conversation to JSONL: {e}")

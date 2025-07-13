@@ -20,7 +20,7 @@ from voice_mode.config import BASE_DIR
 class ConversationLogger:
     """Handles JSONL-based conversation logging."""
     
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
     CONVERSATION_GAP_MINUTES = 5
     
     def __init__(self, base_dir: Optional[Path] = None):
@@ -183,6 +183,8 @@ class ConversationLogger:
             "provider": kwargs.get("provider"),
             "language": kwargs.get("language"),
             "audio_format": kwargs.get("audio_format"),
+            "transport": kwargs.get("transport"),
+            "silence_detection": kwargs.get("silence_detection"),
             "error": kwargs.get("error"),
         }
         
@@ -197,6 +199,7 @@ class ConversationLogger:
             "provider": kwargs.get("provider"),
             "audio_format": kwargs.get("audio_format"),
             "timing": kwargs.get("timing"),
+            "transport": kwargs.get("transport"),
             "emotion": kwargs.get("emotion"),
             "error": kwargs.get("error"),
         }
