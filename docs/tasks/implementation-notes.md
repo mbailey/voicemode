@@ -1,1 +1,0 @@
-/home/m/Code/github.com/mbailey/voicemode-shadow/docs/tasks/implementation-notes.md
