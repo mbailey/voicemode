@@ -8,15 +8,14 @@
     },
     "voice-mode": {
       "type": "stdio",
-      "command": "uvx",
+      "command": "uv",
       "args": [
-        "--refresh",
-        "."
+        "run",
+        "python",
+        "-m",
+        "voice_mode.server"
       ],
-      "env": {
-        "VOICEMODE_SAVE_ALL": "true",
-        "XVOICEMODE_DEBUG": "trace"
-      }
+      "env": {}
     }
   }
 }

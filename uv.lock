@@ -4236,6 +4236,7 @@ name = "voice-mode"
 source = { editable = "." }
 dependencies = [
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
+    { name = "click" },
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "livekit" },
@@ -4292,6 +4293,7 @@ test = [
 requires-dist = [
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.0.0" },
+    { name = "click", specifier = ">=8.0.0" },
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "flask", marker = "extra == 'scripts'", specifier = ">=3.0.0" },
     { name = "gradio", marker = "extra == 'notebooks'", specifier = ">=4.0.0" },

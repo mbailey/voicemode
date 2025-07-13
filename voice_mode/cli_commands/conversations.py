@@ -13,6 +13,7 @@ from voice_mode.exchanges import (
     ConversationGrouper,
     ExchangeFormatter
 )
+from voice_mode.metadata import ConversationMetadata
 
 
 @click.command()
@@ -33,8 +34,9 @@ from voice_mode.exchanges import (
               help='Minimum duration in seconds')
 @click.option('--reverse', is_flag=True, help='Show oldest first')
 @click.option('--no-color', is_flag=True, help='Disable colored output')
+@click.option('--favorites', is_flag=True, help='Show only favorite conversations')
 def conversations(lines, today, yesterday, date, days, format, min_exchanges, 
-                 min_duration, reverse, no_color):
+                 min_duration, reverse, no_color, favorites):
     """List conversations with summary information.
     
     Shows conversations one per line with ID, timestamp, duration,
@@ -43,6 +45,7 @@ def conversations(lines, today, yesterday, date, days, format, min_exchanges,
     reader = ExchangeReader()
     grouper = ConversationGrouper()
     formatter = ExchangeFormatter()
+    metadata_store = ConversationMetadata()
     
     # Determine which exchanges to read
     if today:
@@ -72,6 +75,13 @@ def conversations(lines, today, yesterday, date, days, format, min_exchanges,
             continue
         if min_duration and conv.duration.total_seconds() < min_duration:
             continue
+        
+        # Filter by favorites if requested
+        if favorites:
+            metadata = metadata_store.read_metadata(conv.id, conv.start_time)
+            if not metadata or not metadata.get('is_favorite'):
+                continue
+        
         filtered_convs.append(conv)
     
     # Sort conversations
@@ -87,12 +97,22 @@ def conversations(lines, today, yesterday, date, days, format, min_exchanges,
     # Format and output
     if format == 'simple':
         for conv in filtered_convs:
-            # Get first user message for preview
-            preview = ""
-            for exchange in conv.exchanges:
-                if exchange.type == 'stt':
-                    preview = exchange.text[:60] + "..." if len(exchange.text) > 60 else exchange.text
-                    break
+            # Check for metadata
+            metadata = metadata_store.read_metadata(conv.id, conv.start_time)
+            
+            # Get preview - prefer title from metadata
+            if metadata and metadata.get('title'):
+                preview = metadata['title']
+                # Add star emoji if favorite
+                if metadata.get('is_favorite'):
+                    preview = "⭐ " + preview
+            else:
+                # Fallback to first user message for preview
+                preview = ""
+                for exchange in conv.exchanges:
+                    if exchange.type == 'stt':
+                        preview = exchange.text[:60] + "..." if len(exchange.text) > 60 else exchange.text
+                        break
             
             # Format duration
             duration_seconds = conv.duration.total_seconds()
@@ -148,6 +168,8 @@ def conversations(lines, today, yesterday, date, days, format, min_exchanges,
         import json
         conv_list = []
         for conv in filtered_convs:
+            metadata = metadata_store.read_metadata(conv.id, conv.start_time)
+            
             conv_dict = {
                 'id': conv.id,
                 'start_time': conv.start_time.isoformat(),
@@ -159,19 +181,36 @@ def conversations(lines, today, yesterday, date, days, format, min_exchanges,
                 'word_count': sum(len(e.text.split()) for e in conv.exchanges),
                 'first_message': conv.exchanges[0].text[:100] if conv.exchanges else ""
             }
+            
+            # Add metadata fields if available
+            if metadata:
+                conv_dict['title'] = metadata.get('title')
+                conv_dict['is_favorite'] = metadata.get('is_favorite', False)
+                conv_dict['tags'] = metadata.get('tags', [])
+                conv_dict['notes'] = metadata.get('notes')
+                conv_dict['rating'] = metadata.get('rating')
+            
             conv_list.append(conv_dict)
         
         print(json.dumps(conv_list, indent=2))
     
     elif format == 'csv':
         # CSV header
-        print("conversation_id,start_time,duration_seconds,exchange_count,stt_count,tts_count,word_count,first_message")
+        print("conversation_id,start_time,duration_seconds,exchange_count,stt_count,tts_count,word_count,title,is_favorite,tags,first_message")
         
         for conv in filtered_convs:
+            metadata = metadata_store.read_metadata(conv.id, conv.start_time)
             first_msg = conv.exchanges[0].text[:100].replace('"', '""') if conv.exchanges else ""
+            
+            # Get metadata fields
+            title = metadata.get('title', '').replace('"', '""') if metadata else ''
+            is_favorite = metadata.get('is_favorite', False) if metadata else False
+            tags = '|'.join(metadata.get('tags', [])) if metadata else ''
+            
             print(f'"{conv.id}","{conv.start_time}",{conv.duration.total_seconds()},'
                   f'{conv.exchange_count},{conv.stt_count},{conv.tts_count},'
-                  f'{sum(len(e.text.split()) for e in conv.exchanges)},"{first_msg}"')
+                  f'{sum(len(e.text.split()) for e in conv.exchanges)},'
+                  f'"{title}",{is_favorite},"{tags}","{first_msg}"')
     
     # Summary
     if format in ['simple', 'detailed']:
