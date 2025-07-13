@@ -1422,6 +1422,33 @@ async def converse(
                         timings['tts_play'] = tts_metrics.get('playback', 0)
                     timings['tts_total'] = time.perf_counter() - tts_start
                     
+                    # Log TTS immediately after it completes
+                    if tts_success:
+                        try:
+                            # Format TTS timing
+                            tts_timing_parts = []
+                            if 'ttfa' in timings:
+                                tts_timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
+                            if 'tts_gen' in timings:
+                                tts_timing_parts.append(f"gen {timings['tts_gen']:.1f}s")
+                            if 'tts_play' in timings:
+                                tts_timing_parts.append(f"play {timings['tts_play']:.1f}s")
+                            tts_timing_str = ", ".join(tts_timing_parts) if tts_timing_parts else None
+                            
+                            conversation_logger = get_conversation_logger()
+                            conversation_logger.log_tts(
+                                text=message,
+                                audio_file=os.path.basename(tts_metrics.get('audio_path')) if tts_metrics and tts_metrics.get('audio_path') else None,
+                                model=tts_model,
+                                voice=voice,
+                                provider=tts_provider if tts_provider else 'openai',
+                                timing=tts_timing_str,
+                                audio_format=audio_format,
+                                transport=transport
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to log TTS to JSONL: {e}")
+                    
                     if not tts_success:
                         result = "Error: Could not speak message"
                         return result
@@ -1479,6 +1506,34 @@ async def converse(
                             event_logger.log_event(event_logger.STT_COMPLETE, {"text": response_text})
                         else:
                             event_logger.log_event(event_logger.STT_NO_SPEECH)
+                    
+                    # Log STT immediately after it completes
+                    if response_text:
+                        try:
+                            # Format STT timing
+                            stt_timing_parts = []
+                            if 'record' in timings:
+                                stt_timing_parts.append(f"record {timings['record']:.1f}s")
+                            if 'stt' in timings:
+                                stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
+                            stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
+                            
+                            conversation_logger = get_conversation_logger()
+                            conversation_logger.log_stt(
+                                text=response_text,
+                                model='whisper-1',  # Default STT model
+                                provider='openai',
+                                audio_format='mp3',
+                                transport=transport,
+                                timing=stt_timing_str,
+                                silence_detection={
+                                    "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
+                                    "vad_aggressiveness": VAD_AGGRESSIVENESS,
+                                    "silence_threshold_ms": SILENCE_THRESHOLD_MS
+                                }
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to log STT to JSONL: {e}")
                 
                 # Calculate total time (use tts_total instead of sub-metrics)
                 main_timings = {k: v for k, v in timings.items() if k in ['tts_total', 'record', 'stt']}
@@ -1546,37 +1601,7 @@ async def converse(
                         }
                         save_transcription(conversation_text, prefix="conversation", metadata=metadata)
                     
-                    # Log to JSONL - TTS message first
-                    try:
-                        conversation_logger = get_conversation_logger()
-                        # Log the TTS utterance
-                        conversation_logger.log_tts(
-                            text=message,
-                            audio_file=os.path.basename(tts_metrics.get('audio_path')) if tts_metrics.get('audio_path') else None,
-                            model=tts_model,
-                            voice=voice,
-                            provider=tts_provider if tts_provider else 'openai',
-                            timing=tts_timing_str,
-                            audio_format=audio_format,
-                            transport=transport
-                        )
-                        
-                        # Log the STT response
-                        conversation_logger.log_stt(
-                            text=response_text,
-                            model='whisper-1',  # Default STT model
-                            provider='openai',
-                            audio_format='mp3',
-                            transport=transport,
-                            timing=stt_timing_str,
-                            silence_detection={
-                                "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
-                                "vad_aggressiveness": VAD_AGGRESSIVENESS,
-                                "silence_threshold_ms": SILENCE_THRESHOLD_MS
-                            }
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to log conversation to JSONL: {e}")
+                    # Logging already done immediately after TTS and STT complete
                     
                     result = f"Voice response: {response_text} | Timing: {timing_str}"
                     success = True
