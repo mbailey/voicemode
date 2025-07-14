@@ -1,6 +1,6 @@
 """Prompt for generating conversation titles."""
 
-from ..server import mcp
+from ..mcp_instance import mcp
 
 GENERATE_TITLES_PROMPT = """
 Generate meaningful titles for voice conversations based on their content.

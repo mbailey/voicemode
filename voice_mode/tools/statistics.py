@@ -5,7 +5,7 @@ import time
 from typing import Optional
 from datetime import datetime
 
-from ..server import mcp
+from ..mcp_instance import mcp
 from ..statistics import get_statistics_tracker, track_conversation
 from ..config import logger
 

@@ -1,10 +1,8 @@
 #!/usr/bin/env python
 """VoiceMode MCP Server - Modular version using FastMCP patterns."""
 
-from fastmcp import FastMCP
-
-# Create FastMCP instance
-mcp = FastMCP("voicemode")
+# Import the shared MCP instance
+from .mcp_instance import mcp
 
 # Import shared configuration and utilities
 from . import config

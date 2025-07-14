@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from ..server import mcp
+from ..mcp_instance import mcp
 from ..config import logger
 from ..exchanges import ExchangeReader, ConversationGrouper
 from ..metadata import ConversationMetadata

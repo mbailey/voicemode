@@ -1,6 +1,6 @@
 """Kokoro TTS service management prompts."""
 
-from voice_mode.server import mcp
+from voice_mode.mcp_instance import mcp
 
 
 @mcp.prompt(name="kokoro-start")

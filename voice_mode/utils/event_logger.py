@@ -346,11 +346,14 @@ def log_stt_start() -> None:
         logger.log_event(EventLogger.STT_START)
 
 
-def log_stt_complete(text: str) -> None:
+def log_stt_complete(text: str, audio_file: Optional[str] = None) -> None:
     """Log STT completion."""
     logger = get_event_logger()
     if logger:
-        logger.log_event(EventLogger.STT_COMPLETE, {"text": text})
+        data = {"text": text}
+        if audio_file:
+            data["audio_file"] = audio_file
+        logger.log_event(EventLogger.STT_COMPLETE, data)
 
 
 def log_tool_request_start(tool_name: str, parameters: Optional[Dict[str, Any]] = None) -> None:

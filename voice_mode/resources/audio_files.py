@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 from typing import Optional
-from voice_mode.server import mcp
+from voice_mode.mcp_instance import mcp
 from voice_mode.config import SAVE_AUDIO, AUDIO_DIR, logger
 
 @mcp.resource("audio://files/{directory}")

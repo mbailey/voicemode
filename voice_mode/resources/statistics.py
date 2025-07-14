@@ -3,7 +3,7 @@
 import json
 from typing import Dict, Any
 
-from ..server import mcp
+from ..mcp_instance import mcp
 from ..statistics import get_statistics_tracker
 from ..config import logger
 

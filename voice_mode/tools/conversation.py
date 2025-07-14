@@ -31,7 +31,7 @@ except ImportError as e:
         f.write(f"Python path: {sys.path}\n")
         f.write(f"Python executable: {sys.executable}\n")
 
-from voice_mode.server import mcp
+from voice_mode.mcp_instance import mcp
 from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
     audio_operation_lock,
@@ -430,7 +430,8 @@ async def speech_to_text_with_failover(
                 stt_config, 
                 openai_clients,
                 save_audio, 
-                audio_dir
+                audio_dir,
+                transport
             )
             
             if result:
@@ -456,14 +457,19 @@ async def _speech_to_text_internal(
     stt_config: dict,
     openai_clients: dict,
     save_audio: bool = False,
-    audio_dir: Optional[Path] = None
+    audio_dir: Optional[Path] = None,
+    transport: str = "local"
 ) -> Optional[str]:
     """Internal speech to text implementation (extracted from original speech_to_text)"""
     logger.info(f"STT: Converting speech to text, audio data shape: {audio_data.shape}")
     
+    # Calculate duration from audio data
+    duration = len(audio_data) / SAMPLE_RATE
+    
     if DEBUG:
         logger.debug(f"STT config - Model: {stt_config['model']}, Base URL: {stt_config['base_url']}")
         logger.debug(f"Audio stats - Min: {audio_data.min()}, Max: {audio_data.max()}, Mean: {audio_data.mean():.2f}")
+        logger.debug(f"Audio duration: {duration:.2f} seconds")
     
     wav_file = None
     export_file = None
@@ -562,6 +568,9 @@ async def _speech_to_text_internal(
         file_size = os.path.getsize(upload_file)
         logger.debug(f"Uploading {file_size} bytes to STT API...")
         
+        # Log STT start event
+        log_stt_start()
+        
         # Perform STT based on configuration
         with open(upload_file, 'rb') as audio_file:
             # Use client from config
@@ -586,6 +595,9 @@ async def _speech_to_text_internal(
             
             if text:
                 logger.info(f"✓ STT result: '{text}'")
+                
+                # Log STT complete event with audio filename
+                log_stt_complete(text, audio_path.name if audio_path else None)
                 
                 # Save transcription if enabled
                 if SAVE_TRANSCRIPTIONS:
@@ -1507,32 +1519,34 @@ async def converse(
                         else:
                             event_logger.log_event(event_logger.STT_NO_SPEECH)
                     
-                    # Log STT immediately after it completes (even if no speech detected)
-                    try:
-                        # Format STT timing
-                        stt_timing_parts = []
-                        if 'record' in timings:
-                            stt_timing_parts.append(f"record {timings['record']:.1f}s")
-                        if 'stt' in timings:
-                            stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
-                        stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
-                        
-                        conversation_logger = get_conversation_logger()
-                        conversation_logger.log_stt(
-                            text=response_text if response_text else "[no speech detected]",
-                            model='whisper-1',  # Default STT model
-                            provider='openai',
-                            audio_format='mp3',
-                            transport=transport,
-                            timing=stt_timing_str,
-                            silence_detection={
-                                "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
-                                "vad_aggressiveness": VAD_AGGRESSIVENESS,
-                                "silence_threshold_ms": SILENCE_THRESHOLD_MS
-                            }
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to log STT to JSONL: {e}")
+                    # STT logging is handled inside _speech_to_text_internal when speech is detected
+                    # But we need to log here when no speech is detected
+                    if not response_text:
+                        try:
+                            # Format STT timing
+                            stt_timing_parts = []
+                            if 'record' in timings:
+                                stt_timing_parts.append(f"record {timings['record']:.1f}s")
+                            if 'stt' in timings:
+                                stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
+                            stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
+                            
+                            conversation_logger = get_conversation_logger()
+                            conversation_logger.log_stt(
+                                text="[no speech detected]",
+                                model='whisper-1',  # Default STT model
+                                provider='openai',
+                                audio_format='mp3',
+                                transport=transport,
+                                timing=stt_timing_str,
+                                silence_detection={
+                                    "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
+                                    "vad_aggressiveness": VAD_AGGRESSIVENESS,
+                                    "silence_threshold_ms": SILENCE_THRESHOLD_MS
+                                }
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to log STT to JSONL: {e}")
                 
                 # Calculate total time (use tts_total instead of sub-metrics)
                 main_timings = {k: v for k, v in timings.items() if k in ['tts_total', 'record', 'stt']}

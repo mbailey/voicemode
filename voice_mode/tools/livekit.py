@@ -3,7 +3,7 @@
 import logging
 from typing import Optional
 
-from voice_mode.server import mcp
+from voice_mode.mcp_instance import mcp
 from voice_mode.shared import LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET
 
 logger = logging.getLogger("voice-mode")

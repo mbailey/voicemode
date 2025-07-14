@@ -35,13 +35,64 @@ from voice_mode.metadata import ConversationMetadata
 @click.option('--reverse', is_flag=True, help='Show oldest first')
 @click.option('--no-color', is_flag=True, help='Disable colored output')
 @click.option('--favorites', is_flag=True, help='Show only favorite conversations')
+@click.option('--web', is_flag=True, help='Open conversation browser in web browser')
 def conversations(lines, today, yesterday, date, days, format, min_exchanges, 
-                 min_duration, reverse, no_color, favorites):
+                 min_duration, reverse, no_color, favorites, web):
     """List conversations with summary information.
     
     Shows conversations one per line with ID, timestamp, duration,
     exchange count, and preview of first message.
     """
+    # Handle web option
+    if web:
+        import webbrowser
+        import subprocess
+        import time
+        from pathlib import Path
+        
+        # Find the conversation browser script
+        script_dir = Path(__file__).parent.parent.parent / "scripts"
+        browser_v2 = script_dir / "conversation_browser_v2.py"
+        browser_v1 = script_dir / "conversation_browser.py"
+        
+        # Try V2 first, fallback to V1
+        browser_script = browser_v2 if browser_v2.exists() else browser_v1
+        
+        if not browser_script.exists():
+            click.echo("Error: Conversation browser script not found", err=True)
+            return
+        
+        # Start the browser
+        port = 5555
+        url = f"http://localhost:{port}"
+        
+        try:
+            # Launch in background
+            subprocess.Popen([sys.executable, str(browser_script)], 
+                           stdout=subprocess.DEVNULL, 
+                           stderr=subprocess.DEVNULL)
+            
+            # Give it a moment to start
+            time.sleep(1.5)
+            
+            # Open browser
+            webbrowser.open(url)
+            
+            click.echo(f"Conversation browser opened at {url}")
+            click.echo("Press Ctrl+C to stop the browser")
+            
+            # Keep running until interrupted
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                click.echo("\nStopping conversation browser...")
+                
+        except Exception as e:
+            click.echo(f"Error launching browser: {e}", err=True)
+        
+        return
+    
     reader = ExchangeReader()
     grouper = ConversationGrouper()
     formatter = ExchangeFormatter()

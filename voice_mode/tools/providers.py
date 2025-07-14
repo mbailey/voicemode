@@ -3,7 +3,7 @@
 import logging
 from typing import Optional, Dict, Any
 
-from voice_mode.server import mcp
+from voice_mode.mcp_instance import mcp
 from voice_mode.provider_discovery import provider_registry
 from voice_mode.config import TTS_BASE_URLS, STT_BASE_URLS
 

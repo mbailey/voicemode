@@ -11,7 +11,7 @@ from typing import Optional, Dict
 from pathlib import Path
 
 import psutil
-from voice_mode.server import mcp
+from voice_mode.mcp_instance import mcp
 
 logger = logging.getLogger("voice-mode")
 
