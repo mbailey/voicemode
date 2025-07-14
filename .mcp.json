@@ -8,14 +8,33 @@
     },
     "voice-mode": {
       "type": "stdio",
-      "command": "uv",
+      "command": "uvx",
       "args": [
-        "run",
-        "python",
-        "-m",
-        "voice_mode.server"
+        "--refresh",
+        "."
       ],
       "env": {}
+    },
+    "tmux": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@nickgnd/tmux-mcp"
+      ],
+      "env": {}
+    },
+    "neovim": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-neovim-server"
+      ],
+      "env": {
+        "ALLOW_SHELL_COMMANDS": "true",
+        "NVIM_SOCKET_PATH": "/tmp/nvim"
+      }
     }
   }
 }
