@@ -1480,9 +1480,11 @@ async def converse(
                     
                     record_start = time.perf_counter()
                     logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration}, disable_silence_detection={disable_silence_detection}, min_duration={min_listen_duration}")
+                    logger.info(f"[DEBUG] Recording audio in MCP context, transport={transport}")
                     audio_data = await asyncio.get_event_loop().run_in_executor(
                         None, record_audio_with_silence_detection, listen_duration, disable_silence_detection, min_listen_duration
                     )
+                    logger.info(f"[DEBUG] Recording returned {len(audio_data) if audio_data is not None else 'None'} samples")
                     timings['record'] = time.perf_counter() - record_start
                     
                     # Log recording end
@@ -1500,8 +1502,12 @@ async def converse(
                     logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
                     
                     if len(audio_data) == 0:
+                        logger.error("[DEBUG] Recording returned empty audio data!")
                         result = "Error: Could not record audio"
                         return result
+                    
+                    # Debug audio stats
+                    logger.info(f"[DEBUG] Recorded audio stats: shape={audio_data.shape}, dtype={audio_data.dtype}, max={np.abs(audio_data).max()}")
                     
                     # Convert to text
                     # Log STT start
