@@ -123,18 +123,26 @@ async def install_whisper_cpp(
             logger.info(f"Removing existing installation at {install_dir}")
             shutil.rmtree(install_dir)
         
-        # Clone whisper.cpp
-        logger.info("Cloning whisper.cpp repository...")
-        subprocess.run([
-            "git", "clone", "https://github.com/ggerganov/whisper.cpp.git", install_dir
-        ], check=True)
+        # Clone whisper.cpp if not exists
+        if not os.path.exists(install_dir):
+            logger.info("Cloning whisper.cpp repository...")
+            subprocess.run([
+                "git", "clone", "https://github.com/ggerganov/whisper.cpp.git", install_dir
+            ], check=True)
+        else:
+            logger.info("Using existing whisper.cpp directory...")
         
         # Build whisper.cpp
         logger.info(f"Building whisper.cpp with {gpu_type} support...")
+        original_dir = os.getcwd()
         os.chdir(install_dir)
         
-        # Clean any previous build
-        subprocess.run(["make", "clean"], check=True)
+        # Clean any previous build (only if Makefile exists)
+        if os.path.exists("Makefile"):
+            try:
+                subprocess.run(["make", "clean"], check=True)
+            except subprocess.CalledProcessError:
+                logger.warning("Make clean failed, continuing anyway...")
         
         # Build with appropriate flags
         build_env = os.environ.copy()
@@ -169,17 +177,22 @@ async def install_whisper_cpp(
             }
         
         # Test whisper with sample if available
+        main_path = os.path.join(install_dir, "main")
         sample_path = os.path.join(install_dir, "samples", "jfk.wav")
-        if os.path.exists(sample_path):
+        if os.path.exists(sample_path) and os.path.exists(main_path):
             try:
                 result = subprocess.run([
-                    "./main", "-m", model_path, "-f", sample_path, "-np"
+                    main_path, "-m", model_path, "-f", sample_path, "-np"
                 ], capture_output=True, text=True, timeout=30)
                 
                 if result.returncode != 0:
                     logger.warning(f"Test run failed: {result.stderr}")
             except subprocess.TimeoutExpired:
                 logger.warning("Test run timed out")
+        
+        # Restore original directory
+        if 'original_dir' in locals():
+            os.chdir(original_dir)
         
         return {
             "success": True,
@@ -191,18 +204,22 @@ async def install_whisper_cpp(
                 "system": system,
                 "gpu_acceleration": gpu_type,
                 "model": model,
-                "binary_path": os.path.join(install_dir, "main")
+                "binary_path": main_path if 'main_path' in locals() else os.path.join(install_dir, "main")
             },
             "message": f"Successfully installed whisper.cpp with {gpu_type} support"
         }
         
     except subprocess.CalledProcessError as e:
+        if 'original_dir' in locals():
+            os.chdir(original_dir)
         return {
             "success": False,
             "error": f"Command failed: {e.cmd}",
             "stderr": e.stderr.decode() if e.stderr else None
         }
     except Exception as e:
+        if 'original_dir' in locals():
+            os.chdir(original_dir)
         return {
             "success": False,
             "error": str(e)
@@ -287,129 +304,157 @@ async def install_kokoro_fastapi(
             logger.info(f"Removing existing installation at {install_dir}")
             shutil.rmtree(install_dir)
         
-        # Clone repository
-        logger.info("Cloning kokoro-fastapi repository...")
-        subprocess.run([
-            "git", "clone", "https://github.com/remsky/kokoro-fastapi.git", install_dir
-        ], check=True)
+        # Clone repository if not exists
+        if not os.path.exists(install_dir):
+            logger.info("Cloning kokoro-fastapi repository...")
+            subprocess.run([
+                "git", "clone", "https://github.com/remsky/kokoro-fastapi.git", install_dir
+            ], check=True)
+        else:
+            logger.info("Using existing kokoro-fastapi directory...")
         
-        os.chdir(install_dir)
+        # Save current directory
+        original_dir = os.getcwd()
         
-        # Create virtual environment and install dependencies
-        logger.info("Creating virtual environment and installing dependencies...")
-        subprocess.run(["uv", "venv"], check=True)
-        
-        # Determine venv Python path
-        venv_python = os.path.join(install_dir, ".venv", "bin", "python")
-        if not os.path.exists(venv_python):
-            # Windows path
-            venv_python = os.path.join(install_dir, ".venv", "Scripts", "python.exe")
-        
-        # Install dependencies
-        subprocess.run(["uv", "pip", "install", "-r", "requirements.txt"], check=True)
-        
-        # Download models if requested
-        if install_models:
-            logger.info("Downloading Kokoro models...")
-            os.makedirs(models_dir, exist_ok=True)
+        try:
+            os.chdir(install_dir)
             
-            # Model files to download
-            model_files = [
-                "kokoro-v0_19.onnx",
-                "kokoro-v0_19.onnx.json",
-                "voices.json"
-            ]
+            # Create virtual environment if not exists
+            venv_path = os.path.join(install_dir, ".venv")
+            if not os.path.exists(venv_path):
+                logger.info("Creating virtual environment...")
+                subprocess.run(["uv", "venv"], check=True)
+            else:
+                logger.info("Using existing virtual environment...")
             
-            async with aiohttp.ClientSession() as session:
-                for model_file in model_files:
-                    url = f"https://huggingface.co/remsky/kokoro-onnx/resolve/main/{model_file}"
-                    output_path = os.path.join(models_dir, model_file)
-                    
-                    if os.path.exists(output_path) and not force_reinstall:
-                        logger.info(f"Model already exists: {model_file}")
-                        continue
-                    
-                    logger.info(f"Downloading {model_file}...")
-                    async with session.get(url) as response:
-                        response.raise_for_status()
-                        with open(output_path, 'wb') as f:
-                            async for chunk in response.content.iter_chunked(8192):
-                                f.write(chunk)
-        
-        # Create configuration
-        config = {
-            "host": "127.0.0.1",
-            "port": port,
-            "models_dir": models_dir,
-            "log_level": "info"
-        }
-        
-        config_path = os.path.join(install_dir, "config.json")
-        with open(config_path, "w") as f:
-            json.dump(config, f, indent=2)
-        
-        # Create start script
-        start_script = f"""#!/bin/bash
+            # Determine venv Python path
+            venv_python = os.path.join(install_dir, ".venv", "bin", "python")
+            if not os.path.exists(venv_python):
+                # Windows path
+                venv_python = os.path.join(install_dir, ".venv", "Scripts", "python.exe")
+            
+            # Install dependencies
+            logger.info("Installing dependencies...")
+            subprocess.run(["uv", "pip", "install", "-r", "requirements.txt"], check=True)
+            
+            # Download models if requested
+            if install_models:
+                logger.info("Downloading Kokoro models...")
+                os.makedirs(models_dir, exist_ok=True)
+            
+                # Model files to download
+                model_files = [
+                    "kokoro-v0_19.onnx",
+                    "kokoro-v0_19.onnx.json",
+                    "voices.json"
+                ]
+                
+                async with aiohttp.ClientSession() as session:
+                    for model_file in model_files:
+                        url = f"https://huggingface.co/remsky/kokoro-onnx/resolve/main/{model_file}"
+                        output_path = os.path.join(models_dir, model_file)
+                        
+                        if os.path.exists(output_path) and not force_reinstall:
+                            logger.info(f"Model already exists: {model_file}")
+                            continue
+                        
+                        logger.info(f"Downloading {model_file}...")
+                        async with session.get(url) as response:
+                            response.raise_for_status()
+                            with open(output_path, 'wb') as f:
+                                async for chunk in response.content.iter_chunked(8192):
+                                    f.write(chunk)
+            
+            # Create configuration
+            config = {
+                "host": "127.0.0.1",
+                "port": port,
+                "models_dir": models_dir,
+                "log_level": "info"
+            }
+            
+            config_path = os.path.join(install_dir, "config.json")
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=2)
+            
+            # Create start script
+            start_script = f"""#!/bin/bash
 cd {install_dir}
 source .venv/bin/activate
 MODELS_DIR={models_dir} uvicorn main:app --host 127.0.0.1 --port {port}
 """
-        
-        start_script_path = os.path.join(install_dir, "start.sh")
-        with open(start_script_path, "w") as f:
-            f.write(start_script)
-        os.chmod(start_script_path, 0o755)
-        
-        # Get available voices
-        available_voices = []
-        voices_file = os.path.join(models_dir, "voices.json")
-        if os.path.exists(voices_file):
-            with open(voices_file, "r") as f:
-                voices_data = json.load(f)
-                available_voices = list(voices_data.keys())
-        
-        result = {
-            "success": True,
-            "install_path": install_dir,
-            "models_path": models_dir,
-            "service_url": f"http://127.0.0.1:{port}",
-            "start_command": f"bash {start_script_path}",
-            "available_voices": available_voices,
-            "config_path": config_path
-        }
-        
-        # Start service if requested
-        if auto_start:
-            logger.info("Starting kokoro-fastapi service...")
-            # Start in background
-            process = subprocess.Popen(
-                ["bash", start_script_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
             
-            # Wait a moment for service to start
-            await asyncio.sleep(3)
+            start_script_path = os.path.join(install_dir, "start.sh")
+            with open(start_script_path, "w") as f:
+                f.write(start_script)
+            os.chmod(start_script_path, 0o755)
             
-            # Check if service is running
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f"http://127.0.0.1:{port}/health") as response:
-                        if response.status == 200:
-                            result["service_status"] = "running"
-                            result["service_pid"] = process.pid
-                        else:
-                            result["service_status"] = "failed"
-                            result["error"] = "Health check failed"
-            except:
-                result["service_status"] = "failed"
-                result["error"] = "Could not connect to service"
-        else:
-            result["service_status"] = "not_started"
-        
-        result["message"] = f"Successfully installed kokoro-fastapi at {install_dir}"
-        return result
-        
+            # Get available voices
+            available_voices = []
+            voices_file = os.path.join(models_dir, "voices.json")
+            if os.path.exists(voices_file):
+                with open(voices_file, "r") as f:
+                    voices_data = json.load(f)
+                    available_voices = list(voices_data.keys())
+            
+            result = {
+                "success": True,
+                "install_path": install_dir,
+                "models_path": models_dir,
+                "service_url": f"http://127.0.0.1:{port}",
+                "start_command": f"bash {start_script_path}",
+                "available_voices": available_voices,
+                "config_path": config_path
+            }
+            
+            # Start service if requested
+            if auto_start:
+                logger.info("Starting kokoro-fastapi service...")
+                # Start in background
+                process = subprocess.Popen(
+                    ["bash", start_script_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                
+                # Wait a moment for service to start
+                await asyncio.sleep(3)
+                
+                # Check if service is running
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(f"http://127.0.0.1:{port}/health") as response:
+                            if response.status == 200:
+                                result["service_status"] = "running"
+                                result["service_pid"] = process.pid
+                            else:
+                                result["service_status"] = "failed"
+                                result["error"] = "Health check failed"
+                except:
+                    result["service_status"] = "failed"
+                    result["error"] = "Could not connect to service"
+            else:
+                result["service_status"] = "not_started"
+            
+            result["message"] = f"Successfully installed kokoro-fastapi at {install_dir}"
+            return result
+            
+        except subprocess.CalledProcessError as e:
+            return {
+                "success": False,
+                "error": f"Command failed: {e.cmd}",
+                "stderr": e.stderr.decode() if e.stderr else None
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
+        finally:
+            # Always restore original directory
+            if 'original_dir' in locals():
+                os.chdir(original_dir)
+    
     except subprocess.CalledProcessError as e:
         return {
             "success": False,
