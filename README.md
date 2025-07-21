@@ -443,8 +443,12 @@ nix run github:mbailey/voicemode
 | `start_kokoro` | Start the Kokoro TTS service | `models_dir` (optional, defaults to ~/Models/kokoro) |
 | `stop_kokoro` | Stop the Kokoro TTS service | None |
 | `kokoro_status` | Check the status of Kokoro TTS service | None |
+| `install_whisper_cpp` | Install whisper.cpp for local STT | `install_dir`, `model` (default: base.en), `use_gpu` (auto-detect) |
+| `install_kokoro_fastapi` | Install kokoro-fastapi for local TTS | `install_dir`, `port` (default: 8880), `auto_start` (default: true) |
 
 **Note:** The `converse` tool is the primary interface for voice interactions, combining speaking and listening in a natural flow.
+
+**New:** The `install_whisper_cpp` and `install_kokoro_fastapi` tools help you set up free, private, open-source voice services locally. See [Installation Tools Documentation](docs/installation-tools.md) for detailed usage.
 
 ## Configuration
 
