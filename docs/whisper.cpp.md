@@ -11,9 +11,27 @@ Voice Mode automatically checks for local STT services before falling back to Op
 
 ## Setting Up Whisper.cpp
 
-### Installation
+### Quick Installation
 
-Install Whisper.cpp following the [official instructions](https://github.com/ggerganov/whisper.cpp).
+Voice Mode includes an installation tool that sets up Whisper.cpp automatically:
+
+```bash
+# Install with default large-v2 model (recommended)
+claude run install_whisper_cpp
+
+# Install with a specific model
+claude run install_whisper_cpp --model base.en
+```
+
+This will:
+- Clone and build Whisper.cpp with GPU support (if available)
+- Download the specified model (default: large-v2)
+- Create a start script with environment variable support
+- Set up automatic startup (launchd on macOS, systemd on Linux)
+
+### Manual Installation
+
+Alternatively, install Whisper.cpp following the [official instructions](https://github.com/ggerganov/whisper.cpp).
 
 ### Running the OpenAI-Compatible Server
 
@@ -21,7 +39,7 @@ To run Whisper.cpp with an OpenAI-compatible API endpoint:
 
 ```bash
 whisper-server \
-  --model base.en \
+  --model models/ggml-large-v2.bin \
   --host 127.0.0.1 \
   --port 2022 \
   --inference-path "/v1/audio/transcriptions" \
@@ -32,7 +50,7 @@ whisper-server \
 ```
 
 Key options:
-- `--model`: Model to use (tiny, base, small, medium, large)
+- `--model`: Model file path (supports tiny, base, small, medium, large-v2, large-v3)
 - `--host`: Server host (default: 127.0.0.1)
 - `--port`: Server port (Voice Mode expects 2022)
 - `--inference-path`: OpenAI-compatible endpoint path
@@ -62,10 +80,43 @@ Or add to your MCP configuration:
 
 ## Model Selection
 
-The Whisper model is automatically selected based on your hardware:
-- **Mac (Apple Silicon)**: Uses optimized CoreML models
-- **NVIDIA GPU**: Uses CUDA-accelerated models
-- **CPU**: Uses optimized CPU models
+### Available Models
+
+| Model | Size | RAM Usage | Accuracy | Speed |
+|-------|------|-----------|----------|-------|
+| tiny | 39 MB | ~390 MB | Low | Fastest |
+| base | 142 MB | ~500 MB | Fair | Fast |
+| small | 466 MB | ~1 GB | Good | Moderate |
+| medium | 1.5 GB | ~2.6 GB | Very Good | Slow |
+| large-v2 | 3 GB | ~3.9 GB | Excellent | Slower |
+| large-v3 | 3 GB | ~3.9 GB | Best | Slowest |
+
+### Switching Models
+
+Set the `VOICEMODE_WHISPER_MODEL` environment variable:
+
+```bash
+# Use base model for faster processing
+export VOICEMODE_WHISPER_MODEL=base.en
+
+# Use large-v2 for best accuracy (default)
+export VOICEMODE_WHISPER_MODEL=large-v2
+```
+
+### Viewing Available Models
+
+Use the MCP resource to see installed models:
+
+```bash
+claude resource read whisper://models
+```
+
+### Hardware Optimization
+
+The installation tool automatically detects and enables:
+- **Mac (Apple Silicon)**: Metal acceleration
+- **NVIDIA GPU**: CUDA acceleration
+- **CPU**: Optimized CPU builds
 
 ## Performance
 

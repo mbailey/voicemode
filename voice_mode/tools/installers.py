@@ -21,7 +21,7 @@ logger = logging.getLogger("voice-mode")
 @mcp.tool()
 async def install_whisper_cpp(
     install_dir: Optional[str] = None,
-    model: str = "base.en",
+    model: str = "large-v2",
     use_gpu: Optional[bool] = None,
     force_reinstall: bool = False
 ) -> Dict[str, Any]:
@@ -33,7 +33,8 @@ async def install_whisper_cpp(
     
     Args:
         install_dir: Directory to install whisper.cpp (default: ~/.voicemode/whisper.cpp)
-        model: Whisper model to download (tiny, base, small, medium, large-v3, etc.)
+        model: Whisper model to download (tiny, base, small, medium, large-v2, large-v3, etc.)
+               Default is large-v2 for best accuracy. Note: large models require ~3GB RAM.
         use_gpu: Enable GPU support if available (default: auto-detect)
         force_reinstall: Force reinstallation even if already installed
     
@@ -211,8 +212,21 @@ async def install_whisper_cpp(
 
 # Configuration
 WHISPER_DIR="{install_dir}"
-MODEL_PATH="{model_path}"
 LOG_FILE="{os.path.join(voicemode_dir, 'whisper-server.log')}"
+
+# Model selection with environment variable support
+MODEL_NAME="${{VOICEMODE_WHISPER_MODEL:-{model}}}"
+MODEL_PATH="$WHISPER_DIR/models/ggml-$MODEL_NAME.bin"
+
+# Check if model exists
+if [ ! -f "$MODEL_PATH" ]; then
+    echo "Error: Model $MODEL_NAME not found at $MODEL_PATH" >> "$LOG_FILE"
+    echo "Available models:" >> "$LOG_FILE"
+    ls -1 "$WHISPER_DIR/models/" | grep "^ggml-.*\\.bin$" >> "$LOG_FILE"
+    exit 1
+fi
+
+echo "Starting whisper-server with model: $MODEL_NAME" >> "$LOG_FILE"
 
 # Check if whisper-server exists (it's in newer versions)
 if [ ! -f "$WHISPER_DIR/build/bin/whisper-server" ] && [ ! -f "$WHISPER_DIR/server" ]; then
@@ -313,6 +327,71 @@ exec "$SERVER_BIN" \\
                 "start_script": start_script_path,
                 "message": f"Successfully installed whisper.cpp with {gpu_type} support and whisper-server on port 2022"
             }
+        
+        # Install systemd service on Linux
+        elif system == "Linux":
+            logger.info("Installing systemd user service for whisper-server...")
+            systemd_user_dir = os.path.expanduser("~/.config/systemd/user")
+            os.makedirs(systemd_user_dir, exist_ok=True)
+            
+            service_name = "whisper-server.service"
+            service_path = os.path.join(systemd_user_dir, service_name)
+            
+            service_content = f"""[Unit]
+Description=Whisper.cpp Speech Recognition Server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={start_script_path}
+Restart=on-failure
+RestartSec=10
+WorkingDirectory={install_dir}
+StandardOutput=append:{os.path.join(voicemode_dir, 'whisper-server.log')}
+StandardError=append:{os.path.join(voicemode_dir, 'whisper-server.error.log')}
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/cuda/bin"
+Environment="VOICEMODE_WHISPER_MODEL={model}"
+
+[Install]
+WantedBy=default.target
+"""
+            
+            with open(service_path, 'w') as f:
+                f.write(service_content)
+            
+            # Reload systemd and enable service
+            try:
+                subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+                subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
+                subprocess.run(["systemctl", "--user", "start", service_name], check=True)
+                
+                systemd_enabled = True
+                systemd_message = "Systemd service installed and started"
+            except subprocess.CalledProcessError as e:
+                systemd_enabled = False
+                systemd_message = f"Systemd service created but not started: {e}"
+                logger.warning(systemd_message)
+            
+            return {
+                "success": True,
+                "install_path": install_dir,
+                "model_path": model_path,
+                "gpu_enabled": use_gpu,
+                "gpu_type": gpu_type,
+                "performance_info": {
+                    "system": system,
+                    "gpu_acceleration": gpu_type,
+                    "model": model,
+                    "binary_path": main_path if 'main_path' in locals() else os.path.join(install_dir, "main"),
+                    "server_port": 2022,
+                    "server_url": "http://localhost:2022"
+                },
+                "systemd_service": service_path,
+                "systemd_enabled": systemd_enabled,
+                "start_script": start_script_path,
+                "message": f"Successfully installed whisper.cpp with {gpu_type} support. {systemd_message}"
+            }
+        
         else:
             return {
                 "success": True,
@@ -537,8 +616,54 @@ async def install_kokoro_fastapi(
             result["launchagent"] = plist_path
             result["message"] += f"\nLaunchAgent installed: {plist_name}"
         
-        # Start service if requested (skip if launchagent was installed)
-        if auto_start and system != "Darwin":
+        # Install systemd service on Linux
+        elif system == "Linux":
+            logger.info("Installing systemd user service for kokoro-fastapi...")
+            systemd_user_dir = os.path.expanduser("~/.config/systemd/user")
+            os.makedirs(systemd_user_dir, exist_ok=True)
+            
+            service_name = f"kokoro-fastapi-{port}.service"
+            service_path = os.path.join(systemd_user_dir, service_name)
+            
+            service_content = f"""[Unit]
+Description=Kokoro FastAPI TTS Service on port {port}
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={start_script_path}
+Restart=on-failure
+RestartSec=10
+WorkingDirectory={install_dir}
+StandardOutput=append:{os.path.join(voicemode_dir, f'kokoro-fastapi-{port}.log')}
+StandardError=append:{os.path.join(voicemode_dir, f'kokoro-fastapi-{port}.error.log')}
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/home/m/.local/bin"
+
+[Install]
+WantedBy=default.target
+"""
+            
+            with open(service_path, 'w') as f:
+                f.write(service_content)
+            
+            # Reload systemd and enable service
+            try:
+                subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+                subprocess.run(["systemctl", "--user", "enable", service_name], check=True)
+                subprocess.run(["systemctl", "--user", "start", service_name], check=True)
+                
+                result["systemd_service"] = service_path
+                result["systemd_enabled"] = True
+                result["message"] += f"\nSystemd service installed and started: {service_name}"
+                result["service_status"] = "managed_by_systemd"
+            except subprocess.CalledProcessError as e:
+                result["systemd_service"] = service_path
+                result["systemd_enabled"] = False
+                result["message"] += f"\nSystemd service created but not started: {e}"
+                logger.warning(f"Systemd service error: {e}")
+        
+        # Start service if requested (skip if launchagent or systemd was installed)
+        if auto_start and system not in ["Darwin", "Linux"]:
             logger.info("Starting kokoro-fastapi service...")
             # Start in background
             process = subprocess.Popen(
@@ -563,8 +688,11 @@ async def install_kokoro_fastapi(
             except:
                 result["service_status"] = "failed"
                 result["error"] = "Could not connect to service"
-        elif system == "Darwin":
+        elif system == "Darwin" and "launchagent" in result:
             result["service_status"] = "managed_by_launchd"
+        elif system == "Linux" and "systemd_enabled" in result and result["systemd_enabled"]:
+            # Service status already set to "managed_by_systemd" in the systemd section
+            pass
         else:
             result["service_status"] = "not_started"
         

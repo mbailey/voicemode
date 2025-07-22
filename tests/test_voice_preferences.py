@@ -220,9 +220,9 @@ class TestVoicePreferences:
             os.chdir(original_cwd)
     
     def test_standalone_voices_file_precedence(self, tmp_path):
-        """Test that standalone voices.txt takes precedence over .voicemode/voices.txt."""
+        """Test that standalone .voices.txt takes precedence over .voicemode/voices.txt."""
         # Create both files in same directory
-        standalone_file = tmp_path / "voices.txt"
+        standalone_file = tmp_path / ".voices.txt"
         standalone_file.write_text("echo\nfable")
         
         voicemode_dir = tmp_path / ".voicemode"
@@ -250,13 +250,13 @@ class TestVoicePreferences:
             os.chdir(original_cwd)
     
     def test_home_standalone_voices_file(self, tmp_path):
-        """Test finding standalone voices.txt in home directory."""
+        """Test finding standalone .voices.txt in home directory."""
         # Create a fake home directory
         fake_home = tmp_path / "home"
         fake_home.mkdir()
         
-        # Create standalone file
-        standalone_file = fake_home / "voices.txt"
+        # Create standalone file (hidden with dot prefix)
+        standalone_file = fake_home / ".voices.txt"
         standalone_file.write_text("shimmer\nonyx")
         
         # Also create .voicemode version (should not be used)

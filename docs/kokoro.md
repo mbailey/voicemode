@@ -11,6 +11,26 @@ Voice Mode automatically checks for local TTS services before falling back to Op
 
 ## Setting Up Kokoro
 
+### Automatic Installation (Recommended)
+
+Voice Mode includes an installation tool that handles everything for you:
+
+```bash
+# Using Claude Code
+claude converse "Please install kokoro-fastapi"
+
+# Or programmatically
+await install_kokoro_fastapi()
+```
+
+This will:
+- Clone the kokoro-fastapi repository to `~/.voicemode/kokoro-fastapi`
+- Install UV package manager if needed
+- Set up a systemd service (Linux) or LaunchAgent (macOS) for automatic startup
+- Start the service on port 8880
+
+### Manual Installation
+
 1. Install and run Kokoro following the [official instructions](https://huggingface.co/hexgrad/Kokoro-82M)
 2. Ensure it's running on port 8880 with the OpenAI-compatible API
 3. Voice Mode will automatically detect and use it
@@ -48,3 +68,34 @@ Or add to your MCP configuration:
 ## Performance
 
 Kokoro runs locally on your machine, so performance depends on your hardware. Typical generation times are 1-3 seconds for short phrases.
+
+## Service Management
+
+### Linux (systemd)
+
+```bash
+# Check status
+systemctl --user status kokoro-fastapi-8880
+
+# Start/stop/restart
+systemctl --user start kokoro-fastapi-8880
+systemctl --user stop kokoro-fastapi-8880
+systemctl --user restart kokoro-fastapi-8880
+
+# View logs
+journalctl --user -u kokoro-fastapi-8880 -f
+
+# Disable auto-start
+systemctl --user disable kokoro-fastapi-8880
+```
+
+### macOS (launchd)
+
+```bash
+# Check if running
+launchctl list | grep kokoro
+
+# Stop/start
+launchctl unload ~/Library/LaunchAgents/com.voicemode.kokoro-8880.plist
+launchctl load ~/Library/LaunchAgents/com.voicemode.kokoro-8880.plist
+```

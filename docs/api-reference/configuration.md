@@ -22,6 +22,7 @@ This is the only required configuration for basic functionality.
 | `STT_MODEL` | `"whisper-1"` | STT model to use |
 | `STT_LANGUAGE` | auto-detect | Language code (e.g., "en", "es") |
 | `VOICEMODE_STT_AUDIO_FORMAT` | `"mp3"` | Audio format for STT upload |
+| `VOICEMODE_WHISPER_MODEL` | `"large-v2"` | Local Whisper model to use (tiny, base, small, medium, large-v2, large-v3) |
 
 ### Text-to-Speech (TTS)
 
@@ -119,6 +120,13 @@ The system will automatically failover to working providers.
 export OPENAI_API_KEY="not-needed-for-local"
 export STT_BASE_URL="http://127.0.0.1:2022/v1"
 export TTS_BASE_URL="http://127.0.0.1:8880/v1"
+```
+
+### Local Whisper with Different Model
+```bash
+export OPENAI_API_KEY="not-needed-for-local"
+export STT_BASE_URL="http://127.0.0.1:2022/v1"
+export VOICEMODE_WHISPER_MODEL="base.en"  # Use smaller model for faster processing
 ```
 
 ### High-Quality Cloud Setup
