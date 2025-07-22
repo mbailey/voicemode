@@ -29,9 +29,10 @@ async def install_whisper_cpp(
     Install whisper.cpp with automatic system detection and configuration.
     
     Supports macOS (with Metal) and Linux (with CUDA if available).
+    On macOS, also installs a launchagent to run whisper-server on port 2022.
     
     Args:
-        install_dir: Directory to install whisper.cpp (default: ~/whisper.cpp)
+        install_dir: Directory to install whisper.cpp (default: ~/.voicemode/whisper.cpp)
         model: Whisper model to download (tiny, base, small, medium, large-v3, etc.)
         use_gpu: Enable GPU support if available (default: auto-detect)
         force_reinstall: Force reinstallation even if already installed
@@ -40,9 +41,12 @@ async def install_whisper_cpp(
         Installation status with paths and configuration details
     """
     try:
-        # Set default install directory
+        # Set default install directory under ~/.voicemode
+        voicemode_dir = os.path.expanduser("~/.voicemode")
+        os.makedirs(voicemode_dir, exist_ok=True)
+        
         if install_dir is None:
-            install_dir = os.path.expanduser("~/whisper.cpp")
+            install_dir = os.path.join(voicemode_dir, "whisper.cpp")
         else:
             install_dir = os.path.expanduser(install_dir)
         
@@ -157,6 +161,13 @@ async def install_whisper_cpp(
         
         subprocess.run(["make", f"-j{cpu_count}"], env=build_env, check=True)
         
+        # Also build the server binary
+        logger.info("Building whisper-server...")
+        try:
+            subprocess.run(["make", "server"], env=build_env, check=True)
+        except subprocess.CalledProcessError:
+            logger.warning("Failed to build whisper-server, it may not be available in this version")
+        
         # Download model
         logger.info(f"Downloading model: {model}")
         models_dir = os.path.join(install_dir, "models")
@@ -194,20 +205,129 @@ async def install_whisper_cpp(
         if 'original_dir' in locals():
             os.chdir(original_dir)
         
-        return {
-            "success": True,
-            "install_path": install_dir,
-            "model_path": model_path,
-            "gpu_enabled": use_gpu,
-            "gpu_type": gpu_type,
-            "performance_info": {
-                "system": system,
-                "gpu_acceleration": gpu_type,
-                "model": model,
-                "binary_path": main_path if 'main_path' in locals() else os.path.join(install_dir, "main")
-            },
-            "message": f"Successfully installed whisper.cpp with {gpu_type} support"
-        }
+        # Create start script for whisper-server
+        logger.info("Creating whisper-server start script...")
+        start_script_content = f"""#!/bin/bash
+
+# Configuration
+WHISPER_DIR="{install_dir}"
+MODEL_PATH="{model_path}"
+LOG_FILE="{os.path.join(voicemode_dir, 'whisper-server.log')}"
+
+# Check if whisper-server exists (it's in newer versions)
+if [ ! -f "$WHISPER_DIR/build/bin/whisper-server" ] && [ ! -f "$WHISPER_DIR/server" ]; then
+    echo "Building whisper-server..." >> "$LOG_FILE"
+    cd "$WHISPER_DIR"
+    make server >> "$LOG_FILE" 2>&1
+fi
+
+# Determine server binary location
+if [ -f "$WHISPER_DIR/build/bin/whisper-server" ]; then
+    SERVER_BIN="$WHISPER_DIR/build/bin/whisper-server"
+elif [ -f "$WHISPER_DIR/server" ]; then
+    SERVER_BIN="$WHISPER_DIR/server"
+else
+    echo "Error: whisper-server binary not found" >> "$LOG_FILE"
+    exit 1
+fi
+
+# Start whisper-server
+cd "$WHISPER_DIR"
+exec "$SERVER_BIN" \\
+    --model "$MODEL_PATH" \\
+    --host 0.0.0.0 \\
+    --port 2022 \\
+    --inference-path /v1/audio/transcriptions \\
+    --threads 8 \\
+    >> "$LOG_FILE" 2>&1
+"""
+        
+        start_script_path = os.path.join(install_dir, "start-whisper-server.sh")
+        with open(start_script_path, 'w') as f:
+            f.write(start_script_content)
+        os.chmod(start_script_path, 0o755)
+        
+        # Install launchagent on macOS
+        if system == "Darwin":
+            logger.info("Installing launchagent for whisper-server...")
+            launchagents_dir = os.path.expanduser("~/Library/LaunchAgents")
+            os.makedirs(launchagents_dir, exist_ok=True)
+            
+            plist_name = "com.voicemode.whisper-server.plist"
+            plist_path = os.path.join(launchagents_dir, plist_name)
+            
+            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicemode.whisper-server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{start_script_path}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{install_dir}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{os.path.join(voicemode_dir, 'whisper-server.stdout.log')}</string>
+    <key>StandardErrorPath</key>
+    <string>{os.path.join(voicemode_dir, 'whisper-server.stderr.log')}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>"""
+            
+            with open(plist_path, 'w') as f:
+                f.write(plist_content)
+            
+            # Load the launchagent
+            try:
+                subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+            except:
+                pass  # Ignore if not loaded
+            
+            subprocess.run(["launchctl", "load", plist_path], check=True)
+            
+            return {
+                "success": True,
+                "install_path": install_dir,
+                "model_path": model_path,
+                "gpu_enabled": use_gpu,
+                "gpu_type": gpu_type,
+                "performance_info": {
+                    "system": system,
+                    "gpu_acceleration": gpu_type,
+                    "model": model,
+                    "binary_path": main_path if 'main_path' in locals() else os.path.join(install_dir, "main"),
+                    "server_port": 2022,
+                    "server_url": "http://localhost:2022"
+                },
+                "launchagent": plist_path,
+                "start_script": start_script_path,
+                "message": f"Successfully installed whisper.cpp with {gpu_type} support and whisper-server on port 2022"
+            }
+        else:
+            return {
+                "success": True,
+                "install_path": install_dir,
+                "model_path": model_path,
+                "gpu_enabled": use_gpu,
+                "gpu_type": gpu_type,
+                "performance_info": {
+                    "system": system,
+                    "gpu_acceleration": gpu_type,
+                    "model": model,
+                    "binary_path": main_path if 'main_path' in locals() else os.path.join(install_dir, "main")
+                },
+                "message": f"Successfully installed whisper.cpp with {gpu_type} support"
+            }
         
     except subprocess.CalledProcessError as e:
         if 'original_dir' in locals():
@@ -236,30 +356,35 @@ async def install_kokoro_fastapi(
     force_reinstall: bool = False
 ) -> Dict[str, Any]:
     """
-    Install and setup remsky/kokoro-fastapi TTS service.
+    Install and setup remsky/kokoro-fastapi TTS service using the simple 3-step approach.
     
-    Automatically configures the service and downloads required models.
+    1. Clones the repository to ~/.voicemode/kokoro-fastapi
+    2. Uses the appropriate start script (start-gpu_mac.sh on macOS)
+    3. Installs a launchagent on macOS for automatic startup
     
     Args:
-        install_dir: Directory to install kokoro-fastapi (default: ~/kokoro-fastapi)
-        models_dir: Directory for Kokoro models (default: ~/Models/kokoro)
+        install_dir: Directory to install kokoro-fastapi (default: ~/.voicemode/kokoro-fastapi)
+        models_dir: Directory for Kokoro models (default: ~/.voicemode/kokoro-models) - not currently used
         port: Port to configure for the service (default: 8880)
-        auto_start: Start the service after installation
-        install_models: Download Kokoro models
+        auto_start: Start the service after installation (ignored on macOS, uses launchd instead)
+        install_models: Download Kokoro models (not used - handled by start script)
         force_reinstall: Force reinstallation even if already installed
     
     Returns:
         Installation status with service configuration details
     """
     try:
-        # Set default directories
+        # Set default directories under ~/.voicemode
+        voicemode_dir = os.path.expanduser("~/.voicemode")
+        os.makedirs(voicemode_dir, exist_ok=True)
+        
         if install_dir is None:
-            install_dir = os.path.expanduser("~/kokoro-fastapi")
+            install_dir = os.path.join(voicemode_dir, "kokoro-fastapi")
         else:
             install_dir = os.path.expanduser(install_dir)
             
         if models_dir is None:
-            models_dir = os.path.expanduser("~/Models/kokoro")
+            models_dir = os.path.join(voicemode_dir, "kokoro-models")
         else:
             models_dir = os.path.expanduser(models_dir)
         
@@ -313,147 +438,137 @@ async def install_kokoro_fastapi(
         else:
             logger.info("Using existing kokoro-fastapi directory...")
         
-        # Save current directory
-        original_dir = os.getcwd()
+        # Determine system and select appropriate start script
+        system = platform.system()
+        if system == "Darwin":
+            start_script_name = "start-gpu_mac.sh"
+        elif system == "Linux":
+            # Check if GPU available
+            if shutil.which("nvidia-smi"):
+                start_script_name = "start-gpu.sh"
+            else:
+                start_script_name = "start-cpu.sh"
+        else:
+            start_script_name = "start-cpu.ps1"  # Windows
         
-        try:
-            os.chdir(install_dir)
+        start_script_path = os.path.join(install_dir, start_script_name)
+        
+        # Check if the start script exists
+        if not os.path.exists(start_script_path):
+            return {
+                "success": False,
+                "error": f"Start script not found: {start_script_path}",
+                "message": "The repository seems incomplete. Try force_reinstall=True"
+            }
+        
+        # If a custom port is requested, we need to modify the start script
+        if port != 8880:
+            logger.info(f"Creating custom start script for port {port}")
+            with open(start_script_path, 'r') as f:
+                script_content = f.read()
             
-            # Create virtual environment if not exists
-            venv_path = os.path.join(install_dir, ".venv")
-            if not os.path.exists(venv_path):
-                logger.info("Creating virtual environment...")
-                subprocess.run(["uv", "venv"], check=True)
-            else:
-                logger.info("Using existing virtual environment...")
+            # Replace the port in the script
+            modified_script = script_content.replace("--port 8880", f"--port {port}")
             
-            # Determine venv Python path
-            venv_python = os.path.join(install_dir, ".venv", "bin", "python")
-            if not os.path.exists(venv_python):
-                # Windows path
-                venv_python = os.path.join(install_dir, ".venv", "Scripts", "python.exe")
+            # Create a custom start script
+            custom_script_name = f"start-custom-{port}.sh"
+            custom_script_path = os.path.join(install_dir, custom_script_name)
+            with open(custom_script_path, 'w') as f:
+                f.write(modified_script)
+            os.chmod(custom_script_path, 0o755)
+            start_script_path = custom_script_path
             
-            # Install dependencies
-            logger.info("Installing dependencies...")
-            subprocess.run(["uv", "pip", "install", "-r", "requirements.txt"], check=True)
+        result = {
+            "success": True,
+            "install_path": install_dir,
+            "service_url": f"http://127.0.0.1:{port}",
+            "start_command": f"cd {install_dir} && ./{os.path.basename(start_script_path)}",
+            "start_script": start_script_path,
+            "message": f"Kokoro-fastapi installed. Run: cd {install_dir} && ./{os.path.basename(start_script_path)}"
+        }
+        
+        # Install launchagent on macOS
+        if system == "Darwin":
+            logger.info("Installing launchagent for automatic startup...")
+            launchagents_dir = os.path.expanduser("~/Library/LaunchAgents")
+            os.makedirs(launchagents_dir, exist_ok=True)
             
-            # Download models if requested
-            if install_models:
-                logger.info("Downloading Kokoro models...")
-                os.makedirs(models_dir, exist_ok=True)
+            plist_name = f"com.voicemode.kokoro-{port}.plist"
+            plist_path = os.path.join(launchagents_dir, plist_name)
             
-                # Model files to download
-                model_files = [
-                    "kokoro-v0_19.onnx",
-                    "kokoro-v0_19.onnx.json",
-                    "voices.json"
-                ]
-                
+            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicemode.kokoro-{port}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{start_script_path}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{install_dir}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{os.path.join(voicemode_dir, f'kokoro-{port}.log')}</string>
+    <key>StandardErrorPath</key>
+    <string>{os.path.join(voicemode_dir, f'kokoro-{port}.error.log')}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>"""
+            
+            with open(plist_path, 'w') as f:
+                f.write(plist_content)
+            
+            # Load the launchagent
+            try:
+                subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+            except:
+                pass  # Ignore if not loaded
+            
+            subprocess.run(["launchctl", "load", plist_path], check=True)
+            result["launchagent"] = plist_path
+            result["message"] += f"\nLaunchAgent installed: {plist_name}"
+        
+        # Start service if requested (skip if launchagent was installed)
+        if auto_start and system != "Darwin":
+            logger.info("Starting kokoro-fastapi service...")
+            # Start in background
+            process = subprocess.Popen(
+                ["bash", start_script_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            # Wait a moment for service to start
+            await asyncio.sleep(3)
+            
+            # Check if service is running
+            try:
                 async with aiohttp.ClientSession() as session:
-                    for model_file in model_files:
-                        url = f"https://huggingface.co/remsky/kokoro-onnx/resolve/main/{model_file}"
-                        output_path = os.path.join(models_dir, model_file)
-                        
-                        if os.path.exists(output_path) and not force_reinstall:
-                            logger.info(f"Model already exists: {model_file}")
-                            continue
-                        
-                        logger.info(f"Downloading {model_file}...")
-                        async with session.get(url) as response:
-                            response.raise_for_status()
-                            with open(output_path, 'wb') as f:
-                                async for chunk in response.content.iter_chunked(8192):
-                                    f.write(chunk)
-            
-            # Create configuration
-            config = {
-                "host": "127.0.0.1",
-                "port": port,
-                "models_dir": models_dir,
-                "log_level": "info"
-            }
-            
-            config_path = os.path.join(install_dir, "config.json")
-            with open(config_path, "w") as f:
-                json.dump(config, f, indent=2)
-            
-            # Create start script
-            start_script = f"""#!/bin/bash
-cd {install_dir}
-source .venv/bin/activate
-MODELS_DIR={models_dir} uvicorn main:app --host 127.0.0.1 --port {port}
-"""
-            
-            start_script_path = os.path.join(install_dir, "start.sh")
-            with open(start_script_path, "w") as f:
-                f.write(start_script)
-            os.chmod(start_script_path, 0o755)
-            
-            # Get available voices
-            available_voices = []
-            voices_file = os.path.join(models_dir, "voices.json")
-            if os.path.exists(voices_file):
-                with open(voices_file, "r") as f:
-                    voices_data = json.load(f)
-                    available_voices = list(voices_data.keys())
-            
-            result = {
-                "success": True,
-                "install_path": install_dir,
-                "models_path": models_dir,
-                "service_url": f"http://127.0.0.1:{port}",
-                "start_command": f"bash {start_script_path}",
-                "available_voices": available_voices,
-                "config_path": config_path
-            }
-            
-            # Start service if requested
-            if auto_start:
-                logger.info("Starting kokoro-fastapi service...")
-                # Start in background
-                process = subprocess.Popen(
-                    ["bash", start_script_path],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                
-                # Wait a moment for service to start
-                await asyncio.sleep(3)
-                
-                # Check if service is running
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(f"http://127.0.0.1:{port}/health") as response:
-                            if response.status == 200:
-                                result["service_status"] = "running"
-                                result["service_pid"] = process.pid
-                            else:
-                                result["service_status"] = "failed"
-                                result["error"] = "Health check failed"
-                except:
-                    result["service_status"] = "failed"
-                    result["error"] = "Could not connect to service"
-            else:
-                result["service_status"] = "not_started"
-            
-            result["message"] = f"Successfully installed kokoro-fastapi at {install_dir}"
-            return result
-            
-        except subprocess.CalledProcessError as e:
-            return {
-                "success": False,
-                "error": f"Command failed: {e.cmd}",
-                "stderr": e.stderr.decode() if e.stderr else None
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
-        finally:
-            # Always restore original directory
-            if 'original_dir' in locals():
-                os.chdir(original_dir)
+                    async with session.get(f"http://127.0.0.1:{port}/health") as response:
+                        if response.status == 200:
+                            result["service_status"] = "running"
+                            result["service_pid"] = process.pid
+                        else:
+                            result["service_status"] = "failed"
+                            result["error"] = "Health check failed"
+            except:
+                result["service_status"] = "failed"
+                result["error"] = "Could not connect to service"
+        elif system == "Darwin":
+            result["service_status"] = "managed_by_launchd"
+        else:
+            result["service_status"] = "not_started"
+        
+        return result
     
     except subprocess.CalledProcessError as e:
         return {
