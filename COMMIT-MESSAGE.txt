@@ -1,0 +1,28 @@
+feat: implement unified configuration enhancements
+
+- Add VOICEMODE_ALWAYS_TRY_LOCAL for resilient local provider handling
+- Local providers (Whisper/Kokoro) no longer marked permanently unavailable
+- Add comprehensive Whisper configuration variables:
+  - VOICEMODE_WHISPER_MODEL (model selection)
+  - VOICEMODE_WHISPER_PORT (service port)
+  - VOICEMODE_WHISPER_LANGUAGE (language code)
+  - VOICEMODE_WHISPER_MODEL_PATH (model storage)
+- Add comprehensive Kokoro configuration variables:
+  - VOICEMODE_KOKORO_PORT (service port)
+  - VOICEMODE_KOKORO_MODELS_DIR (models directory)
+  - VOICEMODE_KOKORO_CACHE_DIR (cache directory)
+  - VOICEMODE_KOKORO_DEFAULT_VOICE (default voice)
+- Create MCP resources for configuration visibility:
+  - voice://config/all (complete overview)
+  - voice://config/whisper (Whisper settings)
+  - voice://config/kokoro (Kokoro settings)
+  - voice://config/env-template (environment template)
+- Update documentation with new configuration options
+- Add comprehensive test coverage for provider resilience
+
+This enables fine-grained control over voice services with better
+resilience for local providers and full transparency through MCP.
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>

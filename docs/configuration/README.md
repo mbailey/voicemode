@@ -53,6 +53,18 @@ export VOICEMODE_TTS_BASE_URLS="http://127.0.0.1:8880/v1"
 export VOICEMODE_STT_BASE_URLS="http://127.0.0.1:2022/v1"
 ```
 
+**Configure Whisper for faster performance:**
+```bash
+export VOICEMODE_WHISPER_MODEL=base  # Smaller, faster model
+export VOICEMODE_WHISPER_LANGUAGE=en  # Skip language detection
+```
+
+**Configure Kokoro with custom voice:**
+```bash
+export VOICEMODE_KOKORO_DEFAULT_VOICE=am_adam  # Male voice
+export VOICEMODE_KOKORO_PORT=8888  # Custom port
+```
+
 ## Directory Structure
 
 Voice Mode stores all data under `~/.voicemode/` by default:
@@ -62,8 +74,22 @@ Voice Mode stores all data under `~/.voicemode/` by default:
 ├── audio/          # Saved audio recordings
 ├── transcriptions/ # Saved transcriptions
 ├── logs/           # Event and debug logs
-└── config/         # Configuration files
+├── config/         # Configuration files
+├── models/         # Model storage
+│   ├── whisper/    # Whisper models
+│   └── kokoro/     # Kokoro models
+└── cache/          # Service caches
+    └── kokoro/     # Kokoro cache
 ```
+
+## Viewing Configuration
+
+Voice Mode provides MCP resources to view current configuration:
+
+- `voice://config/all` - Complete configuration overview
+- `voice://config/whisper` - Whisper-specific settings
+- `voice://config/kokoro` - Kokoro-specific settings
+- `voice://config/env-template` - Environment variable template
 
 ## Privacy
 
