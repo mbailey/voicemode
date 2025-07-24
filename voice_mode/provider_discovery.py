@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import httpx
 from openai import AsyncOpenAI
 
-from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
+from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, ALWAYS_TRY_LOCAL
 
 logger = logging.getLogger("voice-mode")
 
@@ -31,7 +31,7 @@ def detect_provider_type(base_url: str) -> str:
         return "kokoro"
     elif ":2022" in base_url:
         return "whisper"
-    elif "127.0.0.1" in base_url or "127.0.0.1" in base_url:
+    elif "127.0.0.1" in base_url or "localhost" in base_url:
         # Try to infer from port if not already detected
         if base_url.endswith("/v1"):
             port_part = base_url[:-3].split(":")[-1]
@@ -42,6 +42,14 @@ def detect_provider_type(base_url: str) -> str:
         return "local"  # Generic local provider
     else:
         return "unknown"
+
+
+def is_local_provider(base_url: str) -> bool:
+    """Check if a provider URL is for a local service."""
+    provider_type = detect_provider_type(base_url)
+    return provider_type in ["kokoro", "whisper", "local"] or \
+           "127.0.0.1" in base_url or \
+           "localhost" in base_url
 
 
 @dataclass
@@ -304,12 +312,25 @@ class ProviderRegistry:
         }
     
     async def mark_unhealthy(self, service_type: str, base_url: str, error: str):
-        """Mark an endpoint as unhealthy after a failure."""
+        """Mark an endpoint as unhealthy after a failure.
+        
+        If ALWAYS_TRY_LOCAL is enabled and the provider is local, it will not be
+        permanently marked as unhealthy - it will be retried on next request.
+        """
         if base_url in self.registry[service_type]:
-            self.registry[service_type][base_url].healthy = False
-            self.registry[service_type][base_url].error = error
-            self.registry[service_type][base_url].last_health_check = datetime.now(timezone.utc).isoformat()
-            logger.warning(f"Marked {service_type} endpoint {base_url} as unhealthy: {error}")
+            # Check if we should skip marking local providers as unhealthy
+            if ALWAYS_TRY_LOCAL and is_local_provider(base_url):
+                # Log the error but don't mark as unhealthy
+                logger.info(f"Local {service_type} endpoint {base_url} failed ({error}) but will be retried (ALWAYS_TRY_LOCAL enabled)")
+                # Update error and last check time for diagnostics, but keep healthy=True
+                self.registry[service_type][base_url].error = f"{error} (will retry)"
+                self.registry[service_type][base_url].last_health_check = datetime.now(timezone.utc).isoformat()
+            else:
+                # Normal behavior - mark as unhealthy
+                self.registry[service_type][base_url].healthy = False
+                self.registry[service_type][base_url].error = error
+                self.registry[service_type][base_url].last_health_check = datetime.now(timezone.utc).isoformat()
+                logger.warning(f"Marked {service_type} endpoint {base_url} as unhealthy: {error}")
 
 
 # Global registry instance
