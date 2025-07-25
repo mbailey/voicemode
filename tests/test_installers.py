@@ -15,12 +15,13 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import the actual async functions from the module
-import voice_mode.tools.installers as installers
+# Import the actual async functions from the new locations
+import voice_mode.tools.services.whisper.install as whisper_install
+import voice_mode.tools.services.kokoro.install as kokoro_install
 
 # Get the actual async functions from the MCP tool decorators
-install_whisper_cpp = installers.install_whisper_cpp.fn
-install_kokoro_fastapi = installers.install_kokoro_fastapi.fn
+install_whisper_cpp = whisper_install.whisper_install.fn
+install_kokoro_fastapi = kokoro_install.kokoro_install.fn
 
 
 def mock_exists_for_whisper(path):
@@ -63,6 +64,8 @@ class TestWhisperCppInstaller:
                 return True
             if path.endswith("jfk.wav"):
                 return True
+            if path.endswith("download-ggml-model.sh"):
+                return True
             return False
         
         with patch('subprocess.run') as mock_run, \
@@ -72,9 +75,15 @@ class TestWhisperCppInstaller:
              patch('os.makedirs'), \
              patch('platform.system', return_value='Darwin'), \
              patch('builtins.open', create=True), \
-             patch('os.chmod'):
+             patch('os.chmod'), \
+             patch('voice_mode.tools.services.whisper.install.download_whisper_model') as mock_download:
             
             mock_run.return_value = MagicMock(returncode=0)
+            mock_download.return_value = {
+                "success": True,
+                "path": f"{custom_path}/models/ggml-large-v2.bin",
+                "message": "Model already exists"
+            }
             
             result = await install_whisper_cpp(install_dir=custom_path)
             
@@ -196,6 +205,8 @@ class TestWhisperCppInstaller:
                     return True
                 if path.endswith("jfk.wav"):
                     return True
+                if path.endswith("download-ggml-model.sh"):
+                    return True
                 return False
                 
             with patch('subprocess.run') as mock_run, \
@@ -205,9 +216,15 @@ class TestWhisperCppInstaller:
                  patch('os.makedirs'), \
                  patch('platform.system', return_value='Darwin'), \
                  patch('builtins.open', create=True), \
-                 patch('os.chmod'):
+                 patch('os.chmod'), \
+                 patch('voice_mode.tools.services.whisper.install.download_whisper_model') as mock_download:
                 
                 mock_run.return_value = MagicMock(returncode=0)
+                mock_download.return_value = {
+                    "success": True,
+                    "path": f"/Users/admin/.voicemode/whisper.cpp/models/ggml-{model}.bin",
+                    "message": f"Model {model} downloaded successfully"
+                }
                 
                 result = await install_whisper_cpp(model=model)
                 

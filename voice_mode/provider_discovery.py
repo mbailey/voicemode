@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 import httpx
 from openai import AsyncOpenAI
 
-from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, ALWAYS_TRY_LOCAL
+from . import config
+from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
 
 logger = logging.getLogger("voice-mode")
 
@@ -319,7 +320,7 @@ class ProviderRegistry:
         """
         if base_url in self.registry[service_type]:
             # Check if we should skip marking local providers as unhealthy
-            if ALWAYS_TRY_LOCAL and is_local_provider(base_url):
+            if config.ALWAYS_TRY_LOCAL and is_local_provider(base_url):
                 # Log the error but don't mark as unhealthy
                 logger.info(f"Local {service_type} endpoint {base_url} failed ({error}) but will be retried (ALWAYS_TRY_LOCAL enabled)")
                 # Update error and last check time for diagnostics, but keep healthy=True
