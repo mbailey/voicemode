@@ -17,13 +17,13 @@ class TestMinDurationIntegration:
     
     async def test_converse_validates_min_duration(self):
         """Test that converse validates min_listen_duration parameter."""
-        from voice_mode.tools.conversation import converse
+        from voice_mode.tools.converse import converse
         
         # Get the actual function from the MCP tool wrapper
         converse_func = converse.fn
         
         # Mock required dependencies
-        with patch('voice_mode.tools.conversation.startup_initialization', new_callable=AsyncMock):
+        with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             # Mock FFmpeg availability by patching the module attribute
             import voice_mode.config
             voice_mode.config.FFMPEG_AVAILABLE = True
@@ -37,12 +37,12 @@ class TestMinDurationIntegration:
             assert "min_listen_duration cannot be negative" in result
             
             # Test min > max duration
-            with patch('voice_mode.tools.conversation.logger') as mock_logger:
-                with patch('voice_mode.tools.conversation.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
+            with patch('voice_mode.tools.converse.logger') as mock_logger:
+                with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
                     mock_tts.return_value = (True, {}, {})
-                    with patch('voice_mode.tools.conversation.record_audio_with_silence_detection') as mock_record:
+                    with patch('voice_mode.tools.converse.record_audio_with_silence_detection') as mock_record:
                         mock_record.return_value = np.array([1, 2, 3])
-                        with patch('voice_mode.tools.conversation.speech_to_text', new_callable=AsyncMock) as mock_stt:
+                        with patch('voice_mode.tools.converse.speech_to_text', new_callable=AsyncMock) as mock_stt:
                             mock_stt.return_value = "Test response"
                             
                             result = await converse_func(
@@ -60,22 +60,22 @@ class TestMinDurationIntegration:
     
     async def test_converse_passes_min_duration_to_recording(self):
         """Test that converse passes min_listen_duration to recording function."""
-        from voice_mode.tools.conversation import converse
+        from voice_mode.tools.converse import converse
         
         # Get the actual function from the MCP tool wrapper
         converse_func = converse.fn
         
         # Mock all dependencies
-        with patch('voice_mode.tools.conversation.startup_initialization', new_callable=AsyncMock):
+        with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             # Mock FFmpeg availability by patching the module attribute
             import voice_mode.config
             voice_mode.config.FFMPEG_AVAILABLE = True
             
-            with patch('voice_mode.tools.conversation.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
+            with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
                 mock_tts.return_value = (True, {'generation': 0.5, 'playback': 1.0}, {})
-                with patch('voice_mode.tools.conversation.record_audio_with_silence_detection') as mock_record:
+                with patch('voice_mode.tools.converse.record_audio_with_silence_detection') as mock_record:
                     mock_record.return_value = np.array([1, 2, 3])
-                    with patch('voice_mode.tools.conversation.speech_to_text', new_callable=AsyncMock) as mock_stt:
+                    with patch('voice_mode.tools.converse.speech_to_text', new_callable=AsyncMock) as mock_stt:
                         mock_stt.return_value = "Test response"
                         
                         # Test with specific min_listen_duration

@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 os.environ.setdefault("VOICEMODE_DEBUG", "true")
 os.environ.setdefault("VOICEMODE_ENABLE_SILENCE_DETECTION", "true")
 
-from voice_mode.tools.conversation import (
+from voice_mode.tools.converse import (
     record_audio_with_silence_detection,
     record_audio,
     VAD_AVAILABLE
