@@ -13,6 +13,7 @@ import asyncio
 import aiohttp
 
 from voice_mode.server import mcp
+from .helpers import download_whisper_model
 
 logger = logging.getLogger("voice-mode")
 
@@ -168,24 +169,23 @@ async def whisper_install(
         except subprocess.CalledProcessError:
             logger.warning("Failed to build whisper-server, it may not be available in this version")
         
-        # Download model
-        logger.info(f"Downloading model: {model}")
+        # Download model using shared helper
+        logger.info(f"Downloading default model: {model}")
         models_dir = os.path.join(install_dir, "models")
-        os.makedirs(models_dir, exist_ok=True)
         
-        # Use the download script
-        download_script = os.path.join(models_dir, "download-ggml-model.sh")
-        subprocess.run(["bash", download_script, model], check=True)
+        download_result = await download_whisper_model(
+            model=model,
+            models_dir=models_dir,
+            force_download=False
+        )
         
-        # Verify installation
-        logger.info("Verifying installation...")
-        model_path = os.path.join(models_dir, f"ggml-{model}.bin")
-        
-        if not os.path.exists(model_path):
+        if not download_result["success"]:
             return {
                 "success": False,
-                "error": f"Model file not found: {model_path}"
+                "error": f"Failed to download model: {download_result.get('error', 'Unknown error')}"
             }
+        
+        model_path = download_result["path"]
         
         # Test whisper with sample if available
         main_path = os.path.join(install_dir, "main")
