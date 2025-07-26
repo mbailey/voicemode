@@ -14,9 +14,9 @@ import psutil
 
 from voice_mode.server import mcp
 from voice_mode.config import WHISPER_PORT, KOKORO_PORT, SERVICE_AUTO_ENABLE
-from voice_mode.tools.services.common import find_process_by_port
-from voice_mode.tools.services.whisper.helpers import find_whisper_server, find_whisper_model
-from voice_mode.tools.services.kokoro.helpers import find_kokoro_fastapi
+from voice_mode.utils.services.common import find_process_by_port
+from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_whisper_model
+from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi
 
 logger = logging.getLogger("voice-mode")
 

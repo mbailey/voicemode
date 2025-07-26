@@ -14,11 +14,12 @@ import aiohttp
 
 from voice_mode.server import mcp
 from voice_mode.config import SERVICE_AUTO_ENABLE
-from .helpers import download_whisper_model
-from ..version_helpers import (
+from voice_mode.utils.services.whisper_helpers import download_whisper_model
+from voice_mode.utils.version_helpers import (
     get_git_tags, get_latest_stable_tag, get_current_version,
     checkout_version, is_version_installed
 )
+from voice_mode.utils.migration_helpers import auto_migrate_if_needed
 
 logger = logging.getLogger("voice-mode")
 
@@ -50,6 +51,9 @@ async def whisper_install(
         Installation status with paths and configuration details
     """
     try:
+        # Check for and migrate old installations
+        migration_msg = auto_migrate_if_needed("whisper")
+        
         # Set default install directory under ~/.voicemode
         voicemode_dir = os.path.expanduser("~/.voicemode")
         os.makedirs(voicemode_dir, exist_ok=True)
@@ -383,7 +387,7 @@ exec "$SERVER_BIN" \\
                 },
                 "launchagent": plist_path,
                 "start_script": start_script_path,
-                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support and whisper-server on port 2022{enable_message}"
+                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support and whisper-server on port 2022{enable_message}{' (' + migration_msg + ')' if migration_msg else ''}"
             }
         
         # Install systemd service on Linux
@@ -463,7 +467,7 @@ WantedBy=default.target
                 "systemd_service": service_path,
                 "systemd_enabled": systemd_enabled,
                 "start_script": start_script_path,
-                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support. {systemd_message}{enable_message}"
+                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support. {systemd_message}{enable_message}{' (' + migration_msg + ')' if migration_msg else ''}"
             }
         
         else:
@@ -489,7 +493,7 @@ WantedBy=default.target
                     "model": model,
                     "binary_path": main_path if 'main_path' in locals() else os.path.join(install_dir, "main")
                 },
-                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support{enable_message}"
+                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support{enable_message}{' (' + migration_msg + ')' if migration_msg else ''}"
             }
         
     except subprocess.CalledProcessError as e:

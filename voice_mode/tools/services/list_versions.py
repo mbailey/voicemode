@@ -1,7 +1,7 @@
 """Tools to list available versions for services."""
 
 from voice_mode.server import mcp
-from voice_mode.tools.services.version_helpers import (
+from voice_mode.utils.version_helpers import (
     get_git_tags, get_latest_stable_tag, get_current_version
 )
 from pathlib import Path

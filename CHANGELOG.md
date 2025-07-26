@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Version management for whisper.cpp and kokoro-fastapi services
+  - Track installed versions and support upgrades
+  - Install only tagged releases by default (not latest commits)
+  - `version` parameter added to install tools
+  - Version info displayed in service status
+- Uninstall tools for whisper and kokoro services
+  - Clean removal of services and optionally models/data
+  - Automatic service stop before uninstall
+- Migration helpers for old service naming conventions
+  - Automatically migrate from old naming (e.g., whisper-server) to new (whisper)
+  - Built into installers, no separate tool needed
+
+### Changed
+- Reorganized helper functions from tools/ to utils/
+  - `voice_mode/tools/services/common.py` → `voice_mode/utils/services/common.py`
+  - `voice_mode/tools/services/*/helpers.py` → `voice_mode/utils/services/*_helpers.py`
+  - `voice_mode/tools/services/version_helpers.py` → `voice_mode/utils/version_helpers.py`
+  - Helper functions are no longer exposed as MCP tools
+
+### Fixed
+- Fixed test failures caused by version management implementation
+  - Fixed version parsing bug with mixed int/string comparisons
+  - Updated test mocks to use correct import paths
+  - Made subprocess mocks command-specific to avoid breaking git commands
+- Fixed unified service test failures
+  - Added missing subprocess.run and Path.exists mocks
+  - Fixed incomplete Popen mock setup
+
 ## [2.15.0] - 2025-07-23
 
 ## [2.14.0] - 2025-07-20

@@ -62,7 +62,8 @@ def parse_version(version: str) -> Tuple:
             try:
                 version_parts.append(int(part))
             except ValueError:
-                version_parts.append(part)
+                # Convert non-numeric parts to 0 for consistent comparison
+                version_parts.append(0)
     
     # Pad version parts to ensure consistent comparison
     while len(version_parts) < 3:

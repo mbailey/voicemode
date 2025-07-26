@@ -11,8 +11,19 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import the service function
-from voice_mode.tools.service import service
+# Import the service function - get the actual function from the tool decorator
+from voice_mode.tools.service import service as service_tool
+
+# Extract the actual function from the FastMCP tool wrapper
+service = service_tool.fn
+
+# Import prompts for testing
+from voice_mode.prompts.services import whisper_prompt as whisper_prompt_tool
+from voice_mode.prompts.services import kokoro_prompt as kokoro_prompt_tool
+
+# Extract the actual functions from FastMCP prompt wrappers
+whisper_prompt = whisper_prompt_tool.fn
+kokoro_prompt = kokoro_prompt_tool.fn
 
 
 class TestUnifiedServiceTool:
@@ -62,12 +73,16 @@ class TestUnifiedServiceTool:
              patch('voice_mode.tools.service.find_whisper_server', return_value="/path/to/whisper-server"), \
              patch('voice_mode.tools.service.find_whisper_model', return_value="/path/to/model.bin"), \
              patch('subprocess.Popen') as mock_popen, \
+             patch('subprocess.run') as mock_run, \
+             patch('pathlib.Path.exists', return_value=False), \
              patch('asyncio.sleep'):
             
             mock_process = MagicMock()
             mock_process.poll.return_value = None
             mock_process.pid = 12345
+            mock_process.communicate.return_value = (b"", b"")
             mock_popen.return_value = mock_process
+            mock_run.return_value = MagicMock(returncode=0)
             
             result = await service("whisper", "start")
             assert "✅" in result
@@ -78,7 +93,8 @@ class TestUnifiedServiceTool:
     async def test_start_whisper_missing_binary(self):
         """Test starting whisper when binary is missing"""
         with patch('voice_mode.tools.service.find_process_by_port', return_value=None), \
-             patch('voice_mode.tools.service.find_whisper_server', return_value=None):
+             patch('voice_mode.tools.service.find_whisper_server', return_value=None), \
+             patch('pathlib.Path.exists', return_value=False):
             result = await service("whisper", "start")
             assert "❌" in result
             assert "not found" in result
@@ -87,7 +103,8 @@ class TestUnifiedServiceTool:
     @pytest.mark.asyncio
     async def test_stop_service_not_running(self):
         """Test stopping a service that's not running"""
-        with patch('voice_mode.tools.service.find_process_by_port', return_value=None):
+        with patch('voice_mode.tools.service.find_process_by_port', return_value=None), \
+             patch('pathlib.Path.exists', return_value=False):
             result = await service("whisper", "stop")
             assert "not running" in result
     
@@ -145,6 +162,7 @@ class TestUnifiedServiceTool:
              patch('voice_mode.tools.service.load_service_file_version', return_value="1.0.0"), \
              patch('voice_mode.tools.service.load_service_template', return_value="template content"), \
              patch('voice_mode.tools.service.find_kokoro_fastapi', return_value="/path/to/kokoro"), \
+             patch('pathlib.Path.exists', return_value=True), \
              patch('pathlib.Path.mkdir'), \
              patch('pathlib.Path.write_text'), \
              patch('subprocess.run') as mock_run:
@@ -259,8 +277,6 @@ class TestServicePrompts:
     
     def test_whisper_prompt_valid_action(self):
         """Test whisper prompt with valid action"""
-        from voice_mode.prompts.services import whisper_prompt
-        
         result = whisper_prompt("status")
         assert "service tool" in result
         assert "service_name='whisper'" in result
@@ -268,8 +284,6 @@ class TestServicePrompts:
     
     def test_whisper_prompt_logs_action(self):
         """Test whisper prompt for logs action"""
-        from voice_mode.prompts.services import whisper_prompt
-        
         result = whisper_prompt("logs")
         assert "service tool" in result
         assert "action='logs'" in result
@@ -277,16 +291,12 @@ class TestServicePrompts:
     
     def test_whisper_prompt_invalid_action(self):
         """Test whisper prompt with invalid action"""
-        from voice_mode.prompts.services import whisper_prompt
-        
         result = whisper_prompt("invalid")
         assert "Invalid action" in result
         assert "Use one of:" in result
     
     def test_kokoro_prompt_valid_action(self):
         """Test kokoro prompt with valid action"""
-        from voice_mode.prompts.services import kokoro_prompt
-        
         result = kokoro_prompt("start")
         assert "service tool" in result
         assert "service_name='kokoro'" in result

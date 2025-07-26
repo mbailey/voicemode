@@ -13,10 +13,11 @@ import aiohttp
 
 from voice_mode.server import mcp
 from voice_mode.config import SERVICE_AUTO_ENABLE
-from ..version_helpers import (
+from voice_mode.utils.version_helpers import (
     get_git_tags, get_latest_stable_tag, get_current_version,
     checkout_version, is_version_installed
 )
+from voice_mode.utils.migration_helpers import auto_migrate_if_needed
 
 logger = logging.getLogger("voice-mode")
 
@@ -53,6 +54,9 @@ async def kokoro_install(
         Installation status with service configuration details
     """
     try:
+        # Check for and migrate old installations
+        migration_msg = auto_migrate_if_needed("kokoro")
+        
         # Set default directories under ~/.voicemode
         voicemode_dir = os.path.expanduser("~/.voicemode")
         os.makedirs(voicemode_dir, exist_ok=True)
@@ -200,7 +204,7 @@ async def kokoro_install(
             "start_command": f"cd {install_dir} && ./{os.path.basename(start_script_path)}",
             "start_script": start_script_path,
             "version": current_version,
-            "message": f"Kokoro-fastapi {current_version} installed. Run: cd {install_dir} && ./{os.path.basename(start_script_path)}"
+            "message": f"Kokoro-fastapi {current_version} installed. Run: cd {install_dir} && ./{os.path.basename(start_script_path)}{' (' + migration_msg + ')' if migration_msg else ''}"
         }
         
         # Install launchagent on macOS

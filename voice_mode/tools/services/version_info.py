@@ -10,10 +10,10 @@ from datetime import datetime
 
 from voice_mode.server import mcp
 from voice_mode.config import BASE_DIR
-from voice_mode.tools.services.whisper.helpers import find_whisper_server
-from voice_mode.tools.services.kokoro.helpers import find_kokoro_fastapi
-from voice_mode.tools.services.common import find_process_by_port
-from voice_mode.tools.services.version_helpers import get_current_version
+from voice_mode.utils.services.whisper_helpers import find_whisper_server
+from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi
+from voice_mode.utils.services.common import find_process_by_port
+from voice_mode.utils.version_helpers import get_current_version
 
 logger = logging.getLogger("voice-mode")
 
