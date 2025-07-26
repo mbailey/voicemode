@@ -13,7 +13,12 @@ import asyncio
 import aiohttp
 
 from voice_mode.server import mcp
+from voice_mode.config import SERVICE_AUTO_ENABLE
 from .helpers import download_whisper_model
+from ..version_helpers import (
+    get_git_tags, get_latest_stable_tag, get_current_version,
+    checkout_version, is_version_installed
+)
 
 logger = logging.getLogger("voice-mode")
 
@@ -23,13 +28,14 @@ async def whisper_install(
     install_dir: Optional[str] = None,
     model: str = "large-v2",
     use_gpu: Optional[bool] = None,
-    force_reinstall: bool = False
+    force_reinstall: bool = False,
+    auto_enable: Optional[bool] = None,
+    version: str = "latest"
 ) -> Dict[str, Any]:
     """
     Install whisper.cpp with automatic system detection and configuration.
     
     Supports macOS (with Metal) and Linux (with CUDA if available).
-    On macOS, also installs a launchagent to run whisper-server on port 2022.
     
     Args:
         install_dir: Directory to install whisper.cpp (default: ~/.voicemode/whisper.cpp)
@@ -37,6 +43,8 @@ async def whisper_install(
                Default is large-v2 for best accuracy. Note: large models require ~3GB RAM.
         use_gpu: Enable GPU support if available (default: auto-detect)
         force_reinstall: Force reinstallation even if already installed
+        auto_enable: Enable service after install. If None, uses VOICEMODE_SERVICE_AUTO_ENABLE config.
+        version: Version to install (default: "latest" for latest stable release)
     
     Returns:
         Installation status with paths and configuration details
@@ -51,16 +59,36 @@ async def whisper_install(
         else:
             install_dir = os.path.expanduser(install_dir)
         
+        # Resolve version if "latest" is specified
+        if version == "latest":
+            tags = get_git_tags("https://github.com/ggerganov/whisper.cpp")
+            if not tags:
+                return {
+                    "success": False,
+                    "error": "Failed to fetch available versions"
+                }
+            version = get_latest_stable_tag(tags)
+            if not version:
+                return {
+                    "success": False,
+                    "error": "No stable versions found"
+                }
+            logger.info(f"Using latest stable version: {version}")
+        
         # Check if already installed
         if os.path.exists(install_dir) and not force_reinstall:
             if os.path.exists(os.path.join(install_dir, "main")):
-                return {
-                    "success": True,
-                    "install_path": install_dir,
-                    "model_path": os.path.join(install_dir, "models", f"ggml-{model}.bin"),
-                    "already_installed": True,
-                    "message": "whisper.cpp already installed. Use force_reinstall=True to reinstall."
-                }
+                # Check if the requested version is already installed
+                if is_version_installed(Path(install_dir), version):
+                    current_version = get_current_version(Path(install_dir))
+                    return {
+                        "success": True,
+                        "install_path": install_dir,
+                        "model_path": os.path.join(install_dir, "models", f"ggml-{model}.bin"),
+                        "already_installed": True,
+                        "version": current_version,
+                        "message": f"whisper.cpp version {current_version} already installed. Use force_reinstall=True to reinstall."
+                    }
         
         # Detect system
         system = platform.system()
@@ -130,12 +158,27 @@ async def whisper_install(
         
         # Clone whisper.cpp if not exists
         if not os.path.exists(install_dir):
-            logger.info("Cloning whisper.cpp repository...")
+            logger.info(f"Cloning whisper.cpp repository (version {version})...")
             subprocess.run([
                 "git", "clone", "https://github.com/ggerganov/whisper.cpp.git", install_dir
             ], check=True)
+            # Checkout the specific version
+            if not checkout_version(Path(install_dir), version):
+                shutil.rmtree(install_dir)
+                return {
+                    "success": False,
+                    "error": f"Failed to checkout version {version}"
+                }
         else:
-            logger.info("Using existing whisper.cpp directory...")
+            logger.info(f"Using existing whisper.cpp directory, switching to version {version}...")
+            # Clean any local changes and checkout the version
+            subprocess.run(["git", "reset", "--hard"], cwd=install_dir, check=True)
+            subprocess.run(["git", "clean", "-fd"], cwd=install_dir, check=True)
+            if not checkout_version(Path(install_dir), version):
+                return {
+                    "success": False,
+                    "error": f"Failed to checkout version {version}"
+                }
         
         # Build whisper.cpp
         logger.info(f"Building whisper.cpp with {gpu_type} support...")
@@ -266,7 +309,7 @@ exec "$SERVER_BIN" \\
             launchagents_dir = os.path.expanduser("~/Library/LaunchAgents")
             os.makedirs(launchagents_dir, exist_ok=True)
             
-            plist_name = "com.voicemode.whisper-server.plist"
+            plist_name = "com.voicemode.whisper.plist"
             plist_path = os.path.join(launchagents_dir, plist_name)
             
             plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -274,7 +317,7 @@ exec "$SERVER_BIN" \\
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.voicemode.whisper-server</string>
+    <string>com.voicemode.whisper</string>
     <key>ProgramArguments</key>
     <array>
         <string>{start_script_path}</string>
@@ -286,9 +329,9 @@ exec "$SERVER_BIN" \\
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{os.path.join(voicemode_dir, 'whisper-server.stdout.log')}</string>
+    <string>{os.path.join(voicemode_dir, 'logs', 'whisper.out.log')}</string>
     <key>StandardErrorPath</key>
-    <string>{os.path.join(voicemode_dir, 'whisper-server.stderr.log')}</string>
+    <string>{os.path.join(voicemode_dir, 'logs', 'whisper.err.log')}</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -308,12 +351,28 @@ exec "$SERVER_BIN" \\
             
             subprocess.run(["launchctl", "load", plist_path], check=True)
             
+            # Handle auto_enable
+            enable_message = ""
+            if auto_enable is None:
+                auto_enable = SERVICE_AUTO_ENABLE
+            
+            if auto_enable:
+                logger.info("Auto-enabling whisper service...")
+                from voice_mode.tools.service import service
+                enable_result = await service("whisper", "enable")
+                if "✅" in enable_result:
+                    enable_message = " Service auto-enabled."
+                else:
+                    logger.warning(f"Auto-enable failed: {enable_result}")
+            
+            current_version = get_current_version(Path(install_dir))
             return {
                 "success": True,
                 "install_path": install_dir,
                 "model_path": model_path,
                 "gpu_enabled": use_gpu,
                 "gpu_type": gpu_type,
+                "version": current_version,
                 "performance_info": {
                     "system": system,
                     "gpu_acceleration": gpu_type,
@@ -324,7 +383,7 @@ exec "$SERVER_BIN" \\
                 },
                 "launchagent": plist_path,
                 "start_script": start_script_path,
-                "message": f"Successfully installed whisper.cpp with {gpu_type} support and whisper-server on port 2022"
+                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support and whisper-server on port 2022{enable_message}"
             }
         
         # Install systemd service on Linux
@@ -333,7 +392,7 @@ exec "$SERVER_BIN" \\
             systemd_user_dir = os.path.expanduser("~/.config/systemd/user")
             os.makedirs(systemd_user_dir, exist_ok=True)
             
-            service_name = "whisper-server.service"
+            service_name = "voicemode-whisper.service"
             service_path = os.path.join(systemd_user_dir, service_name)
             
             service_content = f"""[Unit]
@@ -346,8 +405,8 @@ ExecStart={start_script_path}
 Restart=on-failure
 RestartSec=10
 WorkingDirectory={install_dir}
-StandardOutput=append:{os.path.join(voicemode_dir, 'whisper-server.log')}
-StandardError=append:{os.path.join(voicemode_dir, 'whisper-server.error.log')}
+StandardOutput=append:{os.path.join(voicemode_dir, 'logs', 'whisper.out.log')}
+StandardError=append:{os.path.join(voicemode_dir, 'logs', 'whisper.err.log')}
 Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/cuda/bin"
 Environment="VOICEMODE_WHISPER_MODEL={model}"
 
@@ -371,12 +430,28 @@ WantedBy=default.target
                 systemd_message = f"Systemd service created but not started: {e}"
                 logger.warning(systemd_message)
             
+            # Handle auto_enable
+            enable_message = ""
+            if auto_enable is None:
+                auto_enable = SERVICE_AUTO_ENABLE
+            
+            if auto_enable:
+                logger.info("Auto-enabling whisper service...")
+                from voice_mode.tools.service import service
+                enable_result = await service("whisper", "enable")
+                if "✅" in enable_result:
+                    enable_message = " Service auto-enabled."
+                else:
+                    logger.warning(f"Auto-enable failed: {enable_result}")
+            
+            current_version = get_current_version(Path(install_dir))
             return {
                 "success": True,
                 "install_path": install_dir,
                 "model_path": model_path,
                 "gpu_enabled": use_gpu,
                 "gpu_type": gpu_type,
+                "version": current_version,
                 "performance_info": {
                     "system": system,
                     "gpu_acceleration": gpu_type,
@@ -388,23 +463,33 @@ WantedBy=default.target
                 "systemd_service": service_path,
                 "systemd_enabled": systemd_enabled,
                 "start_script": start_script_path,
-                "message": f"Successfully installed whisper.cpp with {gpu_type} support. {systemd_message}"
+                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support. {systemd_message}{enable_message}"
             }
         
         else:
+            # Handle auto_enable for other systems (if we add Windows support later)
+            enable_message = ""
+            if auto_enable is None:
+                auto_enable = SERVICE_AUTO_ENABLE
+            
+            if auto_enable:
+                logger.info("Auto-enable not supported on this platform")
+            
+            current_version = get_current_version(Path(install_dir))
             return {
                 "success": True,
                 "install_path": install_dir,
                 "model_path": model_path,
                 "gpu_enabled": use_gpu,
                 "gpu_type": gpu_type,
+                "version": current_version,
                 "performance_info": {
                     "system": system,
                     "gpu_acceleration": gpu_type,
                     "model": model,
                     "binary_path": main_path if 'main_path' in locals() else os.path.join(install_dir, "main")
                 },
-                "message": f"Successfully installed whisper.cpp with {gpu_type} support"
+                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support{enable_message}"
             }
         
     except subprocess.CalledProcessError as e:

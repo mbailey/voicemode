@@ -1,0 +1,30 @@
+# voicemode-kokoro.service v1.0.0
+# Last updated: 2025-01-25
+# Compatible with: kokoro-fastapi v1.0.0+
+
+[Unit]
+Description=Voice Mode Kokoro Text-to-Speech Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={KOKORO_DIR}
+ExecStart={START_SCRIPT}
+Restart=always
+RestartSec=10
+
+# Environment
+Environment="VOICEMODE_KOKORO_PORT={KOKORO_PORT}"
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# Resource limits
+MemoryLimit=4G
+CPUQuota=100%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-kokoro
+
+[Install]
+WantedBy=default.target

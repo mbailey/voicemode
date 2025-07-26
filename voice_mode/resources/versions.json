@@ -1,0 +1,21 @@
+{
+  "service_files": {
+    "com.voicemode.whisper.plist": "1.0.0",
+    "com.voicemode.kokoro.plist": "1.0.0",
+    "voicemode-whisper.service": "1.0.0",
+    "voicemode-kokoro.service": "1.0.0"
+  },
+  "last_updated": "2025-01-25",
+  "min_tool_version": "2.15.0",
+  "changelog": {
+    "1.0.0": {
+      "date": "2025-01-25",
+      "changes": [
+        "Initial version with standalone service files",
+        "Added environment variables support",
+        "Added resource limits for systemd",
+        "Added proper logging configuration"
+      ]
+    }
+  }
+}

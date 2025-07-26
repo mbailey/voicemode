@@ -12,6 +12,11 @@ import asyncio
 import aiohttp
 
 from voice_mode.server import mcp
+from voice_mode.config import SERVICE_AUTO_ENABLE
+from ..version_helpers import (
+    get_git_tags, get_latest_stable_tag, get_current_version,
+    checkout_version, is_version_installed
+)
 
 logger = logging.getLogger("voice-mode")
 
@@ -23,7 +28,9 @@ async def kokoro_install(
     port: int = 8880,
     auto_start: bool = True,
     install_models: bool = True,
-    force_reinstall: bool = False
+    force_reinstall: bool = False,
+    auto_enable: Optional[bool] = None,
+    version: str = "latest"
 ) -> Dict[str, Any]:
     """
     Install and setup remsky/kokoro-fastapi TTS service using the simple 3-step approach.
@@ -39,6 +46,8 @@ async def kokoro_install(
         auto_start: Start the service after installation (ignored on macOS, uses launchd instead)
         install_models: Download Kokoro models (not used - handled by start script)
         force_reinstall: Force reinstallation even if already installed
+        auto_enable: Enable service after install. If None, uses VOICEMODE_SERVICE_AUTO_ENABLE config.
+        version: Version to install (default: "latest" for latest stable release)
     
     Returns:
         Installation status with service configuration details
@@ -58,16 +67,36 @@ async def kokoro_install(
         else:
             models_dir = os.path.expanduser(models_dir)
         
+        # Resolve version if "latest" is specified
+        if version == "latest":
+            tags = get_git_tags("https://github.com/remsky/kokoro-fastapi")
+            if not tags:
+                return {
+                    "success": False,
+                    "error": "Failed to fetch available versions"
+                }
+            version = get_latest_stable_tag(tags)
+            if not version:
+                return {
+                    "success": False,
+                    "error": "No stable versions found"
+                }
+            logger.info(f"Using latest stable version: {version}")
+        
         # Check if already installed
         if os.path.exists(install_dir) and not force_reinstall:
             if os.path.exists(os.path.join(install_dir, "main.py")):
-                return {
-                    "success": True,
-                    "install_path": install_dir,
-                    "models_path": models_dir,
-                    "already_installed": True,
-                    "message": "kokoro-fastapi already installed. Use force_reinstall=True to reinstall."
-                }
+                # Check if the requested version is already installed
+                if is_version_installed(Path(install_dir), version):
+                    current_version = get_current_version(Path(install_dir))
+                    return {
+                        "success": True,
+                        "install_path": install_dir,
+                        "models_path": models_dir,
+                        "already_installed": True,
+                        "version": current_version,
+                        "message": f"kokoro-fastapi version {current_version} already installed. Use force_reinstall=True to reinstall."
+                    }
         
         # Check Python version
         if sys.version_info < (3, 10):
@@ -101,12 +130,27 @@ async def kokoro_install(
         
         # Clone repository if not exists
         if not os.path.exists(install_dir):
-            logger.info("Cloning kokoro-fastapi repository...")
+            logger.info(f"Cloning kokoro-fastapi repository (version {version})...")
             subprocess.run([
                 "git", "clone", "https://github.com/remsky/kokoro-fastapi.git", install_dir
             ], check=True)
+            # Checkout the specific version
+            if not checkout_version(Path(install_dir), version):
+                shutil.rmtree(install_dir)
+                return {
+                    "success": False,
+                    "error": f"Failed to checkout version {version}"
+                }
         else:
-            logger.info("Using existing kokoro-fastapi directory...")
+            logger.info(f"Using existing kokoro-fastapi directory, switching to version {version}...")
+            # Clean any local changes and checkout the version
+            subprocess.run(["git", "reset", "--hard"], cwd=install_dir, check=True)
+            subprocess.run(["git", "clean", "-fd"], cwd=install_dir, check=True)
+            if not checkout_version(Path(install_dir), version):
+                return {
+                    "success": False,
+                    "error": f"Failed to checkout version {version}"
+                }
         
         # Determine system and select appropriate start script
         system = platform.system()
@@ -148,13 +192,15 @@ async def kokoro_install(
             os.chmod(custom_script_path, 0o755)
             start_script_path = custom_script_path
             
+        current_version = get_current_version(Path(install_dir))
         result = {
             "success": True,
             "install_path": install_dir,
             "service_url": f"http://127.0.0.1:{port}",
             "start_command": f"cd {install_dir} && ./{os.path.basename(start_script_path)}",
             "start_script": start_script_path,
-            "message": f"Kokoro-fastapi installed. Run: cd {install_dir} && ./{os.path.basename(start_script_path)}"
+            "version": current_version,
+            "message": f"Kokoro-fastapi {current_version} installed. Run: cd {install_dir} && ./{os.path.basename(start_script_path)}"
         }
         
         # Install launchagent on macOS
@@ -206,6 +252,21 @@ async def kokoro_install(
             subprocess.run(["launchctl", "load", plist_path], check=True)
             result["launchagent"] = plist_path
             result["message"] += f"\nLaunchAgent installed: {plist_name}"
+            
+            # Handle auto_enable
+            enable_message = ""
+            if auto_enable is None:
+                auto_enable = SERVICE_AUTO_ENABLE
+            
+            if auto_enable:
+                logger.info("Auto-enabling kokoro service...")
+                from voice_mode.tools.service import service
+                enable_result = await service("kokoro", "enable")
+                if "✅" in enable_result:
+                    enable_message = " Service auto-enabled."
+                else:
+                    logger.warning(f"Auto-enable failed: {enable_result}")
+                result["message"] += enable_message
         
         # Install systemd service on Linux
         elif system == "Linux":
@@ -252,6 +313,21 @@ WantedBy=default.target
                 result["systemd_enabled"] = False
                 result["message"] += f"\nSystemd service created but not started: {e}"
                 logger.warning(f"Systemd service error: {e}")
+            
+            # Handle auto_enable
+            enable_message = ""
+            if auto_enable is None:
+                auto_enable = SERVICE_AUTO_ENABLE
+            
+            if auto_enable:
+                logger.info("Auto-enabling kokoro service...")
+                from voice_mode.tools.service import service
+                enable_result = await service("kokoro", "enable")
+                if "✅" in enable_result:
+                    enable_message = " Service auto-enabled."
+                else:
+                    logger.warning(f"Auto-enable failed: {enable_result}")
+                result["message"] += enable_message
         
         # Start service if requested (skip if launchagent or systemd was installed)
         if auto_start and system not in ["Darwin", "Linux"]:

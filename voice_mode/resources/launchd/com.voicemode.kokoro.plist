@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.voicemode.kokoro.plist v1.0.0 -->
+<!-- Last updated: 2025-01-25 -->
+<!-- Compatible with: kokoro-fastapi v1.0.0+ -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicemode.kokoro</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{START_SCRIPT}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{KOKORO_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{LOG_DIR}/kokoro.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{LOG_DIR}/kokoro.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <key>VOICEMODE_KOKORO_PORT</key>
+        <string>{KOKORO_PORT}</string>
+    </dict>
+</dict>
+</plist>

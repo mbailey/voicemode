@@ -1,0 +1,26 @@
+# voicemode-whisper.service v1.0.0
+# Last updated: 2025-01-25
+# Compatible with: whisper.cpp v1.5.0+
+
+[Unit]
+Description=Voice Mode Whisper Speech-to-Text Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={WHISPER_BIN} --host 0.0.0.0 --port {WHISPER_PORT} --model {MODEL_FILE}
+WorkingDirectory={WORKING_DIR}
+Restart=always
+RestartSec=10
+
+# Resource limits
+MemoryLimit=2G
+CPUQuota=80%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-whisper
+
+[Install]
+WantedBy=default.target
