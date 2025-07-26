@@ -15,6 +15,12 @@ from datetime import datetime
 
 # ==================== ENVIRONMENT CONFIGURATION ====================
 
+# Helper function to parse boolean environment variables
+def env_bool(env_var: str, default: bool = False) -> bool:
+    """Parse boolean from environment variable."""
+    value = os.getenv(env_var, "").lower()
+    return value in ("true", "1", "yes", "on") if value else default
+
 # Base directory for all voicemode data
 BASE_DIR = Path(os.getenv("VOICEMODE_BASE_DIR", str(Path.home() / ".voicemode")))
 
@@ -92,6 +98,11 @@ KOKORO_PORT = int(os.getenv("VOICEMODE_KOKORO_PORT", "8880"))
 KOKORO_MODELS_DIR = os.getenv("VOICEMODE_KOKORO_MODELS_DIR", str(BASE_DIR / "models" / "kokoro"))
 KOKORO_CACHE_DIR = os.getenv("VOICEMODE_KOKORO_CACHE_DIR", str(BASE_DIR / "cache" / "kokoro"))
 KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
+
+# ==================== SERVICE MANAGEMENT CONFIGURATION ====================
+
+# Auto-enable services after installation
+SERVICE_AUTO_ENABLE = env_bool("VOICEMODE_SERVICE_AUTO_ENABLE", False)
 
 # ==================== AUDIO CONFIGURATION ====================
 
