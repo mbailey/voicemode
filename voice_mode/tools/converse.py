@@ -52,7 +52,14 @@ from voice_mode.config import (
     INITIAL_SILENCE_GRACE_PERIOD,
     DEFAULT_LISTEN_DURATION,
     TTS_VOICES,
-    TTS_MODELS
+    TTS_MODELS,
+    SILERO_VAD_MIN_SPEECH_DURATION,
+    SILERO_VAD_MIN_SILENCE_DURATION,
+    SILERO_VAD_PREFIX_PADDING_DURATION,
+    SILERO_VAD_MAX_BUFFERED_SPEECH,
+    SILERO_VAD_ACTIVATION_THRESHOLD,
+    SILERO_VAD_SAMPLE_RATE,
+    SILERO_VAD_FORCE_CPU
 )
 import voice_mode.config
 from voice_mode.providers import (
@@ -96,6 +103,57 @@ last_session_end_time = None
 openai_clients = get_openai_clients(OPENAI_API_KEY or "dummy-key-for-local", None, None)
 
 # Provider-specific clients are now created dynamically by the provider registry
+
+# ==================== SILERO VAD OPTIMIZATION ====================
+
+# Cached Silero VAD instance for LiveKit sessions
+# This is loaded once at module level to avoid repeated loading costs
+_silero_vad_instance = None
+
+
+def get_silero_vad():
+    """Get or create the cached Silero VAD instance for LiveKit sessions.
+    
+    This function ensures the VAD is only loaded once and reused across all
+    LiveKit conversations, providing significant performance optimization.
+    
+    Returns:
+        Silero VAD instance configured with environment variables, or None if loading fails
+    """
+    global _silero_vad_instance
+    
+    if _silero_vad_instance is not None:
+        return _silero_vad_instance
+    
+    try:
+        from livekit.plugins import silero
+        
+        logger.info("Loading Silero VAD with configured parameters...")
+        logger.debug(f"VAD Config: min_speech={SILERO_VAD_MIN_SPEECH_DURATION}s, "
+                     f"min_silence={SILERO_VAD_MIN_SILENCE_DURATION}s, "
+                     f"threshold={SILERO_VAD_ACTIVATION_THRESHOLD}, "
+                     f"sample_rate={SILERO_VAD_SAMPLE_RATE}Hz, "
+                     f"force_cpu={SILERO_VAD_FORCE_CPU}")
+        
+        _silero_vad_instance = silero.VAD.load(
+            min_speech_duration=SILERO_VAD_MIN_SPEECH_DURATION,
+            min_silence_duration=SILERO_VAD_MIN_SILENCE_DURATION, 
+            prefix_padding_duration=SILERO_VAD_PREFIX_PADDING_DURATION,
+            max_buffered_speech=SILERO_VAD_MAX_BUFFERED_SPEECH,
+            activation_threshold=SILERO_VAD_ACTIVATION_THRESHOLD,
+            sample_rate=SILERO_VAD_SAMPLE_RATE,
+            force_cpu=SILERO_VAD_FORCE_CPU
+        )
+        
+        logger.info("✓ Silero VAD loaded successfully")
+        return _silero_vad_instance
+        
+    except ImportError:
+        logger.warning("Silero VAD not available - livekit.plugins.silero not found")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to load Silero VAD: {e}")
+        return None
 
 
 async def startup_initialization():
@@ -1038,12 +1096,74 @@ async def check_livekit_available() -> bool:
         return False
 
 
+async def send_chime_to_livekit_session(session, chime_type: str = "listening"):
+    """Send a chime sound through LiveKit session to remote participants
+    
+    Args:
+        session: LiveKit AgentSession instance
+        chime_type: Either "listening" (start chime) or "finished" (end chime)
+    """
+    try:
+        from livekit import rtc
+        from voice_mode.core import generate_chime
+        import numpy as np
+        
+        # Generate the same chime audio as local mode
+        if chime_type == "listening":
+            chime_audio = generate_chime([800, 1000], duration=0.1, sample_rate=SAMPLE_RATE)
+        else:  # finished
+            chime_audio = generate_chime([1000, 800], duration=0.1, sample_rate=SAMPLE_RATE)
+        
+        # Convert to 16-bit PCM for LiveKit
+        audio_data = (chime_audio * 32767).astype(np.int16)
+        
+        # Create audio frame for LiveKit
+        frame = rtc.AudioFrame.create(
+            sample_rate=SAMPLE_RATE,
+            num_channels=1,
+            samples_per_channel=len(audio_data)
+        )
+        frame.data[:len(audio_data)] = audio_data.tobytes()
+        
+        # Send the frame through LiveKit's room
+        if hasattr(session, 'room') and session.room:
+            local_participant = session.room.local_participant
+            if local_participant:
+                # Create temporary audio source and track for the chime
+                audio_source = rtc.AudioSource(SAMPLE_RATE, 1)
+                track = rtc.LocalAudioTrack.create_audio_track("chime", audio_source)
+                
+                # Publish the track temporarily
+                publication = await local_participant.publish_track(track, rtc.TrackPublishOptions())
+                
+                # Send the frame through the audio source
+                await audio_source.capture_frame(frame)
+                
+                # Brief pause to ensure delivery
+                await asyncio.sleep(0.15)
+                
+                # Clean up - unpublish the track
+                await local_participant.unpublish_track(publication.sid)
+                
+                logger.debug(f"Sent {chime_type} chime through LiveKit session")
+        
+    except Exception as e:
+        logger.debug(f"Failed to send chime through LiveKit: {e}")
+        # Fallback: Try to use TTS-based chime
+        try:
+            if hasattr(session, 'say'):
+                chime_text = "*ding*" if chime_type == "listening" else "*done*"
+                await session.say(chime_text, allow_interruptions=False)
+        except Exception as tts_e:
+            logger.debug(f"TTS chime fallback also failed: {tts_e}")
+
+
 async def livekit_converse(message: str, room_name: str = "", timeout: float = 60.0) -> str:
     """Have a conversation using LiveKit transport"""
     try:
         from livekit import rtc, api
         from livekit.agents import Agent, AgentSession
-        from livekit.plugins import openai as lk_openai, silero
+        from livekit.plugins import openai as lk_openai
         
         # Auto-discover room if needed
         if not room_name:
@@ -1085,6 +1205,13 @@ async def livekit_converse(message: str, room_name: str = "", timeout: float = 6
                 if self.session:
                     await self.session.say(message, allow_interruptions=True)
                     self.has_spoken = True
+                    
+                    # Brief pause after speaking
+                    await asyncio.sleep(0.5)
+                    
+                    # Send "listening" chime to indicate ready for response
+                    if AUDIO_FEEDBACK_ENABLED:
+                        await send_chime_to_livekit_session(self.session, "listening")
             
             async def on_user_speech_started(self):
                 """Track when user starts speaking"""
@@ -1128,6 +1255,10 @@ async def livekit_converse(message: str, room_name: str = "", timeout: float = 6
                     if content.strip() and len(content.strip()) > 2:
                         self.response = content
                         logger.debug(f"Accepted response: '{content}'")
+                        
+                        # Send "finished" chime to indicate response received
+                        if AUDIO_FEEDBACK_ENABLED:
+                            await send_chime_to_livekit_session(self.session, "finished")
         
         # Connect and run
         token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -1145,17 +1276,14 @@ async def livekit_converse(message: str, room_name: str = "", timeout: float = 6
             return "No participants in LiveKit room"
         
         agent = VoiceAgent()
-        # Configure Silero VAD with less aggressive settings for better end-of-turn detection
-        vad = silero.VAD.load(
-            min_speech_duration=0.1,        # Slightly increased - require more speech to start
-            min_silence_duration=1.2,       # Increased to 1.2s - wait much longer before ending speech
-            prefix_padding_duration=0.5,    # Keep default - padding at speech start
-            max_buffered_speech=60.0,       # Keep default - max speech buffer
-            activation_threshold=0.35,      # Lowered to 0.35 - more sensitive to soft speech
-            sample_rate=16000,              # Standard sample rate
-            force_cpu=True                  # Use CPU for compatibility
-        )
-        session = AgentSession(vad=vad)
+        # Get cached Silero VAD instance with environment variable configuration
+        vad = get_silero_vad()
+        
+        if vad is None:
+            logger.warning("Silero VAD not available, using default AgentSession")
+            session = AgentSession()
+        else:
+            session = AgentSession(vad=vad)
         await session.start(room=room, agent=agent)
         
         # Wait for response
