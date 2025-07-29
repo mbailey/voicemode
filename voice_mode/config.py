@@ -118,6 +118,37 @@ def load_voicemode_env():
 # LiveKit API credentials
 # LIVEKIT_API_KEY=devkey
 # LIVEKIT_API_SECRET=secret
+
+#############
+# Silero VAD Configuration (LiveKit)
+#############
+
+# Voice Activity Detection settings for LiveKit sessions
+# These control when speech starts/ends and end-of-turn detection
+
+# Minimum speech duration to trigger detection (default: 0.1s)
+# VOICEMODE_SILERO_VAD_MIN_SPEECH_DURATION=0.1
+
+# Silence duration before ending speech detection (default: 1.2s)
+# Higher values = wait longer before concluding user is done speaking
+# VOICEMODE_SILERO_VAD_MIN_SILENCE_DURATION=1.2
+
+# Audio padding at start of speech (default: 0.5s)
+# VOICEMODE_SILERO_VAD_PREFIX_PADDING_DURATION=0.5
+
+# Maximum speech buffer duration (default: 60.0s)
+# VOICEMODE_SILERO_VAD_MAX_BUFFERED_SPEECH=60.0
+
+# Voice detection sensitivity threshold (default: 0.35, range: 0.0-1.0)
+# Lower values = more sensitive to quiet speech
+# VOICEMODE_SILERO_VAD_ACTIVATION_THRESHOLD=0.35
+
+# Sample rate for VAD processing (default: 16000Hz)
+# VOICEMODE_SILERO_VAD_SAMPLE_RATE=16000
+
+# Force CPU usage for VAD (default: true)
+# Set to false to use GPU if available
+# VOICEMODE_SILERO_VAD_FORCE_CPU=true
 '''
         with open(config_path, 'w') as f:
             f.write(default_config)
@@ -257,6 +288,18 @@ INITIAL_SILENCE_GRACE_PERIOD = float(os.getenv("VOICEMODE_INITIAL_SILENCE_GRACE_
 
 # Default listen duration for converse tool
 DEFAULT_LISTEN_DURATION = float(os.getenv("VOICEMODE_DEFAULT_LISTEN_DURATION", "120.0"))  # Default 120s listening time
+
+# ==================== SILERO VAD CONFIGURATION (LIVEKIT) ====================
+
+# Silero VAD configuration for LiveKit sessions
+# These settings control voice activity detection and end-of-turn detection in LiveKit rooms
+SILERO_VAD_MIN_SPEECH_DURATION = float(os.getenv("VOICEMODE_SILERO_VAD_MIN_SPEECH_DURATION", "0.1"))  # Minimum speech duration to start detection
+SILERO_VAD_MIN_SILENCE_DURATION = float(os.getenv("VOICEMODE_SILERO_VAD_MIN_SILENCE_DURATION", "1.2"))  # Wait time before ending speech detection  
+SILERO_VAD_PREFIX_PADDING_DURATION = float(os.getenv("VOICEMODE_SILERO_VAD_PREFIX_PADDING_DURATION", "0.5"))  # Padding at speech start
+SILERO_VAD_MAX_BUFFERED_SPEECH = float(os.getenv("VOICEMODE_SILERO_VAD_MAX_BUFFERED_SPEECH", "60.0"))  # Maximum speech buffer in seconds
+SILERO_VAD_ACTIVATION_THRESHOLD = float(os.getenv("VOICEMODE_SILERO_VAD_ACTIVATION_THRESHOLD", "0.35"))  # Sensitivity threshold (0.0-1.0)
+SILERO_VAD_SAMPLE_RATE = int(os.getenv("VOICEMODE_SILERO_VAD_SAMPLE_RATE", "16000"))  # Sample rate for VAD processing  
+SILERO_VAD_FORCE_CPU = os.getenv("VOICEMODE_SILERO_VAD_FORCE_CPU", "true").lower() in ("true", "1", "yes", "on")  # Force CPU usage for compatibility
 
 # Audio format configuration
 AUDIO_FORMAT = os.getenv("VOICEMODE_AUDIO_FORMAT", "pcm").lower()
