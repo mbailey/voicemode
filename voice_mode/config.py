@@ -16,8 +16,8 @@ from datetime import datetime
 # ==================== ENVIRONMENT CONFIGURATION ====================
 
 def load_voicemode_env():
-    """Load configuration from .voicemode.env file if it exists, creating a default if not."""
-    config_path = Path.home() / ".voicemode" / ".voicemode.env"
+    """Load configuration from voicemode.env file if it exists, creating a default if not."""
+    config_path = Path.home() / ".voicemode" / "voicemode.env"
     
     if not config_path.exists():
         # Create default template
@@ -156,7 +156,7 @@ BASE_DIR = Path(os.getenv("VOICEMODE_BASE_DIR", str(Path.home() / ".voicemode"))
 AUDIO_DIR = BASE_DIR / "audio"
 TRANSCRIPTIONS_DIR = BASE_DIR / "transcriptions"
 LOGS_DIR = BASE_DIR / "logs"
-# CONFIG_DIR = BASE_DIR / "config"  # Removed - config stored in .voicemode.env file instead
+# CONFIG_DIR = BASE_DIR / "config"  # Removed - config stored in voicemode.env file instead
 MODELS_DIR = Path(os.getenv("VOICEMODE_MODELS_DIR", str(BASE_DIR / "models")))
 
 # Debug configuration
@@ -405,7 +405,7 @@ def initialize_directories():
     AUDIO_DIR.mkdir(exist_ok=True)
     TRANSCRIPTIONS_DIR.mkdir(exist_ok=True)
     LOGS_DIR.mkdir(exist_ok=True)
-    # CONFIG_DIR.mkdir(exist_ok=True)  # Removed - config stored in .voicemode.env file instead
+    # CONFIG_DIR.mkdir(exist_ok=True)  # Removed - config stored in voicemode.env file instead
     
     # Create subdirectories for logs
     if DEBUG:

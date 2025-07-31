@@ -36,7 +36,7 @@ mkdir -p ~/Models/kokoro
 
 ## Configure
 
-Environment variables in `~/.voicemode.env`:
+Environment variables in `~/.voicemode/voicemode.env`:
 
 ```bash
 VOICEMODE_KOKORO_PORT=8880

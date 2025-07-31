@@ -22,8 +22,8 @@ Voice Mode can create an initial configuration file with sensible defaults, maki
 Voice Mode follows standard configuration precedence:
 
 1. **Environment variables** (highest priority) - Always win
-2. **Project config** (`.voicemode.env` in current directory)
-3. **User config** (`~/.voicemode.env`)
+2. **Project config** (`voicemode.env` in current directory)
+3. **User config** (`~/.voicemode/voicemode.env`)
 4. **Built-in defaults** (lowest priority)
 
 ## Not Against MCP Specification
@@ -47,7 +47,7 @@ This approach provides:
 # Host-provided (highest priority)
 export VOICEMODE_TTS_VOICES="nova,alloy"
 
-# Or in ~/.voicemode.env
+# Or in ~/.voicemode/voicemode.env
 VOICEMODE_TTS_VOICES="af_sky,nova"
 VOICEMODE_WHISPER_MODEL="base"
 

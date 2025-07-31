@@ -238,13 +238,13 @@ async def environment_variables() -> str:
     Shows each configuration variable with:
     - Name: The environment variable name
     - Environment Value: Current value from environment
-    - Config File Value: Value from ~/.voicemode.env (if exists)
+    - Config File Value: Value from ~/.voicemode/voicemode.env (if exists)
     - Description: What the variable controls
     
     This helps identify configuration sources and troubleshoot settings.
     """
     # Parse config file
-    user_config_path = Path.home() / ".voicemode.env"
+    user_config_path = Path.home() / ".voicemode" / "voicemode.env"
     file_config = parse_env_file(user_config_path)
     
     # Define all configuration variables with descriptions
@@ -330,7 +330,7 @@ async def environment_template() -> str:
     Environment variable template for voice mode configuration.
     
     Provides a ready-to-use template of all available environment variables
-    with their current values. This can be saved to ~/.voicemode.env and
+    with their current values. This can be saved to ~/.voicemode/voicemode.env and
     customized as needed.
     
     Sensitive values like API keys are masked for security.

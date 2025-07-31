@@ -2,7 +2,7 @@
 
 This is a comprehensive reference of all configuration options available in Voice Mode.
 
-**Note:** Voice Mode automatically creates `~/.voicemode/.voicemode.env` on first run with basic settings. You can edit this file to customize your configuration. Environment variables always take precedence over file settings.
+**Note:** Voice Mode automatically creates `~/.voicemode/voicemode.env` on first run with basic settings. You can edit this file to customize your configuration. Environment variables always take precedence over file settings.
 
 ## API Keys and Authentication
 

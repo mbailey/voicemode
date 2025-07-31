@@ -42,7 +42,7 @@ wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2.bin
 
 ## Configure
 
-Environment variables in `~/.voicemode.env`:
+Environment variables in `~/.voicemode/voicemode.env`:
 
 ```bash
 VOICEMODE_WHISPER_MODEL=large-v2

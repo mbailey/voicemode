@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger("voice-mode")
 
 # Configuration file path (user-level only for security)
-USER_CONFIG_PATH = Path.home() / ".voicemode" / ".voicemode.env"
+USER_CONFIG_PATH = Path.home() / ".voicemode" / "voicemode.env"
 
 
 def parse_env_file(file_path: Path) -> Dict[str, str]:

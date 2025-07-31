@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Configuration directory creation**
-  - Removed redundant `config/` directory creation (config stored in `.voicemode.env`)
+  - Removed redundant `config/` directory creation (config stored in `voicemode.env`)
   - Fixed issue where services created unexpected directory structures
 - **Claude Code compatibility**
   - Fixed `claude mcp list` and `claude mcp add` for versions without `--scope` support
@@ -73,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Automatic configuration file loading**
-  - Voice Mode now creates `~/.voicemode/.voicemode.env` on first run
+  - Voice Mode now creates `~/.voicemode/voicemode.env` on first run
   - Template file includes all available settings with documentation
   - Environment variables always take precedence over file settings
   - Secure file permissions (0600) automatically set
@@ -119,11 +119,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Separated MCP templates and data from resources
 - **Improved configuration documentation**
   - Added comprehensive configuration reference guide
-  - Documented auto-generation of `~/.voicemode/.voicemode.env`
+  - Documented auto-generation of `~/.voicemode/voicemode.env`
   - Clarified that environment variables take precedence over file settings
 - **Configuration management now uses user-level config only**
-  - Removed project-level `.voicemode.env` support for security
-  - All configuration stored in `~/.voicemode/.voicemode.env`
+  - Removed project-level `voicemode.env` support for security
+  - All configuration stored in `~/.voicemode/voicemode.env`
 
 ### Fixed
 - Fixed `wait_for_response=false` being ignored in converse tool

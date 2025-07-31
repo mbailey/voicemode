@@ -108,7 +108,7 @@ To change this behavior, see the [Configuration Reference](configuration-referen
 
 ## Configuration File
 
-Voice Mode automatically creates `~/.voicemode/.voicemode.env` on first run with basic settings. This file uses simple `KEY=value` format (not shell exports).
+Voice Mode automatically creates `~/.voicemode/voicemode.env` on first run with basic settings. This file uses simple `KEY=value` format (not shell exports).
 
 ### Using the Configuration File
 
@@ -119,7 +119,7 @@ Voice Mode automatically creates `~/.voicemode/.voicemode.env` on first run with
 
 2. Edit the generated configuration file:
    ```bash
-   vim ~/.voicemode/.voicemode.env  # or your preferred editor
+   vim ~/.voicemode/voicemode.env  # or your preferred editor
    ```
 
 3. The file will be automatically loaded on next run. Environment variables always take precedence over file settings.
