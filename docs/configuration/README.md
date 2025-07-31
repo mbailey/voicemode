@@ -110,6 +110,8 @@ To change this behavior, see the [Configuration Reference](configuration-referen
 
 Voice Mode automatically creates `~/.voicemode/voicemode.env` on first run with basic settings. This file uses simple `KEY=value` format (not shell exports).
 
+**Note:** If you have an existing configuration at `~/.voicemode/.voicemode.env` (the old location), Voice Mode will continue to read from it until you have a config file at the new location. Configuration updates will always be written to the new location.
+
 ### Using the Configuration File
 
 1. Run Voice Mode once to generate the default configuration:

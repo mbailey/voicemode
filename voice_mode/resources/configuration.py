@@ -243,9 +243,16 @@ async def environment_variables() -> str:
     
     This helps identify configuration sources and troubleshoot settings.
     """
-    # Parse config file
-    user_config_path = Path.home() / ".voicemode" / "voicemode.env"
-    file_config = parse_env_file(user_config_path)
+    # Parse config file (check both new and old locations)
+    new_config_path = Path.home() / ".voicemode" / "voicemode.env"
+    old_config_path = Path.home() / ".voicemode" / ".voicemode.env"
+    
+    if new_config_path.exists():
+        file_config = parse_env_file(new_config_path)
+    elif old_config_path.exists():
+        file_config = parse_env_file(old_config_path)
+    else:
+        file_config = {}
     
     # Define all configuration variables with descriptions
     config_vars = [

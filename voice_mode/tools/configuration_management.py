@@ -10,8 +10,9 @@ import logging
 
 logger = logging.getLogger("voice-mode")
 
-# Configuration file path (user-level only for security)
+# Configuration file paths (user-level only for security)
 USER_CONFIG_PATH = Path.home() / ".voicemode" / "voicemode.env"
+OLD_CONFIG_PATH = Path.home() / ".voicemode" / ".voicemode.env"
 
 
 def parse_env_file(file_path: Path) -> Dict[str, str]:
@@ -117,12 +118,18 @@ async def update_config(key: str, value: str) -> str:
     if not re.match(r'^[A-Z_]+$', key):
         return f"❌ Invalid key format: {key}. Keys must be uppercase with underscores only."
     
-    # Use user config path
+    # Determine which config path to use
     config_path = USER_CONFIG_PATH
     
-    try:
-        # Read existing configuration
+    # Check if we need to read from old location
+    if not config_path.exists() and OLD_CONFIG_PATH.exists():
+        # Read from old location but write to new
+        config = parse_env_file(OLD_CONFIG_PATH)
+    else:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
         config = parse_env_file(config_path)
+    
+    try:
         
         # Store old value for reporting
         old_value = config.get(key, "[not set]")
@@ -130,15 +137,15 @@ async def update_config(key: str, value: str) -> str:
         # Update the configuration
         config[key] = value
         
-        # Write back to file
-        write_env_file(config_path, config)
+        # Always write to new location
+        write_env_file(USER_CONFIG_PATH, config)
         
         # Report the change
-        logger.info(f"Updated {key} in {config_path}")
+        logger.info(f"Updated {key} in {USER_CONFIG_PATH}")
         
         return f"""✅ Configuration updated successfully!
 
-File: {config_path}
+File: {USER_CONFIG_PATH}
 Key: {key}
 Old Value: {old_value}
 New Value: {value}
