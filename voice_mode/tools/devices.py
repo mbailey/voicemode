@@ -13,7 +13,11 @@ logger = logging.getLogger("voice-mode")
 @mcp.tool()
 async def check_audio_devices() -> str:
     """List available audio input and output devices"""
+    import platform
+    import subprocess
+    
     try:
+        # First get sounddevice info
         devices = sd.query_devices()
         input_devices = []
         output_devices = []
@@ -32,10 +36,68 @@ async def check_audio_devices() -> str:
         result.append(f"\nDefault Input: [{default_input['index']}] {default_input['name']}")
         result.append(f"Default Output: [{default_output['index']}] {default_output['name']}")
         
-        result.append("\n\nInput Devices:")
+        # Try to get PulseAudio/PipeWire info on Linux
+        if platform.system() == "Linux":
+            try:
+                # Check if pactl is available
+                pactl_result = subprocess.run(
+                    ["pactl", "info"], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=2
+                )
+                
+                if pactl_result.returncode == 0:
+                    result.append("\n\nPulseAudio/PipeWire Status:")
+                    
+                    # Get server info
+                    for line in pactl_result.stdout.split('\n'):
+                        if 'Server Name:' in line:
+                            result.append(f"  {line.strip()}")
+                        elif 'Default Sink:' in line:
+                            result.append(f"  {line.strip()}")
+                        elif 'Default Source:' in line:
+                            result.append(f"  {line.strip()}")
+                    
+                    # Get sources (inputs)
+                    sources_result = subprocess.run(
+                        ["pactl", "list", "sources", "short"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    
+                    if sources_result.returncode == 0:
+                        result.append("\n  PulseAudio Sources (Inputs):")
+                        for line in sources_result.stdout.strip().split('\n'):
+                            if line:
+                                parts = line.split('\t')
+                                if len(parts) >= 2:
+                                    result.append(f"    [{parts[0]}] {parts[1]}")
+                    
+                    # Get sinks (outputs)
+                    sinks_result = subprocess.run(
+                        ["pactl", "list", "sinks", "short"],
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+                    
+                    if sinks_result.returncode == 0:
+                        result.append("\n  PulseAudio Sinks (Outputs):")
+                        for line in sinks_result.stdout.strip().split('\n'):
+                            if line:
+                                parts = line.split('\t')
+                                if len(parts) >= 2:
+                                    result.append(f"    [{parts[0]}] {parts[1]}")
+                    
+            except Exception as e:
+                logger.debug(f"Could not get PulseAudio info: {e}")
+        
+        result.append("\n\nSoundDevice Input Devices:")
         result.extend(input_devices)
         
-        result.append("\n\nOutput Devices:")
+        result.append("\n\nSoundDevice Output Devices:")
         result.extend(output_devices)
         
         return "\n".join(result)
