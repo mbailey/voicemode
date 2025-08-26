@@ -808,6 +808,10 @@ install_service() {
   if timeout 600 $voice_mode_cmd $service_name install --auto-enable 2>&1 | tee "$temp_log"; then
     install_success=true
   fi
+  print_step "Running: $voice_mode_cmd $service_name enable"
+  if timeout 600 $voice_mode_cmd $service_name enable 2>&1 | tee "$temp_log"; then
+    install_success=true
+  fi
 
   # Check for specific success/failure indicators
   if [[ "$install_success" == true ]] && ! grep -qi "error\|failed\|traceback" "$temp_log"; then
