@@ -1394,17 +1394,11 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
     
     Examples:
     
-        # Simple conversation
-        voicemode converse
-        
-        # Speak a message without waiting
-        voicemode converse -m "Hello there!" --no-wait
-        
-        # Continuous conversation mode
-        voicemode converse --continuous
-        
-        # Use specific voice
-        voicemode converse --voice nova
+        voicemode converse                          # Simple conversation
+        voicemode converse -m "Hello!" --no-wait   # Speak without waiting
+        voicemode converse --continuous             # Continuous conversation
+        voicemode converse --voice nova             # Use specific voice
+        voicemode converse --skip-tts               # Text-only mode
     """
     from voice_mode.tools.converse import converse as converse_fn
     
