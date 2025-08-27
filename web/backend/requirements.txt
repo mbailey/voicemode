@@ -1,0 +1,6 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==12.0
+pydantic==2.5.0
+python-multipart==0.0.6
+aiofiles==23.2.1

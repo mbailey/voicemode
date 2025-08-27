@@ -34,6 +34,11 @@ help:
 	@echo "  docs-check    - Check documentation for errors (strict mode)"
 	@echo "  docs-deploy   - Deploy to ReadTheDocs (requires auth)"
 	@echo ""
+	@echo "Web Dashboard targets:"
+	@echo "  web-backend   - Start the FastAPI backend server (port 8080)"
+	@echo "  web-frontend  - Start the React frontend dev server (port 5173)"
+	@echo "  web-dev       - Start both backend and frontend in tmux"
+	@echo ""
 	@echo "  help          - Show this help message"
 
 # Install package
@@ -279,3 +284,26 @@ docs-deploy:
 	@# ReadTheDocs typically auto-builds from GitHub
 	@echo "Push to main branch to trigger ReadTheDocs build"
 	@echo "Or configure manual deployment in ReadTheDocs dashboard"
+
+# Web Dashboard targets
+web-backend:
+	@echo "Starting FastAPI backend server on port 8080..."
+	@cd web/backend && python main.py
+
+web-frontend:
+	@echo "Starting React frontend dev server on port 5173..."
+	@cd web/frontend && npm run dev
+
+web-dev:
+	@echo "Starting both web servers in tmux..."
+	@# Create new tmux window for web development
+	@tmux new-window -n web-dev
+	@# Split horizontally
+	@tmux split-window -h -t web-dev
+	@# Start backend in left pane
+	@tmux send-keys -t web-dev.0 "cd $(PWD)/web/backend && python main.py" Enter
+	@# Start frontend in right pane
+	@tmux send-keys -t web-dev.1 "cd $(PWD)/web/frontend && npm run dev" Enter
+	@echo "Web servers starting in tmux window 'web-dev'"
+	@echo "Backend: http://localhost:8080"
+	@echo "Frontend: http://localhost:5173"
