@@ -875,6 +875,45 @@ def record_audio(duration: float) -> np.ndarray:
         logger.error(f"Recording failed: {e}")
         logger.error(f"Audio config when error occurred - Sample rate: {SAMPLE_RATE}, Channels: {CHANNELS}")
         
+        # Check if this is a device error that might be recoverable
+        error_str = str(e).lower()
+        if any(err in error_str for err in ['device unavailable', 'device disconnected', 
+                                             'invalid device', 'unanticipated host error',
+                                             'portaudio error']):
+            logger.info("Audio device error detected - attempting to reinitialize audio system")
+            
+            # Try to reinitialize sounddevice
+            try:
+                # Get current default device info before reinit
+                try:
+                    old_device = sd.query_devices(kind='input')
+                    old_device_name = old_device.get('name', 'Unknown')
+                except:
+                    old_device_name = 'Previous device'
+                
+                sd._terminate()
+                sd._initialize()
+                
+                # Get new default device info
+                try:
+                    new_device = sd.query_devices(kind='input')
+                    new_device_name = new_device.get('name', 'Unknown')
+                    logger.info(f"Audio system reinitialized - switched from '{old_device_name}' to '{new_device_name}'")
+                except:
+                    logger.info("Audio system reinitialized - retrying with new default device")
+                
+                # Wait a moment for the system to stabilize
+                import time as time_module
+                time_module.sleep(0.5)
+                
+                # Try recording again with the new device (recursive call)
+                logger.info("Retrying recording with new audio device...")
+                return record_audio(duration)
+                
+            except Exception as reinit_error:
+                logger.error(f"Failed to reinitialize audio: {reinit_error}")
+                # Fall through to normal error handling
+        
         # Import here to avoid circular imports
         from voice_mode.utils.audio_diagnostics import get_audio_error_help
         
@@ -1151,11 +1190,12 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                         logger.info("Audio system reinitialized - retrying with new default device")
                     
                     # Wait a moment for the system to stabilize
-                    import asyncio
-                    await asyncio.sleep(0.5)
+                    import time as time_module
+                    time_module.sleep(0.5)
                     
-                    # Try recording again with the new device
-                    return await record_audio_with_vad(max_duration, min_duration)
+                    # Try recording again with the new device (recursive call in sync context)
+                    logger.info("Retrying recording with new audio device...")
+                    return record_audio_with_silence_detection(max_duration, disable_silence_detection, min_duration, vad_aggressiveness)
                     
                 except Exception as reinit_error:
                     logger.error(f"Failed to reinitialize audio: {reinit_error}")
