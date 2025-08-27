@@ -989,6 +989,14 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
             """Callback for continuous audio stream"""
             if status:
                 logger.warning(f"Audio stream status: {status}")
+                # Check for device-related errors
+                status_str = str(status).lower()
+                if any(err in status_str for err in ['device unavailable', 'device disconnected', 
+                                                      'invalid device', 'unanticipated host error',
+                                                      'stream is stopped', 'portaudio error']):
+                    # Signal that we should stop recording due to device error
+                    audio_queue.put(None)  # Sentinel value to indicate error
+                    return
             # Put the audio data in the queue for processing
             audio_queue.put(indata.copy())
         
@@ -1006,6 +1014,12 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     try:
                         # Get audio chunk from queue with timeout
                         chunk = audio_queue.get(timeout=0.1)
+                        
+                        # Check for error sentinel
+                        if chunk is None:
+                            logger.error("Audio device error detected - stopping recording")
+                            # Raise an exception to trigger recovery logic
+                            raise sd.PortAudioError("Audio device disconnected or unavailable")
                         
                         # Flatten for consistency
                         chunk_flat = chunk.flatten()
@@ -1108,6 +1122,44 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
             
             # Import here to avoid circular imports
             from voice_mode.utils.audio_diagnostics import get_audio_error_help
+            
+            # Check if this is a device error that might be recoverable
+            error_str = str(e).lower()
+            if any(err in error_str for err in ['device unavailable', 'device disconnected', 
+                                                 'invalid device', 'unanticipated host error',
+                                                 'portaudio error']):
+                logger.info("Audio device error detected - attempting to reinitialize audio system")
+                
+                # Try to reinitialize sounddevice
+                try:
+                    # Get current default device info before reinit
+                    try:
+                        old_device = sd.query_devices(kind='input')
+                        old_device_name = old_device.get('name', 'Unknown')
+                    except:
+                        old_device_name = 'Previous device'
+                    
+                    sd._terminate()
+                    sd._initialize()
+                    
+                    # Get new default device info
+                    try:
+                        new_device = sd.query_devices(kind='input')
+                        new_device_name = new_device.get('name', 'Unknown')
+                        logger.info(f"Audio system reinitialized - switched from '{old_device_name}' to '{new_device_name}'")
+                    except:
+                        logger.info("Audio system reinitialized - retrying with new default device")
+                    
+                    # Wait a moment for the system to stabilize
+                    import asyncio
+                    await asyncio.sleep(0.5)
+                    
+                    # Try recording again with the new device
+                    return await record_audio_with_vad(max_duration, min_duration)
+                    
+                except Exception as reinit_error:
+                    logger.error(f"Failed to reinitialize audio: {reinit_error}")
+                    # Fall through to normal error handling
             
             # Get helpful error message
             help_message = get_audio_error_help(e)
@@ -1554,6 +1606,12 @@ async def converse(
     
     # Run startup initialization if needed
     await startup_initialization()
+    
+    # Refresh audio device cache to pick up any device changes (AirPods, etc.)
+    # This takes ~1ms and ensures we use the current default device
+    import sounddevice as sd
+    sd._terminate()
+    sd._initialize()
     
     # Get event logger and start session
     event_logger = get_event_logger()
