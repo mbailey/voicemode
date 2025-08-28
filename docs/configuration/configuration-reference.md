@@ -20,11 +20,11 @@ OPENAI_API_KEY=your-key-here
 # The system will try URLs in order of preference
 VOICEMODE_TTS_BASE_URLS=http://127.0.0.1:8880/v1,https://api.openai.com/v1
 
-# TTS Voices (comma-separated list)
+# Voice Preferences (comma-separated list)
 # Default: af_sky,alloy
 # OpenAI voices: alloy, echo, fable, onyx, nova, shimmer
 # Kokoro voices: af_sky, af_sarah, af_nicole, af_lilly, af_zara, am_adam, am_michael, bf_emma, bf_isabella
-VOICEMODE_TTS_VOICES=af_sky,alloy
+VOICEMODE_VOICES=af_sky,alloy
 
 # TTS Models (comma-separated list)
 # Default: gpt-4o-mini-tts,tts-1-hd,tts-1

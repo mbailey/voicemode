@@ -1,65 +1,99 @@
-# Voice Preferences
+# Voice Preferences with .voicemode.env
 
-Voice Mode supports file-based voice preferences that allow you to set preferred voices per project or user. This provides a convenient way to maintain consistent voice settings without environment variables.
+Voice Mode uses a unified `.voicemode.env` configuration system that allows you to set voice preferences and other configuration options per project or globally. This provides a consistent way to maintain voice settings and other configuration without environment variables.
 
-## Voice Preference Files
+## Configuration File Discovery
 
-Voice Mode looks for voice preference files in the following order:
+Voice Mode searches for configuration files in this order:
 
 1. **Project-level** (walks up from current directory):
-   - `.voices.txt` (hidden file in project)
-   - `.voicemode/voices.txt` (in .voicemode directory)
-2. **User-level** (in home directory):
-   - `~/.voices.txt` (hidden file in home)
-   - `~/.voicemode/voices.txt` (in .voicemode directory)
+   - `.voicemode.env` (in project root)  
+   - `.voicemode/voicemode.env` (in .voicemode directory)
+2. **Global** (in user's home directory):
+   - `~/.voicemode/voicemode.env` (primary global configuration)
 
-The first file found is used. Standalone `.voices.txt` files take precedence over those in `.voicemode` directories.
+The system uses cascading configuration where files found first take precedence, similar to how Claude Code handles CLAUDE.md files.
 
 ## File Format
 
-The `.voices.txt` file is a simple text file with one voice name per line:
+The `.voicemode.env` file uses simple `KEY=value` format:
 
+```bash
+# Voice preferences for this project
+VOICEMODE_VOICES=af_sky,nova,alloy
+VOICEMODE_DEBUG=true
+VOICEMODE_SAVE_AUDIO=false
 ```
-# Preferred voices for this project
+
+- One setting per line: `KEY=value`
+- Comments start with `#`
+- Empty lines are ignored
+- No quotes needed around values
+- Comma-separated lists for multiple values
+
+## Voice Configuration
+
+Configure voice preferences using the `VOICEMODE_VOICES` setting:
+
+```bash
+# Preferred voices (comma-separated, tried in order)
+VOICEMODE_VOICES=af_sky,nova,shimmer
+```
+
+Voice selection follows this priority:
+1. **Environment variables** (highest priority)
+2. **Project .voicemode.env files** (cascading from current directory up)  
+3. **Global ~/.voicemode/voicemode.env**
+4. **Built-in defaults** (lowest priority)
+
+## Examples
+
+### Project-Specific Voices
+**`.voicemode.env` in project root:**
+```bash
+# Creative writing project - expressive voices
+VOICEMODE_VOICES=shimmer,fable,nova
+VOICEMODE_SAVE_TRANSCRIPTIONS=true
+```
+
+**`.voicemode/voicemode.env` in project's .voicemode directory:**
+```bash
+# Development project with Kokoro voice
+VOICEMODE_VOICES=af_sky,am_adam
+VOICEMODE_DEBUG=true
+```
+
+### Global User Preferences
+**`~/.voicemode/voicemode.env`:**
+```bash
+# My default voice preferences
+VOICEMODE_VOICES=af_sky,nova
+VOICEMODE_SAVE_ALL=false
+OPENAI_API_KEY=your-api-key-here
+```
+
+## Configuration Management
+
+Use the MCP configuration tools for runtime management:
+
+- `config_reload()` - Reload configuration from all files
+- `show_config_files()` - View which files are being loaded
+- `update_config()` - Update specific settings
+
+## Migration from .voices.txt
+
+The old `.voices.txt` system has been replaced. To migrate:
+
+**Old `.voices.txt`:**
+```
 af_sky
 nova
 alloy
 ```
 
-- One voice name per line
-- Comments start with `#`
-- Empty lines are ignored
-- Voices are tried in order listed
-
-## Preference Priority
-
-Voice selection follows this priority order:
-
-1. **Voice preference files** (`.voicemode/voices.txt`)
-2. **Environment variable** (`VOICEMODE_TTS_VOICES`)
-3. **Built-in defaults** (`alloy`, `nova`, etc.)
-
-## Examples
-
-**Simple project setup** (`/my-project/.voices.txt`):
-```
-# Project prefers these voices
-nova
-shimmer
+**New `.voicemode.env`:**
+```bash
+VOICEMODE_VOICES=af_sky,nova,alloy
 ```
 
-**Organized project setup** (`/my-project/.voicemode/voices.txt`):
-```
-# Creative writing project - use expressive voices
-shimmer
-fable
-```
-
-**User default voices** (`~/.voices.txt` or `~/.voicemode/voices.txt`):
-```
-# My preferred voices
-af_sky  # Kokoro voice when available
-nova    # Fallback to OpenAI
-```
-
-This allows teams to share voice preferences via version control while individual users can override with their own preferences. The standalone `.voices.txt` option provides a simpler setup for projects that don't need a full `.voicemode` directory.
+This unified approach allows voice preferences alongside all other Voice Mode configuration in a single, consistent format.
