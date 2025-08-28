@@ -74,7 +74,7 @@ class TestVoiceFirstSelection:
     async def test_voice_first_selects_kokoro_for_af_sky(self, mock_registry):
         """Test that af_sky voice preference selects Kokoro."""
         with patch('voice_mode.providers.provider_registry', mock_registry):
-            with patch('voice_mode.providers.TTS_VOICES', ['af_sky', 'alloy']):
+            with patch('voice_mode.providers.get_voice_preferences', return_value=['af_sky', 'alloy']):
                 with patch('voice_mode.providers.TTS_MODELS', ['tts-1', 'tts-1-hd']):
                     with patch('voice_mode.providers.TTS_BASE_URLS', [
                         'http://127.0.0.1:8880/v1',
@@ -90,7 +90,7 @@ class TestVoiceFirstSelection:
     async def test_voice_first_selects_openai_for_nova(self, mock_registry):
         """Test that nova voice preference selects OpenAI."""
         with patch('voice_mode.providers.provider_registry', mock_registry):
-            with patch('voice_mode.providers.TTS_VOICES', ['nova', 'af_sky']):
+            with patch('voice_mode.providers.get_voice_preferences', return_value=['nova', 'af_sky']):
                 with patch('voice_mode.providers.TTS_MODELS', ['tts-1-hd', 'tts-1']):
                     with patch('voice_mode.providers.TTS_BASE_URLS', [
                         'http://127.0.0.1:8880/v1',
@@ -107,7 +107,7 @@ class TestVoiceFirstSelection:
     async def test_specific_voice_overrides_preferences(self, mock_registry):
         """Test that specific voice request overrides preferences."""
         with patch('voice_mode.providers.provider_registry', mock_registry):
-            with patch('voice_mode.providers.TTS_VOICES', ['nova', 'alloy']):
+            with patch('voice_mode.providers.get_voice_preferences', return_value=['nova', 'alloy']):
                 with patch('voice_mode.providers.TTS_BASE_URLS', [
                     'http://127.0.0.1:8880/v1',
                     'https://api.openai.com/v1'
@@ -124,7 +124,7 @@ class TestVoiceFirstSelection:
         mock_registry.registry["tts"]["http://127.0.0.1:8880/v1"].healthy = False
         
         with patch('voice_mode.providers.provider_registry', mock_registry):
-            with patch('voice_mode.providers.TTS_VOICES', ['af_sky', 'nova']):
+            with patch('voice_mode.providers.get_voice_preferences', return_value=['af_sky', 'nova']):
                 with patch('voice_mode.providers.TTS_BASE_URLS', [
                     'http://127.0.0.1:8880/v1',
                     'https://api.openai.com/v1'
@@ -139,7 +139,7 @@ class TestVoiceFirstSelection:
     async def test_model_selection_respects_provider_models(self, mock_registry):
         """Test that model selection respects what the provider supports."""
         with patch('voice_mode.providers.provider_registry', mock_registry):
-            with patch('voice_mode.providers.TTS_VOICES', ['af_sky']):
+            with patch('voice_mode.providers.get_voice_preferences', return_value=['af_sky']):
                 with patch('voice_mode.providers.TTS_MODELS', ['gpt-4o-mini-tts', 'tts-1-hd', 'tts-1']):
                     with patch('voice_mode.providers.TTS_BASE_URLS', [
                         'http://127.0.0.1:8880/v1',
