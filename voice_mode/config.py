@@ -111,8 +111,8 @@ def load_voicemode_env():
 # Comma-separated list of STT endpoints
 # VOICEMODE_STT_BASE_URLS=http://127.0.0.1:2022/v1,https://api.openai.com/v1
 
-# Comma-separated list of preferred voices
-# VOICEMODE_TTS_VOICES=af_sky,alloy
+# Comma-separated list of preferred voices  
+# VOICEMODE_VOICES=af_sky,alloy
 
 # Comma-separated list of preferred models
 # VOICEMODE_TTS_MODELS=tts-1,tts-1-hd,gpt-4o-mini-tts
@@ -269,7 +269,7 @@ def parse_comma_list(env_var: str, fallback: str) -> list:
 # New provider endpoint lists configuration
 TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
 STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
-TTS_VOICES = parse_comma_list("VOICEMODE_TTS_VOICES", "af_sky,alloy")
+TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
 
 # Voice preferences cache
@@ -280,7 +280,7 @@ def get_voice_preferences() -> list[str]:
     """
     Get voice preferences from configuration.
     
-    Uses the VOICEMODE_TTS_VOICES configuration which is loaded from:
+    Uses the VOICEMODE_VOICES configuration which is loaded from:
     1. Environment variables (highest priority)
     2. Project-specific .voicemode.env files 
     3. Global ~/.voicemode/voicemode.env file
@@ -322,7 +322,7 @@ def reload_configuration():
     global TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS
     TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
     STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
-    TTS_VOICES = parse_comma_list("VOICEMODE_TTS_VOICES", "af_sky,alloy")
+    TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
     TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
     
     logger.info("Configuration reloaded successfully")
