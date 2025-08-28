@@ -41,6 +41,10 @@ while [[ $# -gt 0 ]]; do
     export VOICEMODE_INSTALL_DEBUG=true
     shift
     ;;
+  --test-error)
+    export VOICEMODE_TEST_ERROR=true
+    shift
+    ;;
   *)
     echo "Unknown option: $1"
     echo "Use --help for usage information"
@@ -76,20 +80,272 @@ HOMEBREW_INSTALLED=false
 XCODE_TOOLS_INSTALLED=false
 IS_WSL=false
 
+# Logging configuration
+VOICEMODE_DATA_DIR="${HOME}/.voicemode"
+LOG_DIR="${VOICEMODE_DATA_DIR}/logs"
+LOG_FILE=""
+AUTO_SUBMIT=false
+SUBMISSION_ENDPOINT="https://api.voicemode.io/v1/install-reports" # Mock endpoint for now
+
+# Initialize logging
+init_logging() {
+  mkdir -p "$LOG_DIR"
+  LOG_FILE="${LOG_DIR}/install-$(date +%Y%m%d-%H%M%S).log"
+  
+  # Check for auto-submit preference
+  if [[ -f "${VOICEMODE_DATA_DIR}/.submit-logs" ]]; then
+    AUTO_SUBMIT=true
+  fi
+  
+  # Write initial log entry
+  log_info "VoiceMode Installation started at $(date)"
+  log_info "OS: $(uname -s)"
+  log_info "Kernel: $(uname -r)"
+  log_info "Architecture: $(uname -m)"
+  log_info "Shell: ${SHELL}"
+  log_info "User: [USER]" # Pre-sanitized
+  log_info "Home: [HOME]" # Pre-sanitized
+}
+
+# Logging functions
+log_message() {
+  local level="$1"
+  shift
+  local message="$*"
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  
+  # Write to log file if it exists
+  if [[ -n "$LOG_FILE" ]]; then
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+  fi
+  
+  # Also output based on level (but don't duplicate print_* functions)
+  case "$level" in
+    DEBUG)
+      [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]] && echo -e "${DIM}[DEBUG] $message${NC}" >&2
+      ;;
+  esac
+}
+
+log_error() { log_message "ERROR" "$@"; }
+log_warn()  { log_message "WARN" "$@"; }
+log_info()  { log_message "INFO" "$@"; }
+log_debug() { log_message "DEBUG" "$@"; }
+
+# Sanitize log content to remove PII
+sanitize_log() {
+  local content="$1"
+  local username="${USER:-$(whoami)}"
+  
+  # Remove username from paths
+  content="${content//$username/\[USER\]}"
+  content="${content//$HOME/\[HOME\]}"
+  
+  # Remove IP addresses
+  content=$(echo "$content" | sed -E 's/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[IP]/g')
+  
+  # Remove email addresses
+  content=$(echo "$content" | sed -E 's/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[EMAIL]/g')
+  
+  # Remove API keys/tokens (common patterns)
+  content=$(echo "$content" | sed -E 's/(api[_-]?key|token|secret|password)[[:space:]]*[:=][[:space:]]*[^[:space:]]+/\1=[REDACTED]/gi')
+  
+  echo "$content"
+}
+
+# Generate JSON error report
+generate_json_report() {
+  local exit_code="${1:-1}"
+  local failed_step="${2:-unknown}"
+  local error_message="${3:-Installation failed}"
+  
+  cat <<EOF
+{
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "os": "$(uname -s)",
+  "os_version": "$(uname -r)",
+  "arch": "$(uname -m)",
+  "shell": "${SHELL##*/}",
+  "python_version": "$(python3 --version 2>&1 | cut -d' ' -f2 || echo 'not installed')",
+  "node_version": "$(node --version 2>&1 || echo 'not installed')",
+  "exit_code": $exit_code,
+  "failed_step": "$failed_step",
+  "error_message": "$error_message",
+  "is_wsl": $IS_WSL
+}
+EOF
+}
+
+# Prompt user for error submission
+prompt_error_submission() {
+  local exit_code="${1:-1}"
+  local failed_step="${2:-unknown}"
+  local error_message="${3:-Installation failed}"
+  local report_file="${LOG_FILE}.json"
+  
+  echo ""
+  echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+  echo -e "${YELLOW} Installation encountered an error${NC}"
+  echo -e "${YELLOW}═══════════════════════════════════════════════════════${NC}"
+  echo ""
+  echo "Would you like to submit an error report to help improve VoiceMode?"
+  echo "The report contains only technical information (no personal data)."
+  echo ""
+  echo "Options:"
+  echo "  [y]es     - Submit this report"
+  echo "  [a]lways  - Always submit reports automatically"
+  echo "  [v]iew    - View the report first"
+  echo "  [n]o      - Don't submit (default)"
+  echo ""
+  
+  local choice
+  read -p "Your choice [y/a/v/N]: " choice
+  
+  case "${choice,,}" in
+    y|yes)
+      submit_error_report "$exit_code" "$failed_step" "$error_message"
+      ;;
+    a|always)
+      touch "${VOICEMODE_DATA_DIR}/.submit-logs"
+      echo -e "${GREEN}Auto-submission enabled. You can disable this by removing:${NC}"
+      echo -e "${GREEN}  ${VOICEMODE_DATA_DIR}/.submit-logs${NC}"
+      submit_error_report "$exit_code" "$failed_step" "$error_message"
+      ;;
+    v|view)
+      view_and_prompt_report "$exit_code" "$failed_step" "$error_message"
+      ;;
+    *)
+      echo "Report not submitted. Log saved at: $LOG_FILE"
+      ;;
+  esac
+}
+
+# View report and prompt again
+view_and_prompt_report() {
+  local exit_code="${1:-1}"
+  local failed_step="${2:-unknown}"
+  local error_message="${3:-Installation failed}"
+  local report_file="${LOG_FILE}.json"
+  generate_json_report "$exit_code" "$failed_step" "$error_message" > "$report_file"
+  
+  # Sanitize the report
+  local sanitized=$(sanitize_log "$(cat "$report_file")")
+  echo "$sanitized" > "$report_file"
+  
+  # Show in pager
+  ${PAGER:-less} "$report_file"
+  
+  echo ""
+  echo "After viewing the report, would you like to submit it?"
+  local choice
+  read -p "[y]es / [n]o / [a]lways: " choice
+  
+  case "${choice,,}" in
+    y|yes)
+      submit_error_report "$exit_code" "$failed_step" "$error_message"
+      ;;
+    a|always)
+      touch "${VOICEMODE_DATA_DIR}/.submit-logs"
+      submit_error_report "$exit_code" "$failed_step" "$error_message"
+      ;;
+    *)
+      echo "Report not submitted."
+      ;;
+  esac
+}
+
+# Submit error report (mock for now)
+submit_error_report() {
+  local exit_code="${1:-1}"
+  local failed_step="${2:-unknown}"
+  local error_message="${3:-Installation failed}"
+  local report_file="${LOG_FILE}.json"
+  
+  # Generate and sanitize report
+  generate_json_report "$exit_code" "$failed_step" "$error_message" > "$report_file"
+  local sanitized=$(sanitize_log "$(cat "$report_file")")
+  echo "$sanitized" > "$report_file"
+  
+  # Mock submission for now (will be replaced with actual endpoint)
+  echo -e "${GREEN}Report prepared for submission (mock mode - not actually sent)${NC}"
+  echo -e "${DIM}Report saved at: $report_file${NC}"
+  
+  # When ready for production, uncomment:
+  # local response=$(curl -s -X POST \
+  #   -H "Content-Type: application/json" \
+  #   -d "@$report_file" \
+  #   "$SUBMISSION_ENDPOINT" \
+  #   2>/dev/null || echo '{"error":"submission_failed"}')
+  # 
+  # if [[ "$response" == *"success"* ]]; then
+  #   echo -e "${GREEN}Report submitted successfully. Thank you!${NC}"
+  # else
+  #   echo -e "${YELLOW}Report submission failed. Log saved at: $report_file${NC}"
+  # fi
+}
+
+# Error handler
+handle_installation_error() {
+  local exit_code=$?
+  local line_number="${BASH_LINENO[0]}"
+  local failed_command="${1:-unknown}"
+  
+  log_error "Installation failed at line $line_number"
+  log_error "Failed command: $failed_command"
+  log_error "Exit code: $exit_code"
+  
+  # Try to determine which step failed based on the command
+  local failed_step="unknown"
+  case "$failed_command" in
+    *detect_os*)
+      failed_step="os_detection"
+      ;;
+    *install_prerequisites*)
+      failed_step="prerequisites"
+      ;;
+    *install_uv*)
+      failed_step="uv_installation"
+      ;;
+    *install_voicemode*)
+      failed_step="voicemode_installation"
+      ;;
+    *configure_claude*)
+      failed_step="claude_configuration"
+      ;;
+    *)
+      failed_step="command: ${failed_command:0:50}"
+      ;;
+  esac
+  
+  # Generate error report
+  if [[ "$AUTO_SUBMIT" == "true" ]]; then
+    echo -e "${YELLOW}Auto-submitting error report...${NC}"
+    submit_error_report "$exit_code" "$failed_step" "$failed_command"
+  else
+    prompt_error_submission "$exit_code" "$failed_step" "$failed_command"
+  fi
+  
+  exit $exit_code
+}
+
 print_step() {
   echo -e "${BLUE}🔧 $1${NC}"
+  log_info "STEP: $1"
 }
 
 print_success() {
   echo -e "${GREEN}✅ $1${NC}"
+  log_info "SUCCESS: $1"
 }
 
 print_warning() {
   echo -e "${YELLOW}⚠️  $1${NC}"
+  log_warn "WARNING: $1"
 }
 
 print_error() {
   echo -e "${RED}❌ $1${NC}"
+  log_error "ERROR: $1"
   exit 1
 }
 
@@ -1075,6 +1331,12 @@ setup_coreml_acceleration() {
 }
 
 main() {
+  # Initialize logging first
+  init_logging
+  
+  # Set up error trap
+  trap 'handle_installation_error "$BASH_COMMAND"' ERR
+  
   # Show banner first
   show_banner
 
@@ -1082,6 +1344,14 @@ main() {
   if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
     echo -e "${YELLOW}[DEBUG MODE ENABLED]${NC}"
     echo ""
+    log_info "Debug mode enabled"
+  fi
+  
+  # Test mode - trigger error for testing
+  if [[ "${VOICEMODE_TEST_ERROR:-}" == "true" ]]; then
+    echo -e "${YELLOW}[TEST MODE] Simulating installation error...${NC}"
+    log_info "Test mode - triggering error"
+    false # This will trigger the error trap
   fi
 
   # Anonymous analytics beacon (privacy-respecting)
@@ -1169,6 +1439,10 @@ main() {
 
   echo ""
   echo "For more information, visit: https://github.com/mbailey/voicemode"
+  
+  # Log successful completion
+  log_info "Installation completed successfully"
+  log_info "Log file saved at: $LOG_FILE"
 }
 
 # Run main function
