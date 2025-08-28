@@ -39,7 +39,7 @@ class TestVoiceFirstSelection:
     @pytest.fixture(autouse=True)
     def mock_voice_preferences(self):
         """Mock voice preferences to avoid test pollution."""
-        with patch('voice_mode.providers.get_preferred_voices', return_value=[]):
+        with patch('voice_mode.providers.get_voice_preferences', return_value=[]):
             yield
     
     @pytest.fixture

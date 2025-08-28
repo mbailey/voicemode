@@ -9,9 +9,8 @@ import logging
 from typing import Dict, Optional, List, Any, Tuple
 from openai import AsyncOpenAI
 
-from .config import TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, OPENAI_API_KEY
+from .config import TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, OPENAI_API_KEY, get_voice_preferences
 from .provider_discovery import provider_registry, EndpointInfo
-from .voice_preferences import get_preferred_voices
 
 logger = logging.getLogger("voice-mode")
 
@@ -68,14 +67,14 @@ async def get_tts_client_and_voice(
         return client, selected_voice, selected_model, endpoint_info
     
     # Voice-first selection algorithm
-    # Get user preferences and prepend to system defaults
-    user_preferences = get_preferred_voices()
-    combined_voice_list = user_preferences + [v for v in TTS_VOICES if v not in user_preferences]
+    # Get user preferences from configuration
+    voice_preferences = get_voice_preferences()
+    combined_voice_list = voice_preferences
     
     logger.info(f"TTS Provider Selection (voice-first)")
-    if user_preferences:
-        logger.info(f"  User voice preferences: {user_preferences}")
-    logger.info(f"  Combined voice list: {combined_voice_list}")
+    if voice_preferences:
+        logger.info(f"  Voice preferences: {voice_preferences}")
+    logger.info(f"  Voice list: {combined_voice_list}")
     logger.info(f"  Preferred models: {TTS_MODELS}")
     logger.info(f"  Available endpoints: {TTS_BASE_URLS}")
     
