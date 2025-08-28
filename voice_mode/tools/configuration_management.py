@@ -175,7 +175,7 @@ async def list_config_keys() -> str:
         ("Provider Configuration", [
             ("VOICEMODE_TTS_BASE_URLS", "Comma-separated list of TTS endpoints"),
             ("VOICEMODE_STT_BASE_URLS", "Comma-separated list of STT endpoints"),
-            ("VOICEMODE_TTS_VOICES", "Comma-separated list of preferred voices"),
+            ("VOICEMODE_VOICES", "Comma-separated list of preferred voices"),
             ("VOICEMODE_TTS_MODELS", "Comma-separated list of preferred models"),
             ("VOICEMODE_PREFER_LOCAL", "Prefer local providers over cloud (true/false)"),
             ("VOICEMODE_ALWAYS_TRY_LOCAL", "Always attempt local providers (true/false)"),
@@ -211,13 +211,13 @@ async def list_config_keys() -> str:
             lines.append(f"    {description}")
         lines.append("")
     
-    lines.append("💡 Usage: update_config(key='VOICEMODE_TTS_VOICES', value='af_sky,nova')")
+    lines.append("💡 Usage: update_config(key='VOICEMODE_VOICES', value='af_sky,nova')")
     
     return "\n".join(lines)
 
 
 @mcp.tool()
-async def reload_config() -> str:
+async def config_reload() -> str:
     """Reload configuration from .voicemode.env files and clear all caches.
     
     This tool reloads configuration from:
