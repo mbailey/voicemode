@@ -58,4 +58,10 @@ export const fetchHealthStatus = async () => {
   return response.data
 }
 
+// Voice Testing
+export const testVoice = async (params: { text: string, response_duration?: number, voice?: string }) => {
+  const response = await apiClient.post('/voice/test', params)
+  return response.data
+}
+
 export default apiClient

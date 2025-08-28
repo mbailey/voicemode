@@ -35,9 +35,13 @@ help:
 	@echo "  docs-deploy   - Deploy to ReadTheDocs (requires auth)"
 	@echo ""
 	@echo "Web Dashboard targets:"
-	@echo "  web-backend   - Start the FastAPI backend server (port 8080)"
-	@echo "  web-frontend  - Start the React frontend dev server (port 5173)"
+	@echo "  web-install   - Install web dashboard dependencies"
 	@echo "  web-dev       - Start both backend and frontend in tmux"
+	@echo "  web-backend   - Start only the FastAPI backend server (port 8080)"
+	@echo "  web-frontend  - Start only the React frontend dev server (port 5175)"
+	@echo "  web-stop      - Stop all web servers"
+	@echo "  web-logs      - Show backend server logs"
+	@echo "  web-test      - Test if the API is responding"
 	@echo ""
 	@echo "  help          - Show this help message"
 
@@ -288,22 +292,55 @@ docs-deploy:
 # Web Dashboard targets
 web-backend:
 	@echo "Starting FastAPI backend server on port 8080..."
-	@cd web/backend && python main.py
+	@cd web/backend && uv run python test_backend.py
 
 web-frontend:
-	@echo "Starting React frontend dev server on port 5173..."
+	@echo "Starting React frontend dev server..."
 	@cd web/frontend && npm run dev
+
+web-install:
+	@echo "Installing web dashboard dependencies..."
+	@echo "Installing backend dependencies..."
+	@uv pip install fastapi uvicorn
+	@echo "Installing frontend dependencies..."
+	@cd web/frontend && npm install
+	@echo "✅ Web dashboard dependencies installed!"
 
 web-dev:
 	@echo "Starting both web servers in tmux..."
-	@# Create new tmux window for web development
-	@tmux new-window -n web-dev
-	@# Split horizontally
-	@tmux split-window -h -t web-dev
+	@# Check if tmux session exists
+	@if tmux has-session -t cora 2>/dev/null; then \
+		# Create new window in existing session; \
+		tmux new-window -t cora -n web-dev 2>/dev/null || tmux select-window -t cora:web-dev; \
+	else \
+		# Create new session if doesn't exist; \
+		tmux new-session -d -s cora -n web-dev; \
+	fi
+	@# Split horizontally for backend and frontend
+	@tmux split-window -h -t cora:web-dev 2>/dev/null || true
 	@# Start backend in left pane
-	@tmux send-keys -t web-dev.0 "cd $(PWD)/web/backend && python main.py" Enter
-	@# Start frontend in right pane
-	@tmux send-keys -t web-dev.1 "cd $(PWD)/web/frontend && npm run dev" Enter
-	@echo "Web servers starting in tmux window 'web-dev'"
-	@echo "Backend: http://localhost:8080"
-	@echo "Frontend: http://localhost:5173"
+	@tmux send-keys -t cora:web-dev.0 "cd $(PWD)/web/backend && uv run python test_backend.py" Enter
+	@# Start frontend in right pane  
+	@tmux send-keys -t cora:web-dev.1 "cd $(PWD)/web/frontend && npm run dev" Enter
+	@echo ""
+	@echo "✅ Web servers starting in tmux window 'web-dev'"
+	@echo ""
+	@echo "  Backend:  http://localhost:8080/api/health"
+	@echo "  Frontend: http://localhost:5175"
+	@echo "  API Docs: http://localhost:8080/docs"
+	@echo ""
+	@echo "Use 'tmux attach -t cora' to view the servers"
+
+web-stop:
+	@echo "Stopping web servers..."
+	@pkill -f "test_backend.py" 2>/dev/null || true
+	@pkill -f "vite" 2>/dev/null || true
+	@echo "✅ Web servers stopped"
+
+web-logs:
+	@echo "Showing web backend logs..."
+	@tail -f web/backend/test.log 2>/dev/null || tail -f web/backend/backend.log 2>/dev/null || echo "No log files found"
+
+web-test:
+	@echo "Testing web API..."
+	@curl -s http://localhost:8080/api/health | jq . || echo "Backend not running or jq not installed"

@@ -4,10 +4,12 @@ import {
   ChatBubbleLeftRightIcon, 
   Cog6ToothIcon,
   MicrophoneIcon,
-  SpeakerWaveIcon
+  SpeakerWaveIcon,
+  BeakerIcon,
+  VideoCameraIcon
 } from '@heroicons/react/24/outline'
 
-type View = 'dashboard' | 'whisper' | 'kokoro' | 'conversations' | 'settings'
+type View = 'dashboard' | 'whisper' | 'kokoro' | 'conversations' | 'voice-test' | 'live-chat' | 'settings'
 
 interface SidebarProps {
   currentView: View
@@ -21,6 +23,8 @@ export default function Sidebar({ currentView, onNavigate }: SidebarProps) {
     { name: 'Whisper STT', id: 'whisper' as View, icon: MicrophoneIcon, indent: true },
     { name: 'Kokoro TTS', id: 'kokoro' as View, icon: SpeakerWaveIcon, indent: true },
     { name: 'Conversations', id: 'conversations' as View, icon: ChatBubbleLeftRightIcon },
+    { name: 'Live Chat', id: 'live-chat' as View, icon: VideoCameraIcon },
+    { name: 'Voice Testing', id: 'voice-test' as View, icon: BeakerIcon },
     { name: 'Settings', id: 'settings' as View, icon: Cog6ToothIcon },
   ]
 

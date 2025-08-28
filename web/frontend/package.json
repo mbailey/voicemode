@@ -12,9 +12,13 @@
   "dependencies": {
     "@headlessui/react": "^2.2.7",
     "@heroicons/react": "^2.2.0",
+    "@livekit/components-react": "^2.9.14",
     "@tanstack/react-query": "^5.85.5",
     "axios": "^1.11.0",
     "clsx": "^2.1.1",
+    "framer-motion": "^12.23.12",
+    "livekit-client": "^2.15.6",
+    "livekit-server-sdk": "^2.13.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

@@ -4,11 +4,13 @@ import Dashboard from './components/Dashboard'
 import Sidebar from './components/Sidebar'
 import ServiceDetail from './components/ServiceDetail'
 import Conversations from './components/Conversations'
+import VoiceTest from './components/VoiceTest'
+import LiveKitChat from './components/LiveKitChat'
 import './App.css'
 
 const queryClient = new QueryClient()
 
-type View = 'dashboard' | 'whisper' | 'kokoro' | 'conversations' | 'settings'
+type View = 'dashboard' | 'whisper' | 'kokoro' | 'conversations' | 'voice-test' | 'live-chat' | 'settings'
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard')
@@ -23,6 +25,10 @@ function App() {
         return <ServiceDetail serviceName="kokoro" />
       case 'conversations':
         return <Conversations />
+      case 'voice-test':
+        return <VoiceTest />
+      case 'live-chat':
+        return <LiveKitChat />
       case 'settings':
         return <div className="p-8"><h2 className="text-2xl font-bold">Settings</h2></div>
       default:

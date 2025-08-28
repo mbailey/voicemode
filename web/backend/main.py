@@ -8,6 +8,7 @@ import asyncio
 import json
 import subprocess
 from pathlib import Path
+import livekit_api
 
 app = FastAPI(
     title="Voice Mode Dashboard API",
@@ -16,13 +17,23 @@ app = FastAPI(
 )
 
 # CORS configuration for local development
+origins = [
+    "http://localhost:3000",
+    "http://localhost:5173", 
+    "http://localhost:5174",
+    "http://localhost:5175",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174", "http://localhost:5175"],  # React dev servers
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include LiveKit API router
+app.include_router(livekit_api.router)
 
 # In-memory storage for demo (replace with actual service calls)
 connected_clients: List[WebSocket] = []
@@ -235,6 +246,23 @@ async def simulate_assistant_response(user_message: str):
         "type": "text",
         "timestamp": datetime.utcnow().isoformat()
     })
+
+@app.post("/api/voice/test")
+async def test_voice(request: Dict[str, Any]):
+    """Test voice synthesis with given text and settings"""
+    text = request.get("text", "Hello, this is a test")
+    
+    # TODO: Actually call voice-mode converse with --no-wait
+    # For now, simulate the operation
+    
+    return {
+        "success": True,
+        "message": "Voice test completed",
+        "text": text,
+        "duration_ms": 1500,
+        "voice_used": "af_sky",
+        "provider": "kokoro"
+    }
 
 @app.get("/api/stats/voice")
 async def get_voice_stats():
