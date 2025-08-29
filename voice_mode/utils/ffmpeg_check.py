@@ -71,7 +71,7 @@ To install FFmpeg on macOS:
    sudo port install ffmpeg
 
 If you don't have Homebrew, install it first:
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install)"
 
 After installation, restart your terminal or reload your shell configuration."""
     

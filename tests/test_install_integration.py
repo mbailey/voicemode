@@ -1,7 +1,7 @@
 """
-Integration tests for install.sh script
+Integration tests for install script
 
-These tests run the actual install.sh script in controlled environments
+These tests run the actual install script in controlled environments
 to validate end-to-end functionality without requiring actual installations.
 """
 import os
@@ -29,9 +29,9 @@ def isolated_install_env():
     os.makedirs(mock_bin)
     os.makedirs(mock_etc)
     
-    # Copy install.sh to temp directory
-    install_script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
-    test_install_script = os.path.join(temp_dir, "install.sh")
+    # Copy install to temp directory
+    install_script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
+    test_install_script = os.path.join(temp_dir, "install")
     shutil.copy2(install_script_path, test_install_script)
     
     # Set up environment variables
@@ -65,7 +65,7 @@ def create_mock_executable(bin_dir, name, script_content):
 
 
 class TestInstallScriptDryRun:
-    """Test install.sh script execution without actual installations"""
+    """Test install script execution without actual installations"""
     
     def test_os_detection_integration(self, isolated_install_env):
         """Test OS detection with mocked system info"""
@@ -271,7 +271,7 @@ main "$@"
 
 
 class TestInstallScriptErrorHandling:
-    """Test error handling in install.sh"""
+    """Test error handling in install"""
     
     def test_missing_dependencies_error(self, isolated_install_env):
         """Test error handling when dependencies are missing"""
@@ -324,7 +324,7 @@ source "{env['install_script']}"
 install_uvx() {{
     if ! command -v uvx >/dev/null 2>&1; then
         print_step "Installing UV/UVX..."
-        if curl -LsSf https://astral.sh/uv/install.sh | sh; then
+        if curl -LsSf https://astral.sh/uv/install | sh; then
             print_success "UV installed"
         else
             print_warning "UV installation failed - network error"

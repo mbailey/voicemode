@@ -138,14 +138,14 @@ sudo dscl . -append /Groups/admin GroupMembership voicetest
 su - voicetest
 
 # Install Homebrew fresh for this user
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install)"
 ```
 
 #### Option 2: Standalone uv Installation
 Skip Homebrew entirely and use standalone tools:
 ```bash
 # Install uv without Homebrew
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install | sh
 
 # Note: This approach may require manual installation of system dependencies
 ```
@@ -156,7 +156,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    # Install uv (if using Homebrew)
    brew install uv
    # OR use standalone (if avoiding Homebrew)
-   curl -LsSf https://astral.sh/uv/install.sh | sh
+   curl -LsSf https://astral.sh/uv/install | sh
    
    # Clone and setup
    git clone <repo>

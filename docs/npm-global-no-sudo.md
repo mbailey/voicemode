@@ -86,7 +86,7 @@ These tools install Node.js and npm in your home directory by default, avoiding 
 
 ```bash
 # Install nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install | bash
 
 # Install latest Node.js
 nvm install node

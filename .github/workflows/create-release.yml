@@ -45,7 +45,7 @@ jobs:
         echo "Install Claude Code with Voice Mode configured and ready to run on Linux, macOS, and Windows WSL:" >> $GITHUB_OUTPUT
         echo "" >> $GITHUB_OUTPUT
         echo '```bash' >> $GITHUB_OUTPUT
-        echo "curl -O https://getvoicemode.com/install.sh && bash install.sh" >> $GITHUB_OUTPUT
+        echo "curl -O https://getvoicemode.com/install && bash install" >> $GITHUB_OUTPUT
         echo '```' >> $GITHUB_OUTPUT
         echo "" >> $GITHUB_OUTPUT
         echo "This installer will:" >> $GITHUB_OUTPUT

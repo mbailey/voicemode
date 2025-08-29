@@ -2,7 +2,7 @@
 
 ## Problem Summary
 
-The original install.sh script had critical reliability issues when invoking voice-mode CLI commands after MCP configuration:
+The original install script had critical reliability issues when invoking voice-mode CLI commands after MCP configuration:
 
 1. **Inconsistent Command Detection**: Mixed logic trying both `voice-mode` and `uvx voice-mode`
 2. **PATH Issues**: UV/UVX installation didn't guarantee immediate availability
@@ -37,7 +37,7 @@ check_voice_mode_cli() {
 ```bash
 install_uvx() {
   # Install UV
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  curl -LsSf https://astral.sh/uv/install | sh
   export PATH="$HOME/.local/bin:$PATH"
   
   # Immediate verification

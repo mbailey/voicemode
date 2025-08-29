@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `--force` flag to `uv tool install --upgrade` command
   - Ensures voicemode is fully reinstalled even if already present
   - Prevents stale installations when package structure changes
-  - Improves update reliability when running install.sh multiple times
+  - Improves update reliability when running install multiple times
 
 ## [2.34.0] - 2025-08-26
 
@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Service file updates on reinstall**
   - Fixed whisper and kokoro installers to always update service files (plist/systemd) even when service is already installed
   - Ensures paths are properly expanded (no `~` symbols) in service files
-  - Fixes issue where broken service files with unexpanded paths would remain broken after running install.sh
+  - Fixes issue where broken service files with unexpanded paths would remain broken after running install
   - Service files now updated to latest templates on every install, ensuring users always get working configurations
 
 ## [2.33.4] - 2025-08-26
@@ -114,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Web documentation improvements**
-  - Updated Quick Start to use `curl -O && bash install.sh` for proper interactive prompts
+  - Updated Quick Start to use `curl -O && bash install` for proper interactive prompts
   - Clarified OpenAI API key is optional and serves as backup when local services unavailable
   - Added comprehensive list of what the installer automatically configures
   - Changed example to use `claude converse` instead of interactive prompt
@@ -495,7 +495,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - SSL configuration examples and documentation
   - Production-ready frontend build support
   - Bash completions for all new commands
-- **Service installation in install.sh** - Automated service setup during installation
+- **Service installation in install** - Automated service setup during installation
   - Offers to install Whisper, Kokoro, and LiveKit services
   - Quick mode (Y) installs all services automatically
   - Selective mode (s) allows choosing individual services
@@ -610,12 +610,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Universal installer script** for automatic setup
-  - Single command installation: `curl -O https://getvoicemode.com/install.sh && bash install.sh`
+  - Single command installation: `curl -O https://getvoicemode.com/install && bash install`
   - Cross-platform support: Linux (Ubuntu/Fedora), macOS, and Windows WSL
   - Automatic dependency installation (Node.js, audio libraries, etc.)
   - Claude Code installation and Voice Mode MCP configuration
   - WSL2-specific audio setup and troubleshooting guidance
-  - Symlink in project root for easy access: `./install.sh`
+  - Symlink in project root for easy access: `./install`
 - **Centralized GPU detection utility**
   - Unified GPU detection across platforms (Metal, CUDA, ROCm)
   - Automatic selection of GPU vs CPU scripts for services

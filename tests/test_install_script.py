@@ -1,7 +1,7 @@
 """
-Comprehensive tests for install.sh script
+Comprehensive tests for install script
 
-This module tests the Voice Mode install.sh script functionality including:
+This module tests the Voice Mode install script functionality including:
 - OS detection and platform-specific logic
 - Dependency checking and installation
 - Service installation flows
@@ -23,16 +23,16 @@ pytestmark = pytest.mark.skip(reason="Install.sh tests need refactoring for envi
 # Test fixtures and utilities
 @pytest.fixture
 def temp_install_env():
-    """Create a temporary environment for testing install.sh"""
+    """Create a temporary environment for testing install"""
     temp_dir = tempfile.mkdtemp(prefix="voicemode_install_test_")
     
     # Create mock executables directory
     mock_bin = os.path.join(temp_dir, "bin")
     os.makedirs(mock_bin)
     
-    # Create install.sh copy for testing
-    install_script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
-    test_install_script = os.path.join(temp_dir, "install.sh")
+    # Create install copy for testing
+    install_script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
+    test_install_script = os.path.join(temp_dir, "install")
     shutil.copy2(install_script_path, test_install_script)
     
     yield {
@@ -48,7 +48,7 @@ def temp_install_env():
 
 @pytest.fixture
 def mock_system_commands():
-    """Mock common system commands used by install.sh"""
+    """Mock common system commands used by install"""
     mocks = {}
     
     def mock_command_success(*args, **kwargs):
@@ -130,7 +130,7 @@ class TestOSDetection:
             self._run_install_function("detect_os", temp_install_env)
     
     def _run_install_function(self, function_name, temp_env):
-        """Helper to run specific install.sh functions"""
+        """Helper to run specific install functions"""
         # This is a simplified approach - in practice, we'd extract and test 
         # functions more carefully
         cmd = f"bash -c 'source {temp_env['install_script']}; {function_name}'"
@@ -685,13 +685,13 @@ class TestPerformanceAndStress:
 
 # Utility functions for testing
 def create_mock_install_script(temp_dir, modifications=None):
-    """Create a modified version of install.sh for testing"""
+    """Create a modified version of install for testing"""
     # This would create test-specific versions of the script
     pass
 
 
 def extract_install_functions(script_path):
-    """Extract individual functions from install.sh for unit testing"""
+    """Extract individual functions from install for unit testing"""
     # This would parse the script and extract functions for isolated testing
     pass
 

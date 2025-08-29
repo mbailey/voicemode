@@ -437,7 +437,7 @@ class TestKokoroFastAPIInstaller:
                 print(f"Run call: {call}")
             
             # Verify UV installation was attempted
-            assert any("uv/install.sh" in str(call) for call in mock_run.call_args_list)
+            assert any("uv/install" in str(call) for call in mock_run.call_args_list)
     
     @pytest.mark.asyncio
     async def test_model_download(self):

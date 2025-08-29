@@ -319,7 +319,7 @@ async def kokoro_install(
         if not shutil.which("uv"):
             logger.info("Installing UV package manager...")
             subprocess.run(
-                "curl -LsSf https://astral.sh/uv/install.sh | sh",
+                "curl -LsSf https://astral.sh/uv/install | sh",
                 shell=True,
                 check=True
             )

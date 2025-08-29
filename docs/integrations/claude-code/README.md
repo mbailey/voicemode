@@ -12,7 +12,7 @@ Claude Code is Anthropic's official CLI for Claude that enables powerful AI-assi
 
 - [ ] Claude Code installed (`npm install -g @anthropic-ai/claude-code`) - [See npm setup guide to avoid sudo](../../npm-global-no-sudo.md)
 - [ ] Python 3.10 or higher
-- [ ] [uv](https://github.com/astral-sh/uv) package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [ ] [uv](https://github.com/astral-sh/uv) package manager (`curl -LsSf https://astral.sh/uv/install | sh`)
 - [ ] OpenAI API key (or compatible service)
 - [ ] System audio dependencies installed ([see main README](../../README.md#system-dependencies))
 

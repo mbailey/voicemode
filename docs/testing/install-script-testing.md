@@ -1,10 +1,10 @@
 # Install Script Testing Documentation
 
-This document describes the comprehensive testing approach for the Voice Mode `install.sh` script.
+This document describes the comprehensive testing approach for the Voice Mode `install` script.
 
 ## Overview
 
-The install.sh script is a critical user-facing component that handles dependency installation, service setup, and system configuration. Robust testing is essential to catch regressions and ensure cross-platform compatibility.
+The install script is a critical user-facing component that handles dependency installation, service setup, and system configuration. Robust testing is essential to catch regressions and ensure cross-platform compatibility.
 
 ## Testing Architecture
 
@@ -13,7 +13,7 @@ The install.sh script is a critical user-facing component that handles dependenc
 **Purpose**: Test individual bash functions in isolation with comprehensive mocking.
 
 **Key Features**:
-- Extracts specific functions from install.sh for isolated testing
+- Extracts specific functions from install for isolated testing
 - Mocks external commands and system dependencies
 - Tests both success and failure scenarios
 - Validates syntax and security patterns
@@ -43,7 +43,7 @@ def test_detect_os_function_macos(self, install_script_path):
 
 ### 2. Functional Tests (`test_install_functions.py`)
 
-**Purpose**: Test install.sh functions with more realistic execution environments.
+**Purpose**: Test install functions with more realistic execution environments.
 
 **Key Features**:
 - Creates isolated test environments with mock commands
@@ -79,7 +79,7 @@ def test_check_voice_mode_cli_available(self, install_tester):
 
 ### 4. Validation Script (`test_install_services_fixed.sh`)
 
-**Purpose**: Quick validation script for basic install.sh functionality.
+**Purpose**: Quick validation script for basic install functionality.
 
 **Key Features**:
 - Bash syntax validation
@@ -182,7 +182,7 @@ python -m pytest tests/test_install_integration.py -v
 ## Known Issues and Limitations
 
 ### Current Issues
-1. **TTY Redirection**: Line 8 in install.sh (`exec </dev/tty`) causes issues in non-interactive environments
+1. **TTY Redirection**: Line 8 in install (`exec </dev/tty`) causes issues in non-interactive environments
 2. **External Dependencies**: Some tests require internet connectivity simulation
 3. **Service Installation**: Full service testing requires complex mocking
 
@@ -253,7 +253,7 @@ def test_security_patterns(self):
 4. **Network Mocking**: Simulate network conditions and failures
 
 ### Maintenance
-1. **Keep Tests Updated**: Update tests when install.sh changes
+1. **Keep Tests Updated**: Update tests when install changes
 2. **Validate Coverage**: Ensure new code paths are tested
 3. **Regular Execution**: Run tests frequently during development
 4. **CI Integration**: Automate test execution in build pipeline
@@ -264,7 +264,7 @@ def test_security_patterns(self):
 
 **"Function not found"**
 - Check function name spelling
-- Verify function exists in install.sh
+- Verify function exists in install
 - Check function extraction logic
 
 **"Command not found in test"**
@@ -290,4 +290,4 @@ python -m pytest tests/test_install_script_unit.py::TestInstallScriptFunctions::
 python -m pytest tests/test_install_script_unit.py -s
 ```
 
-This comprehensive testing approach ensures that the install.sh script is robust, secure, and works correctly across different platforms and scenarios.
+This comprehensive testing approach ensures that the install script is robust, secure, and works correctly across different platforms and scenarios.

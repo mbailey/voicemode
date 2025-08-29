@@ -1,7 +1,7 @@
 """
-Unit tests for install.sh script functions
+Unit tests for install script functions
 
-This module tests individual functions from install.sh by extracting and 
+This module tests individual functions from install by extracting and 
 testing them in isolation with comprehensive mocking.
 """
 import os
@@ -17,12 +17,12 @@ pytestmark = pytest.mark.skip(reason="Install.sh tests need refactoring for envi
 
 
 class TestInstallScriptFunctions:
-    """Test individual install.sh functions with proper mocking"""
+    """Test individual install functions with proper mocking"""
     
     @pytest.fixture
     def install_script_path(self):
-        """Get path to install.sh script"""
-        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
+        """Get path to install script"""
+        return os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
     
     def extract_bash_function(self, script_path, function_name):
         """Extract a specific bash function from the script"""
@@ -571,11 +571,11 @@ fi
 
 
 class TestInstallScriptValidation:
-    """Test install.sh script validation and syntax"""
+    """Test install script validation and syntax"""
     
     def test_bash_syntax_validation(self):
-        """Test that install.sh has valid bash syntax"""
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
+        """Test that install has valid bash syntax"""
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
         
         result = subprocess.run(
             ['bash', '-n', script_path],
@@ -586,8 +586,8 @@ class TestInstallScriptValidation:
         assert result.returncode == 0, f"Bash syntax error: {result.stderr}"
     
     def test_shellcheck_validation(self):
-        """Test install.sh with shellcheck if available"""
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
+        """Test install with shellcheck if available"""
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
         
         # Check if shellcheck is available
         try:
@@ -614,8 +614,8 @@ class TestInstallScriptValidation:
                 pytest.fail(f"Shellcheck errors found: {result.stdout}")
     
     def test_required_functions_exist(self):
-        """Test that all required functions exist in install.sh"""
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
+        """Test that all required functions exist in install"""
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
         
         with open(script_path, 'r') as f:
             content = f.read()
@@ -636,11 +636,11 @@ class TestInstallScriptValidation:
         
         for func in required_functions:
             pattern = f"{func}() {{"
-            assert pattern in content, f"Required function {func} not found in install.sh"
+            assert pattern in content, f"Required function {func} not found in install"
     
     def test_security_patterns(self):
-        """Test for potential security issues in install.sh"""
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
+        """Test for potential security issues in install"""
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
         
         with open(script_path, 'r') as f:
             content = f.read()
@@ -660,7 +660,7 @@ class TestInstallScriptValidation:
     
     def test_error_handling_patterns(self):
         """Test that proper error handling patterns are used"""
-        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
+        script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
         
         with open(script_path, 'r') as f:
             content = f.read()

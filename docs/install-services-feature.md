@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Voice Mode installer (`install.sh`) now includes an integrated service installation feature that offers to install Whisper, Kokoro, and LiveKit services after the core Voice Mode setup is complete.
+The Voice Mode installer (`install`) now includes an integrated service installation feature that offers to install Whisper, Kokoro, and LiveKit services after the core Voice Mode setup is complete.
 
 ## Features
 
@@ -50,7 +50,7 @@ The Voice Mode installer (`install.sh`) now includes an integrated service insta
 
 ### Default Flow
 ```bash
-curl -sSf https://getvoicemode.com/install.sh | sh
+curl -sSf https://getvoicemode.com/install | sh
 ```
 
 Users will see:

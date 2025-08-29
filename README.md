@@ -43,7 +43,7 @@ Install Claude Code with Voice Mode configured and ready to run on Linux, macOS,
 
 ```bash
 # Download and run the installer
-curl -O https://getvoicemode.com/install.sh && bash install.sh
+curl -O https://getvoicemode.com/install && bash install
 
 # While local voice services can be installed automatically, we recommend
 # providing an OpenAI API key as a fallback in case local services are unavailable
@@ -117,7 +117,7 @@ Voice Mode works with your favorite AI coding assistants:
 
 ### Prerequisites
 - Python >= 3.10
-- [Astral UV](https://github.com/astral-sh/uv) - Package manager (install with `curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [Astral UV](https://github.com/astral-sh/uv) - Package manager (install with `curl -LsSf https://astral.sh/uv/install | sh`)
 - OpenAI API Key (or compatible service)
 
 #### System Dependencies
@@ -146,7 +146,7 @@ sudo dnf install python3-devel alsa-lib-devel portaudio-devel ffmpeg
 
 ```bash
 # Install Homebrew if not already installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install)"
 
 # Install dependencies
 brew install portaudio ffmpeg cmake
@@ -586,7 +586,7 @@ The OpenAI SDK handles this automatically - no Voice Mode configuration needed!
 
 - **No microphone access**: Check system permissions for terminal/application
   - **WSL2 Users**: See [WSL2 Microphone Access Guide](docs/troubleshooting/wsl2-microphone-access.md)
-- **UV not found**: Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- **UV not found**: Install with `curl -LsSf https://astral.sh/uv/install | sh`
 - **OpenAI API error**: Verify your `OPENAI_API_KEY` is set correctly
 - **No audio output**: Check system audio settings and available devices
 

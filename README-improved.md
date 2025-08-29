@@ -48,7 +48,7 @@ Watch Voice Mode transform how you work with Claude Code:
 
 ```bash
 # One command installs everything:
-curl -O https://getvoicemode.com/install.sh && bash install.sh
+curl -O https://getvoicemode.com/install && bash install
 
 # Then just run:
 claude converse

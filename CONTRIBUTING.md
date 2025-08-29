@@ -7,7 +7,7 @@ Thank you for your interest in contributing to voice-mode! This guide will help 
 ### Prerequisites
 
 - Python 3.10 or higher
-- [Astral UV](https://github.com/astral-sh/uv) - Package manager (install with `curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- [Astral UV](https://github.com/astral-sh/uv) - Package manager (install with `curl -LsSf https://astral.sh/uv/install | sh`)
 - Git
 - A working microphone and speakers (for testing)
 - System dependencies (see README.md for OS-specific instructions)

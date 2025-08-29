@@ -1,7 +1,7 @@
 """
-Functional tests for install.sh - tests specific functions in isolation
+Functional tests for install - tests specific functions in isolation
 
-This module provides actual testing of install.sh functions by executing them
+This module provides actual testing of install functions by executing them
 in controlled environments with mocked external dependencies.
 """
 import os
@@ -17,7 +17,7 @@ pytestmark = pytest.mark.skip(reason="Install.sh tests need refactoring for envi
 
 
 class InstallScriptTester:
-    """Helper class to test install.sh functions"""
+    """Helper class to test install functions"""
     
     def __init__(self, install_script_path):
         self.install_script_path = install_script_path
@@ -61,8 +61,8 @@ class InstallScriptTester:
         return command_path
     
     def run_install_function(self, function_name, *args, **kwargs):
-        """Execute a specific function from install.sh"""
-        # Create a test script that sources install.sh and runs the function
+        """Execute a specific function from install"""
+        # Create a test script that sources install and runs the function
         test_script = f"""
 #!/bin/bash
 set -e
@@ -107,7 +107,7 @@ print_error() {{ echo "ERROR: $1"; exit 1; }}
 @pytest.fixture
 def install_tester():
     """Fixture providing InstallScriptTester instance"""
-    script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install.sh")
+    script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "install")
     tester = InstallScriptTester(script_path)
     tester.setup_test_environment()
     yield tester
@@ -375,7 +375,7 @@ EOF
 install_uvx
 """
         
-        test_script_path = os.path.join(install_tester.temp_dir, "test_uvx_install.sh")
+        test_script_path = os.path.join(install_tester.temp_dir, "test_uvx_install")
         with open(test_script_path, 'w') as f:
             f.write(test_script)
         os.chmod(test_script_path, 0o755)
@@ -584,7 +584,7 @@ confirm_action() {{ return 0; }}
 install_claude_if_needed
 """
         
-        test_script_path = os.path.join(install_tester.temp_dir, "test_claude_install.sh")
+        test_script_path = os.path.join(install_tester.temp_dir, "test_claude_install")
         with open(test_script_path, 'w') as f:
             f.write(test_script)
         os.chmod(test_script_path, 0o755)
@@ -612,7 +612,7 @@ sleep 10
 echo "This should timeout"
 """)
         
-        # Test timeout handling (install.sh uses timeout 30 for some commands)
+        # Test timeout handling (install uses timeout 30 for some commands)
         test_script = f"""
 #!/bin/bash
 set -e

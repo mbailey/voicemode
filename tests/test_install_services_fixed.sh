@@ -1,6 +1,6 @@
 #!/bin/bash
-# Fixed test script for install.sh service installation feature
-# This script provides basic validation that install.sh functions work
+# Fixed test script for install service installation feature
+# This script provides basic validation that install functions work
 
 set -e
 
@@ -29,7 +29,7 @@ print_info() {
 
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_SCRIPT="$SCRIPT_DIR/install.sh"
+INSTALL_SCRIPT="$SCRIPT_DIR/install"
 
 # Test counter
 TESTS_RUN=0
@@ -147,16 +147,16 @@ test_error_handling() {
 
 # Main test runner
 main() {
-    echo -e "${BLUE}🧪 Voice Mode install.sh Basic Validation Tests${NC}"
+    echo -e "${BLUE}🧪 Voice Mode install Basic Validation Tests${NC}"
     echo "============================================="
     echo ""
     
     if [[ ! -f "$INSTALL_SCRIPT" ]]; then
-        print_failure "install.sh not found at $INSTALL_SCRIPT"
+        print_failure "install not found at $INSTALL_SCRIPT"
         exit 1
     fi
     
-    print_info "Testing install.sh at: $INSTALL_SCRIPT"
+    print_info "Testing install at: $INSTALL_SCRIPT"
     echo ""
     
     # Run tests
@@ -175,7 +175,7 @@ main() {
     
     if [[ $TESTS_PASSED -eq $TESTS_RUN ]]; then
         echo ""
-        print_success "All tests passed! install.sh appears to be working correctly."
+        print_success "All tests passed! install appears to be working correctly."
         echo ""
         print_info "For comprehensive testing, run:"
         echo "  python -m pytest tests/test_install_script_unit.py -v"
