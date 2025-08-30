@@ -85,6 +85,7 @@ from voice_mode.utils import (
     log_tool_request_start,
     log_tool_request_end
 )
+from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
 
 logger = logging.getLogger("voice-mode")
 
@@ -254,6 +255,11 @@ async def text_to_speech_with_failover(
         Tuple of (success, tts_metrics, tts_config)
     """
     from voice_mode.config import SIMPLE_FAILOVER
+    
+    # Apply pronunciation rules if enabled
+    if pronounce_enabled():
+        pronounce_mgr = get_pronounce_manager()
+        message = pronounce_mgr.process_tts(message)
     
     # Use simple failover if enabled
     if SIMPLE_FAILOVER:
@@ -694,6 +700,11 @@ async def _speech_to_text_internal(
             
             logger.debug(f"STT API response type: {type(transcription)}")
             text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
+            
+            # Apply pronunciation rules if enabled
+            if text and pronounce_enabled():
+                pronounce_mgr = get_pronounce_manager()
+                text = pronounce_mgr.process_stt(text)
             
             if text:
                 logger.info(f"✓ STT result: '{text}'")

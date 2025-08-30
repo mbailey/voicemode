@@ -1,0 +1,268 @@
+version: 1
+tts_rules:
+  # Company names
+  - name: "3m_company"
+    order: 10
+    pattern: '\b3M\b'
+    replacement: 'three em'
+    enabled: true
+    description: "Pronounce 3M company name correctly"
+    private: false
+  
+  # Networking terms
+  - name: "poe_acronym"
+    order: 20
+    pattern: '\bPoE\+?\b'
+    replacement: 'P O E'
+    enabled: true
+    description: "Power over Ethernet acronym"
+    private: false
+  
+  - name: "gigabit_ethernet"
+    order: 30
+    pattern: '\b(\d+(?:\.\d+)?)\s*GbE\b'
+    replacement: '$1 gigabit ethernet'
+    enabled: true
+    description: "Expand GbE to gigabit ethernet with number"
+    private: false
+  
+  - name: "tcp_ip"
+    order: 40
+    pattern: '\bTCP/IP\b'
+    replacement: 'T C P I P'
+    enabled: true
+    description: "Pronounce TCP/IP as individual letters"
+    private: false
+  
+  - name: "ssh"
+    order: 50
+    pattern: '\bSSH\b'
+    replacement: 'S S H'
+    enabled: true
+    description: "Pronounce SSH as individual letters"
+    private: false
+  
+  - name: "https"
+    order: 60
+    pattern: '\bHTTPS\b'
+    replacement: 'H T T P S'
+    enabled: true
+    description: "Pronounce HTTPS as individual letters"
+    private: false
+  
+  # Model numbers and versions
+  - name: "unifi_u7"
+    order: 70
+    pattern: '\bU7\b'
+    replacement: 'U seven'
+    enabled: true
+    description: "UniFi U7 model number"
+    private: false
+  
+  - name: "wifi_6e"
+    order: 80
+    pattern: '\bWiFi 6E\b'
+    replacement: 'wifi six E'
+    enabled: true
+    description: "WiFi 6E standard"
+    private: false
+  
+  - name: "wifi_7"
+    order: 90
+    pattern: '\bWiFi 7\b'
+    replacement: 'wifi seven'
+    enabled: true
+    description: "WiFi 7 standard"
+    private: false
+  
+  # Units and measurements
+  - name: "gigahertz"
+    order: 100
+    pattern: '\b(\d+(?:\.\d+)?)\s*GHz\b'
+    replacement: '$1 gigahertz'
+    enabled: true
+    description: "Expand GHz to gigahertz"
+    private: false
+  
+  - name: "megahertz"
+    order: 110
+    pattern: '\b(\d+(?:\.\d+)?)\s*MHz\b'
+    replacement: '$1 megahertz'
+    enabled: true
+    description: "Expand MHz to megahertz"
+    private: false
+  
+  - name: "gigabytes"
+    order: 120
+    pattern: '\b(\d+(?:\.\d+)?)\s*GB\b'
+    replacement: '$1 gigabytes'
+    enabled: true
+    description: "Expand GB to gigabytes"
+    private: false
+  
+  - name: "terabytes"
+    order: 130
+    pattern: '\b(\d+(?:\.\d+)?)\s*TB\b'
+    replacement: '$1 terabytes'
+    enabled: true
+    description: "Expand TB to terabytes"
+    private: false
+  
+  - name: "milliseconds"
+    order: 140
+    pattern: '\b(\d+(?:\.\d+)?)\s*ms\b'
+    replacement: '$1 milliseconds'
+    enabled: true
+    description: "Expand ms to milliseconds"
+    private: false
+  
+  # Cloud providers
+  - name: "aws"
+    order: 150
+    pattern: '\bAWS\b'
+    replacement: 'A W S'
+    enabled: true
+    description: "Amazon Web Services"
+    private: false
+  
+  - name: "gcp"
+    order: 160
+    pattern: '\bGCP\b'
+    replacement: 'G C P'
+    enabled: true
+    description: "Google Cloud Platform"
+    private: false
+  
+  # Programming terms
+  - name: "json"
+    order: 170
+    pattern: '\bJSON\b'
+    replacement: 'jason'
+    enabled: true
+    description: "Pronounce JSON as Jason"
+    private: false
+  
+  - name: "yaml"
+    order: 180
+    pattern: '\bYAML\b'
+    replacement: 'yammel'
+    enabled: true
+    description: "Pronounce YAML as yammel"
+    private: false
+  
+  - name: "api"
+    order: 190
+    pattern: '\bAPI\b'
+    replacement: 'A P I'
+    enabled: true
+    description: "Pronounce API as individual letters"
+    private: false
+  
+  - name: "cli"
+    order: 200
+    pattern: '\bCLI\b'
+    replacement: 'C L I'
+    enabled: true
+    description: "Command Line Interface"
+    private: false
+  
+  # Project specific
+  - name: "mcp"
+    order: 210
+    pattern: '\bMCP\b'
+    replacement: 'M C P'
+    enabled: true
+    description: "Model Context Protocol"
+    private: false
+  
+  - name: "tts"
+    order: 220
+    pattern: '\bTTS\b'
+    replacement: 'T T S'
+    enabled: true
+    description: "Text to Speech"
+    private: false
+  
+  - name: "stt"
+    order: 230
+    pattern: '\bSTT\b'
+    replacement: 'S T T'
+    enabled: true
+    description: "Speech to Text"
+    private: false
+
+stt_rules:
+  # Common Whisper mishearings
+  - name: "metool_correction"
+    order: 10
+    pattern: '\bme tool\b'
+    replacement: 'metool'
+    enabled: true
+    description: "Correct Whisper hearing 'me tool' as two words"
+    private: false
+  
+  - name: "cora_seven"
+    order: 20
+    pattern: '\bcora 7\b'
+    replacement: 'Cora 7'
+    enabled: true
+    description: "Ensure proper capitalization of Cora 7"
+    private: false
+  
+  - name: "ai_cora"
+    order: 30
+    pattern: '\bAI cora\b'
+    replacement: 'ai-cora'
+    enabled: true
+    description: "GitHub username format"
+    private: false
+  
+  # Programming terms often misheard
+  - name: "python_capital"
+    order: 40
+    pattern: '\bpython\b'
+    replacement: 'Python'
+    enabled: true
+    description: "Capitalize Python language name"
+    private: false
+  
+  - name: "github_capital"
+    order: 50
+    pattern: '\bgithub\b'
+    replacement: 'GitHub'
+    enabled: true
+    description: "Correct GitHub capitalization"
+    private: false
+  
+  - name: "tmux_spelling"
+    order: 60
+    pattern: '\b(tee mux|t mux|teamux)\b'
+    replacement: 'tmux'
+    enabled: true
+    description: "Correct various tmux mishearings"
+    private: false
+  
+  - name: "neovim_spelling"
+    order: 70
+    pattern: '\b(neo vim|neovem|neovam)\b'
+    replacement: 'Neovim'
+    enabled: true
+    description: "Correct Neovim mishearings"
+    private: false
+  
+  # Common phrases
+  - name: "lets_contraction"
+    order: 80
+    pattern: '\blet us\b'
+    replacement: "let's"
+    enabled: true
+    description: "Contract 'let us' to let's"
+    private: false
+  
+  - name: "its_contraction"
+    order: 90
+    pattern: '\bit is\b'
+    replacement: "it's"
+    enabled: false  # Disabled by default as it can be wrong
+    description: "Contract 'it is' to it's (use carefully)"
+    private: false
