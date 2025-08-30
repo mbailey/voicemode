@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Dict, Optional, List
 from voice_mode.server import mcp
-from voice_mode.config import BASE_DIR
+from voice_mode.config import BASE_DIR, reload_configuration, find_voicemode_env_files
 import logging
 
 logger = logging.getLogger("voice-mode")
@@ -175,7 +175,7 @@ async def list_config_keys() -> str:
         ("Provider Configuration", [
             ("VOICEMODE_TTS_BASE_URLS", "Comma-separated list of TTS endpoints"),
             ("VOICEMODE_STT_BASE_URLS", "Comma-separated list of STT endpoints"),
-            ("VOICEMODE_TTS_VOICES", "Comma-separated list of preferred voices"),
+            ("VOICEMODE_VOICES", "Comma-separated list of preferred voices"),
             ("VOICEMODE_TTS_MODELS", "Comma-separated list of preferred models"),
             ("VOICEMODE_PREFER_LOCAL", "Prefer local providers over cloud (true/false)"),
             ("VOICEMODE_ALWAYS_TRY_LOCAL", "Always attempt local providers (true/false)"),
@@ -211,6 +211,107 @@ async def list_config_keys() -> str:
             lines.append(f"    {description}")
         lines.append("")
     
-    lines.append("💡 Usage: update_config(key='VOICEMODE_TTS_VOICES', value='af_sky,nova')")
+    lines.append("💡 Usage: update_config(key='VOICEMODE_VOICES', value='af_sky,nova')")
     
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def config_reload() -> str:
+    """Reload configuration from .voicemode.env files and clear all caches.
+    
+    This tool reloads configuration from:
+    1. Global ~/.voicemode/voicemode.env file
+    2. Project-specific .voicemode.env files (searched up directory tree)
+    3. Environment variables (highest priority)
+    
+    Returns:
+        Status message showing which files were loaded and any changes
+    """
+    try:
+        # Get config files before reload
+        old_files = find_voicemode_env_files()
+        
+        # Reload configuration 
+        reload_configuration()
+        
+        # Get config files after reload
+        new_files = find_voicemode_env_files()
+        
+        lines = ["✅ Configuration reloaded successfully!", ""]
+        
+        if new_files:
+            lines.append("📁 Configuration files loaded (in order):")
+            for i, config_file in enumerate(new_files, 1):
+                lines.append(f"  {i}. {config_file}")
+        else:
+            lines.append("📁 No configuration files found - using defaults")
+        
+        lines.append("")
+        lines.append("🔄 All caches have been cleared")
+        lines.append("📊 Voice preferences and provider settings updated")
+        
+        logger.info(f"Configuration reloaded from {len(new_files)} files")
+        
+        return "\n".join(lines)
+        
+    except Exception as e:
+        logger.error(f"Failed to reload configuration: {e}")
+        return f"❌ Failed to reload configuration: {str(e)}"
+
+
+@mcp.tool()
+async def show_config_files() -> str:
+    """Show which .voicemode.env files are being used for configuration.
+    
+    This shows the current configuration file discovery and loading order:
+    - Global configuration from ~/.voicemode/voicemode.env
+    - Project-specific configuration (searched up directory tree)
+    - Current working directory for context
+    
+    Returns:
+        Formatted list of configuration files and their status
+    """
+    try:
+        config_files = find_voicemode_env_files()
+        
+        lines = ["📋 Voice Mode Configuration Files", "=" * 40, ""]
+        lines.append(f"🗂️  Current directory: {Path.cwd()}")
+        lines.append("")
+        
+        if config_files:
+            lines.append("📁 Configuration files (loading order):")
+            lines.append("")
+            
+            for i, config_file in enumerate(config_files, 1):
+                status = "✅ EXISTS" if config_file.exists() else "❌ MISSING"
+                file_type = ""
+                
+                if config_file.name == "voicemode.env" and config_file.parent.name == ".voicemode":
+                    if config_file.parent == Path.home() / ".voicemode":
+                        file_type = " (Global)"
+                    else:
+                        file_type = " (Project - in .voicemode dir)"
+                elif config_file.name == ".voicemode.env":
+                    if config_file.parent == Path.cwd():
+                        file_type = " (Project - current dir)"
+                    else:
+                        file_type = " (Project - parent dir)"
+                
+                lines.append(f"  {i}. {config_file}{file_type}")
+                lines.append(f"     {status}")
+                lines.append("")
+        else:
+            lines.append("❌ No configuration files found")
+            lines.append("")
+            lines.append("💡 Tip: Create ~/.voicemode/voicemode.env for global configuration")
+            lines.append("💡 Tip: Create .voicemode.env in project directories for project-specific settings")
+        
+        lines.append("")
+        lines.append("🔄 Use reload_config() to reload after making changes")
+        
+        return "\n".join(lines)
+        
+    except Exception as e:
+        logger.error(f"Failed to show config files: {e}")
+        return f"❌ Failed to show config files: {str(e)}"
