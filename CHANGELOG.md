@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.35.0] - 2025-08-31
+
+### Added
+- **Comprehensive test coverage reporting system**
+  - Integration with pytest-cov for coverage measurement
+  - HTML coverage reports generated in htmlcov/ directory  
+  - Coverage badges and metrics for monitoring code quality
+  - Automated coverage reporting in CI/CD pipeline
+  
+- **Word-level timestamps for transcription**
+  - Enhanced transcription output with word-level timing information
+  - Support for SubRip (SRT) format output with precise word timestamps
+  - New transcription CLI command for processing audio files
+  - Comprehensive transcription backend supporting multiple formats
+  - Word timing data available for improved accessibility and analysis
+
 ## [3.34.3] - 2025-08-26
 
 ### Changed
