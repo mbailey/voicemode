@@ -1421,9 +1421,11 @@ config.add_command(pronounce_commands.pronounce_group)
 @click.option('--vad-aggressiveness', type=int, help='VAD aggressiveness (0-3)')
 @click.option('--skip-tts/--no-skip-tts', default=None, help='Skip TTS and only show text')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
+@click.option('--uninterrupted', '-u', is_flag=True, help='Uninterrupted mode - speak until you say "I\'m done"')
+@click.option('--end-phrase', multiple=True, help='Custom end phrases for uninterrupted mode')
 def converse(message, wait, duration, min_duration, transport, room_name, voice, tts_provider, 
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
-            speed, vad_aggressiveness, skip_tts, continuous):
+            speed, vad_aggressiveness, skip_tts, continuous, uninterrupted, end_phrase):
     """Have a voice conversation directly from the command line.
     
     Examples:
@@ -1468,7 +1470,9 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                     disable_silence_detection=disable_silence_detection,
                     speed=speed,
                     vad_aggressiveness=vad_aggressiveness,
-                    skip_tts=skip_tts
+                    skip_tts=skip_tts,
+                    uninterrupted_mode=uninterrupted,
+                    end_phrases=list(end_phrase) if end_phrase else None
                 )
                 
                 if result and "Voice response:" in result:
@@ -1494,7 +1498,9 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                         disable_silence_detection=disable_silence_detection,
                         speed=speed,
                         vad_aggressiveness=vad_aggressiveness,
-                        skip_tts=skip_tts
+                        skip_tts=skip_tts,
+                        uninterrupted_mode=uninterrupted,
+                        end_phrases=list(end_phrase) if end_phrase else None
                     )
                     
                     if result and "Voice response:" in result:
@@ -1533,7 +1539,9 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                     disable_silence_detection=disable_silence_detection,
                     speed=speed,
                     vad_aggressiveness=vad_aggressiveness,
-                    skip_tts=skip_tts
+                    skip_tts=skip_tts,
+                    uninterrupted_mode=uninterrupted,
+                    end_phrases=list(end_phrase) if end_phrase else None
                 )
                 
                 # Display result

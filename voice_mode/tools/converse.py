@@ -5,7 +5,7 @@ import logging
 import os
 import time
 import traceback
-from typing import Optional, Literal, Tuple, Dict, Union
+from typing import Optional, Literal, Tuple, Dict, Union, List
 from pathlib import Path
 from datetime import datetime
 
@@ -1429,7 +1429,9 @@ async def converse(
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
     pip_leading_silence: Optional[float] = None,
-    pip_trailing_silence: Optional[float] = None
+    pip_trailing_silence: Optional[float] = None,
+    uninterrupted_mode: Union[bool, str] = False,
+    end_phrases: Optional[List[str]] = None
 ) -> str:
     """Have a voice conversation - speak a message and optionally listen for response.
     
@@ -1947,11 +1949,45 @@ async def converse(
                         event_logger.log_event(event_logger.RECORDING_START)
                     
                     record_start = time.perf_counter()
-                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration}, disable_silence_detection={disable_silence_detection}, min_duration={min_listen_duration}, vad_aggressiveness={vad_aggressiveness}")
-                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                        None, record_audio_with_silence_detection, listen_duration, disable_silence_detection, min_listen_duration, vad_aggressiveness
-                    )
-                    timings['record'] = time.perf_counter() - record_start
+                    
+                    # Check if we should use uninterrupted mode with whisper-stream
+                    uninterrupted = str(uninterrupted_mode).lower() in ('true', '1', 'yes')
+                    
+                    if uninterrupted:
+                        # Use whisper-stream for uninterrupted recording with end phrase detection
+                        logger.info("Using uninterrupted mode with whisper-stream")
+                        
+                        # Import the whisper_stream module
+                        from voice_mode.whisper_stream import record_with_whisper_stream, check_whisper_stream_available
+                        
+                        # Check if whisper-stream is available
+                        if not check_whisper_stream_available():
+                            logger.error("whisper-stream not found in PATH. Please install whisper-stream.")
+                            return "Error: whisper-stream not available for uninterrupted mode"
+                        
+                        # Record with whisper-stream
+                        audio_data, response_text = await record_with_whisper_stream(
+                            end_phrases=end_phrases,
+                            max_duration=listen_duration
+                        )
+                        
+                        # Set speech_detected based on whether we got text
+                        speech_detected = bool(response_text and response_text.strip())
+                        
+                        # Skip STT since whisper-stream already did transcription
+                        timings['record'] = time.perf_counter() - record_start
+                        timings['stt'] = 0.0  # STT was done during recording
+                        
+                        # We'll skip the STT step below since we already have the text
+                        
+                    else:
+                        # Normal recording with silence detection
+                        logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration}, disable_silence_detection={disable_silence_detection}, min_duration={min_listen_duration}, vad_aggressiveness={vad_aggressiveness}")
+                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                            None, record_audio_with_silence_detection, listen_duration, disable_silence_detection, min_listen_duration, vad_aggressiveness
+                        )
+                        timings['record'] = time.perf_counter() - record_start
+                        response_text = None  # Will be set by STT below
                     
                     # Log recording end
                     if event_logger:
@@ -1981,7 +2017,8 @@ async def converse(
                     # Check if no speech was detected
                     if not speech_detected:
                         logger.info("No speech detected during recording - skipping STT processing")
-                        response_text = None
+                        if not response_text:  # Could already be set by whisper-stream
+                            response_text = None
                         timings['stt'] = 0.0
                         
                         # Still save the audio if configured
@@ -1990,7 +2027,7 @@ async def converse(
                             audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
                             write(audio_path, SAMPLE_RATE, audio_data)
                             logger.debug(f"Saved no-speech audio to: {audio_path}")
-                    else:
+                    elif response_text is None:  # Only do STT if we don't already have text from whisper-stream
                         # Convert to text
                         # Log STT start
                         if event_logger:
