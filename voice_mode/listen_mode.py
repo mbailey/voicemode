@@ -60,6 +60,10 @@ class SimpleCommandRouter:
             response = await self._open_application(command)
             await self._speak(response)
             
+        # Ollama-specific commands (any mention of ollama)
+        elif "ollama" in command_lower:
+            await self._route_to_claude(command)  # Routes to Ollama if available
+            
         # Claude-specific commands or complex queries
         elif "claude" in wake_word.lower() or self._is_complex_query(command_lower):
             await self._route_to_claude(command)
