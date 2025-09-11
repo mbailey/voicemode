@@ -283,7 +283,8 @@ async def continuous_listen_with_whisper_stream(
     command_callback,  # Callable[[str, str], Awaitable[None]]
     max_idle_time: float = 3600.0,  # 1 hour idle timeout
     model_path: Optional[Path] = None,
-    show_audio_level: bool = True  # Show audio level visualization
+    show_audio_level: bool = True,  # Show audio level visualization
+    debug_mode: bool = False  # Show transcribed text for debugging
 ) -> None:
     """
     Continuous listening mode with wake word detection.
@@ -297,6 +298,7 @@ async def continuous_listen_with_whisper_stream(
         max_idle_time: Maximum idle time before auto-shutdown
         model_path: Path to whisper model (defaults to base for efficiency)
         show_audio_level: Show audio level visualization in terminal
+        debug_mode: Show transcribed text for debugging
     """
     from collections import deque
     
@@ -308,11 +310,14 @@ async def continuous_listen_with_whisper_stream(
         else:
             model_path = DEFAULT_MODEL_PATH
     
-    # Normalize wake words to lowercase
-    wake_words_lower = [w.lower().strip() for w in wake_words]
+    # Initialize wake word detector with fuzzy matching
+    from voice_mode.wake_word_detector import WakeWordDetector
+    detector = WakeWordDetector(wake_words)
     
     logger.info(f"Starting continuous listening with wake words: {wake_words}")
     logger.info(f"Using model: {model_path}")
+    if debug_mode:
+        logger.info("Debug mode enabled - will show transcribed text")
     
     # Build whisper-stream command for continuous mode
     cmd = [
@@ -432,37 +437,44 @@ async def continuous_listen_with_whisper_stream(
                 (' = ' in line and 'ms' in line and len(line) < 20)):  # Timer lines
                 continue
             
+            # Show transcribed text in debug mode
+            if debug_mode:
+                print(f"[Transcribed] {line}")
+            
             logger.debug(f"Transcription: {line}")
             buffer.append(line)
             
             # Combine recent buffer for wake word detection
             # Look at last few segments to catch wake words that might span segments
-            recent_text = " ".join(list(buffer)[-5:]).lower()
+            recent_text = " ".join(list(buffer)[-5:])
             
-            # Check for wake words
-            for wake_word in wake_words_lower:
-                if wake_word in recent_text:
-                    logger.info(f"Wake word detected: '{wake_word}'")
+            # Use improved wake word detector
+            detected, wake_word, command_text, confidence = detector.detect(recent_text)
+            
+            if detected:
+                logger.info(f"Wake word detected: '{wake_word}' (confidence: {confidence:.2f})")
+                
+                if debug_mode:
+                    print(f"[Wake Word Detected] '{wake_word}' with confidence {confidence:.2f}")
+                
+                # If we have a command, process it
+                if command_text:
+                    logger.info(f"Command extracted: '{command_text}'")
+                    if debug_mode:
+                        print(f"[Command] '{command_text}'")
                     
-                    # Extract command after wake word
-                    # Find the position of wake word in the combined text
-                    wake_pos = recent_text.rfind(wake_word)
-                    command_text = recent_text[wake_pos + len(wake_word):].strip()
+                    await command_callback(wake_word, command_text)
                     
-                    # If we have a command, process it
-                    if command_text:
-                        logger.info(f"Command extracted: '{command_text}'")
-                        await command_callback(wake_word, command_text)
-                        
-                        # Clear buffer after processing to avoid re-triggering
-                        buffer.clear()
-                        last_activity = time.time()
-                        break
-                    else:
-                        # Wake word detected but no command yet, keep listening
-                        logger.debug("Wake word detected, waiting for command...")
-                        # Don't clear buffer yet, command might come in next segment
-                        last_activity = time.time()
+                    # Clear buffer after processing to avoid re-triggering
+                    buffer.clear()
+                    last_activity = time.time()
+                else:
+                    # Wake word detected but no command yet, keep listening
+                    logger.debug("Wake word detected, waiting for command...")
+                    if debug_mode:
+                        print("[Waiting for command after wake word...]")
+                    # Don't clear buffer yet, command might come in next segment
+                    last_activity = time.time()
     
     finally:
         # Stop visualizer if running

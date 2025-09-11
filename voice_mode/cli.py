@@ -1579,7 +1579,8 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
 @click.option('--config', '-c', type=click.Path(exists=True), help='Path to configuration file')
 @click.option('--no-tts', is_flag=True, help='Disable TTS responses (text only)')
 @click.option('--no-viz', is_flag=True, help='Disable audio level visualization')
-def listen(wake_word, daemon, config, no_tts, no_viz):
+@click.option('--debug', is_flag=True, help='Show transcribed text for debugging')
+def listen(wake_word, daemon, config, no_tts, no_viz, debug):
     """Start continuous listening mode with wake word detection.
     
     Examples:
@@ -1608,6 +1609,8 @@ def listen(wake_word, daemon, config, no_tts, no_viz):
         click.echo("📊 Audio visualization disabled")
     else:
         click.echo("📊 Audio levels will be shown below")
+    if debug:
+        click.echo("🐛 Debug mode - will show transcribed text")
     click.echo("\nListening... (Press Ctrl+C to stop)\n")
     
     async def start_listener():
@@ -1624,7 +1627,8 @@ def listen(wake_word, daemon, config, no_tts, no_viz):
                 wake_words=wake_words,
                 config_path=config_path,
                 daemon=daemon,
-                show_audio_level=not no_viz
+                show_audio_level=not no_viz,
+                debug_mode=debug
             )
         except KeyboardInterrupt:
             click.echo("\n\n👋 Listener stopped")
