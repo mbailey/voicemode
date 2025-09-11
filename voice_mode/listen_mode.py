@@ -305,7 +305,8 @@ class ListenerConfig:
 async def run_listener(
     wake_words: Optional[list] = None,
     config_path: Optional[Path] = None,
-    daemon: bool = False
+    daemon: bool = False,
+    show_audio_level: bool = True
 ) -> None:
     """Run the continuous voice listener.
     
@@ -313,6 +314,7 @@ async def run_listener(
         wake_words: Optional list of wake words to use
         config_path: Optional path to configuration file
         daemon: Whether to run as a background daemon
+        show_audio_level: Whether to show audio level visualization
     """
     # Load configuration
     config = ListenerConfig(config_path)
@@ -357,7 +359,8 @@ async def run_listener(
         await continuous_listen_with_whisper_stream(
             wake_words=config.wake_words,
             command_callback=handle_command,
-            max_idle_time=config.max_idle_time
+            max_idle_time=config.max_idle_time,
+            show_audio_level=show_audio_level
         )
     except KeyboardInterrupt:
         logger.info("Listener stopped by user")

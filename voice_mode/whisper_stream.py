@@ -282,7 +282,8 @@ async def continuous_listen_with_whisper_stream(
     wake_words: List[str],
     command_callback,  # Callable[[str, str], Awaitable[None]]
     max_idle_time: float = 3600.0,  # 1 hour idle timeout
-    model_path: Optional[Path] = None
+    model_path: Optional[Path] = None,
+    show_audio_level: bool = True  # Show audio level visualization
 ) -> None:
     """
     Continuous listening mode with wake word detection.
@@ -295,6 +296,7 @@ async def continuous_listen_with_whisper_stream(
         command_callback: Async function to call with (wake_word, command)
         max_idle_time: Maximum idle time before auto-shutdown
         model_path: Path to whisper model (defaults to base for efficiency)
+        show_audio_level: Show audio level visualization in terminal
     """
     from collections import deque
     
@@ -367,6 +369,18 @@ async def continuous_listen_with_whisper_stream(
     # Use a deque to maintain a rolling buffer of recent transcriptions
     buffer = deque(maxlen=100)  # Keep last 100 transcription segments
     last_activity = time.time()
+    
+    # Initialize audio visualizer if requested
+    visualizer = None
+    if show_audio_level:
+        try:
+            from voice_mode.audio_visualizer import WhisperStreamVisualizer
+            visualizer = WhisperStreamVisualizer()
+            visualizer.start_monitoring()  # Start with simulated audio
+            logger.debug("Audio visualizer started")
+        except ImportError:
+            logger.warning("Audio visualizer not available")
+            visualizer = None
     
     try:
         while True:
@@ -451,6 +465,11 @@ async def continuous_listen_with_whisper_stream(
                         last_activity = time.time()
     
     finally:
+        # Stop visualizer if running
+        if visualizer:
+            visualizer.stop_monitoring()
+            logger.debug("Audio visualizer stopped")
+        
         # Terminate the process
         if process.returncode is None:
             logger.info("Terminating whisper-stream process")
