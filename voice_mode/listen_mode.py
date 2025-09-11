@@ -73,10 +73,9 @@ class SimpleCommandRouter:
             await self._speak("Goodbye!")
             raise KeyboardInterrupt("User requested exit")
             
-        # Default response
+        # Default: send everything else to Ollama/LLM
         else:
-            response = f"I heard: {command}"
-            await self._speak(response)
+            await self._route_to_claude(command)  # Routes to Ollama if available, falls back to message
     
     def _get_time(self) -> str:
         """Get current time in friendly format."""
