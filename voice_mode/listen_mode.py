@@ -264,8 +264,14 @@ class SimpleCommandRouter:
         return any(indicator in command for indicator in complex_indicators)
     
     async def _route_to_claude(self, command: str):
-        """Route command to Claude session."""
-        # For now, just indicate this would go to Claude
+        """Route command to Claude session or local LLM."""
+        # First try Ollama if available
+        ollama_response = await self._try_ollama(command)
+        if ollama_response:
+            await self._speak(ollama_response)
+            return
+            
+        # Fall back to indicating Claude would handle it
         response = f"This looks like a question for Claude: '{command}'. Claude integration is coming soon!"
         await self._speak(response)
         
@@ -274,6 +280,61 @@ class SimpleCommandRouter:
         # 1. Check for existing Claude session via tmux/socket
         # 2. Launch new Claude session if needed
         # 3. Send command via IPC
+    
+    async def _try_ollama(self, command: str) -> Optional[str]:
+        """Try to get response from local Ollama server using OpenAI SDK."""
+        try:
+            from openai import AsyncOpenAI
+        except ImportError:
+            logger.debug("OpenAI SDK not available")
+            return None
+        
+        # Check if Ollama is configured
+        ollama_model = os.getenv("OLLAMA_MODEL", "gemma3:latest")
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        
+        try:
+            # Create OpenAI client pointing to Ollama
+            client = AsyncOpenAI(
+                base_url=f"{ollama_url}/v1",
+                api_key="ollama"  # Ollama doesn't need a real API key
+            )
+            
+            # Get completion from Ollama
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=ollama_model,
+                    messages=[
+                        {"role": "system", "content": "You are a helpful voice assistant. Keep responses concise and natural for speech."},
+                        {"role": "user", "content": command}
+                    ],
+                    max_tokens=150,
+                    temperature=0.7
+                ),
+                timeout=30
+            )
+            
+            if response and response.choices:
+                llm_response = response.choices[0].message.content.strip()
+                
+                if llm_response:
+                    logger.info(f"Got Ollama response for: {command[:50]}...")
+                    print(f"[Ollama Response] {llm_response[:100]}...")
+                    # Clean up response for speech
+                    # Remove markdown, excessive punctuation, etc.
+                    llm_response = llm_response.replace("*", "").replace("#", "")
+                    # Limit to first few sentences for voice
+                    sentences = llm_response.split(". ")[:3]
+                    return ". ".join(sentences)
+            
+            return None
+                        
+        except asyncio.TimeoutError:
+            logger.debug("Ollama request timed out")
+            return None
+        except Exception as e:
+            logger.debug(f"Ollama error: {e}")
+            return None
     
     async def _speak(self, text: str):
         """Speak response using TTS."""
