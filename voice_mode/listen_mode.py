@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
+# aiohttp imported in _get_weather method when needed
+
 logger = logging.getLogger("voice-mode")
 
 
@@ -140,10 +142,60 @@ class SimpleCommandRouter:
             return "Battery status unavailable"
     
     async def _get_weather(self) -> str:
-        """Get weather information (placeholder for now)."""
-        # TODO: Integrate with weather API
-        # For now, return a message about configuration needed
-        return "Weather information is not yet configured. You'll need to add an API key for weather services."
+        """Get weather information from OpenWeatherMap."""
+        import os
+        import aiohttp
+        import json
+        
+        api_key = os.getenv("OPENWEATHER_API_KEY")
+        if not api_key:
+            return "Weather service not configured. Please set OPENWEATHER_API_KEY environment variable."
+        
+        # Get location from environment or use default
+        location = os.getenv("WEATHER_LOCATION", "Melbourne,AU")
+        
+        try:
+            # OpenWeatherMap API endpoint
+            url = f"https://api.openweathermap.org/data/2.5/weather"
+            params = {
+                "q": location,
+                "appid": api_key,
+                "units": "metric"  # Use Celsius
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=5) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        # Extract weather info
+                        temp = round(data["main"]["temp"])
+                        feels_like = round(data["main"]["feels_like"])
+                        description = data["weather"][0]["description"]
+                        humidity = data["main"]["humidity"]
+                        city = data["name"]
+                        
+                        # Format response
+                        response_text = f"In {city}, it's currently {temp} degrees"
+                        
+                        if abs(feels_like - temp) > 2:
+                            response_text += f", feels like {feels_like}"
+                        
+                        response_text += f", with {description}"
+                        
+                        if humidity > 70:
+                            response_text += f" and {humidity}% humidity"
+                        
+                        return response_text
+                    else:
+                        logger.error(f"Weather API error: {response.status}")
+                        return "Unable to get weather information right now"
+                        
+        except asyncio.TimeoutError:
+            return "Weather service is taking too long to respond"
+        except Exception as e:
+            logger.error(f"Weather error: {e}")
+            return "Sorry, I couldn't get the weather information"
     
     async def _open_application(self, command: str) -> str:
         """Open an application on macOS."""
