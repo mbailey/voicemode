@@ -276,3 +276,217 @@ def check_whisper_stream_available() -> bool:
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
+
+
+async def continuous_listen_with_whisper_stream(
+    wake_words: List[str],
+    command_callback,  # Callable[[str, str], Awaitable[None]]
+    max_idle_time: float = 3600.0,  # 1 hour idle timeout
+    model_path: Optional[Path] = None
+) -> None:
+    """
+    Continuous listening mode with wake word detection.
+    
+    This function launches whisper-stream and continuously listens for wake words,
+    then extracts and processes commands following the wake words.
+    
+    Args:
+        wake_words: List of wake words to listen for (case-insensitive)
+        command_callback: Async function to call with (wake_word, command)
+        max_idle_time: Maximum idle time before auto-shutdown
+        model_path: Path to whisper model (defaults to base for efficiency)
+    """
+    from collections import deque
+    
+    if model_path is None:
+        # Use base model for continuous listening (more efficient)
+        base_model = Path.home() / ".voicemode" / "services" / "whisper" / "models" / "ggml-base.bin"
+        if base_model.exists():
+            model_path = base_model
+        else:
+            model_path = DEFAULT_MODEL_PATH
+    
+    # Normalize wake words to lowercase
+    wake_words_lower = [w.lower().strip() for w in wake_words]
+    
+    logger.info(f"Starting continuous listening with wake words: {wake_words}")
+    logger.info(f"Using model: {model_path}")
+    
+    # Build whisper-stream command for continuous mode
+    cmd = [
+        "whisper-stream",
+        "-m", str(model_path),
+        "--step", "0",  # VAD mode
+        "-t", "6",  # threads
+        "--length", "5000",  # Shorter chunks for quicker wake word detection
+        "--keep", "0",  # Don't keep previous audio
+        "-vth", "0.6",  # VAD threshold
+        "-l", "en"  # English
+    ]
+    
+    logger.debug(f"Launching whisper-stream: {' '.join(cmd)}")
+    
+    # Start whisper-stream process
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,  # Capture stderr for initialization monitoring
+        text=False
+    )
+    
+    # Wait for initialization
+    logger.info("Waiting for whisper-stream to initialize...")
+    init_complete = False
+    init_timeout = 10.0  # 10 seconds to initialize
+    init_start = time.time()
+    
+    while time.time() - init_start < init_timeout:
+        # Check stderr for initialization messages
+        try:
+            stderr_line = await asyncio.wait_for(
+                process.stderr.readline(),
+                timeout=0.5
+            )
+            if stderr_line:
+                line = stderr_line.decode('utf-8', errors='ignore').strip()
+                logger.debug(f"Whisper init: {line}")
+                # Check if model is loaded
+                if "whisper_model_load:" in line or "n_text_layer" in line:
+                    init_complete = True
+                    logger.info("Whisper-stream initialized successfully")
+                    break
+        except asyncio.TimeoutError:
+            # Check if process is still running
+            if process.returncode is not None:
+                logger.error("Whisper-stream process ended during initialization")
+                raise RuntimeError("Whisper-stream failed to start")
+    
+    if not init_complete:
+        logger.warning("Whisper-stream initialization timeout - continuing anyway")
+    
+    # Use a deque to maintain a rolling buffer of recent transcriptions
+    buffer = deque(maxlen=100)  # Keep last 100 transcription segments
+    last_activity = time.time()
+    
+    try:
+        while True:
+            # Check idle timeout
+            if time.time() - last_activity > max_idle_time:
+                logger.info("Idle timeout reached, shutting down listener")
+                break
+            
+            # Read line with timeout
+            try:
+                line_bytes = await asyncio.wait_for(
+                    process.stdout.readline(),
+                    timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                # No output, check if process is still running
+                if process.returncode is not None:
+                    logger.warning("Whisper-stream process ended unexpectedly")
+                    break
+                continue
+            
+            if not line_bytes:
+                # End of stream
+                if process.returncode is not None:
+                    break
+                continue
+            
+            # Decode and clean the line
+            try:
+                line = line_bytes.decode('utf-8').strip()
+            except UnicodeDecodeError:
+                continue
+            
+            # Skip non-transcription lines
+            if not line or len(line) < 2:
+                continue
+            
+            # Skip whisper-stream debug/log lines
+            if (line.startswith('whisper') or 
+                line.startswith('init:') or 
+                line.startswith('main:') or
+                line.startswith('###') or
+                line.startswith('⏱️') or
+                'Transcription' in line and 'START' in line or
+                'Transcription' in line and 'END' in line or
+                line.startswith('[Start') or
+                line == '[Start speaking]' or
+                '\033[' in line or  # ANSI codes
+                (' = ' in line and 'ms' in line and len(line) < 20)):  # Timer lines
+                continue
+            
+            logger.debug(f"Transcription: {line}")
+            buffer.append(line)
+            
+            # Combine recent buffer for wake word detection
+            # Look at last few segments to catch wake words that might span segments
+            recent_text = " ".join(list(buffer)[-5:]).lower()
+            
+            # Check for wake words
+            for wake_word in wake_words_lower:
+                if wake_word in recent_text:
+                    logger.info(f"Wake word detected: '{wake_word}'")
+                    
+                    # Extract command after wake word
+                    # Find the position of wake word in the combined text
+                    wake_pos = recent_text.rfind(wake_word)
+                    command_text = recent_text[wake_pos + len(wake_word):].strip()
+                    
+                    # If we have a command, process it
+                    if command_text:
+                        logger.info(f"Command extracted: '{command_text}'")
+                        await command_callback(wake_word, command_text)
+                        
+                        # Clear buffer after processing to avoid re-triggering
+                        buffer.clear()
+                        last_activity = time.time()
+                        break
+                    else:
+                        # Wake word detected but no command yet, keep listening
+                        logger.debug("Wake word detected, waiting for command...")
+                        # Don't clear buffer yet, command might come in next segment
+                        last_activity = time.time()
+    
+    finally:
+        # Terminate the process
+        if process.returncode is None:
+            logger.info("Terminating whisper-stream process")
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Force killing whisper-stream process")
+                process.kill()
+                await process.wait()
+
+
+def extract_command_after_wake(full_text: str, wake_word: str) -> Optional[str]:
+    """
+    Extract command text that comes after a wake word.
+    
+    Args:
+        full_text: The full transcribed text
+        wake_word: The wake word that was detected (lowercase)
+    
+    Returns:
+        The command text after the wake word, or None if no command found
+    """
+    text_lower = full_text.lower()
+    wake_pos = text_lower.rfind(wake_word)
+    
+    if wake_pos == -1:
+        return None
+    
+    # Extract everything after the wake word
+    command = full_text[wake_pos + len(wake_word):].strip()
+    
+    # Clean up the command (remove filler words at the start)
+    filler_words = ["um", "uh", "well", "so", "like", "please"]
+    words = command.split()
+    while words and words[0].lower() in filler_words:
+        words.pop(0)
+    
+    return " ".join(words) if words else None

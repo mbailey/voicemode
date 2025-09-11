@@ -1572,6 +1572,66 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
     asyncio.run(run_conversation())
 
 
+# Listen command for continuous wake word detection
+@voice_mode_main_cli.command()
+@click.option('--wake-word', '-w', multiple=True, default=['hey voicemode'], help='Wake words to listen for')
+@click.option('--daemon', '-d', is_flag=True, help='Run as background daemon')
+@click.option('--config', '-c', type=click.Path(exists=True), help='Path to configuration file')
+@click.option('--no-tts', is_flag=True, help='Disable TTS responses (text only)')
+def listen(wake_word, daemon, config, no_tts):
+    """Start continuous listening mode with wake word detection.
+    
+    Examples:
+        voicemode listen
+        voicemode listen -w "hey computer" -w "hey claude"
+        voicemode listen --config ~/.voicemode/listen.yaml
+        voicemode listen --no-tts  # Text responses only
+    """
+    from pathlib import Path
+    from voice_mode.listen_mode import run_listener
+    
+    # Convert wake words to list
+    wake_words = list(wake_word) if wake_word else None
+    
+    # Convert config path
+    config_path = Path(config) if config else None
+    
+    # Display startup message
+    click.echo("🎤 Starting Voice Mode Listener")
+    click.echo(f"📢 Wake words: {', '.join(wake_words or ['hey voicemode'])}")
+    if config_path:
+        click.echo(f"⚙️  Config: {config_path}")
+    if no_tts:
+        click.echo("🔇 TTS disabled - text responses only")
+    click.echo("\nListening... (Press Ctrl+C to stop)\n")
+    
+    async def start_listener():
+        """Start the listener asynchronously."""
+        try:
+            # Import and patch TTS setting if needed
+            if no_tts:
+                import voice_mode.listen_mode as lm
+                if hasattr(lm, 'SimpleCommandRouter'):
+                    # This will affect the router when it's created
+                    os.environ['VOICEMODE_LISTEN_NO_TTS'] = '1'
+            
+            await run_listener(
+                wake_words=wake_words,
+                config_path=config_path,
+                daemon=daemon
+            )
+        except KeyboardInterrupt:
+            click.echo("\n\n👋 Listener stopped")
+        except Exception as e:
+            click.echo(f"\n❌ Error: {e}", err=True)
+            if os.environ.get('VOICEMODE_DEBUG'):
+                import traceback
+                traceback.print_exc()
+    
+    # Run the listener
+    asyncio.run(start_listener())
+
+
 # Version command
 @voice_mode_main_cli.command()
 def version():
