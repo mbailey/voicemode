@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from mcp.server import Server
 from mcp.types import Tool, TextContent
 
-from mpv_controller import MPVController, Chapter, PlaybackState
+from .mpv_controller import MPVController, Chapter, PlaybackState
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)

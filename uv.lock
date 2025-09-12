@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -3606,6 +3606,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-mpv-jsonipc"
+version = "1.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/29/53914dc0c9f06e5223536f180efdab14b400b85526433da62e7371c2c81a/python-mpv-jsonipc-1.2.1.tar.gz", hash = "sha256:96f4864158fe3a35e80a88ef7bb2ddae14b899e8ec5d2d728687c7fb51c807cc", size = 11682, upload-time = "2025-03-28T22:47:25.52Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/4f/fd53b9e82abaeef2a36d5974e02b0b6597f0e2bc14d9988cb930d9ef3475/python_mpv_jsonipc-1.2.1-py3-none-any.whl", hash = "sha256:a28dd859e259b78c09de5102f0076e27dd5474c6a8644e19b6a6169ffc4dc0a3", size = 12107, upload-time = "2025-03-28T22:47:24.283Z" },
+]
+
+[[package]]
 name = "python-multipart"
 version = "0.0.20"
 source = { registry = "https://pypi.org/simple" }
@@ -4714,6 +4723,7 @@ dependencies = [
     { name = "openai" },
     { name = "psutil" },
     { name = "pydub" },
+    { name = "python-mpv-jsonipc" },
     { name = "pyyaml" },
     { name = "scipy" },
     { name = "setuptools" },
@@ -4804,6 +4814,7 @@ requires-dist = [
     { name = "pytest-mock", marker = "extra == 'test'", specifier = ">=3.10.0" },
     { name = "pytest-timeout", marker = "extra == 'test'", specifier = ">=2.2.0" },
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.5.0" },
+    { name = "python-mpv-jsonipc", specifier = ">=1.2.1" },
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "scipy" },
     { name = "setuptools" },

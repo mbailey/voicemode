@@ -101,6 +101,7 @@ Issues = "https://github.com/mbailey/voicemode/issues"
 [project.scripts]
 voice-mode = "voice_mode.cli:voice_mode"
 voicemode = "voice_mode.cli:voice_mode"
+audio-control = "src.mcp.audio_controller.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voice_mode"]
