@@ -1,0 +1,16 @@
+{
+  "name": "strudel-voice-mode-integration",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Experimental integration of Strudel with voice mode for musical tool hooks",
+  "scripts": {
+    "test": "node test-strudel.js",
+    "play": "node strudel-player.js"
+  },
+  "dependencies": {
+    "@strudel/core": "latest",
+    "@strudel/webaudio": "latest",
+    "@strudel/midi": "latest",
+    "@strudel/osc": "latest"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "voicemode": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "voicemode"
+      ],
+      "env": {
+        "VOICEMODE_SAVE_ALL": "true",
+        "VOICEMODE_TOOLS": "converse,audio_controller",
+        "VOICEMODE_DEBUG": "info"
+      }
+    },
+    "audio-controller": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "-m",
+        "voice_mode.mcp.audio_controller.audio_mcp_server"
+      ],
+      "env": {
+        "AUDIO_CONTROLLER_MPV_SOCKET": "/tmp/voicemode-mpv.sock",
+        "AUDIO_CONTROLLER_DEFAULT_VOLUME": "70",
+        "AUDIO_CONTROLLER_DUCKED_VOLUME": "30"
+      }
+    }
+  }
+}

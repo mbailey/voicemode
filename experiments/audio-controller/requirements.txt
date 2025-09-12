@@ -1,0 +1,2 @@
+python-mpv-jsonipc>=1.1.13
+mcp>=0.1.0

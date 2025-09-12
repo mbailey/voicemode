@@ -48,6 +48,7 @@ dependencies = [
     "livekit-plugins-silero>=0.6.5",
     "click>=8.0.0",
     "pyyaml>=6.0.0",
+    "python-mpv-jsonipc>=1.2.1",
 ]
 
 [project.optional-dependencies]
