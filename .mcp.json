@@ -9,8 +9,21 @@
       ],
       "env": {
         "VOICEMODE_SAVE_ALL": "true",
-        "VOICEMODE_TOOLS": "converse",
+        "XVOICEMODE_TOOLS": "converse",
         "XVOICEMODE_DEBUG": "trace"
+      }
+    },
+    "audio-controller": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "-m",
+        "voice_mode.mcp.audio_controller.audio_mcp_server"
+      ],
+      "env": {
+        "AUDIO_CONTROLLER_MPV_SOCKET": "/tmp/voicemode-mpv.sock",
+        "AUDIO_CONTROLLER_DEFAULT_VOLUME": "70",
+        "AUDIO_CONTROLLER_DUCKED_VOLUME": "30"
       }
     }
   }
