@@ -1,6 +1,5 @@
 # Development Setup
 
-
 *Note: These docs need review.*
 
 This guide covers setting up VoiceMode for development, including building from source, configuring your IDE, and contributing to the project.
@@ -31,8 +30,13 @@ pip install uv
 git clone https://github.com/mbailey/voicemode
 cd voicemode
 
-# Install in development mode
-uv tool install -e .
+# Create and activate virtual environment
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install package with development dependencies
+uv pip install -e .
+uv pip install -e .[dev,test]
 ```
 
 ## Development Workflow
@@ -55,9 +59,18 @@ uvx --from dist/voice_mode-*.whl voice-mode
 
 ### Running Tests
 
+There are several ways to run tests:
+
 ```bash
-# Run all tests
+# Method 1: With activated virtual environment
+source .venv/bin/activate
 pytest
+
+# Method 2: Using uv run (no activation needed)
+uv run pytest
+
+# Method 3: Using the Makefile
+make test
 
 # Run with coverage
 pytest --cov=voice_mode
@@ -85,7 +98,7 @@ voicemode kokoro start
 
 ## Project Structure
 
-```
+```ini
 voicemode/
 ├── voice_mode/           # Main package
 │   ├── __init__.py
@@ -181,8 +194,36 @@ pytest tests/integration/test_whisper.py
 
 ### Manual Testing
 
+#### Testing with MCP
+
+To test your development version with MCP (Model Context Protocol):
+
+1. **Update `.mcp.json` to point to your development version**
+   ```json
+   {
+     "mcpServers": {
+       "voice-mode": {
+         "command": "uv",
+         "args": ["run", "voice-mode", "mcp"]
+       }
+     }
+   }
+   ```
+
+2. **Run `mcp` to test the connection**
+   ```bash
+   mcp test voice-mode
+   ```
+
+3. **Use the voice tools to verify functionality**
+   ```bash
+   mcp run voice-mode converse
+   ```
+
+#### Testing Audio and Voice Features
+
 ```bash
-# Test voice conversation
+# Test voice conversation with debug output
 voice-mode converse --debug
 
 # Test specific tool
@@ -190,55 +231,14 @@ voice-mode test-tool converse
 
 # Test with different providers
 VOICEMODE_TTS_BASE_URLS=http://localhost:8880/v1 voice-mode converse
+
+# Test TTS and audio playback directly
+python -c "from voice_mode.core import text_to_speech; import asyncio; asyncio.run(text_to_speech('Hello world'))"
 ```
 
 ## Contributing
 
-### Code Style
-
-We use Black for formatting and Ruff for linting:
-
-```bash
-# Format code
-black voice_mode tests
-
-# Run linter
-ruff check voice_mode tests
-
-# Fix linting issues
-ruff check --fix voice_mode tests
-```
-
-### Pre-commit Hooks
-
-```bash
-# Install pre-commit
-pip install pre-commit
-
-# Install hooks
-pre-commit install
-
-# Run manually
-pre-commit run --all-files
-```
-
-### Commit Messages
-
-Follow conventional commits:
-- `feat:` New feature
-- `fix:` Bug fix
-- `docs:` Documentation
-- `test:` Tests
-- `refactor:` Code refactoring
-- `chore:` Maintenance
-
-### Pull Request Process
-
-1. Fork the repository
-2. Create feature branch
-3. Make changes with tests
-4. Run test suite
-5. Submit pull request
+For guidelines on contributing to the project, including code style, commit conventions, and the pull request process, please see the [Contributing Guide](/CONTRIBUTING.md).
 
 ## Makefile Commands
 
@@ -264,6 +264,33 @@ make docs-serve   # Serve docs locally
 ```
 
 ## Troubleshooting Development Issues
+
+### Common Issues
+
+#### "pytest: command not found"
+This happens when the virtual environment isn't activated. Solutions:
+- Activate the venv: `source .venv/bin/activate`
+- Use `uv run pytest` instead (no activation needed)
+- Use `make test` which handles everything automatically
+
+#### pyenv/VIRTUAL_ENV conflicts
+If you see warnings about VIRTUAL_ENV not matching the project environment:
+- This is usually harmless - uv will use the project's `.venv`
+- To avoid the warning, deactivate any other Python environments first
+
+#### Verifying Installation
+To check if everything is installed correctly:
+```bash
+# Check if pytest is installed
+uv run pytest --version
+
+# Check if voice_mode is installed in editable mode
+uv pip list | grep voice-mode
+
+# Run a simple test
+uv run pytest tests/test_server_syntax.py -v
+```
+
 
 ### Import Errors
 
