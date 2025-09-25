@@ -23,7 +23,27 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 pip install uv
 ```
 
-## Cloning the Repository
+## Quick Start (Recommended)
+
+The Makefile provides convenient targets for all common development tasks:
+
+```bash
+# Clone the repository
+git clone https://github.com/mbailey/voicemode
+cd voicemode
+
+# Install with development dependencies (creates venv automatically)
+make dev-install
+
+# Run tests to verify setup
+make test
+```
+
+That's it! The Makefile handles virtual environment creation, dependency installation, and test setup automatically.
+
+## Manual Setup (Alternative Method)
+
+If you prefer to set things up manually or need more control:
 
 ```bash
 # Clone the repository
@@ -35,7 +55,6 @@ uv venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install package with development dependencies
-uv pip install -e .
 uv pip install -e .[dev,test]
 ```
 
@@ -59,18 +78,32 @@ uvx --from dist/voice_mode-*.whl voice-mode
 
 ### Running Tests
 
-There are several ways to run tests:
+#### Using Makefile (Recommended)
+
+The Makefile provides comprehensive test targets (see `make help`):
 
 ```bash
-# Method 1: With activated virtual environment
-source .venv/bin/activate
-pytest
+# Run unit tests with pytest
+make test
 
-# Method 2: Using uv run (no activation needed)
+# Run tests with coverage report
+make coverage
+
+# Run all tests (including slow/manual)
+make test-all
+```
+
+#### Manual Testing (Alternative)
+
+If you prefer running tests directly:
+
+```bash
+# Using uv run (no activation needed)
 uv run pytest
 
-# Method 3: Using the Makefile
-make test
+# using python
+source .venv/bin/activate
+pytest
 
 # Run with coverage
 pytest --cov=voice_mode
@@ -194,34 +227,6 @@ pytest tests/integration/test_whisper.py
 
 ### Manual Testing
 
-#### Testing with MCP
-
-To test your development version with MCP (Model Context Protocol):
-
-1. **Update `.mcp.json` to point to your development version**
-   ```json
-   {
-     "mcpServers": {
-       "voice-mode": {
-         "command": "uv",
-         "args": ["run", "voice-mode", "mcp"]
-       }
-     }
-   }
-   ```
-
-2. **Run `mcp` to test the connection**
-   ```bash
-   mcp test voice-mode
-   ```
-
-3. **Use the voice tools to verify functionality**
-   ```bash
-   mcp run voice-mode converse
-   ```
-
-#### Testing Audio and Voice Features
-
 ```bash
 # Test voice conversation with debug output
 voice-mode converse --debug
@@ -231,36 +236,74 @@ voice-mode test-tool converse
 
 # Test with different providers
 VOICEMODE_TTS_BASE_URLS=http://localhost:8880/v1 voice-mode converse
+```
 
-# Test TTS and audio playback directly
-python -c "from voice_mode.core import text_to_speech; import asyncio; asyncio.run(text_to_speech('Hello world'))"
+### Testing Service Installations
+
+Update your local 'voicemode.env' file to overide the default path `~/.voicemode`
+
+```bash
+echo "VOICEMODE_BASE_DIR=/tmp/.voicemode" >> voicemode.env
+```
+
+Use temporary directories when testing installers to prevent affecting your production setup in `~/.voicemode/services/`:
+
+```bash
+
+# Test Whisper installation
+voicemode whisper install --force --install-dir /tmp/.voicemode/services/whisper/ --model large-v3-turbo
+
+# Test Kokoro installation
+voicemode kokoro install --force --install-dir /tmp/.voicemode/services/kokoro/ 
+
+# Test LiveKit installation
+voicemode livekit install --force --install-dir /tmp/.voicemode/services/livekit/ --port 7881
 ```
 
 ## Contributing
 
 For guidelines on contributing to the project, including code style, commit conventions, and the pull request process, please see the [Contributing Guide](/CONTRIBUTING.md).
 
-## Makefile Commands
+## Makefile Commands Reference
+
+The Makefile is the primary tool for development tasks. Run `make help` for a comprehensive list of available targets.  Here is a sample of commonly used targets:
+
+### Essential Development Commands
 
 ```bash
-# Development
-make dev           # Install in dev mode
-make test         # Run tests
-make lint         # Run linters
-make format       # Format code
+make help          # Show all available targets
+make dev-install   # Install package with development dependencies
+make test          # Run unit tests
+make clean         # Remove build artifacts and caches
+```
 
-# Building
-make build        # Build package
-make clean        # Clean build artifacts
+### Testing & Coverage
 
-# Services
-make install-services  # Install local services
-make start-services   # Start local services
-make stop-services    # Stop local services
+```bash
+make test          # Run unit tests with pytest
+make coverage      # Run tests with coverage report
+make coverage-html # Generate and open HTML coverage report
+make test-unit     # Run unit tests only
+make test-integration # Run integration tests
+make test-all      # Run all tests (including slow/manual)
+make test-parallel # Run tests in parallel
+```
 
-# Documentation
-make docs         # Build documentation
-make docs-serve   # Serve docs locally
+### Building & Publishing
+
+```bash
+make build-package # Build Python package for PyPI
+make build-dev     # Build development package with auto-versioning
+make test-package  # Test package installation
+```
+
+### Documentation
+
+```bash
+make docs    # Build documentation
+make docs-serve    # Serve documentation locally (http://localhost:8000)
+make docs-build    # Build documentation site
+make docs-check    # Check documentation for errors (strict mode)
 ```
 
 ## Troubleshooting Development Issues
@@ -268,18 +311,24 @@ make docs-serve   # Serve docs locally
 ### Common Issues
 
 #### "pytest: command not found"
+
 This happens when the virtual environment isn't activated. Solutions:
-- Activate the venv: `source .venv/bin/activate`
-- Use `uv run pytest` instead (no activation needed)
+
 - Use `make test` which handles everything automatically
+- Use `uv run pytest` instead (no activation needed)
+- Activate the venv: `source .venv/bin/activate`
 
 #### pyenv/VIRTUAL_ENV conflicts
+
 If you see warnings about VIRTUAL_ENV not matching the project environment:
+
 - This is usually harmless - uv will use the project's `.venv`
 - To avoid the warning, deactivate any other Python environments first
 
 #### Verifying Installation
+
 To check if everything is installed correctly:
+
 ```bash
 # Check if pytest is installed
 uv run pytest --version
@@ -290,7 +339,6 @@ uv pip list | grep voice-mode
 # Run a simple test
 uv run pytest tests/test_server_syntax.py -v
 ```
-
 
 ### Import Errors
 
