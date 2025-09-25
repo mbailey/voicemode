@@ -23,7 +23,8 @@ def hooks():
 @click.option('--subagent-type', help='Override subagent type (for testing)')
 @click.option('--event', type=click.Choice(['PreToolUse', 'PostToolUse']), help='Override event (for testing)')
 @click.option('--debug', is_flag=True, help='Enable debug output')
-def receiver(tool_name, action, subagent_type, event, debug):
+@click.option('--quiet', is_flag=True, help='Suppress all output (for production)')
+def receiver(tool_name, action, subagent_type, event, debug, quiet):
     """Receive and process hook events from Claude Code via stdin.
     
     This command reads JSON from stdin when called by Claude Code hooks,
@@ -51,10 +52,38 @@ def receiver(tool_name, action, subagent_type, event, debug):
             hook_data = json.load(sys.stdin)
             if debug:
                 print(f"[DEBUG] Received JSON: {json.dumps(hook_data, indent=2)}", file=sys.stderr)
+            elif not quiet:
+                # Show minimal info by default
+                tool = hook_data.get('tool_name', 'Unknown')
+                event_type = hook_data.get('hook_event_name', 'Unknown')
+                if tool == 'Bash':
+                    cmd = hook_data.get('tool_input', {}).get('command', '')[:50]
+                    print(f"[HOOK] {event_type}: {tool} - {cmd}...", file=sys.stderr)
+                else:
+                    print(f"[HOOK] {event_type}: {tool}", file=sys.stderr)
         except Exception as e:
             if debug:
                 print(f"[DEBUG] Failed to parse JSON from stdin: {e}", file=sys.stderr)
             # Silent fail for hooks
+            sys.exit(0)
+    else:
+        # If no stdin and no args, show example
+        if not tool_name and not action and not subagent_type and not event:
+            print("Example JSON that Claude Code sends to this hook:", file=sys.stderr)
+            example = {
+                "session_id": "session_abc123",
+                "transcript_path": "/path/to/transcript.md",
+                "cwd": "/Users/admin/Code/project",
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {
+                    "command": "git push origin main",
+                    "description": "Push changes to remote",
+                    "sandbox": True
+                }
+            }
+            print(json.dumps(example, indent=2), file=sys.stderr)
+            print("\nTest with: echo '<JSON>' | voicemode claude hooks receiver --debug", file=sys.stderr)
             sys.exit(0)
     
     # Extract values from JSON or use command-line overrides/defaults
@@ -81,10 +110,37 @@ def receiver(tool_name, action, subagent_type, event, debug):
         subagent_type = tool_input.get('subagent_type', 'baby-bear')
     elif not subagent_type:
         subagent_type = None
-    
+
+    # Check for YubiKey-requiring commands in Bash tool
+    yubikey_trigger = False
+    if tool_name == 'Bash' and event_name == 'PreToolUse':
+        tool_input = hook_data.get('tool_input', {})
+        command = tool_input.get('command', '')
+
+        # Commands that typically require YubiKey authentication
+        yubikey_patterns = [
+            'git push',
+            'git fetch',
+            'git pull',
+            'ssh ',
+            'scp ',
+            'sftp ',
+            'rsync ',
+        ]
+
+        # Check if command starts with any YubiKey-requiring pattern
+        for pattern in yubikey_patterns:
+            if command.strip().startswith(pattern):
+                yubikey_trigger = True
+                if debug:
+                    print(f"[DEBUG] YubiKey trigger detected for command: {command[:50]}...", file=sys.stderr)
+                elif not quiet:
+                    print(f"[HOOK] YubiKey authentication required for: {command[:30]}...", file=sys.stderr)
+                break
+
     if debug:
         print(f"[DEBUG] Processing: event={event_name}, tool={tool_name}, "
-              f"action={action}, subagent={subagent_type}", file=sys.stderr)
+              f"action={action}, subagent={subagent_type}, yubikey={yubikey_trigger}", file=sys.stderr)
     
     # Check if sound fonts are enabled
     from voice_mode.config import SOUNDFONTS_ENABLED
@@ -94,8 +150,12 @@ def receiver(tool_name, action, subagent_type, event, debug):
             print(f"[DEBUG] Sound fonts are disabled (VOICEMODE_SOUNDFONTS_ENABLED=false)", file=sys.stderr)
     else:
         # Find sound file using filesystem conventions
-        sound_file = find_sound_file(event_name, tool_name, subagent_type)
-        
+        # Override for YubiKey triggers to use special sound
+        if yubikey_trigger:
+            sound_file = find_yubikey_sound_file()
+        else:
+            sound_file = find_sound_file(event_name, tool_name, subagent_type)
+
         if sound_file:
             if debug:
                 print(f"[DEBUG] Found sound file: {sound_file}", file=sys.stderr)
@@ -115,6 +175,49 @@ def receiver(tool_name, action, subagent_type, event, debug):
     
     # Always exit 0 to not disrupt Claude Code
     sys.exit(0)
+
+
+def find_yubikey_sound_file() -> Optional[Path]:
+    """
+    Find YubiKey authentication sound file.
+
+    Looks for yubikey-specific sounds in order:
+    1. yubikey.mp3 or yubikey.wav in soundfonts root
+    2. PreToolUse/bash/yubikey.{mp3,wav}
+    3. PreToolUse/yubikey.{mp3,wav}
+    4. Falls back to a distinctive default
+
+    Returns:
+        Path to sound file if found, None otherwise
+    """
+    base_path = Path.home() / '.voicemode' / 'soundfonts' / 'current'
+
+    # Resolve symlink if it exists
+    if base_path.is_symlink():
+        base_path = base_path.resolve()
+
+    if not base_path.exists():
+        return None
+
+    # Paths to try for YubiKey sound (most to least specific)
+    paths_to_try = [
+        base_path / 'yubikey.mp3',
+        base_path / 'yubikey.wav',
+        base_path / 'PreToolUse' / 'bash' / 'yubikey.mp3',
+        base_path / 'PreToolUse' / 'bash' / 'yubikey.wav',
+        base_path / 'PreToolUse' / 'yubikey.mp3',
+        base_path / 'PreToolUse' / 'yubikey.wav',
+        # Fall back to a distinctive sound if no yubikey-specific sound exists
+        base_path / 'alert.mp3',
+        base_path / 'alert.wav',
+        base_path / 'fallback.mp3',
+    ]
+
+    for path in paths_to_try:
+        if path.exists():
+            return path
+
+    return None
 
 
 def find_sound_file(event: str, tool: str, subagent: Optional[str] = None) -> Optional[Path]:
