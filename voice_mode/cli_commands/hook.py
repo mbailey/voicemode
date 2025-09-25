@@ -6,8 +6,9 @@ import click
 import sys
 import json
 import os
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 
 @click.group()
@@ -111,36 +112,19 @@ def receiver(tool_name, action, subagent_type, event, debug, quiet):
     elif not subagent_type:
         subagent_type = None
 
-    # Check for YubiKey-requiring commands in Bash tool
-    yubikey_trigger = False
-    if tool_name == 'Bash' and event_name == 'PreToolUse':
-        tool_input = hook_data.get('tool_input', {})
-        command = tool_input.get('command', '')
+    # Check for pattern matches using configuration
+    matched_sound = match_hook_pattern(hook_data, debug)
 
-        # Commands that typically require YubiKey authentication
-        yubikey_patterns = [
-            'git push',
-            'git fetch',
-            'git pull',
-            'ssh ',
-            'scp ',
-            'sftp ',
-            'rsync ',
-        ]
-
-        # Check if command starts with any YubiKey-requiring pattern
-        for pattern in yubikey_patterns:
-            if command.strip().startswith(pattern):
-                yubikey_trigger = True
-                if debug:
-                    print(f"[DEBUG] YubiKey trigger detected for command: {command[:50]}...", file=sys.stderr)
-                elif not quiet:
-                    print(f"[HOOK] YubiKey authentication required for: {command[:30]}...", file=sys.stderr)
-                break
+    if matched_sound and not quiet:
+        if tool_name == 'Bash':
+            command = hook_data.get('tool_input', {}).get('command', '')[:30]
+            print(f"[HOOK] Pattern matched for: {command}... -> sound: {matched_sound}", file=sys.stderr)
+        else:
+            print(f"[HOOK] Pattern matched for {tool_name} -> sound: {matched_sound}", file=sys.stderr)
 
     if debug:
         print(f"[DEBUG] Processing: event={event_name}, tool={tool_name}, "
-              f"action={action}, subagent={subagent_type}, yubikey={yubikey_trigger}", file=sys.stderr)
+              f"action={action}, subagent={subagent_type}, matched_sound={matched_sound}", file=sys.stderr)
     
     # Check if sound fonts are enabled
     from voice_mode.config import SOUNDFONTS_ENABLED
@@ -150,9 +134,9 @@ def receiver(tool_name, action, subagent_type, event, debug, quiet):
             print(f"[DEBUG] Sound fonts are disabled (VOICEMODE_SOUNDFONTS_ENABLED=false)", file=sys.stderr)
     else:
         # Find sound file using filesystem conventions
-        # Override for YubiKey triggers to use special sound
-        if yubikey_trigger:
-            sound_file = find_yubikey_sound_file()
+        # Use matched sound from patterns if available
+        if matched_sound:
+            sound_file = find_configured_sound_file(matched_sound)
         else:
             sound_file = find_sound_file(event_name, tool_name, subagent_type)
 
@@ -175,6 +159,141 @@ def receiver(tool_name, action, subagent_type, event, debug, quiet):
     
     # Always exit 0 to not disrupt Claude Code
     sys.exit(0)
+
+
+def get_nested_value(data: Dict[str, Any], path: str) -> Any:
+    """
+    Get a value from nested dictionary using dot notation.
+
+    Args:
+        data: Dictionary to search in
+        path: Dot-separated path (e.g., "tool_input.command")
+
+    Returns:
+        Value at path or None if not found
+    """
+    keys = path.split('.')
+    value = data
+    for key in keys:
+        if isinstance(value, dict):
+            value = value.get(key)
+        else:
+            return None
+    return value
+
+
+def load_hook_patterns() -> List[Dict[str, Any]]:
+    """
+    Load hook pattern configuration from environment or config file.
+
+    Returns:
+        List of pattern configurations
+    """
+    # Try to load from environment variable
+    patterns_json = os.environ.get("VOICEMODE_HOOK_PATTERNS", "")
+
+    if patterns_json:
+        try:
+            return json.loads(patterns_json)
+        except json.JSONDecodeError:
+            print(f"[ERROR] Invalid JSON in VOICEMODE_HOOK_PATTERNS", file=sys.stderr)
+            return []
+
+    # For now, return hardcoded YubiKey patterns as default
+    # This will be replaced with config file loading later
+    return [
+        {
+            "name": "yubikey_auth",
+            "tool_name": "Bash",
+            "hook_event_name": "PreToolUse",
+            "match_field": "tool_input.command",
+            "pattern": "^(git (push|pull|fetch)|ssh |scp |sftp |rsync )",
+            "sound": "yubikey"
+        }
+    ]
+
+
+def match_hook_pattern(hook_data: Dict[str, Any], debug: bool = False) -> Optional[str]:
+    """
+    Check if hook data matches any configured patterns.
+
+    Args:
+        hook_data: The hook data from Claude Code
+        debug: Whether to print debug messages
+
+    Returns:
+        Sound name if pattern matches, None otherwise
+    """
+    patterns = load_hook_patterns()
+
+    for pattern_config in patterns:
+        # Check tool_name if specified
+        if "tool_name" in pattern_config:
+            if hook_data.get("tool_name") != pattern_config["tool_name"]:
+                continue
+
+        # Check hook_event_name if specified
+        if "hook_event_name" in pattern_config:
+            if hook_data.get("hook_event_name") != pattern_config["hook_event_name"]:
+                continue
+
+        # Check pattern against specified field
+        if "match_field" in pattern_config and "pattern" in pattern_config:
+            field_value = get_nested_value(hook_data, pattern_config["match_field"])
+            if field_value and isinstance(field_value, str):
+                try:
+                    if re.match(pattern_config["pattern"], field_value):
+                        if debug:
+                            print(f"[DEBUG] Pattern '{pattern_config.get('name', 'unnamed')}' matched", file=sys.stderr)
+                        return pattern_config.get("sound", "default")
+                except re.error:
+                    if debug:
+                        print(f"[DEBUG] Invalid regex in pattern '{pattern_config.get('name', 'unnamed')}'", file=sys.stderr)
+
+    return None
+
+
+def find_configured_sound_file(sound_name: str) -> Optional[Path]:
+    """
+    Find a sound file by its configured name.
+
+    Args:
+        sound_name: Name of the sound (e.g., "yubikey", "error", "success")
+
+    Returns:
+        Path to sound file if found, None otherwise
+    """
+    base_path = Path.home() / '.voicemode' / 'soundfonts' / 'current'
+
+    # Resolve symlink if it exists
+    if base_path.is_symlink():
+        base_path = base_path.resolve()
+
+    if not base_path.exists():
+        return None
+
+    # Check for environment variable override for this specific sound
+    custom_path = os.environ.get(f"VOICEMODE_HOOK_SOUND_{sound_name.upper()}", "")
+    if custom_path and Path(custom_path).exists():
+        return Path(custom_path)
+
+    # Paths to try for the sound (most to least specific)
+    paths_to_try = [
+        base_path / f'{sound_name}.mp3',
+        base_path / f'{sound_name}.wav',
+        base_path / 'custom' / f'{sound_name}.mp3',
+        base_path / 'custom' / f'{sound_name}.wav',
+        # Special case for yubikey
+        base_path / 'boop.mp3' if sound_name == 'yubikey' else None,
+        # Fall back to default
+        base_path / 'default.mp3',
+    ]
+
+    for path in paths_to_try:
+        if path and path.exists():
+            return path
+
+    return None
 
 
 def find_yubikey_sound_file() -> Optional[Path]:
