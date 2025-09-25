@@ -100,7 +100,11 @@ nav:
     - Migration Guide: migration-guide.md
     - Audio Formats: audio-format-migration.md
   - Troubleshooting:
-    - WSL2 Microphone: troubleshooting/wsl2-microphone-access.md
+    - Overview: troubleshooting/index.md
+    - Voice Interaction:
+      - No Speech Detected: troubleshooting/voice-interaction/no-speech-detected.md
+    - Audio Devices:
+      - WSL2 Microphone: troubleshooting/wsl2-microphone-access.md
   - API Reference:
     - Tools: api-reference/tools.md
     - Configuration: api-reference/configuration.md

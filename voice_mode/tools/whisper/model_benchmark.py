@@ -1,7 +1,7 @@
 """MCP tool for benchmarking Whisper models."""
 
 from typing import Union, List, Dict, Any, Optional
-from voice_mode.tools.services.whisper.models import (
+from voice_mode.tools.whisper.models import (
     get_installed_whisper_models,
     benchmark_whisper_model,
     is_whisper_model_installed,

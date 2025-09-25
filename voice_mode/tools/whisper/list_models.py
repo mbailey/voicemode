@@ -1,7 +1,7 @@
 """MCP tool for listing Whisper models and their status."""
 
 from typing import Dict, Any
-from voice_mode.tools.services.whisper.models import (
+from voice_mode.tools.whisper.models import (
     WHISPER_MODEL_REGISTRY,
     get_model_directory,
     get_active_model,

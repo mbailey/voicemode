@@ -1,7 +1,7 @@
 """MCP tool for showing/setting active Whisper model."""
 
 from typing import Optional, Dict, Any
-from voice_mode.tools.services.whisper.models import (
+from voice_mode.tools.whisper.models import (
     get_active_model,
     set_active_model,
     is_whisper_model_installed,

@@ -13,9 +13,9 @@ import json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import LiveKit-related functions
-from voice_mode.tools.services.livekit.install import livekit_install
-from voice_mode.tools.services.livekit.uninstall import livekit_uninstall
-from voice_mode.tools.services.livekit.frontend import (
+from voice_mode.tools.livekit.install import livekit_install
+from voice_mode.tools.livekit.uninstall import livekit_uninstall
+from voice_mode.tools.livekit.frontend import (
     livekit_frontend_start,
     livekit_frontend_stop,
     livekit_frontend_status,
@@ -271,7 +271,7 @@ class TestLiveKitFrontend:
     @pytest.mark.skip(reason="Test infrastructure needs update for frontend management")
     async def test_frontend_start_success(self):
         """Test successful frontend start"""
-        with patch('voice_mode.tools.services.livekit.frontend.find_frontend_dir') as mock_find:
+        with patch('voice_mode.tools.livekit.frontend.find_frontend_dir') as mock_find:
             mock_frontend_dir = Path("/path/to/frontend")
             mock_find.return_value = mock_frontend_dir
             
@@ -295,7 +295,7 @@ class TestLiveKitFrontend:
     @pytest.mark.asyncio
     async def test_frontend_start_port_in_use(self):
         """Test frontend start when port is already in use"""
-        with patch('voice_mode.tools.services.livekit.frontend.find_frontend_dir') as mock_find:
+        with patch('voice_mode.tools.livekit.frontend.find_frontend_dir') as mock_find:
             mock_find.return_value = Path("/path/to/frontend")
             
             with patch('subprocess.run') as mock_run:
@@ -329,7 +329,7 @@ class TestLiveKitFrontend:
     async def test_frontend_status_running(self):
         """Test frontend status when running"""
         with patch('subprocess.run') as mock_run:
-            with patch('voice_mode.tools.services.livekit.frontend.find_frontend_dir') as mock_find:
+            with patch('voice_mode.tools.livekit.frontend.find_frontend_dir') as mock_find:
                 mock_find.return_value = Path("/path/to/frontend")
                 
                 with patch('pathlib.Path.exists', return_value=True):
@@ -348,7 +348,7 @@ class TestLiveKitFrontend:
     async def test_frontend_status_not_running(self):
         """Test frontend status when not running"""
         with patch('subprocess.run') as mock_run:
-            with patch('voice_mode.tools.services.livekit.frontend.find_frontend_dir') as mock_find:
+            with patch('voice_mode.tools.livekit.frontend.find_frontend_dir') as mock_find:
                 mock_find.return_value = Path("/path/to/frontend")
                 
                 mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -365,7 +365,7 @@ class TestLiveKitFrontend:
         """Test opening frontend when not running - should start it first"""
         # Since the function calls itself, we need to test it differently
         # Let's just verify the basic flow works with proper mocking
-        with patch('voice_mode.tools.services.livekit.frontend.find_frontend_dir') as mock_find:
+        with patch('voice_mode.tools.livekit.frontend.find_frontend_dir') as mock_find:
             with patch('subprocess.run') as mock_run:
                 with patch('subprocess.Popen') as mock_popen:
                     with patch('platform.system', return_value='Linux'):
@@ -400,7 +400,7 @@ class TestLiveKitFrontend:
     @pytest.mark.asyncio
     async def test_frontend_open_already_running(self):
         """Test opening frontend when already running - should just open browser"""
-        with patch('voice_mode.tools.services.livekit.frontend.find_frontend_dir') as mock_find:
+        with patch('voice_mode.tools.livekit.frontend.find_frontend_dir') as mock_find:
             with patch('subprocess.run') as mock_run:
                 with patch('platform.system', return_value='Linux'):
                     with patch('pathlib.Path.exists', return_value=True):

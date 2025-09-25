@@ -23,16 +23,14 @@ def get_all_available_tools() -> set[str]:
         if file.name != "__init__.py" and not file.name.startswith("_"):
             available_tools.add(file.stem)
 
-    # Get tools from services subdirectories
-    services_dir = tools_dir / "services"
-    if services_dir.exists():
-        for service_dir in services_dir.iterdir():
-            if service_dir.is_dir() and not service_dir.name.startswith("_"):
-                for file in service_dir.glob("*.py"):
-                    if file.name != "__init__.py" and not file.name.startswith("_") and file.name != "helpers.py":
-                        # Use flattened naming: service_toolname
-                        tool_name = f"{service_dir.name}_{file.stem}"
-                        available_tools.add(tool_name)
+    # Get tools from all subdirectories
+    for subdir in tools_dir.iterdir():
+        if subdir.is_dir() and not subdir.name.startswith("_") and not subdir.name.startswith("."):
+            for file in subdir.glob("*.py"):
+                if file.name != "__init__.py" and not file.name.startswith("_") and file.name != "helpers.py" and file.name != "types.py":
+                    # Use flattened naming: subdir_toolname
+                    tool_name = f"{subdir.name}_{file.stem}"
+                    available_tools.add(tool_name)
 
     return available_tools
 
@@ -121,22 +119,37 @@ def load_tool(tool_name: str) -> bool:
         True if successfully loaded, False otherwise
     """
     try:
-        # Check if it's a service tool (contains underscore)
-        if "_" in tool_name:
-            parts = tool_name.split("_", 1)
-            if len(parts) == 2:
-                service_name, tool_file = parts
-                module_path = f".services.{service_name}.{tool_file}"
-                logger.debug(f"Loading service tool: {tool_name}")
-                importlib.import_module(module_path, package=__name__)
-                return True
-
-        # Try as a regular tool
+        # First check if it exists as a regular tool in the main directory
         tool_file = tools_dir / f"{tool_name}.py"
         if tool_file.exists():
             logger.debug(f"Loading tool: {tool_name}")
             importlib.import_module(f".{tool_name}", package=__name__)
             return True
+
+        # If not found and contains underscore, try as a subdirectory tool
+        if "_" in tool_name:
+            # Special case for sound_fonts directory (has underscore in name)
+            if tool_name.startswith("sound_fonts_"):
+                tool_file = tool_name.replace("sound_fonts_", "")
+                module_path = f".sound_fonts.{tool_file}"
+                try:
+                    logger.debug(f"Loading sound_fonts tool: {tool_name}")
+                    importlib.import_module(module_path, package=__name__)
+                    return True
+                except ImportError:
+                    pass
+
+            # Standard subdirectory pattern
+            parts = tool_name.split("_", 1)
+            if len(parts) == 2:
+                subdir_name, tool_file = parts
+                module_path = f".{subdir_name}.{tool_file}"
+                try:
+                    logger.debug(f"Loading subdirectory tool: {tool_name}")
+                    importlib.import_module(module_path, package=__name__)
+                    return True
+                except ImportError:
+                    pass
 
         logger.warning(f"Tool not found: {tool_name}")
         return False

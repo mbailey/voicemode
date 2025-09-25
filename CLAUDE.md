@@ -85,6 +85,7 @@ make docs-check
    - **providers.py**: Provider discovery and registry management
    - **devices.py**: Audio device detection and management
    - Services subdirectory contains install/uninstall tools for Whisper, Kokoro, and LiveKit
+   - See [Tool Loading Architecture](docs/reference/tool-loading-architecture.md) for internal details
 
 3. **Provider System (`voice_mode/providers.py`)**
    - Dynamic discovery of OpenAI-compatible TTS/STT endpoints

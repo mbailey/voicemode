@@ -577,28 +577,6 @@
             </div>
         </section>
 
-        <section class="video-section">
-            <h2>AI Conversations: Claude Meets Gemini</h2>
-            <p>
-                Experience a groundbreaking series of conversations between Claude and Gemini, speaking to each other through 
-                their respective CLI tools (Claude Code and Gemini CLI) via VoiceMode MCP. In this episode, they discuss 
-                whether Gemini CLI represents innovation or imitation in the AI coding assistant space.
-            </p>
-            <p style="margin-top: 1rem; font-size: 0.9em; color: var(--text-secondary);">
-                This is part of an ongoing series exploring AI-to-AI communication, demonstrating how VoiceMode MCP enables 
-                natural conversations between different AI systems.
-            </p>
-            <div class="video-container">
-                <iframe 
-                    src="https://www.youtube.com/embed/y07nFEk9Q6M" 
-                    title="Claude and Gemini Talk About Gemini CLI: Innovation or Imitation?" 
-                    frameborder="0" 
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-                    allowfullscreen>
-                </iframe>
-            </div>
-        </section>
-
         <section>
             <h2>Quick Start<span class="typing-indicator"></span></h2>
             <div class="code-block">
@@ -607,7 +585,7 @@ curl -O https://getvoicemode.com/install.sh && bash install.sh<br><br>
 <span class="comment"># Optional: Set OpenAI API key (backup if local services unavailable)</span><br>
 export OPENAI_API_KEY=your-openai-key<br><br>
 <span class="comment"># Start Claude Code and try voice mode</span><br>
-claude /voicemode:converse
+claude converse
 </code>
             </div>
             <p style="margin-top: 1.5rem; color: var(--text-secondary);">
@@ -634,32 +612,8 @@ claude /voicemode:converse
                     <span style="position: absolute; left: 0; color: var(--accent);">✓</span>
                     Sets up shell completions for tab completion
                 </li>
-                <li style="margin-bottom: 0.5rem; padding-left: 1.5rem; position: relative;">
-                    <span style="position: absolute; left: 0; color: var(--accent);">✓</span>
-                    Optionally installs local STT/TTS services (Whisper, Kokoro, LiveKit)
-                </li>
-                <li style="margin-bottom: 0.5rem; padding-left: 1.5rem; position: relative;">
-                    <span style="position: absolute; left: 0; color: var(--accent);">✓</span>
-                    Offers CoreML acceleration setup on Apple Silicon Macs
-                </li>
             </ul>
         </section>
-
-        <div class="highlight-box">
-            <h3>
-                <span class="label">Featured</span>
-                LiveKit Integration
-            </h3>
-            <p>
-                Enable room-based voice communication with LiveKit for distributed teams and advanced voice workflows. 
-                Perfect for multi-participant voice interactions and production deployments.
-            </p>
-            <div class="links">
-                <a href="https://livekit.io">LiveKit.io</a>
-                <a href="https://github.com/livekit/livekit">GitHub</a>
-                <a href="https://docs.livekit.io">Documentation</a>
-            </div>
-        </div>
 
         <div class="highlight-box">
             <h3>
@@ -677,11 +631,7 @@ claude /voicemode:converse
             <div class="features">
                 <div class="feature">
                     <h3>Voice Conversations</h3>
-                    <p>Natural voice interactions with Claude through your microphone and speakers</p>
-                </div>
-                <div class="feature">
-                    <h3>Multiple Transports</h3>
-                    <p>Local microphone access or LiveKit rooms for distributed voice communication</p>
+                    <p>Natural voice interactions with Claude through your microphone and speakers, airpods, etc</p>
                 </div>
                 <div class="feature">
                     <h3>OpenAI Compatible</h3>
@@ -699,7 +649,7 @@ claude /voicemode:converse
                 <h3>Requirements</h3>
                 <ul>
                     <li>OpenAI API key (or self-hosted STT & TTS services)</li>
-                    <li>Microphone and speakers for voice I/O (or LiveKit)</li>
+                    <li>Microphone and speakers for voice I/O</li>
                     <li>Python 3.8+ (handled by uvx)</li>
                 </ul>
             </div>

@@ -203,7 +203,7 @@ def health():
 @click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
 def install(install_dir, port, force, version, auto_enable):
     """Install kokoro-fastapi TTS service."""
-    from voice_mode.tools.services.kokoro.install import kokoro_install
+    from voice_mode.tools.kokoro.install import kokoro_install
     result = asyncio.run(kokoro_install.fn(
         install_dir=install_dir,
         port=port,
@@ -239,7 +239,7 @@ def install(install_dir, port, force, version, auto_enable):
 @click.confirmation_option(prompt='Are you sure you want to uninstall Kokoro?')
 def uninstall(remove_models, remove_all_data):
     """Uninstall kokoro-fastapi service and optionally remove data."""
-    from voice_mode.tools.services.kokoro.uninstall import kokoro_uninstall
+    from voice_mode.tools.kokoro.uninstall import kokoro_uninstall
     result = asyncio.run(kokoro_uninstall.fn(
         remove_models=remove_models,
         remove_all_data=remove_all_data
@@ -373,7 +373,7 @@ def health():
 @click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
 def install(install_dir, model, use_gpu, force, version, auto_enable):
     """Install whisper.cpp STT service with automatic system detection."""
-    from voice_mode.tools.services.whisper.install import whisper_install
+    from voice_mode.tools.whisper.install import whisper_install
     result = asyncio.run(whisper_install.fn(
         install_dir=install_dir,
         model=model,
@@ -419,7 +419,7 @@ def install(install_dir, model, use_gpu, force, version, auto_enable):
 @click.confirmation_option(prompt='Are you sure you want to uninstall Whisper?')
 def uninstall(remove_models, remove_all_data):
     """Uninstall whisper.cpp and optionally remove models and data."""
-    from voice_mode.tools.services.whisper.uninstall import whisper_uninstall
+    from voice_mode.tools.whisper.uninstall import whisper_uninstall
     result = asyncio.run(whisper_uninstall.fn(
         remove_models=remove_models,
         remove_all_data=remove_all_data
@@ -471,7 +471,7 @@ def whisper_model_active(model_name):
     Without arguments: Shows the current active model
     With MODEL_NAME: Sets the active model (updates VOICEMODE_WHISPER_MODEL)
     """
-    from voice_mode.tools.services.whisper.models import (
+    from voice_mode.tools.whisper.models import (
         get_active_model,
         WHISPER_MODEL_REGISTRY,
         is_whisper_model_installed,
@@ -553,7 +553,7 @@ def whisper_model_active(model_name):
 @whisper.command("models")
 def whisper_models():
     """List available Whisper models and their installation status."""
-    from voice_mode.tools.services.whisper.models import (
+    from voice_mode.tools.whisper.models import (
         WHISPER_MODEL_REGISTRY, 
         get_model_directory,
         get_active_model,
@@ -643,7 +643,7 @@ def whisper_model_install(model, force, skip_core_ml, install_torch):
     medium, medium.en, large-v1, large-v2, large-v3, large-v3-turbo
     """
     import json
-    import voice_mode.tools.services.whisper.model_install as install_module
+    import voice_mode.tools.whisper.model_install as install_module
     # Get the actual function from the MCP tool wrapper
     tool = install_module.whisper_model_install
     install_func = tool.fn if hasattr(tool, 'fn') else tool
@@ -714,7 +714,7 @@ def whisper_model_remove(model, force):
     
     MODEL is the name of the model to remove (e.g., 'large-v2').
     """
-    from voice_mode.tools.services.whisper.models import (
+    from voice_mode.tools.whisper.models import (
         WHISPER_MODEL_REGISTRY,
         is_whisper_model_installed,
         get_model_directory,
@@ -785,7 +785,7 @@ def whisper_model_benchmark_cmd(models, sample, runs):
     Runs performance tests on specified models to help choose the optimal model
     for your use case based on speed vs accuracy trade-offs.
     """
-    from voice_mode.tools.services.whisper.model_benchmark import whisper_model_benchmark
+    from voice_mode.tools.whisper.model_benchmark import whisper_model_benchmark
     
     # Parse models parameter
     if ',' in models:
@@ -933,7 +933,7 @@ def update():
 @click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
 def install(install_dir, port, force, version, auto_enable):
     """Install LiveKit server with development configuration."""
-    from voice_mode.tools.services.livekit.install import livekit_install
+    from voice_mode.tools.livekit.install import livekit_install
     result = asyncio.run(livekit_install.fn(
         install_dir=install_dir,
         port=port,
@@ -972,7 +972,7 @@ def install(install_dir, port, force, version, auto_enable):
 @click.confirmation_option(prompt='Are you sure you want to uninstall LiveKit?')
 def uninstall(remove_config, remove_all_data):
     """Uninstall LiveKit server and optionally remove configuration and data."""
-    from voice_mode.tools.services.livekit.uninstall import livekit_uninstall
+    from voice_mode.tools.livekit.uninstall import livekit_uninstall
     result = asyncio.run(livekit_uninstall.fn(
         remove_config=remove_config,
         remove_all_data=remove_all_data
@@ -1007,7 +1007,7 @@ def frontend():
 @click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service after installation (default: from config)')
 def frontend_install(auto_enable):
     """Install and setup LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.services.livekit.frontend import livekit_frontend_install
+    from voice_mode.tools.livekit.frontend import livekit_frontend_install
     result = asyncio.run(livekit_frontend_install.fn(auto_enable=auto_enable))
     
     if result.get('success'):
@@ -1036,7 +1036,7 @@ def frontend_install(auto_enable):
 @click.option('--host', default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
 def frontend_start(port, host):
     """Start the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.services.livekit.frontend import livekit_frontend_start
+    from voice_mode.tools.livekit.frontend import livekit_frontend_start
     result = asyncio.run(livekit_frontend_start.fn(port=port, host=host))
     
     if result.get('success'):
@@ -1058,7 +1058,7 @@ def frontend_start(port, host):
 @frontend.command("stop")
 def frontend_stop():
     """Stop the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.services.livekit.frontend import livekit_frontend_stop
+    from voice_mode.tools.livekit.frontend import livekit_frontend_stop
     result = asyncio.run(livekit_frontend_stop.fn())
     
     if result.get('success'):
@@ -1070,7 +1070,7 @@ def frontend_stop():
 @frontend.command("status")
 def frontend_status():
     """Check status of the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.services.livekit.frontend import livekit_frontend_status
+    from voice_mode.tools.livekit.frontend import livekit_frontend_status
     result = asyncio.run(livekit_frontend_status.fn())
     
     if 'error' in result:
@@ -1098,7 +1098,7 @@ def frontend_open():
     
     Starts the frontend if not already running, then opens it in the default browser.
     """
-    from voice_mode.tools.services.livekit.frontend import livekit_frontend_open
+    from voice_mode.tools.livekit.frontend import livekit_frontend_open
     result = asyncio.run(livekit_frontend_open.fn())
     
     if result.get('success'):
@@ -1122,7 +1122,7 @@ def frontend_logs(lines, follow):
     """
     if follow:
         # For following, run tail -f directly
-        from voice_mode.tools.services.livekit.frontend import livekit_frontend_logs
+        from voice_mode.tools.livekit.frontend import livekit_frontend_logs
         result = asyncio.run(livekit_frontend_logs.fn(follow=True))
         if result.get('success'):
             click.echo(f"📂 Log file: {result['log_file']}")
@@ -1136,7 +1136,7 @@ def frontend_logs(lines, follow):
             click.echo(f"❌ Error: {result.get('error', 'Unknown error')}")
     else:
         # Show last N lines
-        from voice_mode.tools.services.livekit.frontend import livekit_frontend_logs
+        from voice_mode.tools.livekit.frontend import livekit_frontend_logs
         result = asyncio.run(livekit_frontend_logs.fn(lines=lines, follow=False))
         if result.get('success'):
             click.echo(f"📂 Log file: {result['log_file']}")
@@ -1520,6 +1520,12 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
     
     async def run_conversation():
         """Run the conversation asynchronously."""
+        # Suppress the spurious aiohttp warning that appears on startup
+        # This warning is a false positive from asyncio detecting an unclosed
+        # session that was likely created during module import
+        import logging
+        logging.getLogger('asyncio').setLevel(logging.CRITICAL)
+
         try:
             if continuous:
                 # Continuous conversation mode

@@ -159,11 +159,11 @@ class TestToolFiltering:
             assert result is True
             mock_import.assert_called_with(".converse", package="voice_mode.tools")
 
-            # Test service tool
+            # Test subdirectory tool (formerly service tool)
             mock_import.reset_mock()
             result = load_tool("kokoro_install")
             assert result is True
-            mock_import.assert_called_with(".services.kokoro.install", package="voice_mode.tools")
+            mock_import.assert_called_with(".kokoro.install", package="voice_mode.tools")
 
     def test_empty_tools_enabled(self):
         """Test that empty VOICEMODE_TOOLS_ENABLED loads nothing."""

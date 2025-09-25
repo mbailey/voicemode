@@ -6,7 +6,6 @@
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode)](https://pepy.tech/project/voice-mode)
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode/month)](https://pepy.tech/project/voice-mode)
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode/week)](https://pepy.tech/project/voice-mode)
-[![Documentation](https://readthedocs.org/projects/voice-mode/badge/?version=latest)](https://voice-mode.readthedocs.io/en/latest/?badge=latest)
 
 Natural voice conversations for AI assistants. VoiceMode brings human-like voice interactions to Claude Code, AI code editors through the Model Context Protocol (MCP).
 
@@ -17,7 +16,7 @@ Natural voice conversations for AI assistants. VoiceMode brings human-like voice
 ## ✨ Features
 
 - **🎙️ Natural Voice Conversations** with Claude Code - ask questions and hear responses
-- **🗣️ Supports local VoiceModels** - works with any OpenAI API compatible STT/TTS services
+- **🗣️ Supports local Voice Models** - works with any OpenAI API compatible STT/TTS services
 - **⚡ Real-time** - low-latency voice interactions with automatic transport selection
 - **🔧 MCP Integration** - seamless with Claude Code (and other MCP clients)
 - **🎯 Silence detection** - automatically stops recording when you stop speaking (no more waiting!)
@@ -28,11 +27,7 @@ Natural voice conversations for AI assistants. VoiceMode brings human-like voice
 **All you need to get started:**
 
 1. **🎤 Computer with microphone and speakers**
-2. **🔑 OpenAI API Key** (optional) - VoiceMode can install free, open-source transcription and text-to-speech services locally
-
-**Optional for enhanced performance:**
-
-- **🍎 Xcode** (macOS only) - Required for Core ML acceleration of Whisper models (2-3x faster inference). Install from [Mac App Store](https://apps.apple.com/app/xcode/id497799835) then run `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
+2. **🔑 OpenAI API Key** (Recommended, if only as a backup for local services)
 
 ## Quick Start
 
@@ -57,7 +52,6 @@ This installer will:
 - Install Claude Code if not already installed
 - Configure VoiceMode as an MCP server
 - Set up your system for voice conversations
-- Offer to install free local STT/TTS services if no API key is provided
 
 ### Manual Installation
 
@@ -85,7 +79,7 @@ The `converse` function makes voice interactions natural - it automatically wait
 
 ```bash
 sudo apt update
-sudo apt install -y python3-dev libasound2-dev libasound2-plugins libportaudio2 portaudio19-dev ffmpeg pulseaudio pulseaudio-utils
+sudo apt install -y ffmpeg libasound2-dev libasound2-plugins libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils python3-dev 
 ```
 
 **Note for WSL2 users**: WSL2 requires additional audio packages (pulseaudio, libasound2-plugins) for microphone access.
@@ -95,7 +89,7 @@ sudo apt install -y python3-dev libasound2-dev libasound2-plugins libportaudio2 
 <summary><strong>Fedora/RHEL</strong></summary>
 
 ```bash
-sudo dnf install python3-devel alsa-lib-devel portaudio-devel ffmpeg
+sudo dnf install alsa-lib-devel ffmpeg portaudio-devel python3-devel
 ```
 </details>
 
@@ -107,7 +101,7 @@ sudo dnf install python3-devel alsa-lib-devel portaudio-devel ffmpeg
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
 # Install dependencies
-brew install portaudio ffmpeg cmake
+brew install ffmpeg node portaudio
 ```
 </details>
 
@@ -147,12 +141,12 @@ Below are quick configuration snippets. For full installation and setup instruct
 <summary><strong>Claude Code (CLI)</strong></summary>
 
 ```bash
-claude mcp add voicemode -- uvx --refresh voice-mode
+claude mcp add --scope user voicemode -- uvx --refresh voice-mode
 ```
 
 Or with environment variables:
 ```bash
-claude mcp add voicemode --env OPENAI_API_KEY=your-openai-key -- uvx --refresh voice-mode
+claude mcp add --scope user --env OPENAI_API_KEY=your-openai-key voicemode -- uvx --refresh voice-mode
 ```
 </details>
 
@@ -164,7 +158,7 @@ claude mcp add voicemode --env OPENAI_API_KEY=your-openai-key -- uvx --refresh v
 ```bash
 git clone https://github.com/mbailey/voicemode.git
 cd voicemode
-pip install -e .
+uv tool install -e .
 ```
 </details>
 

@@ -41,7 +41,7 @@ class TestLiveKitMCPTools:
     @pytest.mark.skip(reason="Test infrastructure needs update for MCP API changes")
     async def test_livekit_install_tool_schema(self):
         """Test LiveKit install tool has correct schema"""
-        from voice_mode.tools.services.livekit.install import livekit_install
+        from voice_mode.tools.livekit.install import livekit_install
         
         # Check tool metadata
         assert livekit_install.name == 'livekit_install'
@@ -65,7 +65,7 @@ class TestLiveKitMCPTools:
     @pytest.mark.skip(reason="Test infrastructure needs update for MCP API changes")
     async def test_livekit_frontend_tools_schema(self):
         """Test LiveKit frontend tools have correct schemas"""
-        from voice_mode.tools.services.livekit.frontend import (
+        from voice_mode.tools.livekit.frontend import (
             livekit_frontend_start,
             livekit_frontend_stop,
             livekit_frontend_status
