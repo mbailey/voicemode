@@ -2,6 +2,8 @@
 
 VoiceMode supports selective tool loading to reduce token usage in Claude Code and other MCP clients.
 
+> **Technical Details**: For information about how the tool loading system works internally, see the [Tool Loading Architecture](../reference/tool-loading-architecture.md) documentation.
+
 ## Why Use Selective Loading?
 
 By default, VoiceMode loads all available tools (~40+ tools), which consumes approximately 25,000 tokens in your Claude Code context. If you only need voice conversation features, you can load just the `converse` tool and save ~20,000 tokens.

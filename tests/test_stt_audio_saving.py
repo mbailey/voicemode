@@ -9,7 +9,7 @@ import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime
 
-from voice_mode.tools.converse import speech_to_text_with_failover
+from voice_mode.tools.converse import speech_to_text
 from voice_mode import config
 
 
@@ -51,15 +51,16 @@ async def test_stt_audio_saved_with_simple_failover():
                         mock_write.side_effect = write_side_effect
                         
                         # Call the function with save_audio enabled
-                        result = await speech_to_text_with_failover(
+                        result = await speech_to_text(
                             audio_data=audio_data,
                             save_audio=True,
                             audio_dir=test_audio_dir,
                             transport="local"
                         )
                         
-                        # Verify transcription was returned (when saving, returns just text)
-                        assert result == "Test transcription"
+                        # Verify transcription was returned (now returns dict)
+                        assert isinstance(result, dict)
+                        assert result.get("text") == "Test transcription"
                         
                         # Check that audio file was saved in year/month structure
                         now = datetime.now()
@@ -88,12 +89,12 @@ async def test_stt_audio_not_saved_when_disabled():
         test_audio_dir = Path(temp_dir) / "audio"
         test_audio_dir.mkdir()
         
-        # Mock the simple_stt_failover
+        # Mock the simple_stt_failover to return dict format
         with patch('voice_mode.simple_failover.simple_stt_failover', new_callable=AsyncMock) as mock_stt:
-            mock_stt.return_value = "Test transcription"
+            mock_stt.return_value = {"text": "Test transcription", "provider": "whisper", "endpoint": "http://127.0.0.1:2022/v1"}
             
             # Call with save_audio=False
-            result = await speech_to_text_with_failover(
+            result = await speech_to_text(
                 audio_data=audio_data,
                 save_audio=False,
                 audio_dir=test_audio_dir,

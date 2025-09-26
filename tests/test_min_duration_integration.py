@@ -43,7 +43,7 @@ class TestMinDurationIntegration:
                     with patch('voice_mode.tools.converse.record_audio_with_silence_detection') as mock_record:
                         mock_record.return_value = (np.array([1, 2, 3]), True)  # Returns tuple (audio, speech_detected)
                         with patch('voice_mode.tools.converse.speech_to_text', new_callable=AsyncMock) as mock_stt:
-                            mock_stt.return_value = "Test response"
+                            mock_stt.return_value = {"text": "Test response", "provider": "whisper"}
                             
                             result = await converse_func(
                                 message="Test",
@@ -76,7 +76,7 @@ class TestMinDurationIntegration:
                 with patch('voice_mode.tools.converse.record_audio_with_silence_detection') as mock_record:
                     mock_record.return_value = (np.array([1, 2, 3]), True)  # Returns tuple (audio, speech_detected)
                     with patch('voice_mode.tools.converse.speech_to_text', new_callable=AsyncMock) as mock_stt:
-                        mock_stt.return_value = "Test response"
+                        mock_stt.return_value = {"text": "Test response", "provider": "whisper"}
                         
                         # Test with specific min_listen_duration
                         result = await converse_func(

@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.7.1] - 2025-09-23
+
+### Fixed
+- **CLI Commands**
+  - Fix broken whisper model install command import path after services refactoring
+
+### Changed
+- **Testing**
+  - Move comprehensive help test from manual to automated testing for CI coverage
+
+## [4.7.0] - 2025-09-22
+
+### Fixed
+- **Voice Interaction**
+  - Distinguish STT connection errors from genuine "no speech detected" scenarios (#62)
+  - Display detailed error messages showing attempted endpoints and specific failures
+  - Fix misleading "[no speech detected]" messages when services are unavailable
+  - Simplify STT function architecture from 3 layers to 2
+  - Clean up "Unclosed client session" asyncio warning on startup
+
+### Added
+- **Testing**
+  - Add comprehensive test coverage for STT error scenarios
+  - Test connection failures, authentication errors, and fallback behavior
+
+### Documentation
+- Add troubleshooting guide index with diagnostic flowchart
+
+## [4.6.0] - 2025-09-21
+
+### Added
+- **Streamlined Installation Experience**
+  - Add OpenAI API key setup with browser integration for quick start
+  - Add microphone detection before voice test
+  - Improve confirmation prompts with smart defaults ([Y/n] for essential, [y/N] for optional)
+  - Position OpenAI as recommended quick-start path (~3 minute setup)
+  - Consolidate system dependency prompts into single confirmation
+
+- **Documentation**
+  - Add comprehensive tool loading architecture documentation
+  - Improve README clarity and simplify getting started
+  - Add reference documentation for internal systems
+
+### Changed
+- **Installation Flow**
+  - Remove local services prompt from initial setup (moved to post-install docs)
+  - Focus installation on getting users to Claude Code quickly
+  - Update Claude Code configuration to use `uvx --refresh` for latest version
+  - Use long flags in install script for better clarity
+
+- **Code Organization**
+  - Refactor services directory structure - flatten tools directory hierarchy
+  - Move service tools up one level (services/whisper/install.py → whisper_install.py)
+  - Simplify tool loading logic for uniform subdirectory handling
+  - Move version utilities from tools to utils module
+
+### Fixed
+- **macOS Compatibility**
+  - Fix bash completion "nosort: invalid option name" error on bash 3.2
+  - Remove timeout command usage (not available on macOS by default)
+  - Correct microphone device counting (filter input devices only)
+  - Ensure voice test works with API keys from config files
+  - Simplify voice test command for better compatibility
+
+- **Tool Loading**
+  - Handle sound_fonts subdirectory with underscore in name correctly
+  - Fix installer tests after services directory restructuring
+
 ## [4.5.0] - 2025-09-18
 
 ### Added

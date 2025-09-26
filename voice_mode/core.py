@@ -135,22 +135,26 @@ def get_openai_clients(api_key: str, stt_base_url: Optional[str] = None, tts_bas
         'timeout': httpx.Timeout(30.0, connect=5.0),
         'limits': httpx.Limits(max_keepalive_connections=5, max_connections=10),
     }
-    
+
     # Disable retries for local endpoints - they either work or don't
     stt_max_retries = 0 if is_local_provider(stt_base_url) else 2
     tts_max_retries = 0 if is_local_provider(tts_base_url) else 2
+
+    # Create HTTP clients
+    stt_http_client = httpx.AsyncClient(**http_client_config)
+    tts_http_client = httpx.AsyncClient(**http_client_config)
 
     return {
         'stt': AsyncOpenAI(
             api_key=api_key,
             base_url=stt_base_url,
-            http_client=httpx.AsyncClient(**http_client_config),
+            http_client=stt_http_client,
             max_retries=stt_max_retries
         ),
         'tts': AsyncOpenAI(
             api_key=api_key,
             base_url=tts_base_url,
-            http_client=httpx.AsyncClient(**http_client_config),
+            http_client=tts_http_client,
             max_retries=tts_max_retries
         )
     }

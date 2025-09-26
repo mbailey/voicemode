@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
-from voice_mode.tools.converse import speech_to_text_with_failover, get_stt_config
+from voice_mode.tools.converse import speech_to_text, get_stt_config
 from voice_mode.provider_discovery import EndpointInfo
 
 
