@@ -51,11 +51,8 @@ git clone https://github.com/mbailey/voicemode
 cd voicemode
 
 # Create and activate virtual environment
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv tool install -e .[dev,test]
 
-# Install package with development dependencies
-uv pip install -e .[dev,test]
 ```
 
 ## Development Workflow
