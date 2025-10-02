@@ -3,6 +3,9 @@
 # Usage: curl -sSfO https://getvoicemode.com/install.sh && bash install.sh
 
 # Parse command line arguments
+NON_INTERACTIVE=false
+CI_MODE=false
+
 show_help() {
   cat <<EOF
 VoiceMode Universal Installer
@@ -10,21 +13,30 @@ VoiceMode Universal Installer
 Usage: $0 [OPTIONS]
 
 Options:
-  -h, --help     Show this help message
-  -d, --debug    Enable debug output
-  
+  -h, --help           Show this help message
+  -d, --debug          Enable debug output
+  -n, --non-interactive Run without prompts (assumes yes to all)
+  --ci                 CI mode (non-interactive + skip audio/API checks)
+
 Environment variables:
   VOICEMODE_INSTALL_DEBUG=true    Enable debug output
   DEBUG=true                      Enable debug output
+  CI=true                         Enables CI mode automatically
 
 Examples:
   # Normal installation
   curl -O https://getvoicemode.com/install.sh && bash install.sh
-  
+
   # Debug mode
   VOICEMODE_INSTALL_DEBUG=true ./install.sh
   ./install.sh --debug
-  
+
+  # Non-interactive mode
+  ./install.sh --non-interactive
+
+  # CI mode
+  ./install.sh --ci
+
 EOF
   exit 0
 }
@@ -37,6 +49,15 @@ while [[ $# -gt 0 ]]; do
     ;;
   -d | --debug)
     export VOICEMODE_INSTALL_DEBUG=true
+    shift
+    ;;
+  -n | --non-interactive)
+    NON_INTERACTIVE=true
+    shift
+    ;;
+  --ci)
+    CI_MODE=true
+    NON_INTERACTIVE=true
     shift
     ;;
   *)
@@ -52,9 +73,15 @@ if [[ "${DEBUG:-}" == "true" ]]; then
   export VOICEMODE_INSTALL_DEBUG=true
 fi
 
+# Detect CI environment
+if [[ "${CI:-}" == "true" ]] || [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  CI_MODE=true
+  NON_INTERACTIVE=true
+fi
+
 # Reattach stdin to terminal for interactive prompts when run via curl | bash
-# Only attempt this if /dev/tty exists and is accessible
-if [ ! -t 0 ] && [ -e /dev/tty ] && [ -r /dev/tty ]; then
+# Only attempt this if /dev/tty exists and is accessible (skip in CI mode)
+if [ ! -t 0 ] && [ -e /dev/tty ] && [ -r /dev/tty ] && [ "$CI_MODE" != "true" ]; then
   exec </dev/tty 2>/dev/null || true
 fi
 
@@ -120,16 +147,17 @@ detect_os() {
     print_success "Detected Fedora $fedora_version on $ARCH$([[ "$IS_WSL" == "true" ]] && echo " (WSL2)" || echo "")"
   elif [[ -f /etc/os-release ]]; then
     source /etc/os-release
-    if [[ "$ID" == "ubuntu" ]] || [[ "$ID_LIKE" == *"ubuntu"* ]]; then
-      OS="ubuntu"
+    if [[ "$ID" == "ubuntu" ]] || [[ "$ID_LIKE" == *"ubuntu"* ]] || [[ "$ID" == "debian" ]] || [[ "$ID_LIKE" == *"debian"* ]]; then
+      OS="debian"  # Use debian for all Debian-based distros (Ubuntu, Debian, etc - they use apt)
       ARCH=$(uname -m)
-      print_success "Detected Ubuntu $VERSION_ID on $ARCH$([[ "$IS_WSL" == "true" ]] && echo " (WSL2)" || echo "")"
+      local distro_name="$NAME"
+      print_success "Detected $distro_name $VERSION_ID on $ARCH$([[ "$IS_WSL" == "true" ]] && echo " (WSL2)" || echo "")"
     elif [[ "$ID" == "fedora" ]]; then
       OS="fedora"
       ARCH=$(uname -m)
       print_success "Detected Fedora $VERSION_ID on $ARCH$([[ "$IS_WSL" == "true" ]] && echo " (WSL2)" || echo "")"
     else
-      print_error "Unsupported Linux distribution: $ID. Currently only Ubuntu and Fedora are supported."
+      print_error "Unsupported Linux distribution: $ID. Currently only Ubuntu, Debian and Fedora are supported."
     fi
   else
     print_error "Unsupported operating system: $OSTYPE"
@@ -171,9 +199,320 @@ check_homebrew() {
   fi
 }
 
+collect_system_info() {
+  print_step "Collecting system information..."
+
+  # Initialize global variables for system info
+  SYSTEM_INFO_OS=""
+  SYSTEM_INFO_OS_VERSION=""
+  SYSTEM_INFO_ARCH=""
+  SYSTEM_INFO_SHELL=""
+  SYSTEM_INFO_SHELL_VERSION=""
+  SYSTEM_INFO_SHELL_RC_FILE=""
+  SYSTEM_INFO_NODE_VERSION=""
+  SYSTEM_INFO_NPM_VERSION=""
+  SYSTEM_INFO_PYTHON_VERSION=""
+  SYSTEM_INFO_PIP_VERSION=""
+  SYSTEM_INFO_CURL_VERSION=""
+  SYSTEM_INFO_GIT_VERSION=""
+  SYSTEM_INFO_FFMPEG_INSTALLED=""
+  SYSTEM_INFO_DOCKER_INSTALLED=""
+  SYSTEM_INFO_HOMEBREW_VERSION=""
+  SYSTEM_INFO_APT_INSTALLED=""
+  SYSTEM_INFO_TERMINAL_APP=""
+  SYSTEM_INFO_USER_HOME="$HOME"
+  SYSTEM_INFO_CURRENT_DIR="$(pwd)"
+  SYSTEM_INFO_DISK_AVAILABLE=""
+
+  # OS and Architecture (already detected)
+  SYSTEM_INFO_OS="$OS"
+  SYSTEM_INFO_ARCH="$ARCH"
+
+  # OS Version details
+  if [[ "$OS" == "macos" ]]; then
+    SYSTEM_INFO_OS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+  elif [[ "$OS" == "linux" ]]; then
+    if [ -f /etc/os-release ]; then
+      . /etc/os-release
+      SYSTEM_INFO_OS_VERSION="${PRETTY_NAME:-${NAME:-unknown}}"
+    else
+      SYSTEM_INFO_OS_VERSION="$(uname -v 2>/dev/null || echo 'unknown')"
+    fi
+  else
+    SYSTEM_INFO_OS_VERSION="$(uname -v 2>/dev/null || echo 'unknown')"
+  fi
+
+  # Default shell and version
+  SYSTEM_INFO_SHELL="${SHELL:-/bin/bash}"
+  if command -v "$SYSTEM_INFO_SHELL" >/dev/null 2>&1; then
+    if [[ "$SYSTEM_INFO_SHELL" == *"zsh"* ]]; then
+      SYSTEM_INFO_SHELL_VERSION="$($SYSTEM_INFO_SHELL --version 2>/dev/null | head -n1 || echo 'unknown')"
+    elif [[ "$SYSTEM_INFO_SHELL" == *"bash"* ]]; then
+      SYSTEM_INFO_SHELL_VERSION="$($SYSTEM_INFO_SHELL --version 2>/dev/null | head -n1 || echo 'unknown')"
+    elif [[ "$SYSTEM_INFO_SHELL" == *"fish"* ]]; then
+      SYSTEM_INFO_SHELL_VERSION="$($SYSTEM_INFO_SHELL --version 2>/dev/null || echo 'unknown')"
+    else
+      SYSTEM_INFO_SHELL_VERSION="unknown"
+    fi
+  fi
+
+  # Determine shell RC file
+  if [[ "$SYSTEM_INFO_SHELL" == *"zsh"* ]]; then
+    SYSTEM_INFO_SHELL_RC_FILE="$HOME/.zshrc"
+  elif [[ "$SYSTEM_INFO_SHELL" == *"bash"* ]]; then
+    if [[ "$OS" == "macos" ]]; then
+      # macOS uses .bash_profile for login shells
+      SYSTEM_INFO_SHELL_RC_FILE="$HOME/.bash_profile"
+    else
+      SYSTEM_INFO_SHELL_RC_FILE="$HOME/.bashrc"
+    fi
+  elif [[ "$SYSTEM_INFO_SHELL" == *"fish"* ]]; then
+    SYSTEM_INFO_SHELL_RC_FILE="$HOME/.config/fish/config.fish"
+  else
+    # Fallback to .profile
+    SYSTEM_INFO_SHELL_RC_FILE="$HOME/.profile"
+  fi
+
+  # Check if RC file exists, if not try alternatives
+  if [[ ! -f "$SYSTEM_INFO_SHELL_RC_FILE" ]]; then
+    if [[ "$SYSTEM_INFO_SHELL" == *"bash"* ]]; then
+      # Try alternative bash files
+      for rcfile in "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
+        if [[ -f "$rcfile" ]]; then
+          SYSTEM_INFO_SHELL_RC_FILE="$rcfile"
+          break
+        fi
+      done
+    fi
+  fi
+
+  # Node.js and npm versions
+  if command -v node >/dev/null 2>&1; then
+    SYSTEM_INFO_NODE_VERSION="$(node --version 2>/dev/null || echo 'not installed')"
+  else
+    SYSTEM_INFO_NODE_VERSION="not installed"
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    SYSTEM_INFO_NPM_VERSION="$(npm --version 2>/dev/null || echo 'not installed')"
+  else
+    SYSTEM_INFO_NPM_VERSION="not installed"
+  fi
+
+  # Python and pip versions
+  if command -v python3 >/dev/null 2>&1; then
+    SYSTEM_INFO_PYTHON_VERSION="$(python3 --version 2>&1 | cut -d' ' -f2 || echo 'not installed')"
+  elif command -v python >/dev/null 2>&1; then
+    SYSTEM_INFO_PYTHON_VERSION="$(python --version 2>&1 | cut -d' ' -f2 || echo 'not installed')"
+  else
+    SYSTEM_INFO_PYTHON_VERSION="not installed"
+  fi
+
+  if command -v pip3 >/dev/null 2>&1; then
+    SYSTEM_INFO_PIP_VERSION="$(pip3 --version 2>/dev/null | cut -d' ' -f2 || echo 'not installed')"
+  elif command -v pip >/dev/null 2>&1; then
+    SYSTEM_INFO_PIP_VERSION="$(pip --version 2>/dev/null | cut -d' ' -f2 || echo 'not installed')"
+  else
+    SYSTEM_INFO_PIP_VERSION="not installed"
+  fi
+
+  # Curl version
+  if command -v curl >/dev/null 2>&1; then
+    SYSTEM_INFO_CURL_VERSION="$(curl --version 2>/dev/null | head -n1 | cut -d' ' -f2 || echo 'not installed')"
+  else
+    SYSTEM_INFO_CURL_VERSION="not installed"
+  fi
+
+  # Git version
+  if command -v git >/dev/null 2>&1; then
+    SYSTEM_INFO_GIT_VERSION="$(git --version 2>/dev/null | cut -d' ' -f3 || echo 'not installed')"
+  else
+    SYSTEM_INFO_GIT_VERSION="not installed"
+  fi
+
+  # FFmpeg installed
+  if command -v ffmpeg >/dev/null 2>&1; then
+    SYSTEM_INFO_FFMPEG_INSTALLED="yes"
+  else
+    SYSTEM_INFO_FFMPEG_INSTALLED="no"
+  fi
+
+  # Docker installed
+  if command -v docker >/dev/null 2>&1; then
+    SYSTEM_INFO_DOCKER_INSTALLED="yes"
+  else
+    SYSTEM_INFO_DOCKER_INSTALLED="no"
+  fi
+
+  # Package managers
+  if [[ "$OS" == "macos" ]] && command -v brew >/dev/null 2>&1; then
+    SYSTEM_INFO_HOMEBREW_VERSION="$(brew --version 2>/dev/null | head -n1 | cut -d' ' -f2 || echo 'not installed')"
+  else
+    SYSTEM_INFO_HOMEBREW_VERSION="not installed"
+  fi
+
+  if command -v apt >/dev/null 2>&1; then
+    SYSTEM_INFO_APT_INSTALLED="yes"
+  else
+    SYSTEM_INFO_APT_INSTALLED="no"
+  fi
+
+  # Terminal application (if detectable)
+  SYSTEM_INFO_TERMINAL_APP="${TERM_PROGRAM:-${TERMINAL_EMULATOR:-unknown}}"
+
+  # Available disk space (in GB) on home partition
+  if [[ "$OS" == "macos" ]]; then
+    SYSTEM_INFO_DISK_AVAILABLE="$(df -h "$HOME" 2>/dev/null | awk 'NR==2 {print $4}' || echo 'unknown')"
+  else
+    SYSTEM_INFO_DISK_AVAILABLE="$(df -h "$HOME" 2>/dev/null | awk 'NR==2 {print $4}' || echo 'unknown')"
+  fi
+
+  if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
+    echo "System Information:"
+    echo "  OS: $SYSTEM_INFO_OS"
+    echo "  OS Version: $SYSTEM_INFO_OS_VERSION"
+    echo "  Architecture: $SYSTEM_INFO_ARCH"
+    echo "  Shell: $SYSTEM_INFO_SHELL"
+    echo "  Shell Version: $SYSTEM_INFO_SHELL_VERSION"
+    echo "  Shell RC File: $SYSTEM_INFO_SHELL_RC_FILE"
+    echo "  Node Version: $SYSTEM_INFO_NODE_VERSION"
+    echo "  NPM Version: $SYSTEM_INFO_NPM_VERSION"
+    echo "  Python Version: $SYSTEM_INFO_PYTHON_VERSION"
+    echo "  FFmpeg: $SYSTEM_INFO_FFMPEG_INSTALLED"
+    echo "  Terminal: $SYSTEM_INFO_TERMINAL_APP"
+    echo "  Disk Available: $SYSTEM_INFO_DISK_AVAILABLE"
+  fi
+
+  print_success "System information collected"
+}
+
+display_dependency_status() {
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "                    📋 System Dependency Status"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  # Required dependencies
+  echo -e "${BOLD}Required Dependencies:${NC}"
+  echo ""
+
+  # Node.js
+  if [[ "$SYSTEM_INFO_NODE_VERSION" != "not installed" ]]; then
+    echo -e "  ${GREEN}✅${NC} Node.js     ${DIM}$SYSTEM_INFO_NODE_VERSION${NC}"
+  else
+    echo -e "  ${RED}❌${NC} Node.js     ${DIM}(required for Claude Code)${NC}"
+  fi
+
+  # npm
+  if [[ "$SYSTEM_INFO_NPM_VERSION" != "not installed" ]]; then
+    echo -e "  ${GREEN}✅${NC} npm         ${DIM}v$SYSTEM_INFO_NPM_VERSION${NC}"
+  else
+    echo -e "  ${RED}❌${NC} npm         ${DIM}(required for package management)${NC}"
+  fi
+
+  # Python
+  if [[ "$SYSTEM_INFO_PYTHON_VERSION" != "not installed" ]]; then
+    echo -e "  ${GREEN}✅${NC} Python      ${DIM}$SYSTEM_INFO_PYTHON_VERSION${NC}"
+  else
+    echo -e "  ${RED}❌${NC} Python      ${DIM}(required for VoiceMode)${NC}"
+  fi
+
+  # FFmpeg
+  if [[ "$SYSTEM_INFO_FFMPEG_INSTALLED" == "yes" ]]; then
+    echo -e "  ${GREEN}✅${NC} FFmpeg      ${DIM}(audio processing)${NC}"
+  else
+    echo -e "  ${RED}❌${NC} FFmpeg      ${DIM}(required for audio processing)${NC}"
+  fi
+
+  # Git
+  if [[ "$SYSTEM_INFO_GIT_VERSION" != "not installed" ]]; then
+    echo -e "  ${GREEN}✅${NC} Git         ${DIM}v$SYSTEM_INFO_GIT_VERSION${NC}"
+  else
+    echo -e "  ${YELLOW}⚠️ ${NC} Git         ${DIM}(recommended for development)${NC}"
+  fi
+
+  echo ""
+  echo -e "${BOLD}Package Managers:${NC}"
+  echo ""
+
+  # Platform-specific package managers
+  if [[ "$OS" == "macos" ]]; then
+    if [[ "$SYSTEM_INFO_HOMEBREW_VERSION" != "not installed" ]]; then
+      echo -e "  ${GREEN}✅${NC} Homebrew    ${DIM}v$SYSTEM_INFO_HOMEBREW_VERSION${NC}"
+    else
+      echo -e "  ${RED}❌${NC} Homebrew    ${DIM}(required for macOS dependencies)${NC}"
+    fi
+  elif [[ "$OS" == "linux" ]]; then
+    if [[ "$SYSTEM_INFO_APT_INSTALLED" == "yes" ]]; then
+      echo -e "  ${GREEN}✅${NC} APT         ${DIM}(system package manager)${NC}"
+    else
+      echo -e "  ${YELLOW}⚠️ ${NC} APT         ${DIM}(package manager not detected)${NC}"
+    fi
+  fi
+
+  echo ""
+  echo -e "${BOLD}System Information:${NC}"
+  echo ""
+  echo "  • OS:          $SYSTEM_INFO_OS_VERSION"
+  echo "  • Architecture: $SYSTEM_INFO_ARCH"
+  echo -e "  • Shell:       ${SYSTEM_INFO_SHELL##*/} ${DIM}(${SYSTEM_INFO_SHELL_RC_FILE})${NC}"
+  echo "  • Terminal:    $SYSTEM_INFO_TERMINAL_APP"
+  echo "  • Disk Space:  $SYSTEM_INFO_DISK_AVAILABLE available"
+
+  if [[ "$IS_WSL" == true ]]; then
+    echo ""
+    echo -e "  ${YELLOW}⚠️  WSL2 Detected${NC} - Additional audio setup may be required"
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+}
+
+check_missing_dependencies() {
+  # Returns 0 if all required dependencies are met, 1 if any are missing
+  local missing=0
+
+  if [[ "$SYSTEM_INFO_NODE_VERSION" == "not installed" ]]; then
+    missing=1
+  fi
+
+  if [[ "$SYSTEM_INFO_NPM_VERSION" == "not installed" ]]; then
+    missing=1
+  fi
+
+  if [[ "$SYSTEM_INFO_PYTHON_VERSION" == "not installed" ]]; then
+    missing=1
+  fi
+
+  if [[ "$SYSTEM_INFO_FFMPEG_INSTALLED" != "yes" ]]; then
+    missing=1
+  fi
+
+  # Platform-specific requirements
+  if [[ "$OS" == "macos" ]] && [[ "$SYSTEM_INFO_HOMEBREW_VERSION" == "not installed" ]]; then
+    missing=1
+  fi
+
+  return $missing
+}
+
 confirm_action() {
   local action="$1"
   local default_yes="${2:-true}" # Default to yes unless specified
+
+  # In non-interactive mode, always return success
+  if [[ "$NON_INTERACTIVE" == "true" ]]; then
+    echo ""
+    if [[ "$action" == *"?"* ]]; then
+      echo "$action"
+    else
+      echo "About to: $action"
+    fi
+    echo "→ Auto-accepting (non-interactive mode)"
+    return 0
+  fi
 
   echo ""
 
@@ -280,7 +619,7 @@ check_system_dependencies() {
       echo "Missing packages: ${missing_packages[*]}"
       return 1
     fi
-  elif [[ "$OS" == "ubuntu" ]]; then
+  elif [[ "$OS" == "debian" ]]; then
     local packages=("nodejs" "npm" "portaudio19-dev" "ffmpeg" "cmake" "python3-dev" "libasound2-dev" "libasound2-plugins")
     local missing_packages=()
 
@@ -381,7 +720,7 @@ install_system_dependencies() {
       else
         print_warning "Skipping system dependencies. VoiceMode may not work properly without them."
       fi
-    elif [[ "$OS" == "ubuntu" ]]; then
+    elif [[ "$OS" == "debian" ]]; then
       if confirm_action "Install missing system dependencies via APT"; then
         print_step "Installing system dependencies..."
 
@@ -436,15 +775,9 @@ check_python() {
   if command -v python3 >/dev/null 2>&1; then
     local python_version=$(python3 --version | cut -d' ' -f2)
     print_success "Python 3 found: $python_version"
-
-    # Check if pip3 is available
-    if command -v pip3 >/dev/null 2>&1; then
-      print_success "pip3 is available"
-    else
-      print_error "pip3 not found. Please install pip for Python 3."
-    fi
   else
-    print_error "Python 3 not found. Please install Python 3 first."
+    print_warning "Python 3 not found in PATH"
+    echo "  UV will manage Python installation automatically"
   fi
 }
 
@@ -472,16 +805,7 @@ install_uv() {
       fi
 
       # Add to shell profile if not already there
-      local shell_profile=""
-      if [[ "$SHELL" == *"zsh"* ]]; then
-        shell_profile="$HOME/.zshrc"
-      elif [[ "$SHELL" == *"bash"* ]]; then
-        if [[ "$OS" == "macos" ]]; then
-          shell_profile="$HOME/.bash_profile"
-        else
-          shell_profile="$HOME/.bashrc"
-        fi
-      fi
+      local shell_profile="${SYSTEM_INFO_SHELL_RC_FILE:-$HOME/.bashrc}"
 
       if [ -n "$shell_profile" ] && [ -f "$shell_profile" ]; then
         if ! grep -q "\.local/bin" "$shell_profile"; then
@@ -525,10 +849,8 @@ install_voicemode() {
       export PATH="$HOME/.local/bin:$PATH"
 
       # Source shell profile for immediate availability
-      if [[ "$SHELL" == *"zsh"* ]] && [[ -f "$HOME/.zshrc" ]]; then
-        source "$HOME/.zshrc" 2>/dev/null || true
-      elif [[ "$SHELL" == *"bash"* ]] && [[ -f "$HOME/.bashrc" ]]; then
-        source "$HOME/.bashrc" 2>/dev/null || true
+      if [[ -n "${SYSTEM_INFO_SHELL_RC_FILE}" ]] && [[ -f "${SYSTEM_INFO_SHELL_RC_FILE}" ]]; then
+        source "${SYSTEM_INFO_SHELL_RC_FILE}" 2>/dev/null || true
       fi
     else
       print_warning "Could not update shell PATH automatically"
@@ -540,7 +862,11 @@ install_voicemode() {
       return 0
     else
       print_warning "VoiceMode installed but command not immediately available"
-      echo "  You may need to restart your shell or run: source ~/.bashrc"
+      if [[ -n "${SYSTEM_INFO_SHELL_RC_FILE}" ]]; then
+        echo "  You may need to restart your shell or run: source ${SYSTEM_INFO_SHELL_RC_FILE}"
+      else
+        echo "  You may need to restart your shell"
+      fi
       return 0
     fi
   else
@@ -560,16 +886,7 @@ setup_local_npm() {
   export PATH="$HOME/.npm-global/bin:$PATH"
 
   # Add to shell profile if not already there
-  local shell_profile=""
-  if [[ "$SHELL" == *"zsh"* ]]; then
-    shell_profile="$HOME/.zshrc"
-  elif [[ "$SHELL" == *"bash"* ]]; then
-    if [[ "$OS" == "macos" ]]; then
-      shell_profile="$HOME/.bash_profile"
-    else
-      shell_profile="$HOME/.bashrc"
-    fi
-  fi
+  local shell_profile="${SYSTEM_INFO_SHELL_RC_FILE:-$HOME/.bashrc}"
 
   if [ -n "$shell_profile" ] && [ -f "$shell_profile" ]; then
     if ! grep -q "\.npm-global/bin" "$shell_profile"; then
@@ -769,6 +1086,14 @@ fi'
 }
 
 configure_api_key() {
+  # Skip API key configuration in CI mode
+  if [[ "$CI_MODE" == "true" ]]; then
+    print_step "Skipping OpenAI API key configuration (CI mode)"
+    echo "→ API key can be configured later if needed"
+    export VOICEMODE_API_KEY_CONFIGURED=false
+    return 0
+  fi
+
   print_step "Checking OpenAI API key configuration..."
 
   # Track if we have an API key configured
@@ -837,31 +1162,77 @@ configure_api_key() {
       fi
     fi
 
+    # Platform-specific paste instructions
     echo ""
-    echo "Please paste your OpenAI API key (or press Enter to skip):"
+    if [[ "$OS" == "macos" ]]; then
+      echo "Please paste your OpenAI API key (press Cmd+V to paste, or press Enter to skip):"
+    elif [[ "$IS_WSL" == true ]]; then
+      echo "Please paste your OpenAI API key (right-click to paste, or press Enter to skip):"
+    else
+      echo "Please paste your OpenAI API key (Ctrl+Shift+V or right-click to paste, or press Enter to skip):"
+    fi
     echo "(The key will be hidden as you type)"
-    read -s api_key
-    echo ""
 
-    if [ -n "$api_key" ]; then
+    # Allow up to 3 attempts for API key entry
+    local attempts=0
+    local max_attempts=3
+    local api_key=""
+
+    while [[ $attempts -lt $max_attempts ]]; do
+      read -s api_key
+      echo ""
+
+      if [ -z "$api_key" ]; then
+        # User pressed Enter to skip
+        break
+      fi
+
       # Validate that it looks like an API key
       if [[ ! "$api_key" =~ ^sk- ]]; then
-        print_warning "That doesn't look like an OpenAI API key (should start with 'sk-')"
-        echo "Skipping API key configuration"
-        return 1
-      fi
-
-      # Add to shell configuration
-      local shell_profile=""
-      if [[ "$SHELL" == *"zsh"* ]]; then
-        shell_profile="$HOME/.zshrc"
-      elif [[ "$SHELL" == *"bash"* ]]; then
-        if [[ "$OS" == "macos" ]]; then
-          shell_profile="$HOME/.bash_profile"
+        ((attempts++))
+        if [[ $attempts -lt $max_attempts ]]; then
+          print_warning "That doesn't look like an OpenAI API key (should start with 'sk-')"
+          echo "Please try again (attempt $((attempts + 1)) of $max_attempts):"
+          echo "(Make sure to copy the entire key, it should start with 'sk-')"
         else
-          shell_profile="$HOME/.bashrc"
+          print_warning "Invalid API key format after $max_attempts attempts"
+          echo "You can add it manually later to your shell configuration"
+          return 1
+        fi
+      else
+        # Validate the API key by making a test request
+        print_step "Validating API key with OpenAI..."
+        local http_code=$(curl -s -o /dev/null -w "%{http_code}" \
+          -H "Authorization: Bearer $api_key" \
+          -H "Content-Type: application/json" \
+          "https://api.openai.com/v1/models" 2>/dev/null)
+
+        if [[ "$http_code" == "200" ]]; then
+          print_success "API key validated successfully!"
+          break
+        elif [[ "$http_code" == "401" ]]; then
+          ((attempts++))
+          if [[ $attempts -lt $max_attempts ]]; then
+            print_warning "Invalid API key - authentication failed"
+            echo "Please check your key and try again (attempt $((attempts + 1)) of $max_attempts):"
+          else
+            print_error "Invalid API key after $max_attempts attempts"
+            echo "You can add a valid key later to your shell configuration"
+            return 1
+          fi
+        else
+          # Network error or other issue - proceed anyway
+          print_warning "Could not validate API key (network issue?)"
+          echo "Proceeding with configuration anyway..."
+          break
         fi
       fi
+    done
+
+    if [ -n "$api_key" ] && [[ "$api_key" =~ ^sk- ]]; then
+
+      # Add to shell configuration
+      local shell_profile="${SYSTEM_INFO_SHELL_RC_FILE:-$HOME/.bashrc}"
 
       if [ -n "$shell_profile" ]; then
         echo "" >>"$shell_profile"
@@ -1002,6 +1373,67 @@ configure_claude_voicemode() {
   else
     print_warning "Claude Code not found. Please install it first to use VoiceMode."
     return 1
+  fi
+}
+
+check_and_suggest_working_directory() {
+  # Check if user is in home directory
+  local current_dir=$(pwd)
+  local home_dir="$HOME"
+
+  if [[ "$current_dir" == "$home_dir" ]]; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "                    📁 Working Directory Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "You're currently in your home directory."
+    echo "Claude Code works best when launched from a project directory."
+    echo ""
+    echo "Where would you like to start Claude from?"
+    echo "  • Press Enter for ~/claude (recommended sandbox)"
+    echo "  • Type a path like ~/projects or ~/code"
+    echo "  • Type 'here' to use your home directory"
+    echo ""
+
+    read -p "Directory [~/claude]: " chosen_dir
+
+    # Handle the user's choice
+    if [[ -z "$chosen_dir" ]]; then
+      # Default to ~/claude
+      chosen_dir="$HOME/claude"
+    elif [[ "$chosen_dir" == "here" ]] || [[ "$chosen_dir" == "." ]]; then
+      # Use current directory (home)
+      chosen_dir="$HOME"
+    else
+      # Expand tilde if present
+      chosen_dir="${chosen_dir/#\~/$HOME}"
+    fi
+
+    # Create directory if it doesn't exist (unless it's home)
+    if [[ "$chosen_dir" != "$HOME" ]]; then
+      if [[ ! -d "$chosen_dir" ]]; then
+        print_step "Creating directory: $chosen_dir"
+        mkdir -p "$chosen_dir"
+        print_success "Created $chosen_dir"
+      else
+        print_success "Using existing directory: $chosen_dir"
+      fi
+
+      # Save for later reference
+      export CLAUDE_SUGGESTED_DIR="$chosen_dir"
+
+      echo ""
+      echo "After installation completes, you can:"
+      echo "  1. cd $chosen_dir"
+      echo "  2. claude converse"
+      echo ""
+    else
+      print_success "Will use home directory"
+      echo ""
+      echo "You can start Claude from your home directory after installation."
+      echo ""
+    fi
   fi
 }
 
@@ -1427,6 +1859,19 @@ main() {
   # Pre-flight checks
   detect_os
 
+  # Collect comprehensive system information
+  collect_system_info
+
+  # Display dependency status
+  display_dependency_status
+
+  # Check if we have missing dependencies
+  if check_missing_dependencies; then
+    echo "All required dependencies are installed!"
+  else
+    print_warning "Some dependencies are missing and will be installed"
+  fi
+
   # Early sudo caching for service installation (Linux only)
   if [[ "$OS" == "linux" ]] && command -v sudo >/dev/null 2>&1; then
     print_step "Requesting administrator access for system configuration..."
@@ -1458,8 +1903,19 @@ main() {
   # Configure OpenAI API key for quick start
   configure_api_key
 
+  # Check if user is in home directory and suggest creating a workspace
+  check_and_suggest_working_directory
+
   # Install Claude Code if needed, then configure VoiceMode
-  if install_claude_if_needed; then
+  # Skip Claude Code installation in CI mode
+  if [[ "$CI_MODE" == "true" ]]; then
+    print_step "Skipping Claude Code installation (CI mode)"
+    echo ""
+    echo "✅ VoiceMode installation completed successfully!"
+    echo ""
+    echo "VoiceMode has been installed to: $(which voicemode)"
+    echo "Version: $(voicemode --version 2>/dev/null || echo 'unknown')"
+  elif install_claude_if_needed; then
     if configure_claude_voicemode; then
       # VoiceMode configured successfully
       echo ""
@@ -1496,7 +1952,19 @@ main() {
       echo ""
 
       # Important note about shell restart
-      echo "⚠️  IMPORTANT: You'll need to restart your terminal for the 'claude' command to work."
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo ""
+      echo "⚠️  IMPORTANT: Terminal Restart Required"
+      echo ""
+      echo "The 'claude' command won't work until you:"
+      echo "  Option 1: Close and reopen your terminal (recommended)"
+      if [[ -n "${SYSTEM_INFO_SHELL_RC_FILE}" ]]; then
+        echo "  Option 2: Run: source ${SYSTEM_INFO_SHELL_RC_FILE}"
+      else
+        echo "  Option 2: Run: source your shell configuration file"
+      fi
+      echo ""
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       echo ""
       echo "But we can start a conversation right now without restarting!"
       echo ""
@@ -1520,9 +1988,23 @@ main() {
         fi
       else
         echo ""
-        echo "To start using VoiceMode:"
-        echo "  1. Close and reopen your terminal"
-        echo "  2. Run: claude converse"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "🚀 To start using VoiceMode:"
+        echo ""
+        if [[ -n "${SYSTEM_INFO_SHELL_RC_FILE}" ]]; then
+          echo "  1. Restart your terminal (or run: source ${SYSTEM_INFO_SHELL_RC_FILE})"
+        else
+          echo "  1. Restart your terminal"
+        fi
+        if [[ -n "${CLAUDE_SUGGESTED_DIR:-}" ]]; then
+          echo "  2. cd ${CLAUDE_SUGGESTED_DIR}"
+          echo "  3. claude converse"
+        else
+          echo "  2. claude converse  (from your current directory)"
+        fi
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
       fi
     else

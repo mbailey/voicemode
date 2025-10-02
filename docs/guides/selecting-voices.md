@@ -61,29 +61,6 @@ VOICEMODE_VOICES=af_sky,am_adam,nova
 VOICEMODE_VOICES=nova,shimmer,af_sky
 ```
 
-## Voice Selection Examples
-
-### Creative Writing Project
-**`.voicemode.env`:**
-```bash
-# Use expressive voices for storytelling
-VOICEMODE_VOICES=fable,shimmer,af_sarah
-```
-
-### Professional Development
-**`.voicemode.env`:**
-```bash
-# Clear, professional voices
-VOICEMODE_VOICES=echo,alloy,am_adam
-```
-
-### Casual Conversation
-**`.voicemode.env`:**
-```bash
-# Warm, natural voices
-VOICEMODE_VOICES=nova,af_sky,shimmer
-```
-
 ## Provider Considerations
 
 ### OpenAI (Cloud)
@@ -103,30 +80,21 @@ Voice preferences follow this priority order:
 1. **Environment variables** (`VOICEMODE_VOICES=voice1,voice2`)
 2. **Project `.voicemode.env`** files (searched up directory tree)
 3. **Global `~/.voicemode/voicemode.env`**
-4. **Built-in defaults** (`alloy,nova,echo`)
+4. **Built-in defaults** (`af_sky,alloy`)
 
 ## Testing Voice Selection
 
-Use the voice registry tool to see what's available:
-```bash
-# View available voices and providers (MCP tool)
-voice_registry()
-```
+You can test specific voices:
 
-You can also test specific voices:
 ```bash
-# In your configuration
-VOICEMODE_VOICES=af_sky
+VOICEMODE_VOICES=af_sky voicemode converse
 ```
-
-Then use the converse tool to test the voice selection.
 
 ## Troubleshooting
 
 **Voice not working?**
-1. Check `voice_registry()` to see if the voice is available
-2. Verify the provider is healthy
-3. Try a different voice as fallback
+1. Verify the provider is healthy
+2. Try a different voice as fallback
 
 **Provider switching unexpectedly?**
 - Voice-first selection will switch providers to get your preferred voice
