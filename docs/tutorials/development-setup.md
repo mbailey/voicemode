@@ -237,10 +237,10 @@ VOICEMODE_TTS_BASE_URLS=http://localhost:8880/v1 voice-mode converse
 
 ### Testing Service Installations
 
-Update your local 'voicemode.env' file to overide the default path `~/.voicemode`
+Update your local '.voicemode.env' file to overide the default path `~/.voicemode`
 
 ```bash
-echo "VOICEMODE_BASE_DIR=/tmp/.voicemode" >> voicemode.env
+echo "VOICEMODE_BASE_DIR=/tmp/.voicemode" >> .voicemode.env
 ```
 
 Use temporary directories when testing installers to prevent affecting your production setup in `~/.voicemode/services/`:
