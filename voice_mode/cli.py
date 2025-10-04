@@ -15,6 +15,9 @@ try:
 except ImportError:
     __version__ = "unknown"
 
+# Import configuration constants
+from voice_mode.config import DEFAULT_LISTEN_DURATION, MIN_RECORDING_DURATION, FRONTEND_PORT
+
 
 # Suppress known deprecation warnings for better user experience
 # These apply to both CLI commands and MCP server operation
@@ -1198,7 +1201,7 @@ def frontend_install(auto_enable):
 
 @frontend.command("start")
 @click.help_option('-h', '--help')
-@click.option('--port', default=3000, help='Port to run frontend on (default: 3000)')
+@click.option('--port', default=FRONTEND_PORT, help='Port to run frontend on (default: 3000)')
 @click.option('--host', default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
 def frontend_start(port, host):
     """Start the LiveKit Voice Assistant Frontend."""
@@ -1648,8 +1651,8 @@ config.add_command(pronounce_commands.pronounce_group)
 @click.help_option('-h', '--help')
 @click.option('--message', '-m', default="Hello! How can I help you today?", help='Initial message to speak')
 @click.option('--wait/--no-wait', default=True, help='Wait for response after speaking')
-@click.option('--duration', '-d', type=float, default=30.0, help='Listen duration in seconds')
-@click.option('--min-duration', type=float, default=2.0, help='Minimum listen duration before silence detection')
+@click.option('--duration', '-d', type=float, default=DEFAULT_LISTEN_DURATION, help='Listen duration in seconds')
+@click.option('--min-duration', type=float, default=MIN_RECORDING_DURATION, help='Minimum listen duration before silence detection')
 @click.option('--transport', type=click.Choice(['auto', 'local', 'livekit']), default='auto', help='Transport method')
 @click.option('--room-name', default='', help='LiveKit room name (for livekit transport)')
 @click.option('--voice', help='TTS voice to use (e.g., nova, shimmer, af_sky)')
