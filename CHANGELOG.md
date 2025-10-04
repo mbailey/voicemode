@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **CLI Defaults** - Changed CLI defaults to honor environment variables
 
+## [5.0.3] - 2025-10-05
+
+### Fixed
+- **Whisper Model Default** - Consolidated default Whisper model to single constant
+  - Fixed inconsistency where CLI defaulted to `large-v2` while tool used `base`
+  - All code now references `DEFAULT_WHISPER_MODEL = "base"` from config.py
+  - DRY principle applied across CLI and tool implementations
+
 ## [5.0.2] - 2025-10-05
 
 ### Fixed

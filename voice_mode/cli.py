@@ -16,7 +16,7 @@ except ImportError:
     __version__ = "unknown"
 
 # Import configuration constants
-from voice_mode.config import DEFAULT_LISTEN_DURATION, MIN_RECORDING_DURATION, FRONTEND_PORT
+from voice_mode.config import DEFAULT_LISTEN_DURATION, MIN_RECORDING_DURATION, FRONTEND_PORT, DEFAULT_WHISPER_MODEL
 
 
 # Suppress known deprecation warnings for better user experience
@@ -382,7 +382,7 @@ def whisper_service_health():
 @whisper_service.command("install")
 @click.help_option('-h', '--help')
 @click.option('--install-dir', help='Directory to install whisper.cpp')
-@click.option('--model', default='large-v2', help='Whisper model to download (default: large-v2)')
+@click.option('--model', default=DEFAULT_WHISPER_MODEL, help=f'Whisper model to download (default: {DEFAULT_WHISPER_MODEL})')
 @click.option('--use-gpu/--no-gpu', default=None, help='Enable GPU support if available')
 @click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
 @click.option('--version', default='latest', help='Version to install (default: latest)')
@@ -526,7 +526,7 @@ def whisper_health_alias(ctx):
 @whisper.command("install", hidden=True)
 @click.help_option('-h', '--help')
 @click.option('--install-dir', help='Directory to install whisper.cpp')
-@click.option('--model', default='large-v2', help='Whisper model to download (default: large-v2)')
+@click.option('--model', default=DEFAULT_WHISPER_MODEL, help=f'Whisper model to download (default: {DEFAULT_WHISPER_MODEL})')
 @click.option('--use-gpu/--no-gpu', default=None, help='Enable GPU support if available')
 @click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
 @click.option('--version', default='latest', help='Version to install (default: latest)')
@@ -815,14 +815,14 @@ def whisper_models():
 
 @whisper_model.command("install")
 @click.help_option('-h', '--help')
-@click.argument('model', default='large-v2')
+@click.argument('model', default=DEFAULT_WHISPER_MODEL)
 @click.option('--force', '-f', is_flag=True, help='Re-download even if model exists')
 @click.option('--skip-core-ml', is_flag=True, help='Skip Core ML conversion on Apple Silicon')
 def whisper_model_install(model, force, skip_core_ml):
     """Install Whisper model(s) with automatic Core ML support on Apple Silicon.
-    
-    MODEL can be a model name (e.g., 'large-v2'), 'all' to download all models,
-    or omitted to use the default (large-v2).
+
+    MODEL can be a model name (e.g., 'base'), 'all' to download all models,
+    or omitted to use the default (base).
     
     Available models: tiny, tiny.en, base, base.en, small, small.en,
     medium, medium.en, large-v1, large-v2, large-v3, large-v3-turbo

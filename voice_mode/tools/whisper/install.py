@@ -18,7 +18,7 @@ except ImportError:
     from importlib_resources import files
 
 from voice_mode.server import mcp
-from voice_mode.config import SERVICE_AUTO_ENABLE
+from voice_mode.config import SERVICE_AUTO_ENABLE, DEFAULT_WHISPER_MODEL
 from voice_mode.utils.services.whisper_helpers import download_whisper_model
 from voice_mode.utils.version_helpers import (
     get_git_tags, get_latest_stable_tag, get_current_version,
@@ -284,7 +284,7 @@ WantedBy=default.target
 @mcp.tool()
 async def whisper_install(
     install_dir: Optional[str] = None,
-    model: str = "base",
+    model: str = DEFAULT_WHISPER_MODEL,
     no_model: Union[bool, str] = False,
     use_gpu: Optional[Union[bool, str]] = None,
     force_reinstall: Union[bool, str] = False,

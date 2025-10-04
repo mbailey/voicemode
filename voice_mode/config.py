@@ -343,8 +343,11 @@ LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
 
 # ==================== WHISPER CONFIGURATION ====================
 
+# Default Whisper model for installation and runtime
+DEFAULT_WHISPER_MODEL = "base"
+
 # Whisper-specific configuration
-WHISPER_MODEL = os.getenv("VOICEMODE_WHISPER_MODEL", "base")
+WHISPER_MODEL = os.getenv("VOICEMODE_WHISPER_MODEL", DEFAULT_WHISPER_MODEL)
 WHISPER_PORT = int(os.getenv("VOICEMODE_WHISPER_PORT", "2022"))
 WHISPER_LANGUAGE = os.getenv("VOICEMODE_WHISPER_LANGUAGE", "auto")
 WHISPER_MODEL_PATH = expand_path(os.getenv("VOICEMODE_WHISPER_MODEL_PATH", str(Path.home() / ".voicemode" / "services" / "whisper" / "models")))

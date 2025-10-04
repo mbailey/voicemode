@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Union, List, Dict, Any
 
 from voice_mode.server import mcp
-from voice_mode.config import logger, MODELS_DIR
+from voice_mode.config import logger, MODELS_DIR, DEFAULT_WHISPER_MODEL
 from voice_mode.utils.services.whisper_helpers import download_whisper_model, get_available_models
 
 logger = logging.getLogger("voice-mode")
@@ -18,7 +18,7 @@ logger = logging.getLogger("voice-mode")
 
 @mcp.tool()
 async def whisper_model_install(
-    model: Union[str, List[str]] = "large-v2",
+    model: Union[str, List[str]] = DEFAULT_WHISPER_MODEL,
     force_download: Union[bool, str] = False,
     skip_core_ml: Union[bool, str] = False
 ) -> str:
@@ -30,7 +30,7 @@ async def whisper_model_install(
 
     Args:
         model: Model name(s) to download. Can be:
-               - Single model: "large-v2"
+               - Single model: "base"
                - List of models: ["base", "small"]
                - "all" to download all available models
         force_download: Re-download even if model exists (default: False)

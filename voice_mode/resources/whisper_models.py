@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 from ..server import mcp
-from ..config import logger, WHISPER_MODEL_PATH, WHISPER_MODEL
+from ..config import logger, WHISPER_MODEL_PATH, WHISPER_MODEL, DEFAULT_WHISPER_MODEL
 
 
 @mcp.resource("whisper://models")
@@ -61,7 +61,7 @@ async def list_whisper_models() -> str:
             "installed_models": models,
             "total_models": len(models),
             "current_model": current_model,
-            "default_model": "large-v2",
+            "default_model": DEFAULT_WHISPER_MODEL,
             "environment_variable": "VOICEMODE_WHISPER_MODEL",
             "total_size_mb": round(sum(m["size_mb"] for m in models), 1) if models else 0
         }
