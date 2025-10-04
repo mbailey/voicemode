@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **CLI Defaults** - Changed CLI defaults to honor environment variables
 
+## [5.0.2] - 2025-10-05
+
+### Fixed
+  - **CLI Error Messages** - Display meaningful OpenAI error messages in CLI commands
+  - Improved error reporting throughout CLI interface
+  - Better user feedback when OpenAI API calls fail
+
 ## [5.0.1] - 2025-10-04
 
 ### Fixed
