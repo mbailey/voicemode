@@ -1201,7 +1201,7 @@ def frontend_install(auto_enable):
 
 @frontend.command("start")
 @click.help_option('-h', '--help')
-@click.option('--port', default=FRONTEND_PORT, help='Port to run frontend on (default: 3000)')
+@click.option('--port', default=FRONTEND_PORT, help=f'Port to run frontend on (default: {FRONTEND_PORT})')
 @click.option('--host', default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
 def frontend_start(port, host):
     """Start the LiveKit Voice Assistant Frontend."""
