@@ -474,11 +474,12 @@ def setup_logging() -> logging.Logger:
         Logger instance configured for voice-mode
     """
     log_level = logging.DEBUG if DEBUG else logging.INFO
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s' if DEBUG else '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(
         level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format=log_format
     )
-    logger = logging.getLogger("voicemode")
+    logger = logging.getLogger("voice-mode")
     
     # Trace logging setup
     if TRACE_DEBUG:
@@ -494,7 +495,7 @@ def setup_logging() -> logging.Logger:
         
         # Set up file handler for debug logs
         debug_handler = logging.FileHandler(debug_log_file, mode='a')
-        debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'))
         
         # Enable debug logging for httpx and openai
         httpx_logger = logging.getLogger("httpx")
@@ -533,7 +534,7 @@ def setup_logging() -> logging.Logger:
     if DEBUG:
         debug_log_file = Path.home() / "voicemode_debug.log"
         file_handler = logging.FileHandler(debug_log_file, mode='a')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'))
         logger.addHandler(file_handler)
         logger.info(f"Debug logging to file: {debug_log_file}")
     
@@ -646,7 +647,7 @@ def initialize_soundfonts():
         # They're optional and disabled by default
         if DEBUG:
             import logging
-            logging.getLogger("voicemode").debug(f"Could not initialize soundfonts: {e}")
+            logging.getLogger("voice-mode").debug(f"Could not initialize soundfonts: {e}")
 
 # ==================== UTILITY FUNCTIONS ====================
 
