@@ -28,7 +28,7 @@ from .utils import (
     log_tts_first_audio
 )
 
-logger = logging.getLogger("voicemode")
+logger = logging.getLogger("voice-mode")
 
 
 def get_audio_path(filename: str, base_dir: Path, timestamp: Optional[datetime] = None) -> Path:
