@@ -484,12 +484,11 @@ def setup_logging() -> logging.Logger:
     # Trace logging setup
     if TRACE_DEBUG:
         import sys
-        from datetime import datetime
-        
+
         # Create debug log directory
         debug_log_dir = Path.home() / ".voicemode" / "logs" / "debug"
         debug_log_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Create dated debug log file
         debug_log_file = debug_log_dir / f"voicemode_debug_{datetime.now().strftime('%Y-%m-%d')}.log"
         
@@ -531,8 +530,13 @@ def setup_logging() -> logging.Logger:
         logger.info(f"Trace debugging enabled, writing to: {trace_file}")
     
     # Also log to file in debug mode
-    if DEBUG:
-        debug_log_file = Path.home() / "voicemode_debug.log"
+    if DEBUG and not TRACE_DEBUG:
+        # Create debug log directory
+        debug_log_dir = Path.home() / ".voicemode" / "logs" / "debug"
+        debug_log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create dated debug log file (consistent with TRACE_DEBUG)
+        debug_log_file = debug_log_dir / f"voicemode_debug_{datetime.now().strftime('%Y-%m-%d')}.log"
         file_handler = logging.FileHandler(debug_log_file, mode='a')
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'))
         logger.addHandler(file_handler)
