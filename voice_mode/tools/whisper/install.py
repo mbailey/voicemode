@@ -290,7 +290,8 @@ async def whisper_install(
     force_reinstall: Union[bool, str] = False,
     auto_enable: Optional[Union[bool, str]] = None,
     version: str = "latest",
-    skip_core_ml: Union[bool, str] = False
+    skip_core_ml: Union[bool, str] = False,
+    skip_deps: Union[bool, str] = False
 ) -> Dict[str, Any]:
     """
     Install whisper.cpp with automatic system detection and configuration.
@@ -310,6 +311,7 @@ async def whisper_install(
         auto_enable: Enable service after install. If None, uses VOICEMODE_SERVICE_AUTO_ENABLE config.
         version: Version to install (default: "latest" for latest stable release)
         skip_core_ml: Skip Core ML model download on Apple Silicon (default: False)
+        skip_deps: Skip dependency checks (for advanced users, default: False)
 
     Returns:
         Installation status with paths and configuration details
@@ -317,7 +319,31 @@ async def whisper_install(
     try:
         # Check for and migrate old installations
         migration_msg = auto_migrate_if_needed("whisper")
-        
+
+        # Check whisper build dependencies (unless skipped)
+        if not skip_deps:
+            from voice_mode.utils.dependencies.checker import (
+                check_component_dependencies,
+                install_missing_dependencies
+            )
+
+            results = check_component_dependencies('whisper')
+            missing = [pkg for pkg, installed in results.items() if not installed]
+
+            if missing:
+                logger.info(f"Missing whisper build dependencies: {', '.join(missing)}")
+                # Check if we're in an interactive terminal (not MCP context)
+                is_interactive = sys.stdin.isatty() if hasattr(sys.stdin, 'isatty') else False
+                success, output = install_missing_dependencies(missing, interactive=is_interactive)
+                if not success:
+                    return {
+                        "success": False,
+                        "error": "Required build dependencies not installed",
+                        "missing_dependencies": missing
+                    }
+        else:
+            logger.info("Skipping dependency checks (--skip-deps specified)")
+
         # Set default install directory under ~/.voicemode
         voicemode_dir = os.path.expanduser("~/.voicemode")
         os.makedirs(voicemode_dir, exist_ok=True)

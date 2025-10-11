@@ -1,0 +1,358 @@
+# VoiceMode System Dependencies
+# Organized by: voicemode → component → OS/distribution → package list
+#
+# ## SUMMARY
+#
+# ### Installation Tool
+# **UV (required for installation):**
+# - All platforms: UV package manager (https://astral.sh/uv)
+# - Used by install script and for `uv tool install voice-mode`
+# - Provides consistent binary location at ~/.local/bin
+#
+# ### Core (VoiceMode base)
+# **Required (runtime):**
+# - macOS: portaudio, ffmpeg
+# - Ubuntu/Debian: libportaudio2, ffmpeg
+# - Fedora: portaudio, ffmpeg
+#
+# **Required (build tools - for webrtcvad):**
+# - Ubuntu/Debian: python3-dev, gcc
+# - Fedora: python3-devel, gcc
+# - Note: webrtcvad is a Python C extension used for silence detection. It must be compiled during installation.
+#   Testing confirmed: Only gcc is required, g++/gcc-c++ not needed.
+#
+# **Optional (build from source):**
+# - Ubuntu/Debian: libasound2-dev, portaudio19-dev
+# - Fedora: alsa-lib-devel, portaudio-devel
+#
+# **Required for WSL:**
+# - WSL Ubuntu/Debian: pulseaudio, pulseaudio-utils, libasound2-plugins
+# - WSL Fedora: pulseaudio, pulseaudio-utils
+# - Note: Must be running for audio to work in WSL2
+#
+# **Optional (audio server - native Linux):**
+# - Usually pre-installed on desktop Linux distributions
+#
+# ### Whisper (STT)
+# - macOS: cmake, portaudio
+# - Ubuntu/Debian: cmake, gcc, g++, make, portaudio19-dev, libasound2-dev
+# - Fedora: cmake, gcc, gcc-c++, make, portaudio-devel, alsa-lib-devel
+#
+# ### Kokoro (TTS)
+# - macOS: rust (optional)
+# - Ubuntu/Debian: cargo, rustc (ARM64 only)
+# - Fedora: cargo, rust (ARM64 only)
+#
+# ### LiveKit
+# - All platforms: No system dependencies (single binary)
+#
+# ---
+#
+# ## DETAIL
+#
+# Structure:
+#   voicemode:
+#     component:  # core, whisper, kokoro, livekit
+#       description: What this component does
+#       os_or_distro:
+#         packages:
+#           - name: package_name
+#             description: Why this package is needed
+#             required: true/false
+#             min_version: optional minimum version
+#             check_command: optional command to verify installation
+
+voicemode:
+  installation:
+    description: Tools required for installing VoiceMode
+
+    common:  # All platforms
+      packages:
+        - name: uv
+          description: UV package manager for Python
+          required: true
+          check_command: uv --version
+          install_command: curl -LsSf https://astral.sh/uv/install.sh | sh
+          note: Provides consistent installation and binary location (~/.local/bin)
+
+  core:
+    description: VoiceMode core audio and Python dependencies
+
+    debian:  # Ubuntu, Debian
+      packages:
+        - name: python3-dev
+          description: Python development headers (needed for building extensions)
+          required: true
+          check_command: dpkg -l python3-dev
+          note: Required for compiling webrtcvad (C extension used for silence detection)
+
+        - name: gcc
+          description: C compiler (needed for building Python extensions)
+          required: true
+          check_command: gcc --version
+          note: Required for compiling webrtcvad (C extension used for silence detection)
+
+        - name: g++
+          description: C++ compiler (needed for building Python extensions)
+          required: false
+          check_command: g++ --version
+          note: Optional - not needed for webrtcvad. Only needed if building other C++ packages from source.
+
+        - name: libasound2-dev
+          description: ALSA development files (audio support)
+          required: false
+          check_command: dpkg -l libasound2-dev
+          note: Optional - only needed for building, not runtime (libasound2 runtime lib is usually installed)
+
+        - name: libasound2-plugins
+          description: ALSA plugins for PulseAudio
+          required: false
+          check_command: dpkg -l libasound2-plugins
+
+        - name: libportaudio2
+          description: PortAudio library (for sounddevice)
+          required: true
+          check_command: dpkg -l libportaudio2
+
+        - name: portaudio19-dev
+          description: PortAudio development files
+          required: false
+          check_command: dpkg -l portaudio19-dev
+          note: Optional - only needed for building, not runtime (libportaudio2 has the runtime library)
+
+        - name: pulseaudio
+          description: PulseAudio sound server
+          required: wsl  # Required for WSL, optional for native Linux
+          check_command: pulseaudio --version
+          note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
+
+        - name: pulseaudio-utils
+          description: PulseAudio utilities
+          required: wsl  # Required for WSL, optional for native Linux
+          check_command: dpkg -l pulseaudio-utils
+          note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
+
+        - name: ffmpeg
+          description: Audio/video processing
+          required: true
+          check_command: ffmpeg -version
+
+    fedora:  # Fedora, RHEL, CentOS
+      packages:
+        - name: python3-devel
+          description: Python development headers (needed for building extensions)
+          required: true
+          check_command: rpm -q python3-devel
+          note: Required for compiling webrtcvad (C extension used for silence detection)
+
+        - name: gcc
+          description: C compiler (needed for building Python extensions)
+          required: true
+          check_command: gcc --version
+          note: Required for compiling webrtcvad (C extension used for silence detection)
+
+        - name: gcc-c++
+          description: C++ compiler (needed for building Python extensions)
+          required: false
+          check_command: g++ --version
+          note: Optional - not needed for webrtcvad. Only needed if building other C++ packages from source.
+
+        - name: alsa-lib-devel
+          description: ALSA development files (audio support)
+          required: false
+          check_command: rpm -q alsa-lib-devel
+          note: Optional - only needed for building, not runtime (alsa-lib runtime is usually installed)
+
+        - name: portaudio
+          description: PortAudio library (for sounddevice runtime)
+          required: true
+          check_command: rpm -q portaudio
+
+        - name: portaudio-devel
+          description: PortAudio development files
+          required: false
+          check_command: rpm -q portaudio-devel
+          note: Optional - only needed for building, not runtime
+
+        - name: pulseaudio
+          description: PulseAudio sound server
+          required: wsl  # Required for WSL, optional for native Linux
+          check_command: pulseaudio --version
+          note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
+
+        - name: pulseaudio-utils
+          description: PulseAudio utilities
+          required: wsl  # Required for WSL, optional for native Linux
+          check_command: rpm -q pulseaudio-utils
+          note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
+
+        - name: ffmpeg
+          description: Audio/video processing
+          required: true
+          check_command: ffmpeg -version
+          note: May need RPM Fusion repository enabled
+
+    darwin:  # macOS
+      packages:
+        - name: portaudio
+          description: PortAudio library (for sounddevice)
+          required: true
+          check_command: brew list portaudio
+          install_via: homebrew
+
+        - name: ffmpeg
+          description: Audio/video processing
+          required: true
+          check_command: ffmpeg -version
+          install_via: homebrew
+
+  whisper:
+    description: Whisper STT service dependencies
+
+    debian:
+      packages:
+        - name: cmake
+          description: Build system (needed for compiling whisper.cpp)
+          required: true
+          min_version: "3.10"
+          check_command: cmake --version
+
+        - name: gcc
+          description: C compiler
+          required: true
+          min_version: "9.0"
+          check_command: gcc --version
+
+        - name: g++
+          description: C++ compiler
+          required: true
+          min_version: "9.0"
+          check_command: g++ --version
+
+        - name: make
+          description: Build tool
+          required: true
+          check_command: make --version
+
+        - name: portaudio19-dev
+          description: Audio I/O library (for real-time transcription)
+          required: true
+          check_command: pkg-config --exists portaudio-2.0
+
+        - name: libasound2-dev
+          description: Advanced Linux Sound Architecture
+          required: true
+          check_command: pkg-config --exists alsa
+
+    fedora:
+      packages:
+        - name: cmake
+          description: Build system (needed for compiling whisper.cpp)
+          required: true
+          min_version: "3.10"
+          check_command: cmake --version
+
+        - name: gcc
+          description: C compiler
+          required: true
+          min_version: "9.0"
+          check_command: gcc --version
+
+        - name: gcc-c++
+          description: C++ compiler
+          required: true
+          min_version: "9.0"
+          check_command: g++ --version
+
+        - name: make
+          description: Build tool
+          required: true
+          check_command: make --version
+
+        - name: portaudio-devel
+          description: Audio I/O library (for real-time transcription)
+          required: true
+          check_command: pkg-config --exists portaudio-2.0
+
+        - name: alsa-lib-devel
+          description: Advanced Linux Sound Architecture
+          required: true
+          check_command: pkg-config --exists alsa
+
+    darwin:
+      packages:
+        - name: cmake
+          description: Build system
+          required: true
+          check_command: cmake --version
+          install_via: homebrew
+
+        - name: portaudio
+          description: Audio I/O library
+          required: true
+          check_command: brew list portaudio
+          install_via: homebrew
+
+  kokoro:
+    description: Kokoro TTS service dependencies
+
+    common:  # All platforms
+      packages:
+        - name: git
+          description: Version control system (needed to clone kokoro repository)
+          required: true
+          check_command: git --version
+          note: Required for installing Kokoro from GitHub repository
+
+    debian:
+      packages:
+        - name: cargo
+          description: Rust package manager (needed for building sudachipy on ARM)
+          required: false  # Only on ARM64, not x86_64
+          check_command: cargo --version
+          note: Only required for ARM64 architecture
+
+        - name: rustc
+          description: Rust compiler (needed for building sudachipy on ARM)
+          required: false  # Only on ARM64, not x86_64
+          check_command: rustc --version
+          note: Only required for ARM64 architecture
+
+    fedora:
+      packages:
+        - name: cargo
+          description: Rust package manager (needed for building sudachipy on ARM)
+          required: false
+          check_command: cargo --version
+          note: Only required for ARM64 architecture
+
+        - name: rust
+          description: Rust compiler
+          required: false
+          check_command: rustc --version
+          note: Only required for ARM64 architecture
+
+    darwin:
+      packages:
+        - name: rust
+          description: Rust compiler (if needed for building dependencies)
+          required: false
+          check_command: rustc --version
+          install_via: homebrew or rustup
+          note: kokoro-fastapi handles most deps via UV
+
+  livekit:
+    description: LiveKit server dependencies (optional)
+
+    common:
+      note: LiveKit server is distributed as a single binary, no system dependencies required
+      packages: []
+
+# Notes:
+# - macOS typically uses Homebrew for all packages
+# - Linux distributions may need additional repositories (e.g., RPM Fusion for Fedora ffmpeg)
+# - ARM64 systems may need Rust for building certain Python packages from source
+# - WSL requires PulseAudio to be running for audio support
+# - webrtcvad (C extension for silence detection) MUST be compiled during installation on all platforms
+#   This requires gcc/g++, python3-dev/python3-devel to be installed before running 'uv tool install voice-mode'
+# - Most other Python packages (numpy, scipy, sounddevice, etc.) have pre-built wheels for x86_64

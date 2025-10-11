@@ -1555,8 +1555,23 @@ async def converse(
                                         result = formatted_error
                                         break
                                 else:
-                                    # No parsed errors, use raw error
-                                    result = f"✗ Failed to speak message: {error_messages[0]}"
+                                    # No parsed errors, format a helpful error message
+                                    providers_attempted = [attempt.get('provider', 'unknown') for attempt in tts_config.get('attempted_endpoints', [])]
+
+                                    # Include provider info in the error message
+                                    provider_names = ', '.join(set(providers_attempted)) if providers_attempted else 'unknown'
+                                    error_msg = f"✗ Failed to speak message ({provider_names}): {error_messages[0]}"
+
+                                    # Add helpful suggestions based on error type
+                                    if 'connection' in error_messages[0].lower() or 'refused' in error_messages[0].lower():
+                                        suggestions = []
+                                        if any(p in ['kokoro', 'whisper'] for p in providers_attempted):
+                                            suggestions.append("Check if local services (Kokoro/Whisper) are running")
+                                        if 'openai' in providers_attempted:
+                                            suggestions.append("Verify OpenAI API key is set")
+                                        if suggestions:
+                                            error_msg += f"\n   Suggestions: {', '.join(suggestions)}"
+                                    result = error_msg
                             else:
                                 result = "✗ Failed to speak message"
                         else:

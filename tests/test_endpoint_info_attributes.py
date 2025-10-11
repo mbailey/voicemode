@@ -103,20 +103,24 @@ class TestProviderToolsUsage:
         # Mock the registry to return our test endpoint
         mock_registry = Mock(spec=ProviderRegistry)
         test_endpoint = Mock(spec=EndpointInfo)
-        test_endpoint.healthy = True  # This is accessed by devices.py
+        test_endpoint.last_error = None  # No error means it's healthy
         test_endpoint.base_url = "http://127.0.0.1:8880/v1"
         test_endpoint.voices = ["af_sky", "am_adam"]
+        test_endpoint.models = ["tts-1"]
 
         mock_registry.registry = {
-            "tts": {"http://127.0.0.1:8880/v1": test_endpoint}
+            "tts": {"http://127.0.0.1:8880/v1": test_endpoint},
+            "stt": {}
         }
+        mock_registry.initialize = AsyncMock()
 
-        with patch('voice_mode.tools.devices.provider_registry', mock_registry):
+        # Patch at the location where it's imported (inside the function)
+        with patch('voice_mode.provider_discovery.provider_registry', mock_registry):
             # Import here to apply the patch
-            from voice_mode.tools.devices import get_voice_status
+            from voice_mode.tools.devices import voice_status
 
             # This should work without AttributeError
-            result = await get_voice_status.fn()
+            result = await voice_status.fn()
             assert "TTS Endpoints" in result
 
 

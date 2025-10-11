@@ -210,7 +210,8 @@ def health():
 @click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
 @click.option('--version', default='latest', help='Version to install (default: latest)')
 @click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
-def install(install_dir, port, force, version, auto_enable):
+@click.option('--skip-deps', is_flag=True, help='Skip dependency checks (for advanced users)')
+def install(install_dir, port, force, version, auto_enable, skip_deps):
     """Install kokoro-fastapi TTS service."""
     from voice_mode.tools.kokoro.install import kokoro_install
     result = asyncio.run(kokoro_install.fn(
@@ -218,7 +219,8 @@ def install(install_dir, port, force, version, auto_enable):
         port=port,
         force_reinstall=force,
         version=version,
-        auto_enable=auto_enable
+        auto_enable=auto_enable,
+        skip_deps=skip_deps
     ))
     
     if result.get('success'):
@@ -387,7 +389,8 @@ def whisper_service_health():
 @click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
 @click.option('--version', default='latest', help='Version to install (default: latest)')
 @click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
-def whisper_service_install(install_dir, model, use_gpu, force, version, auto_enable):
+@click.option('--skip-deps', is_flag=True, help='Skip dependency checks (for advanced users)')
+def whisper_service_install(install_dir, model, use_gpu, force, version, auto_enable, skip_deps):
     """Install whisper.cpp STT service with automatic system detection."""
     from voice_mode.tools.whisper.install import whisper_install
     result = asyncio.run(whisper_install.fn(
@@ -396,7 +399,8 @@ def whisper_service_install(install_dir, model, use_gpu, force, version, auto_en
         use_gpu=use_gpu,
         force_reinstall=force,
         version=version,
-        auto_enable=auto_enable
+        auto_enable=auto_enable,
+        skip_deps=skip_deps
     ))
     
     if result.get('success'):
@@ -531,11 +535,12 @@ def whisper_health_alias(ctx):
 @click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
 @click.option('--version', default='latest', help='Version to install (default: latest)')
 @click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
+@click.option('--skip-deps', is_flag=True, help='Skip dependency checks (for advanced users)')
 @click.pass_context
-def whisper_install_alias(ctx, install_dir, model, use_gpu, force, version, auto_enable):
+def whisper_install_alias(ctx, install_dir, model, use_gpu, force, version, auto_enable, skip_deps):
     """(Deprecated) Install Whisper. Use 'whisper service install' instead."""
     ctx.forward(whisper_service_install, install_dir=install_dir, model=model, use_gpu=use_gpu,
-                force=force, version=version, auto_enable=auto_enable)
+                force=force, version=version, auto_enable=auto_enable, skip_deps=skip_deps)
 
 @whisper.command("uninstall", hidden=True)
 @click.help_option('-h', '--help')
@@ -1522,6 +1527,70 @@ def config_edit(editor):
         click.echo("   Please check that the editor is installed and in your PATH")
 
 
+# Dependency management group
+@voice_mode_main_cli.command()
+@click.help_option('-h', '--help')
+@click.option('--component', type=click.Choice(['core', 'whisper', 'kokoro']),
+              help='Check specific component only')
+@click.option('--yes', '-y', is_flag=True, help='Install without prompting')
+@click.option('--dry-run', is_flag=True, help='Show what would be installed')
+def deps(component, yes, dry_run):
+    """Check and install system dependencies.
+
+    Shows dependency status and offers to install missing ones.
+    Checks core dependencies by default, or specify --component.
+
+    Examples:
+        voicemode deps                    # Check all dependencies
+        voicemode deps --component whisper  # Check whisper dependencies only
+        voicemode deps --yes              # Install without prompting
+    """
+    from voice_mode.utils.dependencies.checker import (
+        check_component_dependencies,
+        load_dependencies,
+        install_missing_dependencies
+    )
+
+    deps_yaml = load_dependencies()
+    components = [component] if component else ['core', 'whisper', 'kokoro']
+
+    all_missing = []
+
+    for comp in components:
+        click.echo(f"\n{comp.capitalize()} Dependencies:")
+        results = check_component_dependencies(comp, deps_yaml)
+
+        if not results:
+            click.echo("  (No required dependencies for this platform)")
+            continue
+
+        for pkg, installed in results.items():
+            status = "✓" if installed else "✗"
+            click.echo(f"  {status} {pkg}")
+
+            if not installed:
+                all_missing.append(pkg)
+
+    if not all_missing:
+        click.echo("\n✅ All dependencies satisfied")
+        return
+
+    if dry_run:
+        click.echo(f"\nWould install: {', '.join(all_missing)}")
+        return
+
+    # Offer to install
+    success, message = install_missing_dependencies(
+        all_missing,
+        interactive=not yes
+    )
+
+    if success:
+        click.echo("\n✅ Dependencies installed successfully")
+    else:
+        click.echo(f"\n❌ Installation failed: {message}")
+
+
 # Diagnostics group
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
@@ -1666,25 +1735,36 @@ config.add_command(pronounce_commands.pronounce_group)
 @click.option('--vad-aggressiveness', type=int, help='VAD aggressiveness (0-3)')
 @click.option('--skip-tts/--no-skip-tts', default=None, help='Skip TTS and only show text')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
-def converse(message, wait, duration, min_duration, transport, room_name, voice, tts_provider, 
+def converse(message, wait, duration, min_duration, transport, room_name, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
             speed, vad_aggressiveness, skip_tts, continuous):
     """Have a voice conversation directly from the command line.
-    
+
     Examples:
-    
+
         # Simple conversation
         voicemode converse
-        
+
         # Speak a message without waiting
         voicemode converse -m "Hello there!" --no-wait
-        
+
         # Continuous conversation mode
         voicemode converse --continuous
-        
+
         # Use specific voice
         voicemode converse --voice nova
     """
+    # Check core dependencies before running
+    from voice_mode.utils.dependencies.checker import check_component_dependencies
+
+    results = check_component_dependencies('core')
+    missing = [pkg for pkg, installed in results.items() if not installed]
+
+    if missing:
+        click.echo(f"⚠️  Missing core dependencies: {', '.join(missing)}")
+        click.echo("   Run 'voicemode deps' to install them")
+        return
+
     from voice_mode.tools.converse import converse as converse_fn
     
     async def run_conversation():

@@ -72,36 +72,21 @@ async def refresh_provider_registry(
                     results.append(f"\n  ✅ {url}")
                     results.append(f"     Status: Available (optimistic mode)")
                 else:
-                    # Non-optimistic mode: Try to discover actual models/voices
-                    # Since check_health doesn't exist, we'll just try to discover
-                    from voice_mode.provider_discovery import discover_models, discover_voices, EndpointInfo
-                    from datetime import datetime
-
+                    # Non-optimistic mode: Actually discover endpoint capabilities
                     try:
-                        models = await discover_models(service, url)
-                        voices = await discover_voices(url) if service == "tts" else []
+                        await provider_registry._discover_endpoint(service, url)
+                        endpoint_info = provider_registry.registry[service][url]
 
-                        provider_registry.registry[service][url] = EndpointInfo(
-                            base_url=url,
-                            models=models if models else ["whisper-1"] if service == "stt" else ["tts-1"],
-                            voices=voices,
-                            provider_type=detect_provider_type(url),
-                            last_check=datetime.utcnow().isoformat() + "Z"
-                        )
-                        results.append(f"\n  ✅ {url}")
-                        results.append(f"     Models: {', '.join(models) if models else 'default'}")
-                        if service == 'tts' and voices:
-                            results.append(f"     Voices: {', '.join(voices[:5])}{'...' if len(voices) > 5 else ''}")
+                        if endpoint_info.last_error:
+                            results.append(f"\n  ❌ {url}")
+                            results.append(f"     Error: {endpoint_info.last_error}")
+                        else:
+                            results.append(f"\n  ✅ {url}")
+                            if endpoint_info.models:
+                                results.append(f"     Models: {', '.join(endpoint_info.models)}")
+                            if service == 'tts' and endpoint_info.voices:
+                                results.append(f"     Voices: {', '.join(endpoint_info.voices[:5])}{'...' if len(endpoint_info.voices) > 5 else ''}")
                     except Exception as e:
-                        # Failed to discover - mark with error
-                        provider_registry.registry[service][url] = EndpointInfo(
-                            base_url=url,
-                            models=[],
-                            voices=[],
-                            provider_type=detect_provider_type(url),
-                            last_check=datetime.utcnow().isoformat() + "Z",
-                            last_error=str(e)
-                        )
                         results.append(f"\n  ❌ {url}")
                         results.append(f"     Error: {str(e)}")
         

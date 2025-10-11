@@ -595,7 +595,7 @@ check_system_dependencies() {
       return 1
     fi
   elif [[ "$OS" == "fedora" ]]; then
-    local packages=("nodejs" "portaudio-devel" "ffmpeg" "cmake" "python3-devel" "alsa-lib-devel")
+    local packages=("nodejs" "portaudio-devel" "ffmpeg" "cmake" "python3-devel" "alsa-lib-devel" "gcc")
     local missing_packages=()
 
     for package in "${packages[@]}"; do
@@ -713,7 +713,7 @@ install_system_dependencies() {
         sudo dnf check-update || true
 
         # Install required packages
-        local packages=("nodejs" "portaudio-devel" "ffmpeg" "cmake" "python3-devel" "alsa-lib-devel")
+        local packages=("nodejs" "portaudio-devel" "ffmpeg" "cmake" "python3-devel" "alsa-lib-devel" "gcc")
 
         print_step "Installing packages: ${packages[*]}"
         sudo dnf install -y "${packages[@]}"

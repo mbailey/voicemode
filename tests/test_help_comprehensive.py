@@ -21,103 +21,130 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def discover_all_commands() -> List[List[str]]:
     """Dynamically discover all voice-mode commands and subcommands.
-    
+
     Returns a comprehensive list of all command combinations that should
     support --help functionality.
     """
     commands = []
-    
+
     # Use python -m voice_mode for development testing
     base_cmd = [sys.executable, '-m', 'voice_mode']
-    
+
     # Main command - test both -h and --help
     commands.append(base_cmd + ['--help'])
     commands.append(base_cmd + ['-h'])
-    
-    # Top-level commands discovered from help output
-    # These are the actual CLI commands (not MCP tools)
-    top_level_commands = ['config', 'diag', 'exchanges', 'whisper', 'kokoro', 'livekit', 
-                          'converse', 'update', 'version', 'completions']
-    
-    # Commands that have options/arguments and support -h
-    commands_with_short_help = ['config', 'diag', 'exchanges', 'whisper', 'kokoro', 'livekit', 
-                                'converse', 'update', 'completions']
-    
+
+    # Top-level commands
+    top_level_commands = ['audio', 'claude', 'completions', 'config', 'converse',
+                          'deps', 'diag', 'exchanges', 'kokoro', 'livekit',
+                          'update', 'version', 'whisper']
+
+    # Commands that support -h
+    commands_with_short_help = ['audio', 'config', 'converse', 'deps', 'diag',
+                                'exchanges', 'kokoro', 'livekit', 'whisper']
+
     for cmd in top_level_commands:
         commands.append(base_cmd + [cmd, '--help'])
         if cmd in commands_with_short_help:
-            commands.append(base_cmd + [cmd, '-h'])  # Only test -h for commands that support it
-    
-    # Service management commands
-    services = ['whisper', 'kokoro', 'livekit']
-    common_actions = ['status', 'start', 'stop', 'restart', 'enable', 'disable', 'logs', 
-                      'install', 'uninstall']
-    
-    # Service-specific additional actions
-    service_specific = {
-        'whisper': ['health', 'update-service-files'],
-        'kokoro': ['health', 'update-service-files'],
-        'livekit': ['update']  # LiveKit has 'update' instead of 'update-service-files'
-    }
-    
-    # Actions that have options and support -h
-    actions_with_short_help = ['logs', 'install', 'uninstall']
-    
-    for service in services:
-        # Common service subcommands
-        for action in common_actions:
-            commands.append(base_cmd + [service, action, '--help'])
-            if action in actions_with_short_help:
-                commands.append(base_cmd + [service, action, '-h'])
-        
-        # Service-specific commands
-        if service in service_specific:
-            for action in service_specific[service]:
-                commands.append(base_cmd + [service, action, '--help'])
-    
-    # Whisper model subcommands
-    whisper_model_cmds = ['models', 'model']
-    for cmd in whisper_model_cmds:
-        commands.append(base_cmd + ['whisper', cmd, '--help'])
-        if cmd == 'model':
-            commands.append(base_cmd + ['whisper', cmd, '-h'])
-            # Model subcommands
-            for sub in ['active', 'install', 'remove', 'benchmark']:
-                commands.append(base_cmd + ['whisper', 'model', sub, '--help'])
-                commands.append(base_cmd + ['whisper', 'model', sub, '-h'])
-    
+            commands.append(base_cmd + [cmd, '-h'])
+
+    # === WHISPER COMMANDS (restructured with service subgroup) ===
+    # Whisper service subcommands
+    whisper_service_actions = ['disable', 'enable', 'health', 'install', 'logs',
+                               'restart', 'start', 'status', 'stop', 'uninstall',
+                               'update-files']
+    whisper_service_with_options = ['install', 'logs', 'uninstall']
+
+    commands.append(base_cmd + ['whisper', 'service', '--help'])
+    commands.append(base_cmd + ['whisper', 'service', '-h'])
+
+    for action in whisper_service_actions:
+        commands.append(base_cmd + ['whisper', 'service', action, '--help'])
+        if action in whisper_service_with_options:
+            commands.append(base_cmd + ['whisper', 'service', action, '-h'])
+
+    # Whisper model command (simplified - no longer has subcommands)
+    commands.append(base_cmd + ['whisper', 'model', '--help'])
+    commands.append(base_cmd + ['whisper', 'model', '-h'])
+
+    # === KOKORO COMMANDS (direct, no subgroups) ===
+    kokoro_actions = ['disable', 'enable', 'health', 'install', 'logs',
+                      'restart', 'start', 'status', 'stop', 'uninstall',
+                      'update-service-files']
+    kokoro_with_options = ['install', 'logs', 'uninstall']
+
+    for action in kokoro_actions:
+        commands.append(base_cmd + ['kokoro', action, '--help'])
+        if action in kokoro_with_options:
+            commands.append(base_cmd + ['kokoro', action, '-h'])
+
+    # === LIVEKIT COMMANDS ===
+    # Direct LiveKit actions
+    livekit_actions = ['disable', 'enable', 'install', 'logs', 'restart',
+                       'start', 'status', 'stop', 'uninstall', 'update']
+    livekit_with_options = ['install', 'logs', 'uninstall']
+
+    for action in livekit_actions:
+        commands.append(base_cmd + ['livekit', action, '--help'])
+        if action in livekit_with_options:
+            commands.append(base_cmd + ['livekit', action, '-h'])
+
     # LiveKit frontend subcommands
-    frontend_cmds = ['install', 'start', 'stop', 'status', 'open', 'logs', 'enable', 'disable', 'build']
+    commands.append(base_cmd + ['livekit', 'frontend', '--help'])
+    commands.append(base_cmd + ['livekit', 'frontend', '-h'])
+
+    frontend_cmds = ['build', 'disable', 'enable', 'install', 'logs',
+                     'open', 'start', 'status', 'stop']
+    frontend_with_options = ['build', 'install', 'logs', 'start']
+
     for cmd in frontend_cmds:
         commands.append(base_cmd + ['livekit', 'frontend', cmd, '--help'])
-        if cmd in ['install', 'start', 'logs', 'build']:  # Commands with options
+        if cmd in frontend_with_options:
             commands.append(base_cmd + ['livekit', 'frontend', cmd, '-h'])
-    
-    # Config subcommands
-    config_subcommands = ['list', 'get', 'set']
+
+    # === CONFIG COMMANDS ===
+    config_subcommands = ['edit', 'get', 'list', 'set']
+    config_with_options = ['edit', 'get', 'set']
+
     for sub in config_subcommands:
         commands.append(base_cmd + ['config', sub, '--help'])
-        if sub in ['get', 'set']:  # Commands with arguments
+        if sub in config_with_options:
             commands.append(base_cmd + ['config', sub, '-h'])
-    
-    # Exchanges subcommands
-    exchanges_subcommands = ['tail', 'view', 'search', 'stats', 'export']
+
+    # Config pronounce subgroup
+    commands.append(base_cmd + ['config', 'pronounce', '--help'])
+    pronounce_cmds = ['add', 'disable', 'edit', 'enable', 'list', 'reload', 'remove', 'test']
+    for cmd in pronounce_cmds:
+        commands.append(base_cmd + ['config', 'pronounce', cmd, '--help'])
+
+    # === EXCHANGES COMMANDS ===
+    exchanges_subcommands = ['export', 'search', 'stats', 'tail', 'view']
     for sub in exchanges_subcommands:
         commands.append(base_cmd + ['exchanges', sub, '--help'])
-        commands.append(base_cmd + ['exchanges', sub, '-h'])  # All have options
-    
-    # Completions subcommands
-    completions_subcommands = ['bash', 'zsh', 'fish', 'install']
-    for sub in completions_subcommands:
-        commands.append(base_cmd + ['completions', sub, '--help'])
-        if sub == 'install':
-            commands.append(base_cmd + ['completions', sub, '-h'])
-    
-    # Diag subcommands - none have options so no -h support
-    diag_subcommands = ['info', 'devices', 'registry', 'dependencies']
+        commands.append(base_cmd + ['exchanges', sub, '-h'])
+
+    # === DIAG COMMANDS ===
+    diag_subcommands = ['dependencies', 'devices', 'info', 'registry']
     for sub in diag_subcommands:
         commands.append(base_cmd + ['diag', sub, '--help'])
-    
+
+    # === AUDIO COMMANDS ===
+    audio_subcommands = ['play', 'transcribe']
+    for sub in audio_subcommands:
+        commands.append(base_cmd + ['audio', sub, '--help'])
+        if sub == 'play':  # Only 'play' supports -h
+            commands.append(base_cmd + ['audio', sub, '-h'])
+
+    # === CLAUDE COMMANDS ===
+    commands.append(base_cmd + ['claude', 'hooks', '--help'])
+    commands.append(base_cmd + ['claude', 'hooks', '-h'])
+    commands.append(base_cmd + ['claude', 'hooks', 'receiver', '--help'])
+    # Note: receiver doesn't support -h, only --help
+
+    # === COMPLETIONS (special - takes positional arg) ===
+    # Note: completions uses positional args, so we only test main help
+    # Individual shell completions (bash, zsh, fish) don't have separate --help
+
     return commands
 
 
@@ -306,8 +333,12 @@ class TestHelpComprehensive:
             assert indicator not in stderr_lower, \
                 f"Heavy import detected in help: {indicator}"
     
-    @pytest.mark.parametrize("service", ['whisper', 'kokoro', 'livekit'])
-    def test_service_help_completeness(self, service: str):
+    @pytest.mark.parametrize("service,expected_actions", [
+        ('whisper', ['service', 'model']),  # Whisper has service and model subgroups
+        ('kokoro', ['status', 'start', 'stop', 'restart']),  # Kokoro has direct actions
+        ('livekit', ['status', 'start', 'stop', 'restart', 'frontend'])  # LiveKit has actions + frontend
+    ])
+    def test_service_help_completeness(self, service: str, expected_actions: List[str]):
         """Test that service help includes all expected subcommands."""
         result = subprocess.run(
             [sys.executable, '-m', 'voice_mode', service, '--help'],
@@ -315,16 +346,13 @@ class TestHelpComprehensive:
             text=True,
             timeout=2
         )
-        
+
         assert result.returncode == 0
         output = result.stdout.lower()
-        
-        # Service help should mention key actions
-        expected_actions = ['status', 'start', 'stop', 'restart']
-        
+
         for action in expected_actions:
             assert action in output, \
-                f"Service {service} help missing action: {action}"
+                f"Service {service} help missing: {action}"
 
 
 class TestHelpEdgeCases:
