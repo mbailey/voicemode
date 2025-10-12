@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "voicemode-install"
-version = "1.0.0"
+name = "voice-mode-install"
+version = "1.0.1"
 description = "Installer for VoiceMode - handles system dependencies and installation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -38,7 +38,7 @@ Repository = "https://github.com/mbailey/voicemode"
 Issues = "https://github.com/mbailey/voicemode/issues"
 
 [project.scripts]
-voicemode-install = "voicemode_install.cli:main"
+voice-mode-install = "voicemode_install.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voicemode_install"]

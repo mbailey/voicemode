@@ -1,6 +1,6 @@
 # Voice MCP Makefile
 
-.PHONY: help build-package build-dev test test-package publish-test publish release install dev-install clean build-voice-mode publish-voice-mode sync-tomls claude cursor docs docs-serve docs-build docs-check docs-deploy coverage coverage-html coverage-xml test-unit test-integration test-all test-parallel test-markers
+.PHONY: help build-package build-dev test test-package publish-test publish release install dev-install clean build-voice-mode publish-voice-mode sync-tomls claude cursor docs docs-serve docs-build docs-check docs-deploy coverage coverage-html coverage-xml test-unit test-integration test-all test-parallel test-markers build-installer test-installer-ubuntu test-installer-fedora test-installer-all test-installer-ci test-installer-ubuntu-fast test-installer-fedora-fast test-installer-all-fast publish-installer-test publish-installer publish-voicemode-test
 
 # Default target
 help:
@@ -23,6 +23,19 @@ help:
 	@echo "  test-parallel - Run tests in parallel"
 	@echo "  test-markers  - Show available test markers"
 	@echo "  CLAUDE.md     - Generate CLAUDE.md with consolidated startup context"
+	@echo ""
+	@echo "Installer Testing & Publishing:"
+	@echo "  build-installer                 - Build voicemode-install package"
+	@echo "  test-installer-ubuntu           - Test on fresh Ubuntu clone (default)"
+	@echo "  test-installer-fedora           - Test on fresh Fedora clone (default)"
+	@echo "  test-installer-all              - Test on fresh clones of all platforms (default)"
+	@echo "  test-installer-ubuntu-fast      - Test on existing Ubuntu VM (no clone)"
+	@echo "  test-installer-fedora-fast      - Test on existing Fedora VM (no clone)"
+	@echo "  test-installer-all-fast         - Test on existing VMs (no clone)"
+	@echo "  test-installer-ci               - Test installer using Docker (CI mode)"
+	@echo "  publish-installer-test          - Publish voicemode-install to TestPyPI"
+	@echo "  publish-installer               - Publish voicemode-install to PyPI"
+	@echo "  publish-voicemode-test          - Publish voice-mode to TestPyPI"
 	@echo ""
 	@echo "Python package targets:"
 	@echo "  build-package - Build Python package for PyPI"
@@ -386,3 +399,194 @@ test-markers:
 	@echo ""
 	@echo "Usage: uv run pytest -m 'marker_name'"
 	@echo "Example: uv run pytest -m 'not slow'"
+
+# Build voicemode-install package
+build-installer:
+	@echo "Building voicemode-install package..."
+	@cd installer && uv build
+	@echo "✅ Package built: installer/dist/"
+	@ls -lh installer/dist/
+
+# Test installer on fresh Ubuntu clone (default)
+test-installer-ubuntu: build-installer
+	@echo "Testing installer on fresh Ubuntu clone..."
+	@if ! command -v tart >/dev/null 2>&1; then \
+		echo "❌ Tart is not installed!"; \
+		echo "Install from: https://github.com/cirruslabs/tart"; \
+		exit 1; \
+	fi
+	@WHEEL=$$(ls -t installer/dist/voicemode_install-*.whl | head -1); \
+	if [ -z "$$WHEEL" ]; then \
+		echo "❌ Wheel file not found. Run 'make build-installer' first."; \
+		exit 1; \
+	fi; \
+	echo "Using wheel: $$WHEEL"; \
+	python3 scripts/test_installer.py ubuntu --wheel "$$WHEEL" --backend tart --clone-fresh
+
+# Test installer on fresh Fedora clone (default)
+test-installer-fedora: build-installer
+	@echo "Testing installer on fresh Fedora clone..."
+	@if ! command -v tart >/dev/null 2>&1; then \
+		echo "❌ Tart is not installed!"; \
+		echo "Install from: https://github.com/cirruslabs/tart"; \
+		exit 1; \
+	fi
+	@WHEEL=$$(ls -t installer/dist/voicemode_install-*.whl | head -1); \
+	if [ -z "$$WHEEL" ]; then \
+		echo "❌ Wheel file not found. Run 'make build-installer' first."; \
+		exit 1; \
+	fi; \
+	echo "Using wheel: $$WHEEL"; \
+	python3 scripts/test_installer.py fedora --wheel "$$WHEEL" --backend tart --clone-fresh
+
+# Test installer on fresh clones of all platforms (default)
+test-installer-all: build-installer
+	@echo "Testing installer on fresh clones of all platforms..."
+	@if ! command -v tart >/dev/null 2>&1; then \
+		echo "❌ Tart is not installed!"; \
+		echo "Install from: https://github.com/cirruslabs/tart"; \
+		exit 1; \
+	fi
+	@WHEEL=$$(ls -t installer/dist/voicemode_install-*.whl | head -1); \
+	if [ -z "$$WHEEL" ]; then \
+		echo "❌ Wheel file not found. Run 'make build-installer' first."; \
+		exit 1; \
+	fi; \
+	echo "Using wheel: $$WHEEL"; \
+	echo ""; \
+	echo "=== Testing Ubuntu (fresh clone) ==="; \
+	python3 scripts/test_installer.py ubuntu --wheel "$$WHEEL" --backend tart --clone-fresh || true; \
+	echo ""; \
+	echo "=== Testing Fedora (fresh clone) ==="; \
+	python3 scripts/test_installer.py fedora --wheel "$$WHEEL" --backend tart --clone-fresh || true
+
+# Test installer using Docker (CI mode)
+test-installer-ci: build-installer
+	@echo "Testing installer with Docker..."
+	@if ! command -v docker >/dev/null 2>&1; then \
+		echo "❌ Docker is not installed!"; \
+		exit 1; \
+	fi
+	@WHEEL=$$(ls -t installer/dist/voicemode_install-*.whl | head -1); \
+	if [ -z "$$WHEEL" ]; then \
+		echo "❌ Wheel file not found. Run 'make build-installer' first."; \
+		exit 1; \
+	fi; \
+	echo "Using wheel: $$WHEEL"; \
+	echo ""; \
+	echo "=== Testing Ubuntu (Docker) ==="; \
+	python3 scripts/test_installer.py ubuntu --wheel "$$WHEEL" --backend docker || true; \
+	echo ""; \
+	echo "=== Testing Fedora (Docker) ==="; \
+	python3 scripts/test_installer.py fedora --wheel "$$WHEEL" --backend docker || true
+
+# Test installer on existing Ubuntu VM (fast, no clone)
+test-installer-ubuntu-fast: build-installer
+	@echo "Testing installer on existing Ubuntu VM..."
+	@if ! command -v tart >/dev/null 2>&1; then \
+		echo "❌ Tart is not installed!"; \
+		echo "Install from: https://github.com/cirruslabs/tart"; \
+		exit 1; \
+	fi
+	@WHEEL=$$(ls -t installer/dist/voicemode_install-*.whl | head -1); \
+	if [ -z "$$WHEEL" ]; then \
+		echo "❌ Wheel file not found. Run 'make build-installer' first."; \
+		exit 1; \
+	fi; \
+	echo "Using wheel: $$WHEEL"; \
+	python3 scripts/test_installer.py ubuntu --wheel "$$WHEEL" --backend tart
+
+# Test installer on existing Fedora VM (fast, no clone)
+test-installer-fedora-fast: build-installer
+	@echo "Testing installer on existing Fedora VM..."
+	@if ! command -v tart >/dev/null 2>&1; then \
+		echo "❌ Tart is not installed!"; \
+		echo "Install from: https://github.com/cirruslabs/tart"; \
+		exit 1; \
+	fi
+	@WHEEL=$$(ls -t installer/dist/voicemode_install-*.whl | head -1); \
+	if [ -z "$$WHEEL" ]; then \
+		echo "❌ Wheel file not found. Run 'make build-installer' first."; \
+		exit 1; \
+	fi; \
+	echo "Using wheel: $$WHEEL"; \
+	python3 scripts/test_installer.py fedora --wheel "$$WHEEL" --backend tart
+
+# Test installer on existing VMs (fast, no clone)
+test-installer-all-fast: build-installer
+	@echo "Testing installer on existing VMs..."
+	@if ! command -v tart >/dev/null 2>&1; then \
+		echo "❌ Tart is not installed!"; \
+		echo "Install from: https://github.com/cirruslabs/tart"; \
+		exit 1; \
+	fi
+	@WHEEL=$$(ls -t installer/dist/voicemode_install-*.whl | head -1); \
+	if [ -z "$$WHEEL" ]; then \
+		echo "❌ Wheel file not found. Run 'make build-installer' first."; \
+		exit 1; \
+	fi; \
+	echo "Using wheel: $$WHEEL"; \
+	echo ""; \
+	echo "=== Testing Ubuntu ==="; \
+	python3 scripts/test_installer.py ubuntu --wheel "$$WHEEL" --backend tart || true; \
+	echo ""; \
+	echo "=== Testing Fedora ==="; \
+	python3 scripts/test_installer.py fedora --wheel "$$WHEEL" --backend tart || true
+
+# Publish voicemode-install to TestPyPI
+publish-installer-test: build-installer
+	@echo "Publishing voicemode-install to TestPyPI..."
+	@if [ -z "$$UV_PUBLISH_TOKEN" ]; then \
+		echo "❌ UV_PUBLISH_TOKEN not set!"; \
+		echo ""; \
+		echo "Get a token from https://test.pypi.org/manage/account/token/"; \
+		echo "Then set: export UV_PUBLISH_TOKEN=\"pypi-your-token\""; \
+		exit 1; \
+	fi
+	@cd installer && uv publish --index-url https://test.pypi.org/legacy/
+	@echo ""
+	@echo "✅ Published to TestPyPI!"
+	@echo ""
+	@echo "Test installation with:"
+	@echo "  uvx --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ voicemode-install --dry-run"
+
+# Publish voicemode-install to PyPI
+publish-installer: build-installer test-installer-all
+	@echo "Publishing voicemode-install to PyPI..."
+	@echo ""
+	@echo "⚠️  WARNING: This will publish to PRODUCTION PyPI!"
+	@read -p "Are you sure? Type 'yes' to continue: " confirm; \
+	if [ "$$confirm" != "yes" ]; then \
+		echo "Aborted."; \
+		exit 1; \
+	fi
+	@if [ -z "$$UV_PUBLISH_TOKEN" ]; then \
+		echo "❌ UV_PUBLISH_TOKEN not set!"; \
+		echo ""; \
+		echo "Get a token from https://pypi.org/manage/account/token/"; \
+		echo "Then set: export UV_PUBLISH_TOKEN=\"pypi-your-token\""; \
+		exit 1; \
+	fi
+	@cd installer && uv publish
+	@echo ""
+	@echo "✅ Published to PyPI!"
+	@echo ""
+	@echo "Install with:"
+	@echo "  uvx voicemode-install"
+
+# Publish voice-mode to TestPyPI
+publish-voicemode-test: build-package
+	@echo "Publishing voice-mode to TestPyPI..."
+	@if [ -z "$$UV_PUBLISH_TOKEN" ]; then \
+		echo "❌ UV_PUBLISH_TOKEN not set!"; \
+		echo ""; \
+		echo "Get a token from https://test.pypi.org/manage/account/token/"; \
+		echo "Then set: export UV_PUBLISH_TOKEN=\"pypi-your-token\""; \
+		exit 1; \
+	fi
+	@uv publish --index-url https://test.pypi.org/legacy/
+	@echo ""
+	@echo "✅ Published to TestPyPI!"
+	@echo ""
+	@echo "Test installation with:"
+	@echo "  pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ voice-mode"

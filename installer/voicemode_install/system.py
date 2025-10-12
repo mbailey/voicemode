@@ -1,6 +1,7 @@
 """System detection and platform utilities."""
 
 import platform
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -122,15 +123,7 @@ def get_package_manager(distribution: str) -> str:
 
 def check_command_exists(command: str) -> bool:
     """Check if a command exists in PATH."""
-    try:
-        subprocess.run(
-            ['which', command],
-            capture_output=True,
-            check=True
-        )
-        return True
-    except subprocess.CalledProcessError:
-        return False
+    return shutil.which(command) is not None
 
 
 def get_system_info() -> dict:
