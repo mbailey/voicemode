@@ -1,0 +1,69 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "voicemode-install"
+version = "1.0.0"
+description = "Installer for VoiceMode - handles system dependencies and installation"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "mbailey", email = "mbailey@example.com"},
+]
+keywords = ["voicemode", "installer", "mcp", "voice", "setup"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Installation/Setup",
+]
+
+dependencies = [
+    "click>=8.0.0",
+    "pyyaml>=6.0.0",
+    "psutil>=5.9.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/mbailey/voicemode"
+Repository = "https://github.com/mbailey/voicemode"
+Issues = "https://github.com/mbailey/voicemode/issues"
+
+[project.scripts]
+voicemode-install = "voicemode_install.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["voicemode_install"]
+include = [
+  "voicemode_install/**/*.py",
+  "voicemode_install/**/*.yaml",
+]
+exclude = [
+  "**/__pycache__",
+  "**/*.pyc",
+  "**/*.pyo",
+  "**/*.pyd",
+  "**/.DS_Store",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/voicemode_install",
+  "/README.md",
+  "/pyproject.toml",
+]
+exclude = [
+  "**/__pycache__",
+  "**/*.pyc",
+  "**/*.pyo",
+  "**/*.pyd",
+  "**/.DS_Store",
+]
