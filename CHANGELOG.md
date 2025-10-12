@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **voice-mode-install Package** - Standalone installer package for simplified VoiceMode setup
+  - New PyPI package `voice-mode-install` provides `voice-mode-install` command
+  - Handles system dependency detection and installation before main package
+  - Cross-platform support for macOS, Ubuntu/Debian, and Fedora
+  - Interactive prompts with smart defaults for dependency installation
+  - Detects OS, distribution, and architecture automatically
+  - Shows concise summary of missing system packages
+  - Installs system dependencies using native package managers (brew/apt/dnf)
+  - Automatically installs VoiceMode after dependencies are ready
+  - Makefile targets for building, testing, and publishing installer package
+  - Improved command existence checking using shutil.which
+
 ## [5.1.3] - 2025-10-12
 
 ### Fixed
