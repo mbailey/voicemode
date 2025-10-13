@@ -7,9 +7,9 @@
 **Problem:** Silence detection stops recording too early.
 
 **Solutions:**
-1. Increase `min_listen_duration`:
+1. Increase `listen_duration_min`:
    ```python
-   converse("What's on your mind?", min_listen_duration=5.0)
+   converse("What's on your mind?", listen_duration_min=5.0)
    ```
 
 2. Decrease VAD aggressiveness:
@@ -42,17 +42,17 @@
 **Solutions:**
 1. Add leading silence:
    ```python
-   converse("Hello", pip_leading_silence=1.0)
+   converse("Hello", chime_pre_delay=1.0)
    ```
 
 2. Add trailing silence:
    ```python
-   converse("Hello", pip_trailing_silence=0.5)
+   converse("Hello", chime_post_delay=0.5)
    ```
 
 3. Add both:
    ```python
-   converse("Hello", pip_leading_silence=1.0, pip_trailing_silence=0.5)
+   converse("Hello", chime_pre_delay=1.0, chime_post_delay=0.5)
    ```
 
 ### No audio output
@@ -87,7 +87,7 @@
 | Busy office | 2-3 | Filter typing, conversations |
 | Cafe/public | 3 | Filter heavy background noise |
 | Outdoors | 3 | Filter wind, traffic |
-| Dictation mode | 0-1 + high min_listen | Allow thinking pauses |
+| Dictation mode | 0-1 + high listen_duration_min | Allow thinking pauses |
 
 ## Connection Issues
 
@@ -132,7 +132,7 @@
 **Solutions:**
 1. Increase listen duration:
    ```python
-   converse("Please elaborate", listen_duration=300)
+   converse("Please elaborate", listen_duration_max=300)
    ```
 
 2. Check network latency to services
@@ -201,11 +201,11 @@ converse("Quick update", speed=1.5)
 2. Verify microphone permissions
 3. Increase recording duration:
    ```python
-   converse("What do you think?", min_listen_duration=5.0)
+   converse("What do you think?", listen_duration_min=5.0)
    ```
 4. Disable silence detection to see if it's a VAD issue:
    ```python
-   converse("Testing", disable_silence_detection=True, listen_duration=10)
+   converse("Testing", disable_silence_detection=True, listen_duration_max=10)
    ```
 
 ### Incorrect transcriptions
@@ -249,8 +249,8 @@ converse("Quick update", speed=1.5)
 ❌ **Don't:** `converse("Bonjour")`
 ✅ **Do:** `converse("Bonjour", voice="ff_siwis", tts_provider="kokoro")`
 
-### Setting listen_duration too low
-❌ **Don't:** `listen_duration=5` for complex questions
+### Setting listen_duration_max too low
+❌ **Don't:** `listen_duration_max=5` for complex questions
 ✅ **Do:** Use default (120) or higher for long responses
 
 ### Overriding defaults unnecessarily

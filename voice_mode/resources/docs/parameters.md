@@ -12,7 +12,7 @@ Whether to listen for a voice response after speaking.
 
 ## Timing Parameters
 
-### listen_duration
+### listen_duration_max
 **Type:** number (default: 120.0 seconds)
 Maximum time to listen for response. The tool handles silence detection well.
 
@@ -23,7 +23,7 @@ Maximum time to listen for response. The tool handles silence detection well.
 
 **Usually:** Let default and silence detection handle it.
 
-### min_listen_duration
+### listen_duration_min
 **Type:** number (default: 2.0 seconds)
 Minimum recording time before silence detection can stop.
 
@@ -33,7 +33,7 @@ Minimum recording time before silence detection can stop.
 - Quick responses: 0.5-1 second
 
 ### timeout (DEPRECATED)
-Use `listen_duration` instead. Only applies to LiveKit transport.
+Use `listen_duration_max` instead. Only applies to LiveKit transport.
 
 ## Voice & TTS Parameters
 
@@ -131,21 +131,21 @@ Voice Activity Detection strictness level.
 - Normal home/office: Use default (2)
 - Noisy cafe/outdoors: Use 3
 
-### pip_leading_silence
+### chime_pre_delay
 **Type:** number (seconds, optional)
 Time to add before audio chime starts.
 
 **Use case:** Bluetooth devices that need audio buffer (e.g., 1.0 seconds)
 
-**Default:** Uses VOICEMODE_PIP_LEADING_SILENCE env var
+**Default:** Uses VOICEMODE_CHIME_PRE_DELAY env var (0.1s)
 
-### pip_trailing_silence
+### chime_post_delay
 **Type:** number (seconds, optional)
 Time to add after audio chime ends.
 
 **Use case:** Prevent chime cutoff (e.g., 0.5 seconds)
 
-**Default:** Uses VOICEMODE_PIP_TRAILING_SILENCE env var
+**Default:** Uses VOICEMODE_CHIME_POST_DELAY env var (0.2s)
 
 ## Audio Format & Feedback
 
@@ -157,21 +157,11 @@ Override audio format.
 
 **Default:** Uses VOICEMODE_TTS_AUDIO_FORMAT env var
 
-### audio_feedback
+### chime_enabled
 **Type:** boolean | string (optional)
-Override global audio feedback setting.
+Enable or disable audio feedback chimes.
 
-**Default:** Uses VOICE_MODE_AUDIO_FEEDBACK env var
-
-### audio_feedback_style
-**Type:** string (optional)
-Audio feedback style.
-
-**Options:**
-- "whisper" (default)
-- "shout"
-
-**Default:** Uses VOICE_MODE_FEEDBACK_STYLE env var
+**Default:** Uses VOICEMODE_CHIME_ENABLED env var
 
 ### skip_tts
 **Type:** boolean (optional)
