@@ -329,261 +329,19 @@ async def speech_to_text(
     return result
 
 
-async def _speech_to_text_internal(
-    audio_data: np.ndarray,
-    stt_config: dict,
-    openai_clients: dict,
-    save_audio: bool = False,
-    audio_dir: Optional[Path] = None
-) -> Optional[str]:
-    """Internal speech to text implementation (extracted from original speech_to_text)"""
-    logger.info(f"STT: Converting speech to text, audio data shape: {audio_data.shape}")
-    
-    if DEBUG:
-        logger.debug(f"STT config - Model: {stt_config['model']}, Base URL: {stt_config['base_url']}")
-        logger.debug(f"Audio stats - Min: {audio_data.min()}, Max: {audio_data.max()}, Mean: {audio_data.mean():.2f}")
-    
-    wav_file = None
-    export_file = None
-    export_format = None
-    try:
-        import tempfile
-        
-        # Check if input is silent
-        if np.abs(audio_data).max() < 0.001:
-            logger.warning("Audio appears to be silent")
-            return None
-        
-        # Ensure audio is in the correct format
-        if audio_data.dtype != np.int16:
-            logger.debug(f"Converting audio from {audio_data.dtype} to int16")
-            audio_data = (audio_data * 32767).astype(np.int16)
-        
-        # Save as WAV file temporarily
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as wav_file_obj:
-            wav_file = wav_file_obj.name
-            logger.debug(f"Writing audio to WAV file: {wav_file}")
-            write(wav_file, SAMPLE_RATE, audio_data)
-        
-        # Save debug file for original recording
-        if DEBUG:
-            try:
-                with open(wav_file, 'rb') as f:
-                    debug_path = save_debug_file(f.read(), "stt-input", "wav", DEBUG_DIR, DEBUG)
-                    if debug_path:
-                        logger.info(f"STT debug recording saved to: {debug_path}")
-            except Exception as e:
-                logger.error(f"Failed to save debug WAV: {e}")
-        
-        # Initialize audio_path for JSONL logging
-        audio_path = None
-        
-        # Save audio file if audio saving is enabled
-        if save_audio and audio_dir:
-            try:
-                with open(wav_file, 'rb') as f:
-                    # Get conversation ID from logger
-                    conversation_logger = get_conversation_logger()
-                    conversation_id = conversation_logger.conversation_id
-                    audio_path = save_debug_file(f.read(), "stt", "wav", audio_dir, True, conversation_id)
-                    if audio_path:
-                        logger.info(f"STT audio saved to: {audio_path}")
-            except Exception as e:
-                logger.error(f"Failed to save audio WAV: {e}")
-        
-        # Import config for audio format
-        from ..config import STT_AUDIO_FORMAT, validate_audio_format, get_format_export_params
-        
-        # Determine provider from base URL (simple heuristic)
-        provider = stt_config.get('provider', 'openai-whisper')
-        # Check if using local Whisper endpoint
-        if stt_config.get('base_url') and ("127.0.0.1" in stt_config['base_url'] or "localhost" in stt_config['base_url']):
-            provider = "whisper-local"
-        
-        # Check if we can skip conversion for local whisper
-        skip_conversion = False
-        if provider == "whisper-local":
-            # Check if whisper is truly local (not SSH-forwarded)
-            from voice_mode.utils.services.common import check_service_status
-            from voice_mode.config import WHISPER_PORT
-            status, _ = check_service_status(WHISPER_PORT)
-            if status == "local":
-                skip_conversion = True
-                logger.info("Detected truly local whisper - skipping audio conversion, using WAV directly")
-        
-        if skip_conversion:
-            # Use WAV directly for local whisper
-            upload_file = wav_file
-            export_format = "wav"
-            logger.debug("Using WAV file directly for local whisper upload")
-        else:
-            # Validate format for provider
-            export_format = validate_audio_format(STT_AUDIO_FORMAT, provider, "stt")
-            
-            # Convert WAV to target format for upload
-            logger.debug(f"Converting WAV to {export_format.upper()} for upload...")
-            conversion_start = time.perf_counter()
-            try:
-                audio = AudioSegment.from_wav(wav_file)
-                logger.debug(f"Audio loaded - Duration: {len(audio)}ms, Channels: {audio.channels}, Frame rate: {audio.frame_rate}")
-                
-                # Get export parameters for the format
-                export_params = get_format_export_params(export_format)
-                
-                with tempfile.NamedTemporaryFile(suffix=f'.{export_format}', delete=False) as export_file_obj:
-                    export_file = export_file_obj.name
-                    audio.export(export_file, **export_params)
-                    upload_file = export_file
-                    conversion_time = time.perf_counter() - conversion_start
-                    logger.info(f"Audio conversion: WAV → {export_format.upper()} took {conversion_time:.3f}s")
-                    logger.debug(f"{export_format.upper()} created for STT upload: {upload_file}")
-            except Exception as e:
-                if "ffmpeg" in str(e).lower() or "avconv" in str(e).lower():
-                    logger.error(f"Audio conversion failed - FFmpeg may not be installed: {e}")
-                    from voice_mode.utils.ffmpeg_check import get_install_instructions
-                    logger.error(f"\n{get_install_instructions()}")
-                    raise RuntimeError("FFmpeg is required but not found. Please install FFmpeg and try again.") from e
-                else:
-                    raise
-        
-        # Save debug file for upload version
-        if DEBUG:
-            try:
-                with open(upload_file, 'rb') as f:
-                    debug_path = save_debug_file(f.read(), "stt-upload", export_format, DEBUG_DIR, DEBUG)
-                    if debug_path:
-                        logger.info(f"Upload audio saved to: {debug_path}")
-            except Exception as e:
-                logger.error(f"Failed to save debug {export_format.upper()}: {e}")
-        
-        # Get file size for logging
-        file_size = os.path.getsize(upload_file)
-        logger.debug(f"Uploading {file_size} bytes to STT API...")
-        
-        # Perform STT based on configuration
-        with open(upload_file, 'rb') as audio_file:
-            # Use client from config
-            if 'client' in stt_config:
-                stt_client = stt_config['client']
-            else:
-                # Legacy: get from openai_clients dict
-                client_key = stt_config.get('client_key', 'stt')
-                stt_client = openai_clients.get(client_key)
-                if not stt_client:
-                    # Fallback to temporary client
-                    stt_client = openai_clients['_temp_stt']
-            
-            transcription = await stt_client.audio.transcriptions.create(
-                model=stt_config['model'],
-                file=audio_file,
-                response_format="text"
-            )
-            
-            logger.debug(f"STT API response type: {type(transcription)}")
-            text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
-            
-            # Apply pronunciation rules if enabled
-            if text and pronounce_enabled():
-                pronounce_mgr = get_pronounce_manager()
-                text = pronounce_mgr.process_stt(text)
-            
-            if text:
-                logger.info(f"✓ STT result: '{text}'")
-                
-                # Save transcription if enabled
-                if SAVE_TRANSCRIPTIONS:
-                    metadata = {
-                        "type": "stt",
-                        "model": stt_config.get('model', 'unknown'),
-                        "provider": stt_config.get('provider', 'unknown'),
-                        "timestamp": datetime.now().isoformat()
-                    }
-                    save_transcription(text, prefix="stt", metadata=metadata)
-                
-                # Log to JSONL
-                try:
-                    conversation_logger = get_conversation_logger()
-                    conversation_logger.log_stt(
-                        text=text,
-                        audio_file=audio_path.name if audio_path else None,
-                        duration_ms=int(duration * 1000) if duration else None,
-                        model=stt_config.get('model'),
-                        provider=stt_config.get('provider', 'openai'),
-                        provider_url=stt_config.get('base_url'),
-                        provider_type=stt_config.get('provider_type'),
-                        audio_format=export_format,  # Use actual format from conversion
-                        transport=transport,
-                        is_fallback=stt_config.get('is_fallback', False),
-                        fallback_reason=stt_config.get('fallback_reason'),
-                        silence_detection={
-                            "enabled": not DISABLE_SILENCE_DETECTION,
-                            "vad_aggressiveness": VAD_AGGRESSIVENESS,
-                            "silence_threshold_ms": SILENCE_THRESHOLD_MS
-                        },
-                        # Add timing metrics if available
-                        transcription_time=stt_duration if 'stt_duration' in locals() else None
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to log STT to JSONL: {e}")
-                
-                return text
-            else:
-                logger.warning("STT returned empty text")
-                return None
-                    
-    except Exception as e:
-        logger.error(f"STT failed: {e}")
-        logger.error(f"STT config when error occurred - Model: {stt_config.get('model', 'unknown')}, Base URL: {stt_config.get('base_url', 'unknown')}")
-        
-        # Check for authentication errors
-        error_message = str(e).lower()
-        base_url = stt_config.get('base_url', '')
-        if hasattr(e, 'response'):
-            logger.error(f"HTTP status: {e.response.status_code if hasattr(e.response, 'status_code') else 'unknown'}")
-            logger.error(f"Response text: {e.response.text if hasattr(e.response, 'text') else 'unknown'}")
-            
-            # Check for 401 Unauthorized specifically on OpenAI endpoints
-            if hasattr(e.response, 'status_code') and e.response.status_code == 401:
-                if 'openai.com' in base_url:
-                    logger.error("⚠️  Authentication failed with OpenAI. Please set OPENAI_API_KEY environment variable.")
-                    logger.error("   Alternatively, you can use local services (Whisper) without an API key.")
-        elif 'api key' in error_message or 'unauthorized' in error_message or 'authentication' in error_message:
-            if 'openai.com' in base_url:
-                logger.error("⚠️  Authentication issue detected. Please check your OPENAI_API_KEY.")
-                logger.error("   For local-only usage, ensure Whisper is running and configured.")
-        
-        return None
-    finally:
-        # Clean up temporary files
-        if wav_file and os.path.exists(wav_file):
-            try:
-                os.unlink(wav_file)
-                logger.debug(f"Cleaned up WAV file: {wav_file}")
-            except Exception as e:
-                logger.error(f"Failed to clean up WAV file: {e}")
-        
-        if export_file and os.path.exists(export_file):
-            try:
-                os.unlink(export_file)
-                export_format = export_format if 'export_format' in locals() else 'audio'
-                logger.debug(f"Cleaned up {export_format.upper()} file: {export_file}")
-            except Exception as e:
-                logger.error(f"Failed to clean up {export_format.upper() if 'export_format' in locals() else 'audio'} file: {e}")
-
-
 async def play_audio_feedback(
-    text: str, 
-    openai_clients: dict, 
-    enabled: Optional[bool] = None, 
-    style: str = "whisper", 
+    text: str,
+    openai_clients: dict,
+    enabled: Optional[bool] = None,
+    style: str = "whisper",
     feedback_type: Optional[str] = None,
     voice: str = "nova",
     model: str = "gpt-4o-mini-tts",
-    pip_leading_silence: Optional[float] = None,
-    pip_trailing_silence: Optional[float] = None
+    chime_pre_delay: Optional[float] = None,
+    chime_post_delay: Optional[float] = None
 ) -> None:
     """Play an audio feedback chime
-    
+
     Args:
         text: Which chime to play (either "listening" or "finished")
         openai_clients: OpenAI client instances (kept for compatibility, not used)
@@ -592,8 +350,8 @@ async def play_audio_feedback(
         feedback_type: Kept for compatibility, not used
         voice: Kept for compatibility, not used
         model: Kept for compatibility, not used
-        pip_leading_silence: Optional override for leading silence duration
-        pip_trailing_silence: Optional override for trailing silence duration
+        chime_pre_delay: Optional override for pre-chime silence duration
+        chime_post_delay: Optional override for post-chime silence duration
     """
     # Use parameter override if provided, otherwise use global setting
     if enabled is False:
@@ -611,13 +369,13 @@ async def play_audio_feedback(
         # Play appropriate chime with optional delay overrides
         if text == "listening":
             await play_chime_start(
-                leading_silence=pip_leading_silence,
-                trailing_silence=pip_trailing_silence
+                leading_silence=chime_pre_delay,
+                trailing_silence=chime_post_delay
             )
         elif text == "finished":
             await play_chime_end(
-                leading_silence=pip_leading_silence,
-                trailing_silence=pip_trailing_silence
+                leading_silence=chime_pre_delay,
+                trailing_silence=chime_post_delay
             )
     except Exception as e:
         logger.debug(f"Audio feedback failed: {e}")
@@ -1204,131 +962,24 @@ async def converse(
     tts_provider: Optional[Literal["openai", "kokoro"]] = None,
     tts_model: Optional[str] = None,
     tts_instructions: Optional[str] = None,
-    audio_feedback: Optional[Union[bool, str]] = None,
-    audio_feedback_style: Optional[str] = None,
+    chime_enabled: Optional[Union[bool, str]] = None,
     audio_format: Optional[str] = None,
     disable_silence_detection: Union[bool, str] = False,
     speed: Optional[float] = None,
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
-    pip_leading_silence: Optional[float] = None,
-    pip_trailing_silence: Optional[float] = None
+    chime_pre_delay: Optional[float] = None,
+    chime_post_delay: Optional[float] = None
 ) -> str:
-    """Have a voice conversation - speak a message and optionally listen for response.
-
-    🔌 ENDPOINT REQUIREMENTS: STT/TTS services must expose OpenAI-compatible endpoints:
-    - Whisper/Kokoro must serve on: /v1/audio/transcriptions and /v1/audio/speech
-    - Connection errors will be clearly reported with attempted endpoints
-
-    🌍 NON-ENGLISH LANGUAGES: Specify voice & provider for proper pronunciation:
-    - Spanish: voice="ef_dora", tts_provider="kokoro"
-    - French: voice="ff_siwis", tts_provider="kokoro"
-    - Chinese: voice="zf_xiaobei", tts_provider="kokoro"
-    - Japanese: voice="jf_alpha", tts_provider="kokoro"
-    (Default OpenAI voices speak non-English with American accent)
-
-    PRIVACY: Microphone access required when wait_for_response=True. Audio processed via STT service, not stored.
-
-    Args:
-        message: The message to speak
-        wait_for_response: Whether to listen for a response after speaking (default: True)
-        listen_duration: How long to listen for response in seconds (default: 120.0)
-                         The tool handles silence detection well and uses a sensible default.
-                         Only override if you have specific requirements such as:
-                         - Silence detection is disabled and you need a specific timeout
-                         - You know the response will be exceptionally long (>120s)
-                         In most cases, just let the default and silence detection handle it.
-        min_listen_duration: Minimum time to record before silence detection can stop (default: 2.0)
-                             Useful for preventing premature cutoffs when users need thinking time.
-                             Examples: Complex questions: 2-3 seconds; Quick responses: 0.5-1 second
-        transport: Transport method - "auto" (try LiveKit then local), "local" (direct mic), "livekit" (room-based)
-        room_name: LiveKit room name (only for livekit transport, auto-discovered if empty)
-        timeout: Maximum wait time for response in seconds (LiveKit only) - DEPRECATED: Use listen_duration instead
-        voice: Override TTS voice - ONLY specify if user explicitly requests a specific voice
-               OR when speaking non-English languages (see LANGUAGE SUPPORT section above).
-               Examples: nova, shimmer (OpenAI); af_sky, af_sarah, am_adam (Kokoro)
-               IMPORTANT: Never use 'coral' voice.
-        tts_provider: TTS provider - ONLY specify if user explicitly requests or for failover testing
-                      The system automatically selects based on availability and preferences.
-        tts_model: TTS model - ONLY specify for specific features (e.g., gpt-4o-mini-tts for emotions)
-                   The system automatically selects the best available model.
-                   Options: tts-1, tts-1-hd, gpt-4o-mini-tts (OpenAI); Kokoro uses tts-1
-        tts_instructions: Tone/style instructions for gpt-4o-mini-tts model only (e.g., "Speak in a cheerful tone", "Sound angry", "Be extremely sad")
-        audio_feedback: Override global audio feedback setting (default: None uses VOICE_MODE_AUDIO_FEEDBACK env var)
-        audio_feedback_style: Audio feedback style - "whisper" (default) or "shout" (default: None uses VOICE_MODE_FEEDBACK_STYLE env var)
-        audio_format: Override audio format (pcm, mp3, wav, flac, aac, opus) - defaults to VOICEMODE_TTS_AUDIO_FORMAT env var
-        disable_silence_detection: Disable silence detection for this interaction only (default: False)
-                                   Silence detection automatically stops recording after detecting silence.
-                                   Disable if user reports being cut off, in noisy environments, or for
-                                   use cases like dictation where pauses are expected.
-        speed: Speech rate/speed for TTS playback (default: None uses normal speed)
-               Values: 0.25 to 4.0 (0.5 = half speed, 2.0 = double speed)
-               Supported by both OpenAI and Kokoro TTS providers.
-        vad_aggressiveness: Voice Activity Detection aggressiveness level (default: None uses VOICEMODE_VAD_AGGRESSIVENESS env var)
-                            Controls how strict the VAD is about filtering out non-speech audio.
-                            Values: 0-3 (integer)
-                            - 0: Least aggressive - includes more audio, may include non-speech
-                            - 1: Slightly stricter filtering
-                            - 2: Balanced filtering (default) - good for most environments
-                            - 3: Most aggressive - strict speech detection, may cut off soft speech
-                            Use lower values (0-1) in quiet environments, higher (2-3) in noisy environments
-        skip_tts: Skip text-to-speech and only show text (default: None uses VOICEMODE_SKIP_TTS env var)
-                  When True: Skip TTS for faster response, text-only output
-                  When False: Always use TTS regardless of environment setting
-                  When None: Follow VOICEMODE_SKIP_TTS environment variable
-                  Useful for rapid development iterations or when voice isn't needed
-        pip_leading_silence: Override leading silence before chimes (default: None uses VOICEMODE_PIP_LEADING_SILENCE env var)
-                             Time in seconds to add before the chime starts (e.g., 1.0 for Bluetooth devices)
-        pip_trailing_silence: Override trailing silence after chimes (default: None uses VOICEMODE_PIP_TRAILING_SILENCE env var)
-                              Time in seconds to add after the chime ends (e.g., 0.5 to prevent cutoff)
-
-    Returns:
-        If wait_for_response is False: Confirmation that message was spoken
-        If wait_for_response is True: The voice response received (or error/timeout message)
-
-    Examples:
-        - Ask a question: converse("What's your name?")  # Let system auto-select voice/model
-        - Make a statement and wait: converse("Tell me more about that")  # Auto-selection recommended
-        - Just speak without waiting: converse("Goodbye!", wait_for_response=False)
-        - User requests specific voice: converse("Hello", voice="nova")  # Only when explicitly requested
-
-    Language-Specific Examples (MUST specify voice & provider):
-        - Spanish: converse("¿Cómo estás?", voice="ef_dora", tts_provider="kokoro")
-        - French: converse("Bonjour!", voice="ff_siwis", tts_provider="kokoro")
-        - Chinese: converse("你好", voice="zf_xiaobei", tts_provider="kokoro")
-
-    Emotional Speech (Requires OpenAI API):
-        - Excitement: converse("We did it!", tts_model="gpt-4o-mini-tts", tts_instructions="Sound extremely excited and celebratory")
-        - Sadness: converse("I'm sorry for your loss", tts_model="gpt-4o-mini-tts", tts_instructions="Sound gentle and sympathetic")
-
-    Speed Control Examples:
-        - Normal speed: converse("This is normal speed")
-        - Faster speech: converse("This is faster speech", speed=1.5)
-
-    Parallel Operations Pattern (RECOMMENDED):
-        When performing actions that don't require user confirmation, use wait_for_response=False
-        to speak while simultaneously executing other tools. This creates natural, flowing conversations.
-
-        Pattern: converse("Status update", wait_for_response=False) then immediately run other tools.
-        The speech plays while your actions execute in parallel.
-
-        Examples:
-        - Search narration: converse("Searching for that file", wait_for_response=False) + Grep(...)
-        - Processing update: converse("Analyzing the screenshot", wait_for_response=False) + analyze_screenshot(...)
-        - Quick confirmation: converse("Done! The file is saved", wait_for_response=False)
-
-        Benefits: No dead air, user knows what's happening, more natural conversation flow
-
-        When to use: File operations, data processing, status updates, confirmations that don't need response
-        When NOT to use: Questions requiring answers, confirmations needing user approval, error messages
+    """Have an ongoing voice conversation with the user - speak a message and optionally listen for response.
     """
     # Convert string booleans to actual booleans
     if isinstance(wait_for_response, str):
         wait_for_response = wait_for_response.lower() in ('true', '1', 'yes', 'on')
     if isinstance(disable_silence_detection, str):
         disable_silence_detection = disable_silence_detection.lower() in ('true', '1', 'yes', 'on')
-    if isinstance(audio_feedback, str):
-        audio_feedback = audio_feedback.lower() in ('true', '1', 'yes', 'on')
+    if isinstance(chime_enabled, str):
+        chime_enabled = chime_enabled.lower() in ('true', '1', 'yes', 'on')
     if skip_tts is not None and isinstance(skip_tts, str):
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
     
@@ -1746,12 +1397,12 @@ async def converse(
                     
                     # Play "listening" feedback sound
                     await play_audio_feedback(
-                        "listening", 
-                        openai_clients, 
-                        audio_feedback, 
-                        audio_feedback_style or "whisper",
-                        pip_leading_silence=pip_leading_silence,
-                        pip_trailing_silence=pip_trailing_silence
+                        "listening",
+                        openai_clients,
+                        chime_enabled,
+                        "whisper",
+                        chime_pre_delay=chime_pre_delay,
+                        chime_post_delay=chime_post_delay
                     )
                     
                     # Record response
@@ -1777,12 +1428,12 @@ async def converse(
                     
                     # Play "finished" feedback sound
                     await play_audio_feedback(
-                        "finished", 
-                        openai_clients, 
-                        audio_feedback, 
-                        audio_feedback_style or "whisper",
-                        pip_leading_silence=pip_leading_silence,
-                        pip_trailing_silence=pip_trailing_silence
+                        "finished",
+                        openai_clients,
+                        chime_enabled,
+                        "whisper",
+                        chime_pre_delay=chime_pre_delay,
+                        chime_post_delay=chime_post_delay
                     )
                     
                     # Mark the end of recording - this is when user expects response to start
