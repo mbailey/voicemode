@@ -146,8 +146,8 @@ VOICEMODE_AUDIO_FEEDBACK=true
 VOICEMODE_FEEDBACK_STYLE=whisper    # or "shout"
 
 # Silence around chimes (for Bluetooth)
-VOICEMODE_PIP_LEADING_SILENCE=1.0   # Seconds before
-VOICEMODE_PIP_TRAILING_SILENCE=0.5  # Seconds after
+VOICEMODE_CHIME_PRE_DELAY=1.0   # Seconds before
+VOICEMODE_CHIME_POST_DELAY=0.5  # Seconds after
 ```
 
 ### Voice Activity Detection
