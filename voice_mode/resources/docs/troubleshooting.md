@@ -42,17 +42,17 @@
 **Solutions:**
 1. Add leading silence:
    ```python
-   converse("Hello", chime_pre_delay=1.0)
+   converse("Hello", chime_leading_silence=1.0)
    ```
 
 2. Add trailing silence:
    ```python
-   converse("Hello", chime_post_delay=0.5)
+   converse("Hello", chime_trailing_silence=0.5)
    ```
 
 3. Add both:
    ```python
-   converse("Hello", chime_pre_delay=1.0, chime_post_delay=0.5)
+   converse("Hello", chime_leading_silence=1.0, chime_trailing_silence=0.5)
    ```
 
 ### No audio output

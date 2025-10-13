@@ -407,8 +407,8 @@ async def text_to_speech(
                             event_logger.log_event(event_logger.TTS_PLAYBACK_START)
 
                         # Add configurable silence at the beginning to prevent clipping
-                        from .config import CHIME_PRE_DELAY
-                        silence_duration = CHIME_PRE_DELAY  # seconds
+                        from .config import CHIME_LEADING_SILENCE
+                        silence_duration = CHIME_LEADING_SILENCE  # seconds
                         silence_samples = int(audio.frame_rate * silence_duration)
                         # Match the shape of the samples array exactly
                         if samples.ndim == 1:
@@ -585,11 +585,11 @@ def generate_chime(
     chime = np.concatenate(all_samples)
     
     # Import config values if not overridden
-    from .config import CHIME_PRE_DELAY, CHIME_POST_DELAY
+    from .config import CHIME_LEADING_SILENCE, CHIME_TRAILING_SILENCE
 
     # Use parameter overrides or fall back to config
-    actual_leading_silence = leading_silence if leading_silence is not None else CHIME_PRE_DELAY
-    actual_trailing_silence = trailing_silence if trailing_silence is not None else CHIME_POST_DELAY
+    actual_leading_silence = leading_silence if leading_silence is not None else CHIME_LEADING_SILENCE
+    actual_trailing_silence = trailing_silence if trailing_silence is not None else CHIME_TRAILING_SILENCE
     
     # Add leading silence for Bluetooth wake-up time
     # This prevents the beginning of the chime from being cut off

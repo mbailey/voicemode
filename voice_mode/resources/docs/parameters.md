@@ -131,21 +131,21 @@ Voice Activity Detection strictness level.
 - Normal home/office: Use default (2)
 - Noisy cafe/outdoors: Use 3
 
-### chime_pre_delay
+### chime_leading_silence
 **Type:** number (seconds, optional)
 Time to add before audio chime starts.
 
 **Use case:** Bluetooth devices that need audio buffer (e.g., 1.0 seconds)
 
-**Default:** Uses VOICEMODE_CHIME_PRE_DELAY env var (0.1s)
+**Default:** Uses VOICEMODE_CHIME_LEADING_SILENCE env var (0.1s)
 
-### chime_post_delay
+### chime_trailing_silence
 **Type:** number (seconds, optional)
 Time to add after audio chime ends.
 
 **Use case:** Prevent chime cutoff (e.g., 0.5 seconds)
 
-**Default:** Uses VOICEMODE_CHIME_POST_DELAY env var (0.2s)
+**Default:** Uses VOICEMODE_CHIME_TRAILING_SILENCE env var (0.2s)
 
 ## Audio Format & Feedback
 

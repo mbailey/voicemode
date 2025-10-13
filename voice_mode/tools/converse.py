@@ -337,8 +337,8 @@ async def play_audio_feedback(
     feedback_type: Optional[str] = None,
     voice: str = "nova",
     model: str = "gpt-4o-mini-tts",
-    chime_pre_delay: Optional[float] = None,
-    chime_post_delay: Optional[float] = None
+    chime_leading_silence: Optional[float] = None,
+    chime_trailing_silence: Optional[float] = None
 ) -> None:
     """Play an audio feedback chime
 
@@ -350,8 +350,8 @@ async def play_audio_feedback(
         feedback_type: Kept for compatibility, not used
         voice: Kept for compatibility, not used
         model: Kept for compatibility, not used
-        chime_pre_delay: Optional override for pre-chime silence duration
-        chime_post_delay: Optional override for post-chime silence duration
+        chime_leading_silence: Optional override for pre-chime silence duration
+        chime_trailing_silence: Optional override for post-chime silence duration
     """
     # Use parameter override if provided, otherwise use global setting
     if enabled is False:
@@ -369,13 +369,13 @@ async def play_audio_feedback(
         # Play appropriate chime with optional delay overrides
         if text == "listening":
             await play_chime_start(
-                leading_silence=chime_pre_delay,
-                trailing_silence=chime_post_delay
+                leading_silence=chime_leading_silence,
+                trailing_silence=chime_trailing_silence
             )
         elif text == "finished":
             await play_chime_end(
-                leading_silence=chime_pre_delay,
-                trailing_silence=chime_post_delay
+                leading_silence=chime_leading_silence,
+                trailing_silence=chime_trailing_silence
             )
     except Exception as e:
         logger.debug(f"Audio feedback failed: {e}")
@@ -968,8 +968,8 @@ async def converse(
     speed: Optional[float] = None,
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
-    chime_pre_delay: Optional[float] = None,
-    chime_post_delay: Optional[float] = None
+    chime_leading_silence: Optional[float] = None,
+    chime_trailing_silence: Optional[float] = None
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -994,8 +994,8 @@ KEY PARAMETERS:
 • vad_aggressiveness (0-3, default: 2): Voice detection strictness (0=permissive, 3=strict)
 • speed (0.25-4.0): Speech rate (1.0=normal, 2.0=double speed)
 • chime_enabled (bool): Enable/disable audio feedback chimes
-• chime_pre_delay (float): Silence before chime in seconds
-• chime_post_delay (float): Silence after chime in seconds
+• chime_leading_silence (float): Silence before chime in seconds
+• chime_trailing_silence (float): Silence after chime in seconds
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
@@ -1431,8 +1431,8 @@ consult the MCP resources listed above.
                         openai_clients,
                         chime_enabled,
                         "whisper",
-                        chime_pre_delay=chime_pre_delay,
-                        chime_post_delay=chime_post_delay
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence
                     )
                     
                     # Record response
@@ -1462,8 +1462,8 @@ consult the MCP resources listed above.
                         openai_clients,
                         chime_enabled,
                         "whisper",
-                        chime_pre_delay=chime_pre_delay,
-                        chime_post_delay=chime_post_delay
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence
                     )
                     
                     # Mark the end of recording - this is when user expects response to start

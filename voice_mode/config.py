@@ -424,9 +424,9 @@ DEFAULT_LISTEN_DURATION = float(os.getenv("VOICEMODE_DEFAULT_LISTEN_DURATION", "
 
 # Audio feedback chime configuration
 # Leading silence before chimes to allow Bluetooth devices to wake up
-CHIME_PRE_DELAY = float(os.getenv("VOICEMODE_CHIME_PRE_DELAY", "0.1"))  # Default 0.1s - minimal delay for Bluetooth
+CHIME_LEADING_SILENCE = float(os.getenv("VOICEMODE_CHIME_LEADING_SILENCE", "0.1"))  # Default 0.1s - minimal delay for Bluetooth
 # Trailing silence after chimes to prevent cutoff
-CHIME_POST_DELAY = float(os.getenv("VOICEMODE_CHIME_POST_DELAY", "0.2"))  # Default 0.2s - reduced for responsiveness
+CHIME_TRAILING_SILENCE = float(os.getenv("VOICEMODE_CHIME_TRAILING_SILENCE", "0.2"))  # Default 0.2s - reduced for responsiveness
 
 # Audio format configuration
 AUDIO_FORMAT = os.getenv("VOICEMODE_AUDIO_FORMAT", "pcm").lower()
