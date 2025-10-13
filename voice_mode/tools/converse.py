@@ -1228,24 +1228,19 @@ async def converse(
     (Default OpenAI voices speak non-English with American accent)
 
     PRIVACY: Microphone access required when wait_for_response=True. Audio processed via STT service, not stored.
-    
+
     Args:
         message: The message to speak
         wait_for_response: Whether to listen for a response after speaking (default: True)
         listen_duration: How long to listen for response in seconds (default: 120.0)
                          The tool handles silence detection well and uses a sensible default.
-                         It's unusual to need to set the duration - only override if you have 
-                         specific requirements such as:
+                         Only override if you have specific requirements such as:
                          - Silence detection is disabled and you need a specific timeout
                          - You know the response will be exceptionally long (>120s)
-                         - You're in a special mode that requires different timing
                          In most cases, just let the default and silence detection handle it.
         min_listen_duration: Minimum time to record before silence detection can stop (default: 2.0)
                              Useful for preventing premature cutoffs when users need thinking time.
-                             Examples:
-                             - Complex questions: 2-3 seconds
-                             - Open-ended prompts: 3-5 seconds  
-                             - Quick responses: 0.5-1 second
+                             Examples: Complex questions: 2-3 seconds; Quick responses: 0.5-1 second
         transport: Transport method - "auto" (try LiveKit then local), "local" (direct mic), "livekit" (room-based)
         room_name: LiveKit room name (only for livekit transport, auto-discovered if empty)
         timeout: Maximum wait time for response in seconds (LiveKit only) - DEPRECATED: Use listen_duration instead
@@ -1263,8 +1258,8 @@ async def converse(
         audio_feedback_style: Audio feedback style - "whisper" (default) or "shout" (default: None uses VOICE_MODE_FEEDBACK_STYLE env var)
         audio_format: Override audio format (pcm, mp3, wav, flac, aac, opus) - defaults to VOICEMODE_TTS_AUDIO_FORMAT env var
         disable_silence_detection: Disable silence detection for this interaction only (default: False)
-                                   Silence detection automatically stops recording after detecting silence. 
-                                   Disable if user reports being cut off, in noisy environments, or for 
+                                   Silence detection automatically stops recording after detecting silence.
+                                   Disable if user reports being cut off, in noisy environments, or for
                                    use cases like dictation where pauses are expected.
         speed: Speech rate/speed for TTS playback (default: None uses normal speed)
                Values: 0.25 to 4.0 (0.5 = half speed, 2.0 = double speed)
@@ -1272,13 +1267,11 @@ async def converse(
         vad_aggressiveness: Voice Activity Detection aggressiveness level (default: None uses VOICEMODE_VAD_AGGRESSIVENESS env var)
                             Controls how strict the VAD is about filtering out non-speech audio.
                             Values: 0-3 (integer)
-                            - 0: Least aggressive filtering - includes more audio, may include non-speech
+                            - 0: Least aggressive - includes more audio, may include non-speech
                             - 1: Slightly stricter filtering
                             - 2: Balanced filtering (default) - good for most environments
-                            - 3: Most aggressive filtering - strict speech detection, may cut off soft speech
-                            
-                            Use lower values (0-1) in quiet environments to catch all speech
-                            Use higher values (2-3) in noisy environments to reduce false triggers
+                            - 3: Most aggressive - strict speech detection, may cut off soft speech
+                            Use lower values (0-1) in quiet environments, higher (2-3) in noisy environments
         skip_tts: Skip text-to-speech and only show text (default: None uses VOICEMODE_SKIP_TTS env var)
                   When True: Skip TTS for faster response, text-only output
                   When False: Always use TTS regardless of environment setting
@@ -1288,83 +1281,46 @@ async def converse(
                              Time in seconds to add before the chime starts (e.g., 1.0 for Bluetooth devices)
         pip_trailing_silence: Override trailing silence after chimes (default: None uses VOICEMODE_PIP_TRAILING_SILENCE env var)
                               Time in seconds to add after the chime ends (e.g., 0.5 to prevent cutoff)
+
+    Returns:
         If wait_for_response is False: Confirmation that message was spoken
         If wait_for_response is True: The voice response received (or error/timeout message)
-    
+
     Examples:
         - Ask a question: converse("What's your name?")  # Let system auto-select voice/model
         - Make a statement and wait: converse("Tell me more about that")  # Auto-selection recommended
         - Just speak without waiting: converse("Goodbye!", wait_for_response=False)
         - User requests specific voice: converse("Hello", voice="nova")  # Only when explicitly requested
-        - Need HD quality: converse("High quality speech", tts_model="tts-1-hd")  # Only for specific features
-        
+
     Language-Specific Examples (MUST specify voice & provider):
         - Spanish: converse("¿Cómo estás?", voice="ef_dora", tts_provider="kokoro")
         - French: converse("Bonjour!", voice="ff_siwis", tts_provider="kokoro")
-        - Italian: converse("Ciao!", voice="if_sara", tts_provider="kokoro")
         - Chinese: converse("你好", voice="zf_xiaobei", tts_provider="kokoro")
-        
+
     Emotional Speech (Requires OpenAI API):
         - Excitement: converse("We did it!", tts_model="gpt-4o-mini-tts", tts_instructions="Sound extremely excited and celebratory")
         - Sadness: converse("I'm sorry for your loss", tts_model="gpt-4o-mini-tts", tts_instructions="Sound gentle and sympathetic")
-        - Urgency: converse("Watch out!", tts_model="gpt-4o-mini-tts", tts_instructions="Sound urgent and concerned")
-        - Humor: converse("That's hilarious!", tts_model="gpt-4o-mini-tts", tts_instructions="Sound amused and playful")
-        
-    Note: Emotional speech uses OpenAI's gpt-4o-mini-tts model and incurs API costs (~$0.02/minute)
-    
+
     Speed Control Examples:
         - Normal speed: converse("This is normal speed")
         - Faster speech: converse("This is faster speech", speed=1.5)
-        - Double speed: converse("This is double speed", speed=2.0)
-        - Slower speech: converse("This is slower speech", speed=0.8)
-        
-        Note: Speed control works with both OpenAI and Kokoro TTS providers
-    
-    VAD Aggressiveness Examples:
-        - Quiet room, capture all speech: converse("Let's have a conversation", vad_aggressiveness=0)
-        - Normal home/office: converse("Tell me about your day")  # Uses default (2)
-        - Noisy cafe/outdoors: converse("Can you hear me?", vad_aggressiveness=3)
-        - Balance for most cases: converse("How are you?", vad_aggressiveness=2)
-        
-        Remember: Lower values (0-1) = more permissive, may detect non-speech as speech
-                 Higher values (2-3) = more strict, may miss soft speech or whispers
-    
+
     Parallel Operations Pattern (RECOMMENDED):
         When performing actions that don't require user confirmation, use wait_for_response=False
         to speak while simultaneously executing other tools. This creates natural, flowing conversations.
-        
+
         Pattern: converse("Status update", wait_for_response=False) then immediately run other tools.
         The speech plays while your actions execute in parallel.
-        
+
         Examples:
         - Search narration: converse("Searching for that file", wait_for_response=False) + Grep(...)
         - Processing update: converse("Analyzing the screenshot", wait_for_response=False) + analyze_screenshot(...)
-        - Creation status: converse("Creating that document now", wait_for_response=False) + Write(...)
         - Quick confirmation: converse("Done! The file is saved", wait_for_response=False)
-        
-        Benefits:
-        - No dead air during operations
-        - User knows what's happening
-        - More natural conversation flow
-        - Better user experience
-        
-        When to use parallel pattern:
-        - File operations (reading, writing, searching)
-        - Data processing (analysis, computation)
-        - Status updates during long operations
-        - Confirmations that don't need response
-        
-        When NOT to use parallel pattern:
-        - Questions requiring answers
-        - Confirmations needing user approval
-        - Error messages needing acknowledgment
-        - End of conversation farewells (unless doing cleanup)
-    
-    Skip TTS Examples:
-        - Fast iteration mode: converse("Processing your request", skip_tts=True)  # Text only, no voice
-        - Important announcement: converse("Warning: System will restart", skip_tts=False)  # Always use voice
-        - Quick confirmation: converse("Done!", skip_tts=True, wait_for_response=False)  # Fast text-only
-        - Follow user preference: converse("Hello")  # Uses VOICEMODE_SKIP_TTS setting
+
+        Benefits: No dead air, user knows what's happening, more natural conversation flow
+
+        When to use: File operations, data processing, status updates, confirmations that don't need response
+        When NOT to use: Questions requiring answers, confirmations needing user approval, error messages
     """
     # Convert string booleans to actual booleans
     if isinstance(wait_for_response, str):
