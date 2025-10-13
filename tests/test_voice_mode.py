@@ -145,7 +145,7 @@ class TestVoiceMCPTools:
                 {
                     "message": "What is your name?",
                     "transport": "local",
-                    "listen_duration": 2.0
+                    "listen_duration_max": 2.0
                 }
             )
             assert "Test transcription" in result[0].text
@@ -355,7 +355,7 @@ class TestLiveKitIntegration:
                     {
                         "message": "Test",
                         "transport": "auto",
-                        "listen_duration": 1.0
+                        "listen_duration_max": 1.0
                     }
                 )
                 # Should use local transport and succeed
@@ -404,7 +404,7 @@ async def test_full_conversation_flow(voice_mode_server):
             {
                 "message": "What is your favorite color?",
                 "transport": "local",
-                "listen_duration": 2.0
+                "listen_duration_max": 2.0
             }
         )
         assert "Test transcription" in result1[0].text

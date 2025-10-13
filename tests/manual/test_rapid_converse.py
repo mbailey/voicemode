@@ -37,7 +37,7 @@ class MCPTestClient:
             "arguments": {
                 "message": message,
                 "wait_for_response": wait_for_response,
-                "listen_duration": duration
+                "listen_duration_max": duration
             }
         })
 

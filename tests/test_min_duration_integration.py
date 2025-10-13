@@ -16,7 +16,7 @@ class TestMinDurationIntegration:
     """Test minimum duration functionality in converse tool."""
     
     async def test_converse_validates_min_duration(self):
-        """Test that converse validates min_listen_duration parameter."""
+        """Test that converse validates listen_duration_min parameter."""
         from voice_mode.tools.converse import converse
         
         # Get the actual function from the MCP tool wrapper
@@ -28,13 +28,13 @@ class TestMinDurationIntegration:
             import voice_mode.config
             voice_mode.config.FFMPEG_AVAILABLE = True
             
-            # Test negative min_listen_duration
+            # Test negative listen_duration_min
             result = await converse_func(
                 message="Test",
                 wait_for_response=True,
-                min_listen_duration=-1.0
+                listen_duration_min=-1.0
             )
-            assert "min_listen_duration cannot be negative" in result
+            assert "listen_duration_min cannot be negative" in result
             
             # Test min > max duration
             with patch('voice_mode.tools.converse.logger') as mock_logger:
@@ -48,18 +48,18 @@ class TestMinDurationIntegration:
                             result = await converse_func(
                                 message="Test",
                                 wait_for_response=True,
-                                listen_duration=5.0,
-                                min_listen_duration=10.0
+                                listen_duration_max=5.0,
+                                listen_duration_min=10.0
                             )
                             
-                            # Should log warning and adjust min_listen_duration
+                            # Should log warning and adjust listen_duration_min
                             mock_logger.warning.assert_called()
                             warning_msg = mock_logger.warning.call_args[0][0]
-                            assert "min_listen_duration" in warning_msg
+                            assert "listen_duration_min" in warning_msg
                             assert "greater than listen_duration" in warning_msg
     
     async def test_converse_passes_min_duration_to_recording(self):
-        """Test that converse passes min_listen_duration to recording function."""
+        """Test that converse passes listen_duration_min to recording function."""
         from voice_mode.tools.converse import converse
         
         # Get the actual function from the MCP tool wrapper
@@ -78,12 +78,12 @@ class TestMinDurationIntegration:
                     with patch('voice_mode.tools.converse.speech_to_text', new_callable=AsyncMock) as mock_stt:
                         mock_stt.return_value = {"text": "Test response", "provider": "whisper"}
                         
-                        # Test with specific min_listen_duration
+                        # Test with specific listen_duration_min
                         result = await converse_func(
                             message="Test question",
                             wait_for_response=True,
-                            listen_duration=30.0,
-                            min_listen_duration=2.5
+                            listen_duration_max=30.0,
+                            listen_duration_min=2.5
                         )
                         
                         # Verify record_audio_with_silence_detection was called with correct parameters
