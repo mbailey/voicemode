@@ -953,8 +953,8 @@ async def livekit_converse(message: str, room_name: str = "", timeout: float = 6
 async def converse(
     message: str,
     wait_for_response: Union[bool, str] = True,
-    listen_duration: float = DEFAULT_LISTEN_DURATION,
-    min_listen_duration: float = 2.0,
+    listen_duration_max: float = DEFAULT_LISTEN_DURATION,
+    listen_duration_min: float = 2.0,
     transport: Literal["auto", "local", "livekit"] = "auto",
     room_name: str = "",
     timeout: float = 60.0,
@@ -986,8 +986,8 @@ async def converse(
 KEY PARAMETERS:
 • message (required): The message to speak
 • wait_for_response (bool, default: true): Listen for response after speaking
-• listen_duration (number, default: 120): Max listen time in seconds
-• min_listen_duration (number, default: 2.0): Min recording time before silence detection
+• listen_duration_max (number, default: 120): Max listen time in seconds
+• listen_duration_min (number, default: 2.0): Min recording time before silence detection
 • voice (string): TTS voice name (auto-selected unless specified)
 • tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)
 • disable_silence_detection (bool, default: false): Disable auto-stop on silence
@@ -1051,13 +1051,13 @@ consult the MCP resources listed above.
     
     # Validate duration parameters
     if wait_for_response:
-        if min_listen_duration < 0:
-            return "❌ Error: min_listen_duration cannot be negative"
-        if listen_duration <= 0:
-            return "❌ Error: listen_duration must be positive"
-        if min_listen_duration > listen_duration:
-            logger.warning(f"min_listen_duration ({min_listen_duration}s) is greater than listen_duration ({listen_duration}s), using listen_duration as minimum")
-            min_listen_duration = listen_duration
+        if listen_duration_min < 0:
+            return "❌ Error: listen_duration_min cannot be negative"
+        if listen_duration_max <= 0:
+            return "❌ Error: listen_duration_max must be positive"
+        if listen_duration_min > listen_duration_max:
+            logger.warning(f"listen_duration_min ({listen_duration_min}s) is greater than listen_duration_max ({listen_duration_max}s), using listen_duration_max as minimum")
+            listen_duration_min = listen_duration_max
     
     # Check if FFmpeg is available
     ffmpeg_available = getattr(voice_mode.config, 'FFMPEG_AVAILABLE', True)  # Default to True if not set
@@ -1106,7 +1106,7 @@ consult the MCP resources listed above.
         # If we have a session, the event will be associated with it
         log_tool_request_start("converse", {
             "wait_for_response": wait_for_response,
-            "listen_duration": listen_duration if wait_for_response else None
+            "listen_duration_max": listen_duration_max if wait_for_response else None
         })
     
     # Track execution time and resources
@@ -1295,8 +1295,8 @@ consult the MCP resources listed above.
         
         if transport == "livekit":
             # For LiveKit, use the existing function but with the message parameter
-            # Use listen_duration instead of timeout for consistent behavior
-            livekit_result = await livekit_converse(message, room_name, listen_duration)
+            # Use listen_duration_max instead of timeout for consistent behavior
+            livekit_result = await livekit_converse(message, room_name, listen_duration_max)
             
             # Track LiveKit interaction (simplified since we don't have detailed timing)
             success = not livekit_result.startswith("Error:") and not livekit_result.startswith("No ")
@@ -1436,16 +1436,16 @@ consult the MCP resources listed above.
                     )
                     
                     # Record response
-                    logger.info(f"🎤 Listening for {listen_duration} seconds...")
-                    
+                    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+
                     # Log recording start
                     if event_logger:
                         event_logger.log_event(event_logger.RECORDING_START)
-                    
+
                     record_start = time.perf_counter()
-                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration}, disable_silence_detection={disable_silence_detection}, min_duration={min_listen_duration}, vad_aggressiveness={vad_aggressiveness}")
+                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
                     audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                        None, record_audio_with_silence_detection, listen_duration, disable_silence_detection, min_listen_duration, vad_aggressiveness
+                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                     )
                     timings['record'] = time.perf_counter() - record_start
                     
