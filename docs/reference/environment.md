@@ -96,8 +96,8 @@ Supported formats: `pcm`, `opus`, `mp3`, `wav`, `flac`, `aac`
 |----------|-------------|---------|---------|
 | `VOICEMODE_AUDIO_FEEDBACK` | Enable recording chimes | `true` | `false` |
 | `VOICEMODE_FEEDBACK_STYLE` | Chime style | `whisper` | `shout` |
-| `VOICEMODE_CHIME_PRE_DELAY` | Silence before chime (seconds) | `0.1` | `1.0` |
-| `VOICEMODE_CHIME_POST_DELAY` | Silence after chime (seconds) | `0.2` | `0.5` |
+| `VOICEMODE_CHIME_LEADING_SILENCE` | Silence before chime (seconds) | `0.1` | `1.0` |
+| `VOICEMODE_CHIME_TRAILING_SILENCE` | Silence after chime (seconds) | `0.2` | `0.5` |
 
 ## Voice Activity Detection
 
