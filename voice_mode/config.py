@@ -105,6 +105,24 @@ def load_voicemode_env():
 # VOICEMODE_SOUNDFONTS_ENABLED=false
 
 #############
+# Tool Loading Configuration
+#############
+
+# Control which MCP tools are loaded to reduce token usage
+# Whitelist mode - only load specified tools (most efficient)
+# VOICEMODE_TOOLS_ENABLED=converse,service
+
+# Blacklist mode - load all tools except specified ones
+# VOICEMODE_TOOLS_DISABLED=pronunciation_add,pronunciation_remove
+
+# Examples:
+# Minimal (just voice conversation): VOICEMODE_TOOLS_ENABLED=converse
+# Voice + config: VOICEMODE_TOOLS_ENABLED=converse,service,config_get,config_set
+# Load all tools: VOICEMODE_TOOLS_DISABLED=
+# All except pronunciation: VOICEMODE_TOOLS_DISABLED=pronunciation_add,pronunciation_remove,pronunciation_list
+# Default: converse,service (basic voice interaction and service management)
+
+#############
 # Provider Configuration
 #############
 

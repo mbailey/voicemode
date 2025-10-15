@@ -6,35 +6,53 @@ VoiceMode supports selective tool loading to reduce token usage in Claude Code a
 
 ## Why Use Selective Loading?
 
-By default, VoiceMode loads all available tools (~40+ tools), which consumes approximately 25,000 tokens in your Claude Code context. If you only need voice conversation features, you can load just the `converse` tool and save ~20,000 tokens.
+By default, VoiceMode loads only essential tools (`converse`, `service`), which consumes approximately 7,000 tokens in your Claude Code context. If you need additional tools, you can enable them selectively. Loading all tools (~40+ tools) would consume approximately 25,000 tokens.
 
-## How to Enable
+## Loading Modes
 
-Set the `VOICEMODE_TOOLS` environment variable to a comma-separated list of tools you want to load:
+VoiceMode supports two modes for controlling which tools are loaded:
+
+### Whitelist Mode (Most Efficient)
+Use `VOICEMODE_TOOLS_ENABLED` to load only specific tools. This is the most efficient mode for reducing token usage.
 
 ```bash
-# Load only the converse tool (saves ~20k tokens)
-export VOICEMODE_TOOLS=converse
+# Load only converse tool (saves ~20k tokens)
+export VOICEMODE_TOOLS_ENABLED=converse
 
-# Load converse and statistics tools
-export VOICEMODE_TOOLS=converse,statistics
+# Load converse and service tools (recommended minimum)
+export VOICEMODE_TOOLS_ENABLED=converse,service
 
-# Load converse and configuration tools
-export VOICEMODE_TOOLS=converse,configuration_management
+# Load multiple tools
+export VOICEMODE_TOOLS_ENABLED=converse,service,statistics
+```
+
+### Blacklist Mode
+Use `VOICEMODE_TOOLS_DISABLED` to load all tools except specific ones. Useful when you want most tools but need to exclude a few.
+
+```bash
+# Load all tools except pronunciation
+export VOICEMODE_TOOLS_DISABLED=pronunciation_add,pronunciation_remove,pronunciation_list
+
+# Load all tools except service installation
+export VOICEMODE_TOOLS_DISABLED=whisper_install,kokoro_install,livekit_install
 ```
 
 ## Configuration Methods
 
 ### Method 1: Environment Variable
 ```bash
-export VOICEMODE_TOOLS=converse
+export VOICEMODE_TOOLS_ENABLED=converse,service
 claude  # Start Claude Code
 ```
 
-### Method 2: .voicemode.env File
+### Method 2: .voicemode.env File (Recommended)
 Create or edit `~/.voicemode/voicemode.env`:
 ```bash
-VOICEMODE_TOOLS=converse
+# Whitelist mode - only load specified tools (most efficient)
+VOICEMODE_TOOLS_ENABLED=converse,service
+
+# Or blacklist mode - load all except specified
+# VOICEMODE_TOOLS_DISABLED=pronunciation_add,pronunciation_remove
 ```
 
 ### Method 3: .mcp.json Configuration
@@ -47,7 +65,7 @@ Edit your `.mcp.json` file:
       "command": "uv",
       "args": ["run", "voicemode"],
       "env": {
-        "VOICEMODE_TOOLS": "converse"
+        "VOICEMODE_TOOLS_ENABLED": "converse,service"
       }
     }
   }
@@ -81,37 +99,46 @@ Edit your `.mcp.json` file:
 ### Minimal Setup (Voice Only)
 For basic voice conversations with minimal token usage:
 ```bash
-export VOICEMODE_TOOLS=converse
+export VOICEMODE_TOOLS_ENABLED=converse
+```
+
+### Recommended Minimum
+Voice conversation plus service management:
+```bash
+export VOICEMODE_TOOLS_ENABLED=converse,service
 ```
 
 ### Voice with Statistics
 To track conversation metrics:
 ```bash
-export VOICEMODE_TOOLS=converse,statistics
+export VOICEMODE_TOOLS_ENABLED=converse,service,statistics
 ```
 
 ### Full Development Setup
 For development and debugging:
 ```bash
-export VOICEMODE_TOOLS=converse,statistics,configuration_management,providers,service
+export VOICEMODE_TOOLS_ENABLED=converse,service,statistics,configuration_management,providers
 ```
 
-### All Tools (Default)
-To load all tools (or unset the variable):
+### All Tools
+To load all available tools:
 ```bash
-unset VOICEMODE_TOOLS
-# or
-export VOICEMODE_TOOLS=""
+export VOICEMODE_TOOLS_DISABLED=""
+# Or use blacklist to exclude specific tools only
 ```
+
+### Default Behavior
+If no configuration is set, VoiceMode loads essential tools only (`converse`, `service`).
 
 ## Token Savings
 
-| Configuration | Approximate Token Usage | Savings |
+| Configuration | Approximate Token Usage | Compared to All Tools |
 |--------------|------------------------|---------|
-| All tools (default) | ~25,000 tokens | - |
-| `converse` only | ~5,000 tokens | ~20,000 tokens |
-| `converse,statistics` | ~8,000 tokens | ~17,000 tokens |
-| Core tools (5 tools) | ~12,000 tokens | ~13,000 tokens |
+| `converse,service` (default) | ~7,000 tokens | Saves ~18,000 tokens |
+| `converse` only | ~5,000 tokens | Saves ~20,000 tokens |
+| `converse,service,statistics` | ~9,000 tokens | Saves ~16,000 tokens |
+| Core tools (5 tools) | ~12,000 tokens | Saves ~13,000 tokens |
+| All tools | ~25,000 tokens | - |
 
 ## Troubleshooting
 
@@ -130,7 +157,7 @@ Some tools may load additional dependencies. For example:
 Check which tools are loaded:
 ```python
 import os
-os.environ['VOICEMODE_TOOLS'] = 'converse'
+os.environ['VOICEMODE_TOOLS_ENABLED'] = 'converse,service'
 from voice_mode import tools
 # Check loaded modules
 import sys
@@ -140,9 +167,9 @@ print(loaded)
 
 ## Best Practices
 
-1. **Start Minimal**: Begin with just `converse` and add tools as needed
-2. **Production Use**: Use selective loading in production to conserve tokens
-3. **Development**: Load all tools during development for full functionality
+1. **Start Minimal**: Begin with `converse,service` for essential functionality
+2. **Production Use**: Use whitelist mode (`VOICEMODE_TOOLS_ENABLED`) to conserve tokens
+3. **Development**: Load all tools during development, or use blacklist mode to exclude a few
 4. **Documentation**: Document which tools your workflow requires
 
 ## Integration with Claude Code
@@ -153,4 +180,8 @@ When using Claude Code, the token savings from selective loading gives you more 
 - Additional MCP servers
 - Custom agents and tools
 
-Set `VOICEMODE_TOOLS=converse` in your `.mcp.json` for optimal Claude Code performance.
+The default configuration (`converse,service`) provides optimal Claude Code performance with minimal token usage.
+
+## Legacy Variable
+
+> **Note**: The `VOICEMODE_TOOLS` variable is deprecated and will be removed in v5.0. Please migrate to `VOICEMODE_TOOLS_ENABLED` or `VOICEMODE_TOOLS_DISABLED`.
