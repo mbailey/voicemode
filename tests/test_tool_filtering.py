@@ -122,16 +122,16 @@ class TestToolFiltering:
         assert "converse" in tools
         assert "service" in tools
 
-    def test_default_mode_loads_all(self):
-        """Test that default mode loads all available tools."""
-        from voice_mode.tools import determine_tools_to_load, get_all_available_tools
+    def test_default_mode_loads_essential(self):
+        """Test that default mode loads only essential tools (converse, service)."""
+        from voice_mode.tools import determine_tools_to_load
 
         # No environment variables set
         tools, mode = determine_tools_to_load()
-        all_tools = get_all_available_tools()
 
         assert "default mode" in mode
-        assert tools == all_tools
+        assert tools == {"converse", "service"}
+        assert len(tools) == 2
 
     def test_invalid_tool_names_warning(self):
         """Test that invalid tool names generate warnings."""
