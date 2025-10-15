@@ -110,7 +110,7 @@ def load_voicemode_env():
 
 # Control which MCP tools are loaded to reduce token usage
 # Whitelist mode - only load specified tools (most efficient)
-# VOICEMODE_TOOLS_ENABLED=converse
+# VOICEMODE_TOOLS_ENABLED=converse,service
 
 # Blacklist mode - load all tools except specified ones
 # VOICEMODE_TOOLS_DISABLED=pronunciation_add,pronunciation_remove
