@@ -117,9 +117,10 @@ def load_voicemode_env():
 
 # Examples:
 # Minimal (just voice conversation): VOICEMODE_TOOLS_ENABLED=converse
-# Voice + config: VOICEMODE_TOOLS_ENABLED=converse,config_get,config_set
+# Voice + config: VOICEMODE_TOOLS_ENABLED=converse,service,config_get,config_set
+# Load all tools: VOICEMODE_TOOLS_DISABLED=
 # All except pronunciation: VOICEMODE_TOOLS_DISABLED=pronunciation_add,pronunciation_remove,pronunciation_list
-# Default: All tools loaded (no filtering)
+# Default: converse,service (basic voice interaction and service management)
 
 #############
 # Provider Configuration

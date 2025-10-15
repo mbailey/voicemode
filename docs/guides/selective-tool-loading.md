@@ -6,7 +6,7 @@ VoiceMode supports selective tool loading to reduce token usage in Claude Code a
 
 ## Why Use Selective Loading?
 
-By default, VoiceMode loads all available tools (~40+ tools), which consumes approximately 25,000 tokens in your Claude Code context. If you only need voice conversation features, you can load just the `converse` tool and save ~20,000 tokens.
+By default, VoiceMode loads only essential tools (`converse`, `service`), which consumes approximately 7,000 tokens in your Claude Code context. If you need additional tools, you can enable them selectively. Loading all tools (~40+ tools) would consume approximately 25,000 tokens.
 
 ## Loading Modes
 
@@ -120,22 +120,25 @@ For development and debugging:
 export VOICEMODE_TOOLS_ENABLED=converse,service,statistics,configuration_management,providers
 ```
 
-### All Tools (Default)
-To load all tools (leave both variables unset):
+### All Tools
+To load all available tools:
 ```bash
-unset VOICEMODE_TOOLS_ENABLED
-unset VOICEMODE_TOOLS_DISABLED
+export VOICEMODE_TOOLS_DISABLED=""
+# Or use blacklist to exclude specific tools only
 ```
+
+### Default Behavior
+If no configuration is set, VoiceMode loads essential tools only (`converse`, `service`).
 
 ## Token Savings
 
-| Configuration | Approximate Token Usage | Savings |
+| Configuration | Approximate Token Usage | Compared to All Tools |
 |--------------|------------------------|---------|
-| All tools (default) | ~25,000 tokens | - |
-| `converse` only | ~5,000 tokens | ~20,000 tokens |
-| `converse,service` (recommended) | ~7,000 tokens | ~18,000 tokens |
-| `converse,service,statistics` | ~9,000 tokens | ~16,000 tokens |
-| Core tools (5 tools) | ~12,000 tokens | ~13,000 tokens |
+| `converse,service` (default) | ~7,000 tokens | Saves ~18,000 tokens |
+| `converse` only | ~5,000 tokens | Saves ~20,000 tokens |
+| `converse,service,statistics` | ~9,000 tokens | Saves ~16,000 tokens |
+| Core tools (5 tools) | ~12,000 tokens | Saves ~13,000 tokens |
+| All tools | ~25,000 tokens | - |
 
 ## Troubleshooting
 
@@ -177,7 +180,7 @@ When using Claude Code, the token savings from selective loading gives you more 
 - Additional MCP servers
 - Custom agents and tools
 
-Set `VOICEMODE_TOOLS_ENABLED=converse,service` in your `.mcp.json` for optimal Claude Code performance.
+The default configuration (`converse,service`) provides optimal Claude Code performance with minimal token usage.
 
 ## Legacy Variable
 
