@@ -536,7 +536,10 @@ async def whisper_install(
         # Build with CMake for better control and Core ML support
         build_env = os.environ.copy()
         cmake_flags = []
-        
+
+        # Enable SDL2 for whisper-stream binary (real-time transcription)
+        cmake_flags.append("-DWHISPER_SDL2=ON")
+
         # Enable GPU support based on platform
         if is_macos:
             # On macOS, always enable Metal
