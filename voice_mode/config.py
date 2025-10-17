@@ -636,27 +636,27 @@ def setup_logging() -> logging.Logger:
         Logger instance configured for voice-mode
     """
     log_level = logging.DEBUG if DEBUG else logging.INFO
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s' if DEBUG else '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     logging.basicConfig(
         level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format=log_format
     )
-    logger = logging.getLogger("voicemode")
+    logger = logging.getLogger("voice-mode")
     
     # Trace logging setup
     if TRACE_DEBUG:
         import sys
-        from datetime import datetime
-        
+
         # Create debug log directory
         debug_log_dir = Path.home() / ".voicemode" / "logs" / "debug"
         debug_log_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Create dated debug log file
         debug_log_file = debug_log_dir / f"voicemode_debug_{datetime.now().strftime('%Y-%m-%d')}.log"
         
         # Set up file handler for debug logs
         debug_handler = logging.FileHandler(debug_log_file, mode='a')
-        debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        debug_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'))
         
         # Enable debug logging for httpx and openai
         httpx_logger = logging.getLogger("httpx")
@@ -692,10 +692,15 @@ def setup_logging() -> logging.Logger:
         logger.info(f"Trace debugging enabled, writing to: {trace_file}")
     
     # Also log to file in debug mode
-    if DEBUG:
-        debug_log_file = Path.home() / "voicemode_debug.log"
+    if DEBUG and not TRACE_DEBUG:
+        # Create debug log directory
+        debug_log_dir = Path.home() / ".voicemode" / "logs" / "debug"
+        debug_log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create dated debug log file (consistent with TRACE_DEBUG)
+        debug_log_file = debug_log_dir / f"voicemode_debug_{datetime.now().strftime('%Y-%m-%d')}.log"
         file_handler = logging.FileHandler(debug_log_file, mode='a')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'))
         logger.addHandler(file_handler)
         logger.info(f"Debug logging to file: {debug_log_file}")
     
@@ -808,7 +813,7 @@ def initialize_soundfonts():
         # They're optional and disabled by default
         if DEBUG:
             import logging
-            logging.getLogger("voicemode").debug(f"Could not initialize soundfonts: {e}")
+            logging.getLogger("voice-mode").debug(f"Could not initialize soundfonts: {e}")
 
 # ==================== UTILITY FUNCTIONS ====================
 
