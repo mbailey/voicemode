@@ -157,10 +157,14 @@ class DependencyChecker:
             )
             # dpkg -l returns 0 even if package not found, check output
             # Look for lines starting with "ii" (installed) followed by the exact package name
+            # Note: On ARM64 and other architectures, dpkg may include :arch suffix (e.g., python3-dev:arm64)
             for line in result.stdout.splitlines():
                 parts = line.split()
-                if len(parts) >= 2 and parts[0] == 'ii' and parts[1] == package_name:
-                    return True
+                if len(parts) >= 2 and parts[0] == 'ii':
+                    # Strip architecture suffix (e.g., :arm64) if present for comparison
+                    pkg_name_in_output = parts[1].split(':')[0]
+                    if pkg_name_in_output == package_name:
+                        return True
             return False
         except FileNotFoundError:
             return False
