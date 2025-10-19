@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.1] - 2025-10-20
+
+### Fixed
+
+- **Installer: Architecture suffix handling** - Fixed dpkg package detection on ARM64 and other multi-arch systems
+  - Package names with architecture suffixes (e.g., `python3-dev:arm64`) are now correctly detected as installed
+  - Fixes false negatives where installed packages were reported as missing on ARM64 Ubuntu
+  - Tested on Ubuntu ARM64 with `libasound2-dev:arm64` and `libportaudio2:arm64`
+
 ## [6.0.0] - 2025-10-16
 
 ### ⚠️ BREAKING CHANGES
