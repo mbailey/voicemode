@@ -14,7 +14,7 @@ from .provider_discovery import is_local_provider
 from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
 from .provider_discovery import detect_provider_type
 
-logger = logging.getLogger("voicemode")
+logger = logging.getLogger("voice-mode")
 
 
 async def simple_tts_failover(

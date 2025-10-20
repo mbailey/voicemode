@@ -178,7 +178,7 @@ def check_and_report_ffmpeg() -> bool:
     if version:
         # Only log this in debug mode
         import logging
-        logger = logging.getLogger("voicemode")
+        logger = logging.getLogger("voice-mode")
         logger.debug(f"FFmpeg version {version} found at {ffmpeg_path}")
     
     return True
