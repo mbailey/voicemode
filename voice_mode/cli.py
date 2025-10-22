@@ -1711,14 +1711,12 @@ def cli():
 # Import subcommand groups
 from voice_mode.cli_commands import exchanges as exchanges_cmd
 from voice_mode.cli_commands import transcribe as transcribe_cmd
-from voice_mode.cli_commands import pronounce_commands
 from voice_mode.cli_commands import claude
 from voice_mode.cli_commands import hook as hook_cmd
 
 # Add subcommands to legacy CLI
 cli.add_command(exchanges_cmd.exchanges)
 cli.add_command(transcribe_cmd.transcribe)
-cli.add_command(pronounce_commands.pronounce_group)
 cli.add_command(claude.claude_group)
 
 # Add exchanges to main CLI
@@ -1727,8 +1725,7 @@ voice_mode_main_cli.add_command(claude.claude_group)
 
 # Note: We'll add these commands after the groups are defined
 # audio group will get transcribe and play commands
-# claude group will get hook command  
-# config group will get pronounce command
+# claude group will get hook command
 
 
 # Now add the subcommands to their respective groups
@@ -1740,9 +1737,6 @@ audio.add_command(transcribe_audio_cmd)
 # Add hooks command under claude group
 from voice_mode.cli_commands.hook import hooks
 claude.claude_group.add_command(hooks)
-
-# Add pronounce under config group
-config.add_command(pronounce_commands.pronounce_group)
 
 # Converse command - direct voice conversation from CLI
 @voice_mode_main_cli.command()
