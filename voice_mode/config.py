@@ -281,17 +281,18 @@ def load_voicemode_env():
 # Pronunciation System
 #############
 
-# Enable pronunciation rules (true/false, default: true)
+# Enable pronunciation middleware (true/false, default: true)
 # VOICEMODE_PRONUNCIATION_ENABLED=true
 
-# Custom pronunciation config paths (comma-separated)
-# VOICEMODE_PRONUNCIATION_CONFIG=
+# Pronunciation rules (format: DIRECTION pattern replacement # description)
+# Use VOICEMODE_PRONOUNCE or VOICEMODE_PRONOUNCE_* for organizing rules
+# Example: VOICEMODE_PRONOUNCE='TTS \bTali\b Tar-lee # Dog name'
+# VOICEMODE_PRONOUNCE=
+# VOICEMODE_PRONOUNCE_NETWORKING=
+# VOICEMODE_PRONOUNCE_STT=
 
-# Log pronunciation substitutions (true/false, default: false)
+# Log pronunciation substitutions for debugging (true/false, default: false)
 # VOICEMODE_PRONUNCIATION_LOG_SUBSTITUTIONS=false
-
-# Privacy mode - hide pronunciations from LLM tool listings (true/false, default: false)
-# VOICEMODE_PRONUNCIATION_PRIVATE_MODE=false
 
 #############
 # Think Out Loud Mode (Experimental)
