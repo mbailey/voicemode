@@ -144,6 +144,11 @@ class PronounceManager:
         for key, value in os.environ.items():
             if key == 'VOICEMODE_PRONOUNCE' or key.startswith('VOICEMODE_PRONOUNCE_'):
                 if value.strip():
+                    # Strip surrounding quotes if present (from .env file parsing)
+                    value = value.strip()
+                    if (value.startswith('"') and value.endswith('"')) or \
+                       (value.startswith("'") and value.endswith("'")):
+                        value = value[1:-1]
                     rule_texts.append(value)
 
         return rule_texts
