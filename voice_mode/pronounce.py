@@ -85,14 +85,18 @@ def parse_compact_rules(text: str) -> Dict[str, List[PronounceRule]]:
         try:
             tokens = shlex.split(rule_part, posix=False)
         except ValueError as e:
-            logger.warning(f"Line {line_num}: Failed to parse '{rule_part}': {e}")
+            logger.warning(f"Line {line_num}: Parse error in '{rule_part}': {e}")
+            logger.warning(f"  Expected format: DIRECTION pattern replacement # description")
+            logger.warning(f"  Example: TTS \\bword\\b replacement # comment")
             continue
 
         # Remove quotes from tokens but preserve content
         tokens = [t.strip('"').strip("'") for t in tokens]
 
         if len(tokens) < 3:
-            logger.warning(f"Line {line_num}: Need at least 3 fields (direction, pattern, replacement)")
+            logger.warning(f"Line {line_num}: Need at least 3 fields (direction, pattern, replacement), got {len(tokens)}")
+            logger.warning(f"  Got: {rule_part}")
+            logger.warning(f"  Expected format: DIRECTION pattern replacement # description")
             continue
 
         direction = tokens[0].lower()
