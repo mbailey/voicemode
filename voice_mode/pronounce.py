@@ -104,7 +104,7 @@ def parse_compact_rules(text: str) -> Dict[str, List[PronounceRule]]:
         replacement = tokens[2]
 
         if direction not in ('tts', 'stt'):
-            logger.warning(f"Line {line_num}: Direction must be TTS or STT, got '{tokens[0]}'")
+            logger.warning(f"Line {line_num}: Direction must be TTS or STT (case insensitive), got '{tokens[0]}'")
             continue
 
         rule = PronounceRule(

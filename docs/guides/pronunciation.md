@@ -39,6 +39,7 @@ DIRECTION pattern replacement # description
 #### Direction
 - `TTS`: Applies before text is spoken (improves pronunciation)
 - `STT`: Applies after speech is transcribed (corrects misheard words)
+- Case insensitive: `TTS`, `tts`, and `Tts` all work
 
 #### Pattern
 - Standard Python regular expressions
