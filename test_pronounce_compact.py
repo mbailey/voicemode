@@ -42,9 +42,15 @@ def test_manager():
     print("\nTesting PronounceManager with environment variables...\n")
 
     # Set environment variables
+    # Note: Each rule MUST start with TTS or STT direction
     os.environ['VOICEMODE_PRONOUNCE'] = 'TTS \\bTali\\b Tar-lee # Dog name'
     os.environ['VOICEMODE_PRONOUNCE_NETWORKING'] = '''TTS \\bPoE\\b "P O E" # Power over Ethernet
 TTS \\bGbE\\b "gigabit ethernet" # Network speed'''
+
+    print("Example of INCORRECT format (missing direction):")
+    print("  WRONG: 'bag carrier # joke'")
+    print("  RIGHT: 'TTS bag carrier # joke'")
+    print()
 
     manager = PronounceManager()
 
