@@ -189,6 +189,22 @@ def load_voicemode_env():
 # VOICEMODE_KOKORO_DEFAULT_VOICE=af_sky
 
 #############
+# ElevenLabs Configuration
+#############
+
+# ElevenLabs proxy server port (default: 8000)
+# VOICEMODE_ELEVENLABS_PORT=8000
+
+# ElevenLabs API key (required for TTS)
+# ELEVENLABS_API_KEY=your_api_key_here
+
+# Auto-start ElevenLabs service (true/false)
+# VOICEMODE_AUTO_START_ELEVENLABS=false
+
+# Installation: Clone https://github.com/dotCipher/elevenlabs-openai-proxy
+# to ~/.voicemode/services/elevenlabs and run 'make install'
+
+#############
 # LiveKit Configuration
 #############
 
@@ -521,6 +537,13 @@ KOKORO_PORT = int(os.getenv("VOICEMODE_KOKORO_PORT", "8880"))
 KOKORO_MODELS_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_MODELS_DIR", str(BASE_DIR / "models" / "kokoro")))
 KOKORO_CACHE_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_CACHE_DIR", str(BASE_DIR / "cache" / "kokoro")))
 KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
+
+# ==================== ELEVENLABS CONFIGURATION ====================
+
+# ElevenLabs-specific configuration
+ELEVENLABS_PORT = int(os.getenv("VOICEMODE_ELEVENLABS_PORT", "8000"))
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+AUTO_START_ELEVENLABS = os.getenv("VOICEMODE_AUTO_START_ELEVENLABS", "false").lower() == "true"
 
 # ==================== LIVEKIT CONFIGURATION ====================
 

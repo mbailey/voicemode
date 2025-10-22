@@ -13,10 +13,11 @@ from typing import Literal, Optional, Dict, Any, Union
 import psutil
 
 from voice_mode.server import mcp
-from voice_mode.config import WHISPER_PORT, KOKORO_PORT, LIVEKIT_PORT, SERVICE_AUTO_ENABLE
+from voice_mode.config import WHISPER_PORT, KOKORO_PORT, ELEVENLABS_PORT, LIVEKIT_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
 from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_whisper_model
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support
+from voice_mode.utils.services.elevenlabs_helpers import find_elevenlabs_proxy
 
 logger = logging.getLogger("voice-mode")
 
@@ -93,10 +94,26 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "START_SCRIPT": str(start_script) if start_script and start_script.exists() else "",
             "LOG_DIR": os.path.join(voicemode_dir, "logs", "kokoro"),
         }
+    elif service_name == "elevenlabs":
+        elevenlabs_dir = find_elevenlabs_proxy()
+        if not elevenlabs_dir:
+            elevenlabs_dir = os.path.join(voicemode_dir, "services", "elevenlabs")
+
+        python_bin = os.path.join(elevenlabs_dir, "venv", "bin", "python")
+        server_script = os.path.join(elevenlabs_dir, "server.py")
+
+        return {
+            "ELEVENLABS_DIR": str(elevenlabs_dir),
+            "PYTHON_BIN": python_bin,
+            "SERVER_SCRIPT": server_script,
+            "ELEVENLABS_PORT": str(ELEVENLABS_PORT),
+            "LOG_DIR": os.path.join(voicemode_dir, "logs", "elevenlabs"),
+            "WORKING_DIR": str(elevenlabs_dir),
+        }
     elif service_name == "livekit":
         livekit_bin = "/opt/homebrew/bin/livekit-server" if platform.system() == "Darwin" else "/usr/local/bin/livekit-server"
         config_file = os.path.join(voicemode_dir, "config", "livekit.yaml")
-        
+
         return {
             "LIVEKIT_BIN": livekit_bin,
             "LIVEKIT_PORT": str(LIVEKIT_PORT),
@@ -189,6 +206,8 @@ async def status_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "elevenlabs":
+        port = ELEVENLABS_PORT
     elif service_name == "livekit":
         port = LIVEKIT_PORT
     else:  # frontend
