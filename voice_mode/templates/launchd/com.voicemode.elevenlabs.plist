@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.voicemode.elevenlabs.plist v1.0.0 -->
+<!-- Last updated: 2025-01-25 -->
+<!-- Compatible with: elevenlabs-openai-proxy v1.0.0+ -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicemode.elevenlabs</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{PYTHON_BIN}</string>
+        <string>{SERVER_SCRIPT}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{ELEVENLABS_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{LOG_DIR}/elevenlabs.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{LOG_DIR}/elevenlabs.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <key>VOICEMODE_ELEVENLABS_PORT</key>
+        <string>{ELEVENLABS_PORT}</string>
+        <key>PORT</key>
+        <string>{ELEVENLABS_PORT}</string>
+    </dict>
+</dict>
+</plist>

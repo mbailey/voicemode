@@ -2,8 +2,10 @@
   "service_files": {
     "com.voicemode.whisper.plist": "1.1.0",
     "com.voicemode.kokoro.plist": "1.1.0",
+    "com.voicemode.elevenlabs.plist": "1.0.0",
     "voicemode-whisper.service": "1.1.0",
     "voicemode-kokoro.service": "1.1.1",
+    "voicemode-elevenlabs.service": "1.0.0",
     "start-whisper-with-health-check.sh": "1.0.0",
     "start-kokoro-with-health-check.sh": "1.0.0"
   },

@@ -1,0 +1,36 @@
+# voicemode-elevenlabs.service v1.0.0
+# Last updated: 2025-01-25
+# Compatible with: elevenlabs-openai-proxy v1.0.0+
+
+[Unit]
+Description=Voice Mode ElevenLabs TTS Proxy Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory={ELEVENLABS_DIR}
+ExecStart={PYTHON_BIN} {SERVER_SCRIPT}
+# Wait for service to be ready by checking health endpoint
+ExecStartPost=/bin/sh -c 'while ! curl -sf http://127.0.0.1:{ELEVENLABS_PORT}/health >/dev/null 2>&1; do echo "Waiting for ElevenLabs proxy to be ready..."; sleep 1; done; echo "ElevenLabs proxy is ready!"'
+Restart=on-failure
+RestartSec=10
+# Don't restart if the executable is missing
+RestartPreventExitStatus=127
+
+# Environment
+Environment="VOICEMODE_ELEVENLABS_PORT={ELEVENLABS_PORT}"
+Environment="PORT={ELEVENLABS_PORT}"
+Environment="HOST=0.0.0.0"
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# Resource limits
+MemoryLimit=2G
+CPUQuota=100%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-elevenlabs
+
+[Install]
+WantedBy=default.target
