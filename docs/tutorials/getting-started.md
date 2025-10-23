@@ -30,7 +30,7 @@ This installer will:
 
 - Check and install system dependencies (PortAudio, FFmpeg, gcc, etc.)
 - Install VoiceMode MCP package via UV
-- Configure shell completions for the voicemode CLI
+- Configure shell completions for the `voicemode` CLI tool
 - Optionally install and configure local STT/TTS services (Whisper, Kokoro)
   - Services are enabled to start automatically on boot
   - Services start immediately after installation
@@ -41,18 +41,18 @@ This installer will:
 If you already have UV installed and prefer to set up dependencies manually:
 
 ```bash
-# Install VoiceMode package
-uvx voice-mode
-
-# Manually install system dependencies:
+# First install system dependencies (required for building Python extensions):
 # macOS
 brew install portaudio ffmpeg
 
 # Linux (Debian/Ubuntu)
-sudo apt-get install portaudio19-dev ffmpeg gcc
+sudo apt-get install python3-dev gcc libasound2-dev libportaudio2 ffmpeg
 
 # Linux (Fedora/RHEL)
-sudo dnf install portaudio-devel ffmpeg gcc
+sudo dnf install python3-devel gcc alsa-lib-devel portaudio ffmpeg
+
+# Then install VoiceMode package
+uv tool install voice-mode
 ```
 
 Learn more: [UV Installation Guide](https://docs.astral.sh/uv/getting-started/installation/)
