@@ -31,7 +31,9 @@ This installer will:
 - Check and install system dependencies (PortAudio, FFmpeg, gcc, etc.)
 - Install VoiceMode MCP package via UV
 - Configure shell completions for the voicemode CLI
-- Set up optional local STT/TTS services (Whisper, Kokoro)
+- Optionally install and configure local STT/TTS services (Whisper, Kokoro)
+  - Services are enabled to start automatically on boot
+  - Services start immediately after installation
 - Validate the installation and provide next steps
 
 ### Option 2: Manual Installation

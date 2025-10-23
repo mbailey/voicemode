@@ -328,11 +328,39 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive):
             click.echo()
 
             if hardware.should_recommend_local_services():
-                if non_interactive or click.confirm("Install local voice services now?", default=True):
-                    click.echo("\nLocal services can be installed with:")
+                click.echo("Installing local voice services will:")
+                click.echo("  • Enable services to start automatically on boot")
+                click.echo("  • Start services immediately after installation")
+                click.echo()
+                if non_interactive:
+                    click.echo("Skipping local service installation (non-interactive mode)")
+                    click.echo("You can install them later with:")
                     click.echo("  voicemode whisper install")
                     click.echo("  voicemode kokoro install")
-                    click.echo("\nRun these commands after the installer completes.")
+                elif click.confirm("Install local voice services now?", default=True):
+                    click.echo()
+                    print_step("Installing Whisper STT service...")
+                    try:
+                        subprocess.run(["voicemode", "whisper", "install"], check=True)
+                        print_success("Whisper installed successfully")
+                    except subprocess.CalledProcessError as e:
+                        print_warning(f"Whisper installation failed: {e}")
+                        click.echo("You can try installing manually later with: voicemode whisper install")
+
+                    click.echo()
+                    print_step("Installing Kokoro TTS service...")
+                    try:
+                        subprocess.run(["voicemode", "kokoro", "install"], check=True)
+                        print_success("Kokoro installed successfully")
+                    except subprocess.CalledProcessError as e:
+                        print_warning(f"Kokoro installation failed: {e}")
+                        click.echo("You can try installing manually later with: voicemode kokoro install")
+                else:
+                    click.echo()
+                    click.echo("Skipping local service installation.")
+                    click.echo("You can install them later with:")
+                    click.echo("  voicemode whisper install")
+                    click.echo("  voicemode kokoro install")
             else:
                 click.echo("Cloud services recommended for your system configuration.")
                 click.echo("Local services can still be installed if desired:")
