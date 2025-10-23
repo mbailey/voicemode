@@ -71,14 +71,14 @@ pytest -v
 
 ### Using Local Services
 
-For development without API keys:
+For development without API keys, install and start local voice services:
 
 ```bash
-# Or manually
+# Install local services
 voicemode whisper install
 voicemode kokoro install
 
-# Or manually
+# Start local services
 voicemode whisper start
 voicemode kokoro start
 ```

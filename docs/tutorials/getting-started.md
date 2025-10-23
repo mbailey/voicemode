@@ -19,31 +19,39 @@ The fastest way to get started is using VoiceMode with Claude Code.
 The easiest way - installs UV and all dependencies automatically:
 
 ```bash
-curl -O https://getvoicemode.com/install.sh && bash install.sh
+# Install UV package manager (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Run the VoiceMode installer
+uvx voice-mode-install
 ```
 
 This installer will:
 
-- Install UV package manager
-- Install missing system dependencies (Node.js, FFmpeg, PortAudio, etc.)
-- Set up your environment for VoiceMode
-- Offer to install local voice services (Whisper STT and Kokoro TTS)
+- Check and install system dependencies (PortAudio, FFmpeg, gcc, etc.)
+- Install VoiceMode MCP package via UV
+- Configure shell completions for the voicemode CLI
+- Set up optional local STT/TTS services (Whisper, Kokoro)
+- Validate the installation and provide next steps
 
-### Option 2: Manual UV Installation
+### Option 2: Manual Installation
 
-If you prefer to install UV manually:
+If you already have UV installed and prefer to set up dependencies manually:
 
 ```bash
-# macOS/Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install VoiceMode package
+uvx voice-mode
 
-# Or with pip (if available)
-pip install uv
+# Manually install system dependencies:
+# macOS
+brew install portaudio ffmpeg
+
+# Linux (Debian/Ubuntu)
+sudo apt-get install portaudio19-dev ffmpeg gcc
+
+# Linux (Fedora/RHEL)
+sudo dnf install portaudio-devel ffmpeg gcc
 ```
-
-**Note**: You'll also need these system dependencies:
-- **macOS**: PortAudio, FFmpeg (`brew install portaudio ffmpeg`)
-- **Linux**: PortAudio, FFmpeg, ALSA libraries
 
 Learn more: [UV Installation Guide](https://docs.astral.sh/uv/getting-started/installation/)
 
