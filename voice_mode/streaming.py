@@ -28,13 +28,6 @@ from .config import (
 )
 from .utils import get_event_logger
 
-# Opus decoder support (optional)
-try:
-    import opuslib
-    OPUS_AVAILABLE = True
-except ImportError:
-    OPUS_AVAILABLE = False
-    logger.info("opuslib not available - Opus streaming will use fallback method")
 
 
 @dataclass
@@ -80,14 +73,11 @@ class AudioStreamPlayer:
         
     def _get_decoder(self):
         """Get appropriate decoder for the audio format."""
-        if self.format == "opus" and OPUS_AVAILABLE:
-            # Opus decoder initialization
-            return opuslib.Decoder(self.sample_rate, self.channels)
-        elif self.format == "pcm":
+        if self.format == "pcm":
             # PCM needs no decoding
             return None
         else:
-            # For MP3, AAC, etc. we'll use PyDub
+            # For MP3, Opus, AAC, etc. we'll use PyDub
             return "pydub"
     
     def _audio_callback(self, outdata, frames, time_info, status):
@@ -176,20 +166,9 @@ class AudioStreamPlayer:
                 return None
             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
             return samples
-            
-        elif self.format == "opus" and isinstance(self.decoder, opuslib.Decoder):
-            # Opus decoding
-            try:
-                # Opus decoder needs complete frames
-                pcm = self.decoder.decode(data, frame_size=960)
-                samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
-                return samples
-            except Exception:
-                # Incomplete frame - wait for more data
-                return None
-                
+
         elif self.decoder == "pydub":
-            # Use PyDub for MP3, AAC, etc.
+            # Use PyDub for MP3, Opus, AAC, etc.
             # This is tricky because we need complete frames
             try:
                 # Try to decode what we have
@@ -199,7 +178,7 @@ class AudioStreamPlayer:
             except Exception:
                 # Need more data for a complete frame
                 return None
-                
+
         return None
     
     async def _queue_samples(self, samples: np.ndarray):
