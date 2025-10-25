@@ -12,7 +12,7 @@ from voice_mode.server import mcp
 from voice_mode.config import BASE_DIR
 from voice_mode.utils.services.common import find_process_by_port
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 @mcp.tool()

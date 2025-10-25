@@ -21,7 +21,7 @@ from openai import AsyncOpenAI
 from . import config
 from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 def detect_provider_type(base_url: str) -> str:

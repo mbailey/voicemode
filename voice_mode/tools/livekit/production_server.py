@@ -12,7 +12,7 @@ from threading import Thread
 from typing import Optional, Dict, Any
 from urllib.parse import urlparse, parse_qs
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 class ProductionFrontendHandler(SimpleHTTPRequestHandler):

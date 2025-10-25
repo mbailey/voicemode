@@ -13,7 +13,7 @@ from voice_mode.server import mcp
 from voice_mode.config import logger, MODELS_DIR, DEFAULT_WHISPER_MODEL
 from voice_mode.utils.services.whisper_helpers import download_whisper_model, get_available_models
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 @mcp.tool()

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import logging
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 @dataclass

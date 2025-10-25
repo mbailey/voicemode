@@ -10,7 +10,7 @@ from voice_mode.utils.audio_diagnostics import (
     diagnose_audio_setup
 )
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 @mcp.tool()

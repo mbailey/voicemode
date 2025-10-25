@@ -5,7 +5,7 @@ import subprocess
 from typing import Tuple, Optional
 import logging
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 def detect_gpu() -> Tuple[bool, Optional[str]]:

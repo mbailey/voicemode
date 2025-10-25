@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 from pathlib import Path
 import re
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 def get_git_tags(repo_url: str) -> List[str]:

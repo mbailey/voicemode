@@ -16,7 +16,7 @@ from dataclasses import dataclass, asdict, field
 import logging
 import atexit
 
-logger = logging.getLogger("voice-mode.event-logger")
+logger = logging.getLogger("voicemode.event-logger")
 
 
 @dataclass

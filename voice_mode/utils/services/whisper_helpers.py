@@ -14,7 +14,7 @@ from typing import Optional, List, Dict, Union
 
 from voice_mode.utils.download import download_with_progress_async
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 def find_whisper_server() -> Optional[str]:
     """Find the whisper-server binary."""

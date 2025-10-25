@@ -4,7 +4,7 @@ import importlib
 from pathlib import Path
 import logging
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 # Get the directory containing this file
 tools_dir = Path(__file__).parent

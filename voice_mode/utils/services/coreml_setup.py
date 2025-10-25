@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 def setup_coreml_venv(whisper_dir: Path, force: bool = False) -> Dict[str, Any]:

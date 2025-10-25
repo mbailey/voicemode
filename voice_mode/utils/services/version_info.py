@@ -15,7 +15,7 @@ from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi
 from voice_mode.utils.services.common import find_process_by_port
 from voice_mode.utils.version_helpers import get_current_version
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 def get_whisper_version() -> Dict[str, Any]:

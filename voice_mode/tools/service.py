@@ -18,7 +18,7 @@ from voice_mode.utils.services.common import find_process_by_port, check_service
 from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_whisper_model
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 def load_service_file_version(service_name: str, file_type: str) -> Optional[str]:

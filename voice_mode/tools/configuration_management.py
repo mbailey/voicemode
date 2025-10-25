@@ -8,7 +8,7 @@ from voice_mode.server import mcp
 from voice_mode.config import BASE_DIR, reload_configuration, find_voicemode_env_files
 import logging
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 # Configuration file path (user-level only for security)
 USER_CONFIG_PATH = Path.home() / ".voicemode" / "voicemode.env"
