@@ -13,7 +13,7 @@ import asyncio
 from voice_mode.server import mcp
 from voice_mode.tools.service import stop_service, disable_service, uninstall_service
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 @mcp.tool()

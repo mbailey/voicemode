@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 import logging
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 def detect_existing_format_preference() -> Optional[str]:

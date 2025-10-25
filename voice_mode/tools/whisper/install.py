@@ -27,7 +27,7 @@ from voice_mode.utils.version_helpers import (
 from voice_mode.utils.migration_helpers import auto_migrate_if_needed
 from voice_mode.utils.gpu_detection import detect_gpu
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 async def update_whisper_service_files(

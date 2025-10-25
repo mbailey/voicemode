@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 
 from voice_mode.server import mcp
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 # Global production server instance
 _production_server = None

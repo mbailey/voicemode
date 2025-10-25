@@ -19,7 +19,7 @@ from voice_mode.utils.version_helpers import (
 )
 from voice_mode.utils.migration_helpers import auto_migrate_if_needed
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 async def update_kokoro_service_files(

@@ -673,7 +673,7 @@ def setup_logging() -> logging.Logger:
         
         # Legacy trace file support
         trace_file = Path.home() / "voicemode_trace.log"
-        trace_logger = logging.getLogger("voicemode-trace")
+        trace_logger = logging.getLogger("voicemode.trace")
         trace_handler = logging.FileHandler(trace_file, mode='a')
         trace_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
         trace_logger.addHandler(trace_handler)

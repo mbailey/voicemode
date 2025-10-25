@@ -32,7 +32,7 @@ if not os.environ.get('VOICEMODE_DEBUG', '').lower() in ('true', '1', 'yes'):
     
     # Also suppress INFO logging for CLI commands (but not for MCP server)
     import logging
-    logging.getLogger("voice-mode").setLevel(logging.WARNING)
+    logging.getLogger("voicemode").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
@@ -56,7 +56,7 @@ def voice_mode_main_cli(ctx, debug, tools_enabled, tools_disabled):
         os.environ['VOICEMODE_DEBUG'] = 'true'
         # Re-enable INFO logging
         import logging
-        logging.getLogger("voice-mode").setLevel(logging.INFO)
+        logging.getLogger("voicemode").setLevel(logging.INFO)
 
     # Set environment variables from CLI args
     if tools_enabled:

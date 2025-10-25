@@ -80,7 +80,7 @@ from voice_mode.utils import (
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 # Log silence detection config at module load time
 logger.info(f"Module loaded with DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}")

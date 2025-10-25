@@ -7,7 +7,7 @@ from voice_mode.config import TTS_VOICES, TTS_BASE_URLS, TTS_MODELS
 from voice_mode.provider_discovery import provider_registry
 import logging
 
-logger = logging.getLogger("voice-mode")
+logger = logging.getLogger("voicemode")
 
 
 @mcp.tool()
