@@ -226,11 +226,15 @@ async def text_to_speech_with_failover(
     instructions: Optional[str] = None,
     audio_format: Optional[str] = None,
     initial_provider: Optional[str] = None,
-    speed: Optional[float] = None
+    speed: Optional[float] = None,
+    return_when: str = "complete"
 ) -> Tuple[bool, Optional[dict], Optional[dict]]:
     """
     Text to speech with automatic failover to next available endpoint.
-    
+
+    Args:
+        return_when: When to return control ("complete", "audio_starts", "audio_generated")
+
     Returns:
         Tuple of (success, tts_metrics, tts_config)
     """
@@ -251,7 +255,8 @@ async def text_to_speech_with_failover(
         debug_dir=DEBUG_DIR if DEBUG else None,
         save_audio=SAVE_AUDIO,
         audio_dir=AUDIO_DIR if SAVE_AUDIO else None,
-        speed=speed
+        speed=speed,
+        return_when=return_when
     )
 
 
@@ -969,7 +974,8 @@ async def converse(
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
     chime_leading_silence: Optional[float] = None,
-    chime_trailing_silence: Optional[float] = None
+    chime_trailing_silence: Optional[float] = None,
+    return_when: str = "complete"
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -986,6 +992,10 @@ async def converse(
 KEY PARAMETERS:
 • message (required): The message to speak
 • wait_for_response (bool, default: true): Listen for response after speaking
+• return_when (string, default: "complete"): When to return control:
+    - "complete": Wait for full playback (default)
+    - "audio_starts": Return immediately when playback begins
+    - "audio_generated": Return after TTS generation, before playback
 • listen_duration_max (number, default: 120): Max listen time in seconds
 • listen_duration_min (number, default: 2.0): Min recording time before silence detection
 • voice (string): TTS voice name (auto-selected unless specified)
@@ -1142,7 +1152,8 @@ consult the MCP resources listed above.
                             instructions=tts_instructions,
                             audio_format=audio_format,
                             initial_provider=tts_provider,
-                            speed=speed
+                            speed=speed,
+                            return_when=return_when
                         )
                     
                 # Include timing info if available
@@ -1341,7 +1352,8 @@ consult the MCP resources listed above.
                             instructions=tts_instructions,
                             audio_format=audio_format,
                             initial_provider=tts_provider,
-                            speed=speed
+                            speed=speed,
+                            return_when=return_when
                         )
                     
                     # Add TTS sub-metrics

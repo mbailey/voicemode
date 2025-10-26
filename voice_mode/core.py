@@ -31,6 +31,66 @@ from .utils import (
 logger = logging.getLogger("voicemode")
 
 
+def _play_audio_sync(samples, frame_rate, channels, event_logger=None):
+    """Synchronous audio playback helper - runs in thread for async playback.
+
+    Args:
+        samples: Audio samples as numpy array
+        frame_rate: Audio frame rate
+        channels: Number of audio channels
+        event_logger: Optional event logger
+    """
+    import sounddevice as sd
+    import sys
+
+    # Save current stdio state
+    original_stdin = sys.stdin
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    try:
+        # Force initialization before playing
+        sd.default.samplerate = frame_rate
+        sd.default.channels = channels
+
+        # Log TTS playback start event
+        if event_logger:
+            event_logger.log_event(event_logger.TTS_PLAYBACK_START)
+
+        # Add configurable silence at the beginning to prevent clipping
+        from .config import CHIME_LEADING_SILENCE
+        silence_duration = CHIME_LEADING_SILENCE  # seconds
+        silence_samples = int(frame_rate * silence_duration)
+        # Match the shape of the samples array exactly
+        if samples.ndim == 1:
+            silence = np.zeros(silence_samples, dtype=np.float32)
+            samples_with_buffer = np.concatenate([silence, samples])
+        else:
+            silence = np.zeros((silence_samples, samples.shape[1]), dtype=np.float32)
+            samples_with_buffer = np.vstack([silence, samples])
+
+        sd.play(samples_with_buffer, frame_rate)
+        sd.wait()
+
+        # Log TTS playback end event
+        if event_logger:
+            event_logger.log_event(event_logger.TTS_PLAYBACK_END)
+
+        logger.info("✓ TTS played successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Audio playback error in thread: {e}")
+        return False
+    finally:
+        # Restore stdio if it was changed
+        if sys.stdin != original_stdin:
+            sys.stdin = original_stdin
+        if sys.stdout != original_stdout:
+            sys.stdout = original_stdout
+        if sys.stderr != original_stderr:
+            sys.stderr = original_stderr
+
+
 def get_audio_path(filename: str, base_dir: Path, timestamp: Optional[datetime] = None) -> Path:
     """Get full audio path with year/month structure for a given filename.
     
@@ -174,10 +234,17 @@ async def text_to_speech(
     instructions: Optional[str] = None,
     audio_format: Optional[str] = None,
     conversation_id: Optional[str] = None,
-    speed: Optional[float] = None
+    speed: Optional[float] = None,
+    return_when: str = "complete"
 ) -> tuple[bool, Optional[dict]]:
     """Convert text to speech and play it.
-    
+
+    Args:
+        return_when: When to return control:
+            - "complete": Wait for full playback to finish (default)
+            - "audio_starts": Return as soon as audio playback begins
+            - "audio_generated": Return as soon as TTS completes (before playback)
+
     Returns:
         tuple: (success: bool, metrics: dict) where metrics contains 'generation' and 'playback' times
     """
@@ -325,7 +392,13 @@ async def text_to_speech(
                 logger.info(f"TTS audio saved to: {audio_path}")
                 # Store audio path in metrics for the caller
                 metrics['audio_path'] = audio_path
-        
+
+        # Return early if requested (before playback)
+        if return_when == "audio_generated":
+            logger.info("Returning after audio generation (before playback)")
+            metrics['ttfa'] = time.perf_counter() - generation_start
+            return True, metrics
+
         # Play audio
         playback_start = time.perf_counter()
         # For buffered playback, TTFA includes both API response time and audio initialization
@@ -386,49 +459,57 @@ async def text_to_speech(
                         logger.error(f"Error querying audio devices: {dev_e}")
                 
                 logger.debug(f"Playing audio with sounddevice at {audio.frame_rate}Hz...")
-                
+
                 # Try to ensure sounddevice doesn't interfere with stdout/stderr
                 try:
                     import sounddevice as sd
                     import sys
-                    
+
+                    # Check if we should return early (async playback)
+                    if return_when == "audio_starts":
+                        import threading
+                        logger.info("Starting async playback and returning immediately")
+
+                        # Start playback in background thread
+                        playback_thread = threading.Thread(
+                            target=_play_audio_sync,
+                            args=(samples, audio.frame_rate, audio.channels, event_logger),
+                            daemon=True
+                        )
+                        playback_thread.start()
+
+                        # Return immediately - playback continues in background
+                        # Clean up temp file in thread since we're returning now
+                        def cleanup_after_playback(tmp_path):
+                            playback_thread.join()  # Wait for playback to finish
+                            try:
+                                os.unlink(tmp_path)
+                            except Exception as e:
+                                logger.debug(f"Failed to cleanup temp file: {e}")
+
+                        cleanup_thread = threading.Thread(
+                            target=cleanup_after_playback,
+                            args=(tmp_file.name,),
+                            daemon=True
+                        )
+                        cleanup_thread.start()
+
+                        # Return with partial metrics (no playback time yet)
+                        return True, metrics
+
+                    # Synchronous playback (default behavior)
                     # Save current stdio state
                     original_stdin = sys.stdin
                     original_stdout = sys.stdout
                     original_stderr = sys.stderr
-                    
-                    try:
-                        # Force initialization before playing
-                        sd.default.samplerate = audio.frame_rate
-                        sd.default.channels = audio.channels
-                        
-                        # Log TTS playback start event
-                        if event_logger:
-                            event_logger.log_event(event_logger.TTS_PLAYBACK_START)
 
-                        # Add configurable silence at the beginning to prevent clipping
-                        from .config import CHIME_LEADING_SILENCE
-                        silence_duration = CHIME_LEADING_SILENCE  # seconds
-                        silence_samples = int(audio.frame_rate * silence_duration)
-                        # Match the shape of the samples array exactly
-                        if samples.ndim == 1:
-                            silence = np.zeros(silence_samples, dtype=np.float32)
-                            samples_with_buffer = np.concatenate([silence, samples])
-                        else:
-                            silence = np.zeros((silence_samples, samples.shape[1]), dtype=np.float32)
-                            samples_with_buffer = np.vstack([silence, samples])
-                        
-                        sd.play(samples_with_buffer, audio.frame_rate)
-                        sd.wait()
-                        
-                        # Log TTS playback end event
-                        if event_logger:
-                            event_logger.log_event(event_logger.TTS_PLAYBACK_END)
-                        
-                        logger.info("✓ TTS played successfully")
+                    try:
+                        # Use the sync helper
+                        success = _play_audio_sync(samples, audio.frame_rate, audio.channels, event_logger)
+
                         os.unlink(tmp_file.name)
                         metrics['playback'] = time.perf_counter() - playback_start
-                        return True, metrics
+                        return success, metrics
                     finally:
                         # Restore stdio if it was changed
                         if sys.stdin != original_stdin:
