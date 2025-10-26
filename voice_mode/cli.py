@@ -1875,12 +1875,18 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                 
                 # Display result
                 if result:
+                    # Show async mode indicator
+                    if return_when == "audio_starts":
+                        click.echo(f"🔊 Audio playback started (background)")
+                    elif return_when == "audio_generated":
+                        click.echo(f"✓ Audio generated (not played)")
+
                     if "Voice response:" in result:
                         # Extract the response text and timing info
                         parts = result.split('|')
                         response_text = result.split('Voice response:')[1].split('|')[0].strip()
                         timing_info = parts[1].strip() if len(parts) > 1 else ""
-                        
+
                         click.echo(f"\n📢 Spoke: {message}")
                         if wait:
                             click.echo(f"🎤 Heard: {response_text}")
