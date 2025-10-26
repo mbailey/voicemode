@@ -32,7 +32,7 @@ LOGO = """
     ║   ██║ ╚═╝ ██║╚██████╔╝██████╔╝███████╗     ║
     ║   ╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝     ║
     ║                                            ║
-    ║        🎙️  VoiceMode Installer             ║
+    ║       🎙️  VoiceMode Installer              ║
     ║                                            ║
     ╚════════════════════════════════════════════╝
 """
@@ -54,13 +54,55 @@ def print_success(message: str):
 
 
 def print_warning(message: str):
-    """Print a warning message."""
-    click.echo(click.style(f"⚠️  {message}", fg='yellow'))
+    """Print a warning message in Claude Code orange."""
+    # Use ANSI color code for Claude Code orange: \033[38;5;208m
+    click.echo(click.style(f"⚠️  {message}", fg=(208, 128, 0)))
 
 
 def print_error(message: str):
     """Print an error message."""
     click.echo(click.style(f"❌ {message}", fg='red'))
+
+
+def get_installed_version() -> str | None:
+    """Get the currently installed VoiceMode version."""
+    try:
+        result = subprocess.run(
+            ['voicemode', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            # Output is like "VoiceMode version 6.0.1" or just "6.0.1"
+            version = result.stdout.strip().split()[-1]
+            return version
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def get_latest_version() -> str | None:
+    """Get the latest VoiceMode version from PyPI."""
+    try:
+        result = subprocess.run(
+            ['uv', 'pip', 'index', 'versions', 'voice-mode'],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if result.returncode == 0:
+            # Parse output to get latest version
+            for line in result.stdout.split('\n'):
+                if 'Available versions:' in line or line.strip().startswith('voice-mode'):
+                    # Extract first version listed (usually the latest)
+                    parts = line.split()
+                    for part in parts:
+                        if part[0].isdigit():
+                            return part.rstrip(',')
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return None
 
 
 def check_existing_installation() -> bool:
@@ -210,11 +252,50 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive):
 
         # Check for existing installation
         if check_existing_installation():
-            print_warning("VoiceMode is already installed")
-            if not non_interactive:
-                if not click.confirm("Do you want to upgrade it?", default=False):
-                    click.echo("\nTo upgrade manually, run: uv tool install --upgrade voice-mode")
-                    sys.exit(0)
+            installed_version = get_installed_version()
+            latest_version = get_latest_version()
+
+            click.echo(click.style("✓ VoiceMode is currently installed", fg='green'))
+
+            if installed_version:
+                click.echo(f"  Installed version: {installed_version}")
+            else:
+                click.echo("  Installed version: (unable to detect)")
+
+            if latest_version:
+                click.echo(f"  Latest version:    {latest_version}")
+
+                # Check if update is available
+                if installed_version and latest_version and installed_version != latest_version:
+                    click.echo()
+                    if non_interactive:
+                        print_step("Upgrading VoiceMode...")
+                    elif not click.confirm(f"Upgrade to version {latest_version}?", default=True):
+                        click.echo("\nTo upgrade manually later, run: uv tool install --upgrade voice-mode")
+                        sys.exit(0)
+                elif installed_version and latest_version and installed_version == latest_version:
+                    click.echo()
+                    click.echo(click.style("✓ VoiceMode is up-to-date", fg='green'))
+                    if non_interactive:
+                        click.echo("Reinstalling...")
+                    elif not click.confirm("Reinstall anyway?", default=False):
+                        click.echo("\nInstallation cancelled.")
+                        sys.exit(0)
+                else:
+                    click.echo()
+                    if not non_interactive:
+                        if not click.confirm("Reinstall VoiceMode?", default=False):
+                            click.echo("\nTo upgrade manually, run: uv tool install --upgrade voice-mode")
+                            sys.exit(0)
+            else:
+                click.echo("  Latest version:    (unable to check)")
+                click.echo()
+                if not non_interactive:
+                    if not click.confirm("Reinstall/upgrade VoiceMode?", default=False):
+                        click.echo("\nTo upgrade manually, run: uv tool install --upgrade voice-mode")
+                        sys.exit(0)
+
+            click.echo()
 
         # Check dependencies
         print_step("Checking system dependencies...")
