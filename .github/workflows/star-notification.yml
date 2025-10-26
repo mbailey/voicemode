@@ -1,0 +1,17 @@
+name: Star Notification
+
+on:
+  watch:
+    types: [started]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send ntfy notification
+        run: |
+          curl -H "Title: VoiceMode ⭐ New Star!" \
+               -H "Priority: default" \
+               -H "Tags: star,github" \
+               -d "🎉 ${{ github.actor }} just starred voicemode! Total stars: ${{ github.event.repository.stargazers_count }}" \
+               https://ntfy.sh/${{ secrets.NTFY_TOPIC }}
