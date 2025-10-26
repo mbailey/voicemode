@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voice-mode-install"
-version = "6.0.2"
+version = "6.0.3"
 description = "Installer for VoiceMode - handles system dependencies and installation"
 readme = "README.md"
 requires-python = ">=3.10"
