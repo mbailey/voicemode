@@ -320,7 +320,8 @@ async def text_to_speech(
         generation_start = time.perf_counter()
         
         # Check if streaming is enabled and format is supported
-        use_streaming = STREAMING_ENABLED and validated_format in ["opus", "mp3", "pcm", "wav"]
+        # Disable streaming when async return is requested (streaming doesn't support return_when parameter)
+        use_streaming = STREAMING_ENABLED and validated_format in ["opus", "mp3", "pcm", "wav"] and return_when == "complete"
         
         # Allow streaming with the requested format
         # PCM has lowest latency but highest bandwidth
