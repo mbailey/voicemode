@@ -1,5 +1,6 @@
 """Main CLI for VoiceMode installer."""
 
+import json
 import shutil
 import subprocess
 import sys
@@ -40,7 +41,9 @@ LOGO = """
 
 def print_logo():
     """Display the VoiceMode logo in Claude Code orange."""
-    click.echo(click.style(LOGO, fg=(208, 128, 0), bold=True))
+    # Use ANSI 256-color code 208 (orange) for better terminal compatibility
+    # RGB tuples don't work well with xterm-256color
+    click.echo(click.style(LOGO, fg='bright_yellow', bold=True))
 
 
 def print_step(message: str):
@@ -55,8 +58,8 @@ def print_success(message: str):
 
 def print_warning(message: str):
     """Print a warning message in Claude Code orange."""
-    # Use ANSI color code for Claude Code orange: \033[38;5;208m
-    click.echo(click.style(f"⚠️  {message}", fg=(208, 128, 0)))
+    # Use bright_yellow for better compatibility with xterm-256color terminals
+    click.echo(click.style(f"⚠️  {message}", fg='bright_yellow'))
 
 
 def print_error(message: str):
@@ -85,22 +88,17 @@ def get_installed_version() -> str | None:
 def get_latest_version() -> str | None:
     """Get the latest VoiceMode version from PyPI."""
     try:
+        # Use PyPI JSON API to get latest version
         result = subprocess.run(
-            ['uv', 'pip', 'index', 'versions', 'voice-mode'],
+            ['curl', '-s', 'https://pypi.org/pypi/voice-mode/json'],
             capture_output=True,
             text=True,
             timeout=10
         )
         if result.returncode == 0:
-            # Parse output to get latest version
-            for line in result.stdout.split('\n'):
-                if 'Available versions:' in line or line.strip().startswith('voice-mode'):
-                    # Extract first version listed (usually the latest)
-                    parts = line.split()
-                    for part in parts:
-                        if part[0].isdigit():
-                            return part.rstrip(',')
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+            data = json.loads(result.stdout)
+            return data['info']['version']
+    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError):
         pass
     return None
 

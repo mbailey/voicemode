@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Installer Color Compatibility** - Fixed logo showing as white on xterm-256color terminals
+  - Changed from RGB color tuples to `bright_yellow` for better terminal compatibility
+  - RGB tuples only work with True Color terminals, not xterm-256color
+  - Logo and warnings now display in orange/yellow on all terminal types
+- **Installer Version Check** - Fixed "unable to check" latest version error
+  - Changed from non-existent `uv pip index versions` command to PyPI JSON API
+  - Version checking now works reliably with curl
+
 ## [6.0.3] - 2025-10-27
 
 ### Fixed
