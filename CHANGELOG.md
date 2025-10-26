@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Makefile Target** - New `make run-installer` for quick logo preview
+  - Runs installer from source with --dry-run
+  - Shows logo and output without installing anything
+
+### Fixed
+- **Installer Logo Alignment** - Fixed box drawing character alignment
+  - Removed emoji that caused terminal width inconsistencies
+  - Adjusted spacing for perfect box alignment
+  - Logo now renders correctly on all terminals
+
 ## [6.0.4] - 2025-10-27
 
 ### Added
