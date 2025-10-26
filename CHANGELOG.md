@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.5] - 2025-10-27
+
 ### Added
 - **Makefile Target** - New `make run-installer` for quick logo preview
   - Runs installer from source with --dry-run
