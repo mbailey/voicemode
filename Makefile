@@ -432,10 +432,9 @@ build: build-package build-installer
 	@echo "✅ Both packages built successfully!"
 
 # Run installer locally to preview logo and output
-run-installer: build-installer
-	@echo "Running voice-mode-install locally..."
-	@WHEEL=$$(ls -t installer/dist/voice_mode_install-*.whl | head -1); \
-	uvx "$$WHEEL" --help || true
+run-installer:
+	@echo "Running voice-mode-install from source..."
+	@cd installer && uv run voice-mode-install --dry-run --non-interactive 2>&1 | head -30 || true
 
 # Test installer on fresh Ubuntu clone (default)
 test-installer-ubuntu: build-installer
