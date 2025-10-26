@@ -39,8 +39,8 @@ LOGO = """
 
 
 def print_logo():
-    """Display the VoiceMode logo."""
-    click.echo(click.style(LOGO, fg='bright_yellow', bold=True))
+    """Display the VoiceMode logo in Claude Code orange."""
+    click.echo(click.style(LOGO, fg=(208, 128, 0), bold=True))
 
 
 def print_step(message: str):
