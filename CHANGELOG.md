@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.0.2] - 2025-10-27
+
+### Added
+- **GitHub Star Notifications** - Receive notifications when someone stars the repository
+  - Integration with ntfy.sh for push notifications
+  - Automatic notification on new stargazers
+
+### Changed
+- **Logger Names** - Standardized logger names to use "voicemode" without hyphen
+  - Consistent logging namespace across all modules
+  - Improved log filtering and debugging experience
+
+### Fixed
+- **Converse Tool** - Simplified prompt and improved conversation continuation handling
+  - Reduced prompt complexity for better LLM understanding
+  - Better handling of conversation flow and context
+
 ## [6.0.1] - 2025-10-20
 
 ### Fixed
