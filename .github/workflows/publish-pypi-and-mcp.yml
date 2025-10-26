@@ -35,22 +35,43 @@ jobs:
         python -m pip install --upgrade pip
         pip install build twine
     
-    - name: Build package
+    - name: Build voice-mode package
       run: python -m build
-    
-    - name: Check package
+
+    - name: Check voice-mode package
       run: twine check dist/*
+
+    - name: Build voice-mode-install package
+      run: |
+        cd installer
+        python -m build
+
+    - name: Check voice-mode-install package
+      run: twine check installer/dist/*
     
-    - name: Publish to TestPyPI
+    - name: Publish voice-mode to TestPyPI
       if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
       run: twine upload --repository testpypi dist/*
+
+    - name: Publish voice-mode-install to TestPyPI
+      if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      run: twine upload --repository testpypi installer/dist/*
     
-    - name: Publish to PyPI
+    - name: Publish voice-mode to PyPI
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
       uses: pypa/gh-action-pypi-publish@release/v1
+
+    - name: Publish voice-mode-install to PyPI
+      if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        packages-dir: installer/dist/
     
     # MCP Registry Publishing Steps
     - name: Wait for PyPI availability

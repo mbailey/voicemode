@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Automated Installer Publishing** - voice-mode-install now publishes automatically on release
+  - GitHub Actions workflow builds and publishes installer alongside main package
+  - Both packages publish to PyPI when version tags are pushed
+  - Supports both production and TestPyPI publishing
+
 ### Fixed
-- **Installer Color Compatibility** - Fixed logo showing as white on xterm-256color terminals
-  - Changed from RGB color tuples to `bright_yellow` for better terminal compatibility
-  - RGB tuples only work with True Color terminals, not xterm-256color
-  - Logo and warnings now display in orange/yellow on all terminal types
+- **Installer Color** - Now uses proper Claude Code orange (ANSI color 208)
+  - Changed to ANSI escape code `\033[38;5;208m` for proper orange color
+  - Previous `bright_yellow` was not the correct Claude Code orange
+  - Works on all 256-color terminals including xterm-256color
 - **Installer Version Check** - Fixed "unable to check" latest version error
   - Changed from non-existent `uv pip index versions` command to PyPI JSON API
   - Version checking now works reliably with curl

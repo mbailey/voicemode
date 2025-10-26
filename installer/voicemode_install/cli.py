@@ -41,9 +41,9 @@ LOGO = """
 
 def print_logo():
     """Display the VoiceMode logo in Claude Code orange."""
-    # Use ANSI 256-color code 208 (orange) for better terminal compatibility
-    # RGB tuples don't work well with xterm-256color
-    click.echo(click.style(LOGO, fg='bright_yellow', bold=True))
+    # Use ANSI 256-color code 208 (dark orange) which matches Claude Code orange (RGB 208, 128, 0)
+    # This works on xterm-256color and other 256-color terminals
+    click.echo('\033[38;5;208m' + '\033[1m' + LOGO + '\033[0m')
 
 
 def print_step(message: str):
@@ -58,8 +58,8 @@ def print_success(message: str):
 
 def print_warning(message: str):
     """Print a warning message in Claude Code orange."""
-    # Use bright_yellow for better compatibility with xterm-256color terminals
-    click.echo(click.style(f"⚠️  {message}", fg='bright_yellow'))
+    # Use ANSI 256-color code 208 (dark orange)
+    click.echo('\033[38;5;208m' + f"⚠️  {message}" + '\033[0m')
 
 
 def print_error(message: str):
