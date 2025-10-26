@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **CLI Defaults** - Fixed CLI not respecting environment variable configuration (#75)
+  - `voicemode converse` now uses DEFAULT_LISTEN_DURATION (120s) instead of hardcoded 30s
+  - `voicemode converse` now uses MIN_RECORDING_DURATION from config for min-duration
+  - CLI defaults now properly align with environment variable values
+- **CLI Logging** - Restored INFO logging for converse command
+  - `voicemode converse` now shows detailed progress output
+  - Fixed regression caused by logger name standardization
+
 ## [6.0.2] - 2025-10-27
 
 ### Added

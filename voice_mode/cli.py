@@ -16,7 +16,11 @@ except ImportError:
     __version__ = "unknown"
 
 # Import configuration constants
-from voice_mode.config import DEFAULT_WHISPER_MODEL
+from voice_mode.config import (
+    DEFAULT_WHISPER_MODEL,
+    DEFAULT_LISTEN_DURATION,
+    MIN_RECORDING_DURATION,
+)
 
 
 # Suppress known deprecation warnings for better user experience
@@ -1723,8 +1727,8 @@ config.add_command(pronounce_commands.pronounce_group)
 @click.help_option('-h', '--help')
 @click.option('--message', '-m', default="Hello! How can I help you today?", help='Initial message to speak')
 @click.option('--wait/--no-wait', default=True, help='Wait for response after speaking')
-@click.option('--duration', '-d', type=float, default=30.0, help='Listen duration in seconds')
-@click.option('--min-duration', type=float, default=2.0, help='Minimum listen duration before silence detection')
+@click.option('--duration', '-d', type=float, default=DEFAULT_LISTEN_DURATION, help='Listen duration in seconds')
+@click.option('--min-duration', type=float, default=MIN_RECORDING_DURATION, help='Minimum listen duration before silence detection')
 @click.option('--transport', type=click.Choice(['auto', 'local', 'livekit']), default='auto', help='Transport method')
 @click.option('--room-name', default='', help='LiveKit room name (for livekit transport)')
 @click.option('--voice', help='TTS voice to use (e.g., nova, shimmer, af_sky)')
@@ -1777,6 +1781,9 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
         # session that was likely created during module import
         import logging
         logging.getLogger('asyncio').setLevel(logging.CRITICAL)
+
+        # Enable INFO logging for converse command to show progress
+        logging.getLogger('voicemode').setLevel(logging.INFO)
 
         try:
             if continuous:

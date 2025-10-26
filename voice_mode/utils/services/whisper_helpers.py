@@ -240,6 +240,14 @@ async def download_coreml_model(
         # Extract the zip file
         shutil.unpack_archive(coreml_zip, models_dir, 'zip')
 
+        # Handle large-v2 naming mismatch
+        # The large-v2 zip contains "ggml-large-encoder.mlmodelc" instead of "ggml-large-v2-encoder.mlmodelc"
+        if model == "large-v2" and not coreml_dir.exists():
+            legacy_dir = models_dir / "ggml-large-encoder.mlmodelc"
+            if legacy_dir.exists():
+                logger.info(f"Fixing large-v2 naming: renaming {legacy_dir.name} to {coreml_dir.name}")
+                shutil.move(str(legacy_dir), str(coreml_dir))
+
         # Clean up zip file
         coreml_zip.unlink()
         logger.info(f"Core ML model extracted to {coreml_dir}")
