@@ -69,7 +69,6 @@ jobs:
           ls ~/.voicemode/ || echo "Config directory not yet created (OK for CI)"
 
   test-macos:
-    runs-on: macos-latest
     strategy:
       matrix:
         os: ['macos-13', 'macos-14']  # Intel and Apple Silicon
