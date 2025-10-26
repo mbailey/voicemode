@@ -112,7 +112,7 @@ class PackageInstaller:
 
     def install_voicemode(self, version: Optional[str] = None) -> bool:
         """
-        Install voice-mode using uv tool install.
+        Install or upgrade voice-mode using uv tool install --upgrade.
 
         Args:
             version: Optional version to install (e.g., "5.1.3")
@@ -122,16 +122,18 @@ class PackageInstaller:
         """
         if self.dry_run:
             if version:
-                print(f"[DRY RUN] Would install: uv tool install voice-mode=={version}")
+                print(f"[DRY RUN] Would install: uv tool install --upgrade voice-mode=={version}")
             else:
-                print("[DRY RUN] Would install: uv tool install voice-mode")
+                print("[DRY RUN] Would install: uv tool install --upgrade voice-mode")
             return True
 
         try:
+            # Always use --upgrade to ensure we get the latest/requested version
+            # This also implies --refresh to check for new versions
             if version:
-                cmd = ['uv', 'tool', 'install', f'voice-mode=={version}']
+                cmd = ['uv', 'tool', 'install', '--upgrade', f'voice-mode=={version}']
             else:
-                cmd = ['uv', 'tool', 'install', 'voice-mode']
+                cmd = ['uv', 'tool', 'install', '--upgrade', 'voice-mode']
 
             result = subprocess.run(
                 cmd,
