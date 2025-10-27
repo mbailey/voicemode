@@ -183,8 +183,10 @@ async def stream_capture(
     cmd = [
         "whisper-stream",
         "-m", str(model_path),
-        "--step", "0",  # VAD mode - process full utterances
-        "-t", "6",      # 6 threads
+        "--step", "0",     # VAD mode - process full utterances
+        "--keep", "0",     # Don't keep audio from previous chunks (reduces overlap)
+        "--length", "30000",  # 30 seconds max per chunk
+        "-t", "6",         # 6 threads
     ]
 
     logger.info(f"Launching whisper-stream: {' '.join(cmd)}")
