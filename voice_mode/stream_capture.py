@@ -50,6 +50,8 @@ def deduplicate_segments(segments: List[str]) -> str:
     if not segments:
         return ""
 
+    logger.debug(f"Deduplicating {len(segments)} segments")
+
     # First pass: remove exact duplicates while preserving order
     seen = set()
     unique_segments = []
@@ -58,6 +60,8 @@ def deduplicate_segments(segments: List[str]) -> str:
         if segment and segment not in seen:
             seen.add(segment)
             unique_segments.append(segment)
+
+    logger.debug(f"After exact duplicate removal: {len(unique_segments)} segments")
 
     if len(unique_segments) <= 1:
         return " ".join(unique_segments)
@@ -70,9 +74,12 @@ def deduplicate_segments(segments: List[str]) -> str:
         for later in unique_segments[i+1:]:
             if current in later:
                 is_substring = True
+                logger.debug(f"Removing substring: '{current[:50]}...' (contained in later segment)")
                 break
         if not is_substring:
             filtered.append(current)
+
+    logger.debug(f"After substring removal: {len(filtered)} segments")
 
     # Third pass: merge overlapping segments
     if len(filtered) <= 1:
@@ -93,12 +100,17 @@ def deduplicate_segments(segments: List[str]) -> str:
                 merged = last + " " + " ".join(words_current[overlap_size:])
                 final[-1] = merged.strip()
                 overlap_found = True
+                logger.debug(f"Merged overlap of {overlap_size} words")
                 break
 
         if not overlap_found:
             final.append(segment)
 
-    return " ".join(final)
+    logger.debug(f"After merging overlaps: {len(final)} segments")
+    result = " ".join(final)
+    logger.info(f"Deduplication: {len(segments)} -> {len(final)} segments, {len(result.split())} words")
+
+    return result
 
 
 def detect_control_phrase(text: str, control_phrases: Dict[str, List[str]]) -> Optional[str]:
