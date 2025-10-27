@@ -187,6 +187,8 @@ async def stream_capture(
     start_time = time.time()
     control_signal = None
     current_segment_t0 = None
+    current_mode = initial_mode  # "recording" or "paused"
+    control_phrases_detected = []  # Track all control phrases to strip later
 
     try:
         # Read output line by line
@@ -251,17 +253,34 @@ async def stream_capture(
                 if len(parts) == 2:
                     text = parts[1].strip()
                     if text:
-                        logger.debug(f"Transcription: {text}")
-                        segments.append(text)
-
-                        # Check for control phrases
+                        # Check for control phrases first
                         signal = detect_control_phrase(text, control_phrases)
+
                         if signal:
-                            logger.info(f"Control signal detected: {signal}")
-                            control_signal = signal
-                            # Terminal signals end capture immediately
-                            if signal in ["send", "stop", "play"]:
+                            logger.info(f"Control signal detected: {signal} in '{text}'")
+                            control_phrases_detected.append(text)  # Track for stripping later
+
+                            # Handle state transitions
+                            if signal == "pause":
+                                logger.info("State: RECORDING -> PAUSED")
+                                current_mode = "paused"
+                                continue  # Don't add this segment
+                            elif signal == "resume":
+                                logger.info("State: PAUSED -> RECORDING")
+                                current_mode = "recording"
+                                continue  # Don't add this segment
+                            elif signal in ["send", "stop", "play"]:
+                                # Terminal signals - set and break
+                                control_signal = signal
                                 break
+
+                        # Only add segment if we're in recording mode and no control detected
+                        if current_mode == "recording" and not signal:
+                            logger.debug(f"Transcription (recording): {text}")
+                            segments.append(text)
+                        elif current_mode == "paused":
+                            logger.debug(f"Transcription (paused, ignored): {text}")
+                        # If signal was detected, we already handled it above
             else:
                 # Log unexpected output for debugging
                 if not line.startswith("whisper") and not line.startswith("main:"):
@@ -282,19 +301,20 @@ async def stream_capture(
     # Deduplicate and combine transcribed text
     text = deduplicate_segments(segments)
 
-    # Strip control phrases from the final text
-    if control_signal:
-        # Remove the control phrase that triggered the signal
-        for phrase in control_phrases.get(control_signal, []):
-            # Case-insensitive removal
+    # Strip ALL control phrases that were detected during capture
+    # This removes pause, resume, send, etc. from the final text
+    for control_text in control_phrases_detected:
+        # Remove each control phrase occurrence (case-insensitive)
+        text_lower = text.lower()
+        control_lower = control_text.lower()
+
+        # Find and remove the control phrase
+        idx = text_lower.find(control_lower)
+        if idx != -1:
+            text = text[:idx] + text[idx+len(control_text):]
+            text = text.strip()
+            # Update text_lower for next iteration
             text_lower = text.lower()
-            phrase_lower = phrase.lower()
-            if phrase_lower in text_lower:
-                # Find the phrase and remove it
-                idx = text_lower.find(phrase_lower)
-                text = text[:idx] + text[idx+len(phrase):]
-                text = text.strip()
-                break
 
     duration = time.time() - start_time
     logger.info(f"Capture complete: {len(segments)} segments -> {len(text.split())} words, "
