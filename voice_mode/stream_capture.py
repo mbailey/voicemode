@@ -220,6 +220,7 @@ async def stream_capture(
     control_phrases_detected = []  # Track all control phrases to strip later
     recording_started_at = start_time if initial_mode == "recording" else None  # Track when we last entered recording mode
     skip_next_segments = 0  # Skip N segments after resume to avoid stale refinements
+    state_changes = []  # Track pause/resume events with timestamps
 
     try:
         # Read output line by line
@@ -293,18 +294,30 @@ async def stream_capture(
 
                             # Handle state transitions BEFORE checking current_mode
                             if signal == "pause":
-                                logger.info("State: RECORDING -> PAUSED")
+                                relative_time = time.time() - start_time
+                                state_changes.append({
+                                    "event": "pause",
+                                    "relative_time_seconds": relative_time,
+                                    "whisper_t0_ms": current_segment_t0
+                                })
+                                logger.info(f"State: RECORDING -> PAUSED (at {relative_time:.1f}s)")
                                 current_mode = "paused"
                                 recording_started_at = None  # Clear recording timestamp
                                 # Don't add this segment, don't log it
                                 continue
                             elif signal == "resume":
-                                logger.info("State: PAUSED -> RECORDING")
+                                relative_time = time.time() - start_time
+                                state_changes.append({
+                                    "event": "resume",
+                                    "relative_time_seconds": relative_time,
+                                    "whisper_t0_ms": current_segment_t0
+                                })
+                                logger.info(f"State: PAUSED -> RECORDING (at {relative_time:.1f}s)")
                                 current_mode = "recording"
                                 recording_started_at = time.time()  # Mark when we resumed
                                 # Skip next 3 segments to avoid stale whisper refinements from paused period
                                 skip_next_segments = 3
-                                logger.debug(f"Recording resumed at {recording_started_at - start_time:.1f}s, will skip next {skip_next_segments} segments")
+                                logger.debug(f"Recording resumed, will skip next {skip_next_segments} segments")
                                 # Don't add this segment, don't log it
                                 continue
                             elif signal in ["send", "stop", "play"]:
@@ -367,11 +380,19 @@ async def stream_capture(
     logger.info(f"Capture complete: {len(segments)} segments -> {len(text.split())} words, "
                 f"duration: {duration:.1f}s, signal: {control_signal}")
 
+    # Log state changes summary
+    if state_changes:
+        logger.info(f"State changes during capture:")
+        for change in state_changes:
+            logger.info(f"  {change['event']}: {change['relative_time_seconds']:.1f}s "
+                       f"(whisper t0: {change['whisper_t0_ms']}ms)")
+
     return {
         "text": text,
         "control_signal": control_signal,
         "segments": segments,
-        "duration": duration
+        "duration": duration,
+        "state_changes": state_changes
     }
 
 
