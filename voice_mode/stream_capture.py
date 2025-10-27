@@ -21,6 +21,31 @@ from dataclasses import dataclass
 logger = logging.getLogger("voicemode")
 
 
+async def play_control_feedback(control_signal: str) -> None:
+    """
+    Play audio feedback for control commands.
+
+    Uses simple chimes from core module for immediate feedback.
+    """
+    try:
+        from voice_mode.core import play_chime_start, play_chime_end
+
+        if control_signal == "pause":
+            # Descending tone for pause
+            await play_chime_end(leading_silence=0.0, trailing_silence=0.1)
+        elif control_signal == "resume":
+            # Ascending tone for resume
+            await play_chime_start(leading_silence=0.0, trailing_silence=0.1)
+        elif control_signal in ["send", "stop"]:
+            # Double beep for terminal commands
+            await play_chime_end(leading_silence=0.0, trailing_silence=0.1)
+            await asyncio.sleep(0.1)
+            await play_chime_end(leading_silence=0.0, trailing_silence=0.0)
+    except Exception as e:
+        logger.debug(f"Audio feedback failed: {e}")
+        # Don't interrupt capture if feedback fails
+
+
 @dataclass
 class WhisperSegment:
     """Represents a single whisper-stream output segment with timing."""
@@ -459,6 +484,9 @@ async def stream_capture(
                         if signal:
                             logger.info(f"Control signal detected: {signal} in '{text}'")
                             control_phrases_detected.append(text)  # Track for stripping later
+
+                            # Play immediate audio feedback
+                            await play_control_feedback(signal)
 
                             # Handle state transitions BEFORE checking current_mode
                             if signal == "pause":
