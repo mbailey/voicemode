@@ -178,9 +178,8 @@ async def stream_capture(
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        text=True
-        # Note: asyncio subprocess doesn't support bufsize parameter
+        stderr=asyncio.subprocess.PIPE
+        # Note: Read bytes and decode manually (text=True not supported with PIPE)
     )
 
     # Track state
@@ -200,7 +199,7 @@ async def stream_capture(
 
             # Read line with timeout
             try:
-                line = await asyncio.wait_for(
+                line_bytes = await asyncio.wait_for(
                     process.stdout.readline(),
                     timeout=1.0
                 )
@@ -211,13 +210,17 @@ async def stream_capture(
                     break
                 continue
 
-            if not line:
+            if not line_bytes:
                 # End of stream
                 if process.returncode is not None:
                     break
                 continue
 
-            line = line.strip()
+            # Decode bytes to text
+            try:
+                line = line_bytes.decode('utf-8').strip()
+            except UnicodeDecodeError:
+                continue
             if not line:
                 continue
 
