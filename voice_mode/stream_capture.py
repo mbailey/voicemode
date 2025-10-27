@@ -218,6 +218,8 @@ async def stream_capture(
     current_segment_t0 = None
     current_mode = initial_mode  # "recording" or "paused"
     control_phrases_detected = []  # Track all control phrases to strip later
+    recording_started_at = start_time if initial_mode == "recording" else None  # Track when we last entered recording mode
+    skip_next_segments = 0  # Skip N segments after resume to avoid stale refinements
 
     try:
         # Read output line by line
@@ -282,34 +284,50 @@ async def stream_capture(
                 if len(parts) == 2:
                     text = parts[1].strip()
                     if text:
-                        # Check for control phrases first
+                        # Check for control phrases BEFORE any processing
                         signal = detect_control_phrase(text, control_phrases)
 
                         if signal:
                             logger.info(f"Control signal detected: {signal} in '{text}'")
                             control_phrases_detected.append(text)  # Track for stripping later
 
-                            # Handle state transitions
+                            # Handle state transitions BEFORE checking current_mode
                             if signal == "pause":
                                 logger.info("State: RECORDING -> PAUSED")
                                 current_mode = "paused"
-                                continue  # Don't add this segment
+                                recording_started_at = None  # Clear recording timestamp
+                                # Don't add this segment, don't log it
+                                continue
                             elif signal == "resume":
                                 logger.info("State: PAUSED -> RECORDING")
                                 current_mode = "recording"
-                                continue  # Don't add this segment
+                                recording_started_at = time.time()  # Mark when we resumed
+                                # Skip next 3 segments to avoid stale whisper refinements from paused period
+                                skip_next_segments = 3
+                                logger.debug(f"Recording resumed at {recording_started_at - start_time:.1f}s, will skip next {skip_next_segments} segments")
+                                # Don't add this segment, don't log it
+                                continue
                             elif signal in ["send", "stop", "play"]:
-                                # Terminal signals - set and break
+                                # Terminal signals - set and break immediately
                                 control_signal = signal
                                 break
+                            # If we get here with a signal, something's wrong
+                            logger.warning(f"Unhandled signal: {signal}")
 
-                        # Only add segment if we're in recording mode and no control detected
-                        if current_mode == "recording" and not signal:
+                        # Now check mode for non-control segments
+                        # State transitions happen ABOVE, so current_mode is already updated
+
+                        # Skip segments if we're in the post-resume grace period
+                        if skip_next_segments > 0:
+                            skip_next_segments -= 1
+                            logger.info(f"⏭️  [skipped post-resume] {text} ({skip_next_segments} more to skip)")
+                            continue
+
+                        if current_mode == "recording":
                             logger.info(f"📝 {text}")
                             segments.append(text)
-                        elif current_mode == "paused":
+                        else:  # paused
                             logger.info(f"⏸️  [ignored] {text}")
-                        # If signal was detected, we already handled it above
             else:
                 # Log unexpected output for debugging
                 if not line.startswith("whisper") and not line.startswith("main:"):
