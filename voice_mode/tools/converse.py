@@ -1411,7 +1411,15 @@ consult the MCP resources listed above.
                     if stream_mode:
                         # Use stream_capture with control phrase detection
                         logger.info("Using stream_capture mode with control phrases")
-                        capture_result = await stream_capture(max_duration=listen_duration_max)
+
+                        # Create debug output file with timestamp
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        debug_file = Path.home() / "tasks" / "projects" / "voicemode" / "VM-194_feat_implement-stream-capture-with-cassette-deck-flow-controls" / "test-data" / f"capture_{timestamp}.txt"
+
+                        capture_result = await stream_capture(
+                            max_duration=listen_duration_max,
+                            debug_output_file=debug_file
+                        )
                         response_text = capture_result["text"]
                         speech_detected = bool(response_text and response_text.strip())
                         timings['record'] = capture_result["duration"]
