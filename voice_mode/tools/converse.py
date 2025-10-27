@@ -91,6 +91,7 @@ from voice_mode.utils import (
     log_tool_request_end
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
+from voice_mode.stream_capture import stream_capture, check_whisper_stream_available
 
 logger = logging.getLogger("voicemode")
 
@@ -1042,7 +1043,8 @@ async def converse(
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
     chime_leading_silence: Optional[float] = None,
-    chime_trailing_silence: Optional[float] = None
+    chime_trailing_silence: Optional[float] = None,
+    stream_mode: Union[bool, str] = False
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -1069,6 +1071,7 @@ KEY PARAMETERS:
 • chime_enabled (bool): Enable/disable audio feedback chimes
 • chime_leading_silence (float): Silence before chime in seconds
 • chime_trailing_silence (float): Silence after chime in seconds
+• stream_mode (bool, default: false): Use whisper-stream with control phrases (send/pause/resume)
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
@@ -1085,6 +1088,8 @@ consult the MCP resources listed above.
         chime_enabled = chime_enabled.lower() in ('true', '1', 'yes', 'on')
     if skip_tts is not None and isinstance(skip_tts, str):
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
+    if isinstance(stream_mode, str):
+        stream_mode = stream_mode.lower() in ('true', '1', 'yes', 'on')
     
     # Convert vad_aggressiveness to integer if provided as string
     if vad_aggressiveness is not None and isinstance(vad_aggressiveness, str):
@@ -1121,6 +1126,11 @@ consult the MCP resources listed above.
     if vad_aggressiveness is not None:
         if not isinstance(vad_aggressiveness, int) or vad_aggressiveness < 0 or vad_aggressiveness > 3:
             return f"Error: vad_aggressiveness must be an integer between 0 and 3 (got {vad_aggressiveness})"
+
+    # Validate stream_mode requirements
+    if stream_mode and wait_for_response:
+        if not check_whisper_stream_available():
+            return "❌ Error: stream_mode requires whisper-stream to be installed and available in PATH"
     
     # Validate duration parameters
     if wait_for_response:
@@ -1396,11 +1406,30 @@ consult the MCP resources listed above.
                         event_logger.log_event(event_logger.RECORDING_START)
 
                     record_start = time.perf_counter()
-                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                    )
-                    timings['record'] = time.perf_counter() - record_start
+
+                    # Choose recording method based on stream_mode
+                    if stream_mode:
+                        # Use stream_capture with control phrase detection
+                        logger.info("Using stream_capture mode with control phrases")
+                        capture_result = await stream_capture(max_duration=listen_duration_max)
+                        response_text = capture_result["text"]
+                        speech_detected = bool(response_text and response_text.strip())
+                        timings['record'] = capture_result["duration"]
+                        timings['stt'] = 0.0  # STT done during capture
+                        stt_provider = "whisper-stream"
+
+                        # Create dummy audio_data for compatibility (not used in stream mode)
+                        audio_data = np.array([])
+
+                        logger.info(f"Stream capture complete: {len(response_text.split()) if response_text else 0} words, "
+                                   f"control signal: {capture_result['control_signal']}")
+                    else:
+                        # Use normal VAD-based recording
+                        logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
+                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                        )
+                        timings['record'] = time.perf_counter() - record_start
                     
                     # Log recording end
                     if event_logger:
@@ -1422,8 +1451,9 @@ consult the MCP resources listed above.
                     # Mark the end of recording - this is when user expects response to start
                     user_done_time = time.perf_counter()
                     logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
-                    
-                    if len(audio_data) == 0:
+
+                    # Check for recording errors (skip check in stream mode which doesn't use audio_data)
+                    if not stream_mode and len(audio_data) == 0:
                         result = "Error: Could not record audio"
                         return result
                     
@@ -1432,19 +1462,23 @@ consult the MCP resources listed above.
                         logger.info("No speech detected during recording - skipping STT processing")
                         response_text = None
                         timings['stt'] = 0.0
-                        
+
                         # Still save the audio if configured
                         if SAVE_AUDIO and AUDIO_DIR:
                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                             audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
                             write(audio_path, SAMPLE_RATE, audio_data)
                             logger.debug(f"Saved no-speech audio to: {audio_path}")
+                    elif stream_mode:
+                        # Stream mode already has response_text, skip STT processing
+                        logger.debug("Stream mode - transcription already complete, skipping STT")
+                        # response_text already set above from capture_result
                     else:
-                        # Convert to text
+                        # Convert to text with normal STT
                         # Log STT start
                         if event_logger:
                             event_logger.log_event(event_logger.STT_START)
-                        
+
                         stt_start = time.perf_counter()
                         stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
                         timings['stt'] = time.perf_counter() - stt_start
