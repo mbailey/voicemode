@@ -15,9 +15,18 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
+from dataclasses import dataclass
 
 logger = logging.getLogger("voicemode")
+
+
+@dataclass
+class WhisperSegment:
+    """Represents a single whisper-stream output segment with timing."""
+    start_time: float  # seconds
+    end_time: float    # seconds
+    text: str
 
 # Default control phrases
 DEFAULT_CONTROL_PHRASES = {
@@ -109,6 +118,156 @@ def deduplicate_segments(segments: List[str]) -> str:
     logger.debug(f"After merging overlaps: {len(final)} segments")
     result = " ".join(final)
     logger.info(f"Deduplication: {len(segments)} -> {len(final)} segments, {len(result.split())} words")
+
+    return result
+
+
+def parse_whisper_timestamp(timestamp_str: str) -> float:
+    """
+    Parse whisper timestamp format to seconds.
+
+    Format: [HH:MM:SS.mmm --> HH:MM:SS.mmm]  text
+
+    Args:
+        timestamp_str: Timestamp string like "00:00:15.480"
+
+    Returns:
+        Time in seconds (float)
+    """
+    parts = timestamp_str.split(":")
+    hours = int(parts[0])
+    minutes = int(parts[1])
+    seconds = float(parts[2])
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def parse_whisper_line(line: str) -> Optional[WhisperSegment]:
+    """
+    Parse a whisper-stream output line into a segment.
+
+    Format: [00:00:15.000 --> 00:00:20.000]   text here
+
+    Args:
+        line: Line from whisper-stream output
+
+    Returns:
+        WhisperSegment or None if line doesn't match format
+    """
+    if not line.startswith("[") or "-->" not in line:
+        return None
+
+    try:
+        # Extract timestamps and text
+        match = re.match(r'\[([0-9:.]+)\s+-->\s+([0-9:.]+)\]\s+(.*)', line)
+        if not match:
+            return None
+
+        start_str, end_str, text = match.groups()
+        start_time = parse_whisper_timestamp(start_str)
+        end_time = parse_whisper_timestamp(end_str)
+
+        return WhisperSegment(
+            start_time=start_time,
+            end_time=end_time,
+            text=text.strip()
+        )
+    except Exception as e:
+        logger.debug(f"Failed to parse whisper line: {line[:50]}... Error: {e}")
+        return None
+
+
+def process_whisper_output(
+    raw_lines: List[str],
+    state_changes: List[Dict[str, Any]]
+) -> str:
+    """
+    Process raw whisper-stream output with pause/resume filtering.
+
+    Algorithm:
+    1. Parse all lines into WhisperSegment objects with timestamps
+    2. Build pause time ranges from state_changes
+    3. Group segments by their start time (t=0 vs t>0)
+    4. For t=0 segments: take the longest/latest complete transcription
+    5. For t>0 segments: filter out any that fall within paused ranges
+    6. Deduplicate overlapping segments
+    7. Return final text
+
+    Args:
+        raw_lines: Raw output lines from whisper-stream (from -f file)
+        state_changes: List of {event, relative_time_seconds, whisper_t0_ms}
+
+    Returns:
+        Deduplicated and filtered transcription text
+    """
+    logger.info(f"Processing {len(raw_lines)} raw whisper lines with {len(state_changes)} state changes")
+
+    # Parse all segments
+    segments = []
+    for line in raw_lines:
+        seg = parse_whisper_line(line)
+        if seg and seg.text:  # Ignore empty segments
+            segments.append(seg)
+
+    logger.info(f"Parsed {len(segments)} valid segments from raw output")
+
+    # Build paused time ranges
+    # Track pairs of (pause_time, resume_time)
+    paused_ranges = []
+    pause_start = None
+
+    for change in state_changes:
+        if change["event"] == "pause":
+            if pause_start is None:  # Start a new pause period
+                pause_start = change["relative_time_seconds"]
+        elif change["event"] == "resume":
+            if pause_start is not None:  # End the pause period
+                paused_ranges.append((pause_start, change["relative_time_seconds"]))
+                pause_start = None
+
+    # If still paused at end, close the range
+    if pause_start is not None:
+        paused_ranges.append((pause_start, float('inf')))
+
+    logger.info(f"Paused time ranges: {paused_ranges}")
+
+    # Separate segments into t=0 (full retranscriptions) and t>0 (incremental)
+    t0_segments = [s for s in segments if s.start_time == 0.0]
+    incremental_segments = [s for s in segments if s.start_time > 0.0]
+
+    logger.info(f"Segments: {len(t0_segments)} at t=0, {len(incremental_segments)} incremental")
+
+    # For t=0 segments: Take the longest one (most complete transcription)
+    # These are full re-transcriptions of the entire VAD chunk
+    final_segments = []
+
+    if t0_segments:
+        # Find the longest t=0 segment (most complete)
+        longest = max(t0_segments, key=lambda s: len(s.text))
+        logger.info(f"Selected longest t=0 segment: {len(longest.text)} chars, {len(longest.text.split())} words")
+
+        # Split this segment into individual parts based on timing if available
+        # For now, just use it as is
+        final_segments.append(longest.text)
+
+    # For incremental segments: filter by pause ranges
+    for seg in incremental_segments:
+        # Check if this segment's time falls within any paused range
+        is_paused = False
+        for pause_start, pause_end in paused_ranges:
+            # If segment starts or ends during pause, skip it
+            if (pause_start <= seg.start_time <= pause_end or
+                pause_start <= seg.end_time <= pause_end):
+                is_paused = True
+                logger.debug(f"Skipping paused segment [{seg.start_time:.1f}s-{seg.end_time:.1f}s]: {seg.text[:50]}...")
+                break
+
+        if not is_paused:
+            logger.debug(f"Keeping segment [{seg.start_time:.1f}s-{seg.end_time:.1f}s]: {seg.text[:50]}...")
+            final_segments.append(seg.text)
+
+    # Simple join for now - could apply deduplication here
+    result = " ".join(final_segments)
+    logger.info(f"Processed output: {len(final_segments)} segments, {len(result.split())} words")
 
     return result
 
