@@ -128,9 +128,11 @@ def detect_control_phrase(text: str, control_phrases: Dict[str, List[str]]) -> O
                     return signal
             else:
                 # Single-word phrase - check with word boundaries
-                # Split text into words and check for exact match
+                # Strip punctuation from each word before matching
+                import string
                 words = text_lower.split()
-                if phrase_lower in words:
+                words_no_punct = [w.strip(string.punctuation) for w in words]
+                if phrase_lower in words_no_punct:
                     logger.debug(f"Detected control phrase '{phrase}' -> signal '{signal}'")
                     return signal
 
