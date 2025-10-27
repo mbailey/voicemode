@@ -185,7 +185,7 @@ async def stream_capture(
         "-t", "6",      # 6 threads
     ]
 
-    logger.debug(f"Launching whisper-stream: {' '.join(cmd)}")
+    logger.info(f"Launching whisper-stream: {' '.join(cmd)}")
 
     # Start whisper-stream subprocess
     process = await asyncio.create_subprocess_exec(
@@ -289,10 +289,10 @@ async def stream_capture(
 
                         # Only add segment if we're in recording mode and no control detected
                         if current_mode == "recording" and not signal:
-                            logger.debug(f"Transcription (recording): {text}")
+                            logger.info(f"📝 {text}")
                             segments.append(text)
                         elif current_mode == "paused":
-                            logger.debug(f"Transcription (paused, ignored): {text}")
+                            logger.info(f"⏸️  [ignored] {text}")
                         # If signal was detected, we already handled it above
             else:
                 # Log unexpected output for debugging
