@@ -155,7 +155,8 @@ async def stream_capture(
     control_phrases: Optional[Dict[str, List[str]]] = None,
     max_duration: float = 600.0,
     model_path: Optional[Path] = None,
-    initial_mode: str = "recording"
+    initial_mode: str = "recording",
+    debug_output_file: Optional[Path] = None
 ) -> Dict[str, Any]:
     """
     Capture audio with whisper-stream and detect control commands.
@@ -170,13 +171,15 @@ async def stream_capture(
         max_duration: Maximum capture duration in seconds
         model_path: Path to whisper model (defaults to voicemode large-v2)
         initial_mode: Start in "recording" or "paused" state
+        debug_output_file: Optional path to save raw whisper-stream output for analysis
 
     Returns:
         {
             "text": "accumulated transcription",
             "control_signal": "send"|"pause"|"resume"|"play"|"stop"|None,
             "segments": List[str],  # Raw segments for debugging
-            "duration": float
+            "duration": float,
+            "state_changes": List[dict]  # Pause/resume events with timestamps
         }
     """
     if control_phrases is None:
@@ -200,6 +203,12 @@ async def stream_capture(
         "--length", "30000",  # 30 seconds max per chunk
         "-t", "6",         # 6 threads
     ]
+
+    # Add file output for debugging if requested
+    if debug_output_file:
+        debug_output_file.parent.mkdir(parents=True, exist_ok=True)
+        cmd.extend(["-f", str(debug_output_file)])
+        logger.info(f"Debug output will be saved to: {debug_output_file}")
 
     logger.info(f"Launching whisper-stream: {' '.join(cmd)}")
 
