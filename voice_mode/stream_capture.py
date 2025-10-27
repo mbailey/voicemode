@@ -103,7 +103,7 @@ def deduplicate_segments(segments: List[str]) -> str:
 
 def detect_control_phrase(text: str, control_phrases: Dict[str, List[str]]) -> Optional[str]:
     """
-    Detect if text contains a control phrase.
+    Detect if text contains a control phrase using word boundaries.
 
     Args:
         text: Transcribed text to check
@@ -117,9 +117,22 @@ def detect_control_phrase(text: str, control_phrases: Dict[str, List[str]]) -> O
     # Check each control signal's phrases
     for signal, phrases in control_phrases.items():
         for phrase in phrases:
-            if phrase.lower() in text_lower:
-                logger.debug(f"Detected control phrase '{phrase}' -> signal '{signal}'")
-                return signal
+            phrase_lower = phrase.lower()
+
+            # Use word boundary matching for single-word phrases
+            # For multi-word phrases, check if they appear as is
+            if ' ' in phrase_lower:
+                # Multi-word phrase - just check if it appears
+                if phrase_lower in text_lower:
+                    logger.debug(f"Detected control phrase '{phrase}' -> signal '{signal}'")
+                    return signal
+            else:
+                # Single-word phrase - check with word boundaries
+                # Split text into words and check for exact match
+                words = text_lower.split()
+                if phrase_lower in words:
+                    logger.debug(f"Detected control phrase '{phrase}' -> signal '{signal}'")
+                    return signal
 
     return None
 
