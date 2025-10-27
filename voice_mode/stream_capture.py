@@ -179,8 +179,8 @@ async def stream_capture(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        text=True,
-        bufsize=1  # Line buffered
+        text=True
+        # Note: asyncio subprocess doesn't support bufsize parameter
     )
 
     # Track state
