@@ -16,8 +16,13 @@ from . import prompts
 from . import resources
 
 # Main entry point
-def main():
-    """Run the VoiceMode MCP server."""
+def main(transport="stdio", port=8000):
+    """Run the VoiceMode MCP server.
+
+    Args:
+        transport: Transport type - 'stdio', 'sse', or 'streamable-http' (default: 'stdio')
+        port: Port number for HTTP transports (default: 8000)
+    """
     import os
     import sys
     import warnings
@@ -79,8 +84,13 @@ def main():
     else:
         logger.info("Event logging disabled")
     
-    # Run the server
-    mcp.run(transport="stdio")
+    # Run the server with specified transport
+    logger.info(f"Starting MCP server with transport: {transport}")
+    if transport in ['sse', 'streamable-http']:
+        logger.info(f"Using port {port} for HTTP transport")
+        mcp.run(transport=transport, port=port)
+    else:
+        mcp.run(transport=transport)
 
 if __name__ == "__main__":
     main()
