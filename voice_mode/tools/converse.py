@@ -54,7 +54,8 @@ from voice_mode.config import (
     INITIAL_SILENCE_GRACE_PERIOD,
     DEFAULT_LISTEN_DURATION,
     TTS_VOICES,
-    TTS_MODELS
+    TTS_MODELS,
+    RECORDING_VISUALIZATION_ENABLED
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -79,6 +80,7 @@ from voice_mode.utils import (
     log_tool_request_end
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
+from voice_mode.recording_visualization import create_visualizer
 
 logger = logging.getLogger("voicemode")
 
@@ -565,7 +567,16 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     f"Silence threshold: {SILENCE_THRESHOLD_MS}ms, "
                     f"Min duration: {MIN_RECORDING_DURATION}s, "
                     f"Initial grace period: {INITIAL_SILENCE_GRACE_PERIOD}s")
-        
+
+        # Create and start visualizer if enabled
+        visualizer = create_visualizer(
+            max_duration=max_duration,
+            silence_threshold_ms=SILENCE_THRESHOLD_MS,
+            min_duration=max(MIN_RECORDING_DURATION, min_duration),
+            enabled=RECORDING_VISUALIZATION_ENABLED
+        )
+        visualizer.start()
+
         if VAD_DEBUG:
             logger.info(f"[VAD_DEBUG] Starting VAD recording with config:")
             logger.info(f"[VAD_DEBUG]   max_duration: {max_duration}s")
@@ -638,6 +649,21 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                             logger.warning(f"VAD error: {vad_e}, treating as speech")
                             is_speech = True
                         
+                        # Calculate RMS for visualization
+                        rms = np.sqrt(np.mean(chunk.astype(float)**2))
+
+                        # Determine current state
+                        current_state = "WAITING" if not speech_detected else ("ACTIVE" if is_speech else "SILENCE")
+
+                        # Update visualizer
+                        visualizer.update(
+                            duration=recording_duration,
+                            audio_level=rms,
+                            speech_detected=speech_detected,
+                            silence_ms=silence_duration_ms,
+                            state=current_state
+                        )
+
                         # State machine for speech detection
                         if not speech_detected:
                             # WAITING_FOR_SPEECH state
@@ -684,10 +710,13 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                         logger.error(f"Error processing audio chunk: {e}")
                         break
             
+            # Stop visualizer
+            visualizer.stop()
+
             # Concatenate all chunks
             if chunks:
                 full_recording = np.concatenate(chunks)
-                
+
                 if not speech_detected:
                     logger.info(f"✓ Recording completed ({recording_duration:.1f}s) - No speech detected")
                     if VAD_DEBUG:
@@ -696,12 +725,12 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     logger.info(f"✓ Recorded {len(full_recording)} samples ({recording_duration:.1f}s) with speech")
                     if VAD_DEBUG:
                         logger.info(f"[VAD_DEBUG] FINAL STATE: Speech was detected, recording complete")
-                
+
                 if DEBUG:
                     # Calculate RMS for debug
                     rms = np.sqrt(np.mean(full_recording.astype(float) ** 2))
                     logger.debug(f"Recording stats - RMS: {rms:.2f}, Speech detected: {speech_detected}")
-                
+
                 # Return tuple: (audio_data, speech_detected)
                 return (full_recording, speech_detected)
             else:
@@ -709,8 +738,11 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                 return (np.array([]), False)
                 
         except Exception as e:
+            # Stop visualizer on error
+            visualizer.stop()
+
             logger.error(f"Recording with VAD failed: {e}")
-            
+
             # Import here to avoid circular imports
             from voice_mode.utils.audio_diagnostics import get_audio_error_help
             

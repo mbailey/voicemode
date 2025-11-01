@@ -211,6 +211,9 @@ def load_voicemode_env():
 # Disable silence detection for noisy environments (true/false)
 # VOICEMODE_DISABLE_SILENCE_DETECTION=false
 
+# Enable visual feedback during recording - shows audio levels, duration, silence detection (true/false)
+# VOICEMODE_RECORDING_VISUALIZATION=true
+
 # VAD aggressiveness level 0-3, higher = more strict (default: 2)
 # VOICEMODE_VAD_AGGRESSIVENESS=2
 
@@ -555,6 +558,10 @@ CHANNELS = 1
 # Disable silence detection (useful for noisy environments)
 # Silence detection is enabled by default
 DISABLE_SILENCE_DETECTION = os.getenv("VOICEMODE_DISABLE_SILENCE_DETECTION", "false").lower() in ("true", "1", "yes", "on")
+
+# Enable visual feedback during recording (audio levels, duration, silence detection)
+# Visualization is enabled by default for better user experience
+RECORDING_VISUALIZATION_ENABLED = os.getenv("VOICEMODE_RECORDING_VISUALIZATION", "true").lower() in ("true", "1", "yes", "on")
 
 # VAD (Voice Activity Detection) configuration
 VAD_AGGRESSIVENESS = int(os.getenv("VOICEMODE_VAD_AGGRESSIVENESS", "2"))  # 0-3, higher = more aggressive
