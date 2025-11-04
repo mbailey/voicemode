@@ -1030,6 +1030,17 @@ consult the MCP resources listed above.
         # Use global setting
         should_skip_tts = SKIP_TTS
     
+    # Read default speed from environment variable if speed is not provided
+    if speed is None:
+        tts_speed_env = os.getenv("VOICEMODE_TTS_SPEED")
+        if tts_speed_env is not None:
+            try:
+                speed = float(tts_speed_env)
+                logger.info(f"Using speed from VOICEMODE_TTS_SPEED environment variable: {speed}")
+            except ValueError:
+                logger.warning(f"Invalid VOICEMODE_TTS_SPEED value '{tts_speed_env}', ignoring")
+                speed = None
+    
     # Convert string speed to float
     if speed is not None and isinstance(speed, str):
         try:
