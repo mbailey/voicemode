@@ -2,6 +2,9 @@ name: Test Installer
 
 on:
   push:
+    branches:
+      - master
+      - 'v*'  # version tags
     paths:
       - 'docs/web/install.sh'
       - 'install.sh'
