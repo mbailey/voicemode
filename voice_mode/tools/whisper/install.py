@@ -560,7 +560,9 @@ async def whisper_install(
         
         # Configure with CMake
         logger.info("Configuring whisper.cpp build...")
+        logger.info(f"CMake flags: {cmake_flags}")
         cmake_cmd = ["cmake", "-B", "build"] + cmake_flags
+        logger.info(f"CMake command: {' '.join(cmake_cmd)}")
         
         if debug_mode:
             subprocess.run(cmake_cmd, env=build_env, check=True)
