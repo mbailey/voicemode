@@ -27,6 +27,7 @@ from .utils import (
     log_tts_start,
     log_tts_first_audio
 )
+from .audio_player import NonBlockingAudioPlayer
 
 logger = logging.getLogger("voicemode")
 
@@ -417,9 +418,11 @@ async def text_to_speech(
                         else:
                             silence = np.zeros((silence_samples, samples.shape[1]), dtype=np.float32)
                             samples_with_buffer = np.vstack([silence, samples])
-                        
-                        sd.play(samples_with_buffer, audio.frame_rate)
-                        sd.wait()
+
+                        # Use non-blocking audio player for concurrent playback support
+                        player = NonBlockingAudioPlayer()
+                        player.play(samples_with_buffer, audio.frame_rate, blocking=False)
+                        player.wait()
                         
                         # Log TTS playback end event
                         if event_logger:
