@@ -676,6 +676,67 @@ async def play_chime_end(
         return False
 
 
+async def play_system_audio(message_key: str, fallback_text: Optional[str] = None, soundfont: str = "default") -> bool:
+    """Play a pre-recorded system audio message with fallback to TTS.
+
+    System audio files should be stored in voice_mode/data/soundfonts/{soundfont}/system-messages/
+    with the naming pattern: {message_key}.mp3 (or .wav, .opus, .opus, etc.)
+
+    Args:
+        message_key: Key for the system message (e.g., "waiting-1-minute", "ready-to-listen", "repeating")
+        fallback_text: Text to speak if audio file doesn't exist (falls back to TTS)
+        soundfont: Name of the soundfont to use (default: "default")
+
+    Returns:
+        True if audio was played successfully, False otherwise
+    """
+    import sounddevice as sd
+    from pathlib import Path
+    from pydub import AudioSegment
+    import numpy as np
+
+    # Get path to system messages directory in soundfonts
+    system_audio_dir = Path(__file__).parent / "data" / "soundfonts" / soundfont / "system-messages"
+
+    # Try to find the audio file (support multiple formats)
+    audio_file = None
+    for ext in ['.mp3', '.wav', '.opus', '.m4a']:
+        candidate = system_audio_dir / f"{message_key}{ext}"
+        if candidate.exists():
+            audio_file = candidate
+            break
+
+    if audio_file:
+        try:
+            logger.info(f"🔊 Playing system audio: {audio_file}")
+            audio = AudioSegment.from_file(str(audio_file))
+            samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+            if audio.channels == 2:
+                samples = samples.reshape((-1, 2))
+            samples = samples / (2**15)  # Normalize to [-1, 1]
+            sd.play(samples, audio.frame_rate)
+            sd.wait()
+            logger.info(f"✓ System audio played successfully: {message_key}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to play system audio {audio_file}: {e}")
+            # Fall through to TTS fallback
+
+    # If no audio file or playback failed, use TTS fallback
+    if fallback_text:
+        logger.info(f"Using TTS fallback for system message '{message_key}': {fallback_text}")
+        # Import here to avoid circular dependency
+        from voice_mode.simple_failover import simple_tts_failover
+        success, metrics, config = await simple_tts_failover(
+            text=fallback_text,
+            voice="af_sky",  # Use AF Sky for system messages
+            initial_provider=None
+        )
+        return success
+
+    return False
+
+
 async def cleanup(openai_clients: dict):
     """Cleanup function to close HTTP clients and resources"""
     logger.info("Shutting down Voice Mode Server...")

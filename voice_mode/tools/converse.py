@@ -69,7 +69,8 @@ from voice_mode.core import (
     get_debug_filename,
     get_audio_path,
     play_chime_start,
-    play_chime_end
+    play_chime_end,
+    play_system_audio
 )
 from voice_mode.statistics_tracking import track_voice_interaction
 from voice_mode.utils import (
@@ -1482,9 +1483,11 @@ consult the MCP resources listed above.
                     if response_text and should_repeat(response_text):
                         logger.info(f"🔁 Repeat requested: '{response_text}'")
 
+                        # Play system message for repeat
+                        await play_system_audio("repeating", fallback_text="Repeating")
+
                         # Replay the same audio
                         if transport == "local":
-                            # For local transport, replay using the same TTS settings
                             logger.info("Replaying audio...")
 
                             # Play the cached audio if available from tts_metrics
@@ -1574,7 +1577,14 @@ consult the MCP resources listed above.
                     # Check for wait phrase - if detected, pause for configured duration
                     if response_text and should_wait(response_text):
                         logger.info(f"⏸️ Wait requested: '{response_text}'. Pausing for {WAIT_DURATION} seconds...")
+
+                        # Play system message for wait
+                        await play_system_audio("waiting-1-minute", fallback_text="Waiting one minute")
+
                         await asyncio.sleep(WAIT_DURATION)
+
+                        # Play system message when ready to listen again
+                        await play_system_audio("ready-to-listen", fallback_text="Ready to listen")
 
                         # After waiting, listen again
                         logger.info("Wait period ended. Listening for response...")
