@@ -1120,203 +1120,46 @@ consult the MCP resources listed above.
     success = False
     
     try:
-        # If not waiting for response, just speak and return
-        if not wait_for_response:
-            try:
-                async with audio_operation_lock:
-                    if should_skip_tts:
-                        # Skip TTS entirely
-                        success = True
-                        tts_metrics = {
-                            'ttfa': 0,
-                            'generation': 0,
-                            'playback': 0,
-                            'total': 0
-                        }
-                        tts_config = {'provider': 'no-op', 'voice': 'none'}
-                    else:
-                        success, tts_metrics, tts_config = await text_to_speech_with_failover(
-                            message=message,
-                            voice=voice,
-                            model=tts_model,
-                            instructions=tts_instructions,
-                            audio_format=audio_format,
-                            initial_provider=tts_provider,
-                            speed=speed
-                        )
-                    
-                # Include timing info if available
-                timing_info = ""
-                timing_str = ""
-                if success and tts_metrics:
-                    timing_info = f" (gen: {tts_metrics.get('generation', 0):.1f}s, play: {tts_metrics.get('playback', 0):.1f}s)"
-                    # Create timing string for statistics
-                    timing_parts = []
-                    if 'ttfa' in tts_metrics:
-                        timing_parts.append(f"ttfa {tts_metrics['ttfa']:.1f}s")
-                    if 'generation' in tts_metrics:
-                        timing_parts.append(f"tts_gen {tts_metrics['generation']:.1f}s")
-                    if 'playback' in tts_metrics:
-                        timing_parts.append(f"tts_play {tts_metrics['playback']:.1f}s")
-                    timing_str = ", ".join(timing_parts)
-                
-                # Format result with error details if available
-                if success:
-                    result = f"✓ Message spoken successfully{timing_info}"
+        # Determine transport method (only needed when waiting for response)
+        if wait_for_response:
+            if transport == "auto":
+                transport_start = time.time()
+                logger.debug("Starting transport auto-selection")
+
+                if await check_livekit_available():
+                    transport = "livekit"
+                    transport_duration = time.time() - transport_start
+                    logger.info(f"Auto-selected LiveKit transport (selection took {transport_duration:.3f}s)")
                 else:
-                    # Debug logging
-                    logger.debug(f"TTS failed - tts_config: {tts_config}")
-                    # Check if we have error details from failover
-                    if tts_config and 'error_type' in tts_config:
-                        if tts_config['error_type'] == 'all_providers_failed':
-                            # Extract error details from attempted endpoints
-                            error_messages = []
-                            for attempt in tts_config.get('attempted_endpoints', []):
-                                if attempt.get('error_details'):
-                                    # We have parsed OpenAI error details
-                                    error_details = attempt['error_details']
-                                    error_messages.append(error_details.get('message', attempt.get('error', 'Unknown error')))
-                                else:
-                                    error_messages.append(attempt.get('error', 'Unknown error'))
+                    transport = "local"
+                    transport_duration = time.time() - transport_start
+                    logger.info(f"Auto-selected local transport (selection took {transport_duration:.3f}s)")
 
-                            # Use the first meaningful error message
-                            if error_messages:
-                                # Prioritize OpenAI parsed errors
-                                for attempt in tts_config.get('attempted_endpoints', []):
-                                    if attempt.get('error_details'):
-                                        from voice_mode.openai_error_parser import OpenAIErrorParser
-                                        formatted_error = OpenAIErrorParser.format_error_message(
-                                            attempt['error_details'],
-                                            include_fallback=True
-                                        )
-                                        result = formatted_error
-                                        break
-                                else:
-                                    # No parsed errors, format a helpful error message
-                                    providers_attempted = [attempt.get('provider', 'unknown') for attempt in tts_config.get('attempted_endpoints', [])]
+            if transport == "livekit":
+                # For LiveKit, use the existing function but with the message parameter
+                # Use listen_duration_max instead of timeout for consistent behavior
+                livekit_result = await livekit_converse(message, room_name, listen_duration_max)
 
-                                    # Include provider info in the error message
-                                    provider_names = ', '.join(set(providers_attempted)) if providers_attempted else 'unknown'
-                                    error_msg = f"✗ Failed to speak message ({provider_names}): {error_messages[0]}"
-
-                                    # Add helpful suggestions based on error type
-                                    if 'connection' in error_messages[0].lower() or 'refused' in error_messages[0].lower():
-                                        suggestions = []
-                                        if any(p in ['kokoro', 'whisper'] for p in providers_attempted):
-                                            suggestions.append("Check if local services (Kokoro/Whisper) are running")
-                                        if 'openai' in providers_attempted:
-                                            suggestions.append("Verify OpenAI API key is set")
-                                        if suggestions:
-                                            error_msg += f"\n   Suggestions: {', '.join(suggestions)}"
-                                    result = error_msg
-                            else:
-                                result = "✗ Failed to speak message"
-                        else:
-                            result = f"✗ Failed to speak message: {tts_config.get('error_type', 'Unknown error')}"
-                    else:
-                        result = "✗ Failed to speak message"
-                
-                # Track statistics for speak-only interaction
+                # Track LiveKit interaction (simplified since we don't have detailed timing)
+                success = not livekit_result.startswith("Error:") and not livekit_result.startswith("No ")
                 track_voice_interaction(
                     message=message,
-                    response="[speak-only]",
-                    timing_str=timing_str if success else None,
-                    transport="speak-only",
-                    voice_provider=tts_provider,
+                    response=livekit_result,
+                    timing_str=None,  # LiveKit doesn't provide detailed timing
+                    transport="livekit",
+                    voice_provider="livekit",  # LiveKit manages its own providers
                     voice_name=voice,
                     model=tts_model,
                     success=success,
-                    error_message=None if success else "TTS failed"
+                    error_message=livekit_result if not success else None
                 )
-                
-                # Log TTS to JSONL for speak-only mode
-                if success:
-                    try:
-                        conversation_logger = get_conversation_logger()
-                        conversation_logger.log_tts(
-                            text=message,
-                            audio_file=os.path.basename(tts_metrics.get('audio_path')) if tts_metrics.get('audio_path') else None,
-                            model=tts_config.get('model') if tts_config else tts_model,
-                            voice=tts_config.get('voice') if tts_config else voice,
-                            provider=tts_config.get('provider') if tts_config else (tts_provider if tts_provider else 'openai'),
-                            provider_url=tts_config.get('base_url') if tts_config else None,
-                            provider_type=tts_config.get('provider_type') if tts_config else None,
-                            is_fallback=tts_config.get('is_fallback', False) if tts_config else False,
-                            fallback_reason=tts_config.get('fallback_reason') if tts_config else None,
-                            timing=timing_str,
-                            audio_format=audio_format,
-                            transport="speak-only",
-                            # Add timing metrics
-                            time_to_first_audio=tts_metrics.get('ttfa') if tts_metrics else None,
-                            generation_time=tts_metrics.get('generation') if tts_metrics else None,
-                            playback_time=tts_metrics.get('playback') if tts_metrics else None
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to log TTS to JSONL: {e}")
-                
-                logger.info(f"Speak-only result: {result}")
-                # success is already set correctly from TTS result
+
+                result = livekit_result
+                success = not livekit_result.startswith("Error:") and not livekit_result.startswith("No ")
                 return result
-            except Exception as e:
-                logger.error(f"Speak error: {e}")
-                error_msg = f"Error: {str(e)}"
-                
-                # Track failed speak-only interaction
-                track_voice_interaction(
-                    message=message,
-                    response="[error]",
-                    timing_str=None,
-                    transport="speak-only",
-                    voice_provider=tts_provider,
-                    voice_name=voice,
-                    model=tts_model,
-                    success=False,
-                    error_message=str(e)
-                )
-                
-                logger.error(f"Returning error: {error_msg}")
-                result = error_msg
-                return result
-        
-        # Otherwise, speak and then listen for response
-        # Determine transport method
-        if transport == "auto":
-            transport_start = time.time()
-            logger.debug("Starting transport auto-selection")
-            
-            if await check_livekit_available():
-                transport = "livekit"
-                transport_duration = time.time() - transport_start
-                logger.info(f"Auto-selected LiveKit transport (selection took {transport_duration:.3f}s)")
-            else:
-                transport = "local"
-                transport_duration = time.time() - transport_start
-                logger.info(f"Auto-selected local transport (selection took {transport_duration:.3f}s)")
-        
-        if transport == "livekit":
-            # For LiveKit, use the existing function but with the message parameter
-            # Use listen_duration_max instead of timeout for consistent behavior
-            livekit_result = await livekit_converse(message, room_name, listen_duration_max)
-            
-            # Track LiveKit interaction (simplified since we don't have detailed timing)
-            success = not livekit_result.startswith("Error:") and not livekit_result.startswith("No ")
-            track_voice_interaction(
-                message=message,
-                response=livekit_result,
-                timing_str=None,  # LiveKit doesn't provide detailed timing
-                transport="livekit",
-                voice_provider="livekit",  # LiveKit manages its own providers
-                voice_name=voice,
-                model=tts_model,
-                success=success,
-                error_message=livekit_result if not success else None
-            )
-            
-            result = livekit_result
-            success = not livekit_result.startswith("Error:") and not livekit_result.startswith("No ")
-            return result
-        
-        elif transport == "local":
+
+        # For both speak-only and local conversation modes
+        if not wait_for_response or transport == "local":
             # Local microphone approach with timing
             timings = {}
             try:
@@ -1407,7 +1250,8 @@ consult the MCP resources listed above.
                                     openai_error_shown = True
                                 else:
                                     # Show raw error for non-OpenAI or if we already showed OpenAI error
-                                    error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
+                                    endpoint_or_provider = attempt.get('endpoint', attempt.get('provider', 'unknown'))
+                                    error_lines.append(f"  - {endpoint_or_provider}: {attempt['error']}")
 
                             result = "\n".join(error_lines)
                         # Check if we have config info that might indicate why it failed
@@ -1421,7 +1265,43 @@ consult the MCP resources listed above.
                         else:
                             result = "Error: Could not speak message. All TTS providers failed. Check that local services are running or set OPENAI_API_KEY for cloud fallback."
                         return result
-                    
+
+                    # If speak-only mode, return success after TTS
+                    if not wait_for_response:
+                        # Format timing info for speak-only mode
+                        timing_info = ""
+                        if tts_success and tts_metrics:
+                            timing_info = f" (gen: {tts_metrics.get('generation', 0):.1f}s, play: {tts_metrics.get('playback', 0):.1f}s)"
+
+                        # Create timing string for statistics
+                        timing_str = ""
+                        if tts_success and timings:
+                            timing_parts = []
+                            if 'ttfa' in timings:
+                                timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
+                            if 'tts_gen' in timings:
+                                timing_parts.append(f"tts_gen {timings['tts_gen']:.1f}s")
+                            if 'tts_play' in timings:
+                                timing_parts.append(f"tts_play {timings['tts_play']:.1f}s")
+                            timing_str = ", ".join(timing_parts)
+
+                        # Track statistics for speak-only interaction
+                        track_voice_interaction(
+                            message=message,
+                            response="[speak-only]",
+                            timing_str=timing_str,
+                            transport="speak-only",
+                            voice_provider=tts_provider,
+                            voice_name=voice,
+                            model=tts_model,
+                            success=tts_success,
+                            error_message=None if tts_success else "TTS failed"
+                        )
+
+                        result = f"✓ Message spoken successfully{timing_info}"
+                        logger.info(f"Speak-only result: {result}")
+                        return result
+
                     # Brief pause before listening
                     await asyncio.sleep(0.5)
                     
