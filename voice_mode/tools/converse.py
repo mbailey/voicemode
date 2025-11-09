@@ -54,7 +54,10 @@ from voice_mode.config import (
     INITIAL_SILENCE_GRACE_PERIOD,
     DEFAULT_LISTEN_DURATION,
     TTS_VOICES,
-    TTS_MODELS
+    TTS_MODELS,
+    REPEAT_PHRASES,
+    WAIT_PHRASES,
+    WAIT_DURATION
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -84,6 +87,59 @@ logger = logging.getLogger("voicemode")
 
 # Log silence detection config at module load time
 logger.info(f"Module loaded with DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}")
+
+
+def should_repeat(text: str) -> bool:
+    """
+    Check if the transcribed text ends with a repeat phrase.
+
+    Args:
+        text: The transcribed text to check
+
+    Returns:
+        True if text ends with a repeat phrase, False otherwise
+    """
+    if not text:
+        return False
+
+    # Normalize text for comparison (lowercase, strip whitespace and punctuation)
+    import string
+    normalized_text = text.lower().strip().rstrip(string.punctuation).strip()
+
+    # Check if any repeat phrase appears at the end
+    for phrase in REPEAT_PHRASES:
+        if normalized_text.endswith(phrase.lower().strip()):
+            logger.info(f"Repeat phrase detected: '{phrase}' in '{text}'")
+            return True
+
+    return False
+
+
+def should_wait(text: str) -> bool:
+    """
+    Check if the transcribed text ends with a wait phrase.
+
+    Args:
+        text: The transcribed text to check
+
+    Returns:
+        True if text ends with a wait phrase, False otherwise
+    """
+    if not text:
+        return False
+
+    # Normalize text for comparison (lowercase, strip whitespace and punctuation)
+    import string
+    normalized_text = text.lower().strip().rstrip(string.punctuation).strip()
+
+    # Check if any wait phrase appears at the end
+    for phrase in WAIT_PHRASES:
+        if normalized_text.endswith(phrase.lower().strip()):
+            logger.info(f"Wait phrase detected: '{phrase}' in '{text}'")
+            return True
+
+    return False
+
 
 # Track last session end time for measuring AI thinking time
 last_session_end_time = None

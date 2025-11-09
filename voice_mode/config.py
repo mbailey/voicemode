@@ -566,6 +566,15 @@ INITIAL_SILENCE_GRACE_PERIOD = float(os.getenv("VOICEMODE_INITIAL_SILENCE_GRACE_
 # Default listen duration for converse tool
 DEFAULT_LISTEN_DURATION = float(os.getenv("VOICEMODE_DEFAULT_LISTEN_DURATION", "120.0"))  # Default 120s listening time
 
+# Repeat phrase detection for audio replay
+REPEAT_PHRASES = parse_comma_list("VOICEMODE_REPEAT_PHRASES", "repeat,say that again,pardon,what,come again")
+
+# Wait phrase detection for pausing conversation
+WAIT_PHRASES = parse_comma_list("VOICEMODE_WAIT_PHRASES", "wait")
+
+# Wait duration in seconds when wait phrase is detected
+WAIT_DURATION = float(os.getenv("VOICEMODE_WAIT_DURATION", "60.0"))  # Default 60s (1 minute)
+
 # Audio feedback chime configuration
 # Leading silence before chimes to allow Bluetooth devices to wake up
 CHIME_LEADING_SILENCE = float(os.getenv("VOICEMODE_CHIME_LEADING_SILENCE", "0.1"))  # Default 0.1s - minimal delay for Bluetooth
