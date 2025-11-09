@@ -262,13 +262,63 @@ VoiceMode maintains comprehensive logs in `~/.voicemode/`:
 
 To enable debug logging, set `VOICEMODE_DEBUG=true` or use `--debug` flag.
 
+## Communication Guidelines
+
+### Voice Mode Parallel Operations (DEFAULT BEHAVIOR)
+
+When using voice mode, **ALWAYS use the parallel pattern by default**:
+- **Speak without waiting** (`wait_for_response=false`) before performing other actions
+- **Narrate actions while performing them** - this creates natural conversation flow
+- **Execute tools in parallel** - speak and act simultaneously for better responsiveness
+
+Example patterns:
+
+When using MCP tools:
+```python
+# ALWAYS do this - speak while acting
+voicemode:converse("Let me search for that information", wait_for_response=False)
+Grep(pattern="search_term", path="/path")  # Runs while speaking
+```
+
+When using CLI commands with Bash tool:
+```bash
+# Run voice announcement and action in parallel
+voicemode converse -m "Let me check the service status" --no-wait &
+voicemode whisper service status
+```
+
+Only wait for response when:
+- Asking questions that need answers
+- Getting confirmation for important actions
+- At natural conversation endpoints
+
+### Asking Questions
+
+When asking questions, especially in voice mode:
+- **Ask questions one at a time** - avoid bundling multiple questions
+- **Wait for the answer** before proceeding to the next question
+- **Keep questions clear and concise** for voice conversations
+- This ensures clarity and prevents overwhelming in voice interactions
+
+Example:
+```python
+# Good - one question at a time
+voicemode:converse("What type of voice service would you prefer?", wait_for_response=True)
+# Wait for answer...
+voicemode:converse("Would you like me to install it now?", wait_for_response=True)
+
+# Avoid - multiple questions at once
+# voicemode:converse("What voice do you want, and should I install Whisper, and do you need Kokoro too?")
+```
+
 ## Tips for Effective Use
 
-1. **Provider Selection**: Let VoiceMode auto-select providers based on availability
-2. **Voice Preferences**: Set user preferences in `~/.voicemode` file
-3. **Service Management**: Start services before conversations for best performance
-4. **Error Handling**: Check service logs if voice interactions fail
-5. **Audio Quality**: Use local services (Whisper/Kokoro) for privacy and speed
+1. **Parallel Operations**: Use speak-without-waiting pattern for most actions
+2. **Provider Selection**: Let VoiceMode auto-select providers based on availability
+3. **Voice Preferences**: Set user preferences in `~/.voicemode` file
+4. **Service Management**: Start services before conversations for best performance
+5. **Error Handling**: Check service logs if voice interactions fail
+6. **Audio Quality**: Use local services (Whisper/Kokoro) for privacy and speed
 
 ## Integration Notes
 
