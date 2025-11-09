@@ -1,11 +1,5 @@
 {
   "mcpServers": {
-    "livekit-admin-mcp": {
-      "type": "stdio",
-      "command": "./vendor/livekit-admin-mcp/livekit-admin-mcp",
-      "args": [],
-      "env": {}
-    },
     "voicemode": {
       "type": "stdio",
       "command": "uv",

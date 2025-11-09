@@ -54,7 +54,9 @@ from voice_mode.config import (
     INITIAL_SILENCE_GRACE_PERIOD,
     DEFAULT_LISTEN_DURATION,
     TTS_VOICES,
-    TTS_MODELS
+    TTS_MODELS,
+    TTS_BASE_URLS,
+    STT_BASE_URLS
 )
 import voice_mode.config
 from voice_mode.providers import (
@@ -1197,7 +1199,7 @@ async def livekit_converse(message: str, room_name: str = "", timeout: float = 6
         tts_client = lk_openai.TTS(voice=tts_config['voice'], base_url=tts_config['base_url'], model=tts_config['model'], api_key=tts_api_key)
         stt_client = lk_openai.STT(base_url=stt_config['base_url'], model=stt_config['model'], api_key=stt_api_key)
         
-        # Create simple agent that speaks and listens
+        # Create simple agent that speaks and listens (voice + text)
         class VoiceAgent(Agent):
             def __init__(self):
                 super().__init__(
@@ -1207,45 +1209,47 @@ async def livekit_converse(message: str, room_name: str = "", timeout: float = 6
                     llm=None
                 )
                 self.response = None
+                self.response_type = None  # Track if response was 'voice' or 'text'
                 self.has_spoken = False
                 self.speech_start_time = None
                 self.min_speech_duration = 3.0  # Minimum 3 seconds of speech
-            
+
             async def on_enter(self):
                 await asyncio.sleep(0.5)
                 if self.session:
                     await self.session.say(message, allow_interruptions=True)
                     self.has_spoken = True
-            
+
             async def on_user_speech_started(self):
                 """Track when user starts speaking"""
                 self.speech_start_time = time.time()
                 logger.debug("User started speaking")
-            
+
             async def on_user_turn_completed(self, chat_ctx, new_message):
+                """Handle voice responses via STT"""
                 if self.has_spoken and not self.response and new_message.content:
                     content = new_message.content[0]
-                    
+
                     # Check if speech duration was long enough
                     if self.speech_start_time:
                         speech_duration = time.time() - self.speech_start_time
                         if speech_duration < self.min_speech_duration:
                             logger.debug(f"Speech too short ({speech_duration:.1f}s < {self.min_speech_duration}s), ignoring")
                             return
-                    
+
                     # Filter out common ASR hallucinations
                     content_lower = content.lower().strip()
                     if content_lower in ['bye', 'bye.', 'goodbye', 'goodbye.', '...', 'um', 'uh', 'hmm', 'hm']:
                         logger.debug(f"Filtered out ASR hallucination: '{content}'")
                         return
-                    
+
                     # Check if we have actual words (not just punctuation or numbers)
                     words = content.split()
                     has_real_words = any(word.isalpha() and len(word) > 1 for word in words)
                     if not has_real_words:
                         logger.debug(f"No real words detected in: '{content}'")
                         return
-                    
+
                     # Filter out excessive repetitions (e.g., "45, 45, 45, 45...")
                     if len(words) > 5:
                         # Check if last 5 words are all the same
@@ -1254,11 +1258,12 @@ async def livekit_converse(message: str, room_name: str = "", timeout: float = 6
                             # Trim repetitive ending
                             content = ' '.join(words[:-4])
                             logger.debug(f"Trimmed repetitive ending from ASR output")
-                    
+
                     # Ensure we have meaningful content
                     if content.strip() and len(content.strip()) > 2:
                         self.response = content
-                        logger.debug(f"Accepted response: '{content}'")
+                        self.response_type = "voice"
+                        logger.debug(f"Accepted voice response: '{content}'")
         
         # Connect and run
         token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
@@ -1286,9 +1291,43 @@ async def livekit_converse(message: str, room_name: str = "", timeout: float = 6
             sample_rate=16000,              # Standard sample rate
             force_cpu=True                  # Use CPU for compatibility
         )
+        # Custom text input handler to receive messages on lk.chat topic
+        def handle_text_input(session_obj, event):
+            """Handle incoming text messages from lk.chat topic"""
+            if agent.has_spoken and not agent.response:
+                text_content = event.text.strip()
+                if text_content:
+                    agent.response = text_content
+                    agent.response_type = "text"
+                    logger.info(f"Accepted text response: '{text_content}'")
+
+        # Create session with VAD only (text handling will be added via room_io)
         session = AgentSession(vad=vad)
+
+        # Start the agent session
         await session.start(room=room, agent=agent)
-        
+
+        # TODO: Text stream support - RoomIO API not available in current livekit-agents version
+        # Commenting out until API is available or we find alternative approach
+        # # Set up room IO with text input callback
+        # from livekit.agents.voice import RoomIO, RoomInputOptions, RoomOutputOptions
+        # input_opts = RoomInputOptions(
+        #     text_enabled=True,
+        #     audio_enabled=True,
+        #     text_input_cb=handle_text_input
+        # )
+        # output_opts = RoomOutputOptions(
+        #     audio_enabled=True,
+        #     transcription_enabled=True
+        # )
+        # room_io = RoomIO(
+        #     agent_session=session,
+        #     room=room,
+        #     input_options=input_opts,
+        #     output_options=output_opts
+        # )
+        # await room_io.start()
+
         # Wait for response
         start_time = time.time()
         while time.time() - start_time < timeout:

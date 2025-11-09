@@ -34,10 +34,10 @@ importers:
         specifier: ^5.2.2
         version: 5.2.2(prettier@3.5.3)
       '@types/node':
-        specifier: ^20.17.13
+        specifier: ^20.17.57
         version: 20.17.57
       '@types/react':
-        specifier: ^18.3.18
+        specifier: ^18.3.23
         version: 18.3.23
       '@types/react-dom':
         specifier: ^18.3.5
@@ -67,7 +67,7 @@ importers:
         specifier: ^3.4.17
         version: 3.4.17
       typescript:
-        specifier: ^5.7.3
+        specifier: ^5.8.3
         version: 5.8.3
 
 packages:
