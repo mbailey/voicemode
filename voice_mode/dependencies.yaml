@@ -246,18 +246,15 @@ voicemode:
         - name: libsdl2-dev
           description: SDL2 development library (for whisper-stream real-time transcription)
           required: true
-          check_command: pkg-config --exists sdl2
           note: Required for building whisper-stream binary
 
         - name: portaudio19-dev
           description: Audio I/O library (for real-time transcription)
           required: true
-          check_command: pkg-config --exists portaudio-2.0
 
         - name: libasound2-dev
           description: Advanced Linux Sound Architecture
           required: true
-          check_command: pkg-config --exists alsa
 
     fedora:
       packages:
@@ -287,18 +284,15 @@ voicemode:
         - name: SDL2-devel
           description: SDL2 development library (for whisper-stream real-time transcription)
           required: true
-          check_command: pkg-config --exists sdl2
           note: Required for building whisper-stream binary
 
         - name: portaudio-devel
           description: Audio I/O library (for real-time transcription)
           required: true
-          check_command: pkg-config --exists portaudio-2.0
 
         - name: alsa-lib-devel
           description: Advanced Linux Sound Architecture
           required: true
-          check_command: pkg-config --exists alsa
 
     darwin:
       packages:
