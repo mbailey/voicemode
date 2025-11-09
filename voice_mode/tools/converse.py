@@ -1501,31 +1501,31 @@ consult the MCP resources listed above.
                                 except Exception as e:
                                     logger.warning(f"Failed to replay cached audio: {e}. Regenerating...")
                                     # Fall back to regenerating TTS
-                                    tts_result = await speak_text_local(
-                                        message,
+                                    tts_success, new_tts_metrics, _ = await text_to_speech_with_failover(
+                                        message=message,
                                         voice=voice,
                                         model=tts_model,
-                                        speed=speed,
+                                        instructions=tts_instructions,
                                         audio_format=audio_format,
-                                        tts_instructions=tts_instructions,
-                                        track_timings=True
+                                        initial_provider=tts_provider,
+                                        speed=speed
                                     )
-                                    if tts_result.get("error"):
-                                        logger.error(f"Failed to replay audio: {tts_result['error']}")
+                                    if not tts_success:
+                                        logger.error("Failed to replay audio via TTS regeneration")
                             else:
                                 # No cached audio, regenerate TTS
                                 logger.info("No cached audio available, regenerating...")
-                                tts_result = await speak_text_local(
-                                    message,
+                                tts_success, new_tts_metrics, _ = await text_to_speech_with_failover(
+                                    message=message,
                                     voice=voice,
                                     model=tts_model,
-                                    speed=speed,
+                                    instructions=tts_instructions,
                                     audio_format=audio_format,
-                                    tts_instructions=tts_instructions,
-                                    track_timings=True
+                                    initial_provider=tts_provider,
+                                    speed=speed
                                 )
-                                if tts_result.get("error"):
-                                    logger.error(f"Failed to replay audio: {tts_result['error']}")
+                                if not tts_success:
+                                    logger.error("Failed to replay audio via TTS regeneration")
 
                             # Listen again for response - reuse the recording logic
                             logger.info("Listening for response after repeat...")
