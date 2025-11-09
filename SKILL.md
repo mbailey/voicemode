@@ -1,6 +1,6 @@
 ---
 name: voicemode
-description: This skill provides voice interaction capabilities for AI assistants. This skill should be used when users want to have voice conversations, speak with Claude, check voice service status, or manage voice services like Whisper and Kokoro.
+description: This skill provides voice interaction capabilities for AI assistants. This skill should be used when users mention voice mode, want to have voice conversations, speak with Claude, check voice service status, or manage voice services like Whisper and Kokoro.
 ---
 
 # VoiceMode
@@ -12,6 +12,7 @@ This skill enables natural voice conversations between Claude and users by provi
 ## When to Use This Skill
 
 Load this skill when:
+- User mentions "voice mode" or "voicemode"
 - User says "converse", "speak to me", "talk to me", or similar phrases
 - User wants to start or continue a voice conversation
 - User needs to check voice service status (Whisper, Kokoro, LiveKit)
