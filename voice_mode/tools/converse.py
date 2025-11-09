@@ -1477,7 +1477,149 @@ consult the MCP resources listed above.
                             # Should not happen with new code, but handle gracefully
                             response_text = None
                             stt_provider = "unknown"
-                    
+
+                    # Check for repeat phrase - if detected, replay the audio and listen again
+                    if response_text and should_repeat(response_text):
+                        logger.info(f"🔁 Repeat requested: '{response_text}'")
+
+                        # Replay the same audio
+                        if transport == "local":
+                            # For local transport, replay using the same TTS settings
+                            logger.info("Replaying audio...")
+
+                            # Play the cached audio if available from tts_metrics
+                            audio_path = tts_metrics.get('audio_path') if 'tts_metrics' in locals() and tts_metrics else None
+                            if audio_path and os.path.exists(audio_path):
+                                try:
+                                    import sounddevice as sd
+                                    import soundfile as sf
+
+                                    # Read and play the audio file
+                                    data, samplerate = sf.read(audio_path)
+                                    sd.play(data, samplerate, blocking=True)
+                                    logger.info("Audio replay completed")
+                                except Exception as e:
+                                    logger.warning(f"Failed to replay cached audio: {e}. Regenerating...")
+                                    # Fall back to regenerating TTS
+                                    tts_result = await speak_text_local(
+                                        message,
+                                        voice=voice,
+                                        model=tts_model,
+                                        speed=speed,
+                                        audio_format=audio_format,
+                                        tts_instructions=tts_instructions,
+                                        track_timings=True
+                                    )
+                                    if tts_result.get("error"):
+                                        logger.error(f"Failed to replay audio: {tts_result['error']}")
+                            else:
+                                # No cached audio, regenerate TTS
+                                logger.info("No cached audio available, regenerating...")
+                                tts_result = await speak_text_local(
+                                    message,
+                                    voice=voice,
+                                    model=tts_model,
+                                    speed=speed,
+                                    audio_format=audio_format,
+                                    tts_instructions=tts_instructions,
+                                    track_timings=True
+                                )
+                                if tts_result.get("error"):
+                                    logger.error(f"Failed to replay audio: {tts_result['error']}")
+
+                            # Listen again for response - reuse the recording logic
+                            logger.info("Listening for response after repeat...")
+
+                            # Play "listening" feedback sound
+                            await play_audio_feedback(
+                                "listening",
+                                openai_clients,
+                                chime_enabled,
+                                "whisper",
+                                chime_leading_silence=chime_leading_silence,
+                                chime_trailing_silence=chime_trailing_silence
+                            )
+
+                            # Record audio
+                            record_start = time.perf_counter()
+                            audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                                None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                            )
+                            record_time = time.perf_counter() - record_start
+                            timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
+
+                            # Play "finished" feedback sound
+                            await play_audio_feedback(
+                                "finished",
+                                openai_clients,
+                                chime_enabled,
+                                "whisper",
+                                chime_leading_silence=chime_leading_silence,
+                                chime_trailing_silence=chime_trailing_silence
+                            )
+
+                            if len(audio_data) > 0 and speech_detected:
+                                # Transcribe the audio
+                                stt_start = time.perf_counter()
+                                stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                                stt_time = time.perf_counter() - stt_start
+                                timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
+
+                                # Process result
+                                if isinstance(stt_result, dict) and not stt_result.get("error"):
+                                    response_text = stt_result.get("text")
+                                    stt_provider = stt_result.get("provider", "unknown")
+                                    logger.info(f"New response after repeat: {response_text}")
+
+                    # Check for wait phrase - if detected, pause for configured duration
+                    if response_text and should_wait(response_text):
+                        logger.info(f"⏸️ Wait requested: '{response_text}'. Pausing for {WAIT_DURATION} seconds...")
+                        await asyncio.sleep(WAIT_DURATION)
+
+                        # After waiting, listen again
+                        logger.info("Wait period ended. Listening for response...")
+                        if transport == "local":
+                            # Play "listening" feedback sound
+                            await play_audio_feedback(
+                                "listening",
+                                openai_clients,
+                                chime_enabled,
+                                "whisper",
+                                chime_leading_silence=chime_leading_silence,
+                                chime_trailing_silence=chime_trailing_silence
+                            )
+
+                            # Record audio
+                            record_start = time.perf_counter()
+                            audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                                None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                            )
+                            record_time = time.perf_counter() - record_start
+                            timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
+
+                            # Play "finished" feedback sound
+                            await play_audio_feedback(
+                                "finished",
+                                openai_clients,
+                                chime_enabled,
+                                "whisper",
+                                chime_leading_silence=chime_leading_silence,
+                                chime_trailing_silence=chime_trailing_silence
+                            )
+
+                            if len(audio_data) > 0 and speech_detected:
+                                # Transcribe the audio
+                                stt_start = time.perf_counter()
+                                stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                                stt_time = time.perf_counter() - stt_start
+                                timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
+
+                                # Process result
+                                if isinstance(stt_result, dict) and not stt_result.get("error"):
+                                    response_text = stt_result.get("text")
+                                    stt_provider = stt_result.get("provider", "unknown")
+                                    logger.info(f"New response after wait: {response_text}")
+
                     # Log STT complete
                     if event_logger:
                         if response_text:
