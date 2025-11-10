@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.1.0] - 2025-11-10
+
+### 🎉 Major Features
+
+#### **Voice Control Commands - "Repeat" and "Wait"** (VM-199)
+VoiceMode now understands natural voice commands during conversations:
+- **"Repeat" Command**: Say phrases like "could you repeat that?" or "say that again" to replay the last message
+- **"Wait" Command**: Say "wait a minute" or "hold on" to pause the conversation for 60 seconds
+- **Instant Feedback**: Pre-recorded audio responses provide immediate confirmation (no TTS delay)
+- **Natural Phrases**: Recognizes multiple variations: "repeat please", "one more time", "wait a sec", "give me a moment"
+- **Smart Detection**: Strips punctuation and normalizes text for reliable phrase matching
+- **Privacy-First**: System messages use local audio files - no cloud processing for these commands
+
+### Added
+- **Pre-Recorded System Audio Messages**
+  - Bundled audio files for instant system feedback (no TTS latency)
+  - "Repeating" - confirms replay request
+  - "Waiting one minute" - acknowledges pause request
+  - "Ready to listen" - signals end of wait period
+  - Fallback to TTS if audio files unavailable
+  - Audio stored in `voice_mode/data/soundfonts/default/system-messages/`
+
+- **Claude Code Skill for VoiceMode** (VM-210)
+  - New SKILL.md with comprehensive voice interaction instructions
+  - Triggers on "voice mode" or "voicemode" mentions
+  - Includes parallel operation guidelines for natural conversations
+  - Documents all CLI commands and MCP tool usage
+
+### Fixed
+- **Concurrent Audio Playback** (VM-208)
+  - Replaced blocking audio calls with queue-based NonBlockingAudioPlayer
+  - Multiple VoiceMode instances can now play audio simultaneously
+  - System audio mixer properly handles concurrent streams
+  - Fixed chime audio normalization (int16 to float32 conversion)
+  - Works seamlessly with Core Audio (macOS) and PulseAudio (Linux)
+
+- **CI/CD Improvements**
+  - Test installer workflow now restricted to master branch and version tags
+  - Prevents confusing "failure" status on feature branches
+
+### Changed
+- **Unified Audio System**
+  - All audio playback now uses NonBlockingAudioPlayer
+  - Consistent audio handling for chimes, system messages, and replays
+  - Better integration with system audio mixers
+
+- **Communication Guidelines** (VM-210)
+  - Parallel operations now default behavior (speak while acting)
+  - Ask questions one at a time for clarity in voice interactions
+  - Updated skill trigger phrases to include "voice mode"
+
+### Refactored
+- **Converse Tool Architecture** (VM-202)
+  - Eliminated 120 lines of duplicate code between speak-only and conversation modes
+  - Single unified flow with conditional STT execution
+  - Maintains identical functionality with simpler codebase
+  - Easier to maintain and extend with new features
+
+### Developer
+- Added `scripts/compare-voice-modes.sh` for testing voice services against cloud
+
 ## [6.0.5] - 2025-10-27
 
 ### Added
