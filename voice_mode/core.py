@@ -635,9 +635,11 @@ async def play_chime_start(
             leading_silence=leading_silence,
             trailing_silence=trailing_silence
         )
+        # Convert int16 to float32 normalized to [-1, 1] for NonBlockingAudioPlayer
+        chime_float = chime.astype(np.float32) / 32768.0
         # Use non-blocking audio player to avoid interference with concurrent playback
         player = NonBlockingAudioPlayer()
-        player.play(chime, sample_rate, blocking=True)
+        player.play(chime_float, sample_rate, blocking=True)
         return True
     except Exception as e:
         logger.debug(f"Could not play start chime: {e}")
@@ -667,9 +669,11 @@ async def play_chime_end(
             leading_silence=leading_silence,
             trailing_silence=trailing_silence
         )
+        # Convert int16 to float32 normalized to [-1, 1] for NonBlockingAudioPlayer
+        chime_float = chime.astype(np.float32) / 32768.0
         # Use non-blocking audio player to avoid interference with concurrent playback
         player = NonBlockingAudioPlayer()
-        player.play(chime, sample_rate, blocking=True)
+        player.play(chime_float, sample_rate, blocking=True)
         return True
     except Exception as e:
         logger.debug(f"Could not play end chime: {e}")
