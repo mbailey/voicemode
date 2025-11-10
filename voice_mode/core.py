@@ -618,26 +618,26 @@ async def play_chime_start(
     trailing_silence: Optional[float] = None
 ) -> bool:
     """Play the recording start chime (ascending tones).
-    
+
     Args:
         sample_rate: Sample rate for audio
         leading_silence: Optional override for leading silence duration (seconds)
         trailing_silence: Optional override for trailing silence duration (seconds)
-    
+
     Returns:
         True if chime played successfully, False otherwise
     """
     try:
-        import sounddevice as sd
         chime = generate_chime(
-            [800, 1000], 
-            duration=0.1, 
+            [800, 1000],
+            duration=0.1,
             sample_rate=sample_rate,
             leading_silence=leading_silence,
             trailing_silence=trailing_silence
         )
-        sd.play(chime, sample_rate)
-        sd.wait()
+        # Use non-blocking audio player to avoid interference with concurrent playback
+        player = NonBlockingAudioPlayer()
+        player.play(chime, sample_rate, blocking=True)
         return True
     except Exception as e:
         logger.debug(f"Could not play start chime: {e}")
@@ -650,26 +650,26 @@ async def play_chime_end(
     trailing_silence: Optional[float] = None
 ) -> bool:
     """Play the recording end chime (descending tones).
-    
+
     Args:
         sample_rate: Sample rate for audio
         leading_silence: Optional override for leading silence duration (seconds)
         trailing_silence: Optional override for trailing silence duration (seconds)
-    
+
     Returns:
         True if chime played successfully, False otherwise
     """
     try:
-        import sounddevice as sd
         chime = generate_chime(
-            [1000, 800], 
-            duration=0.1, 
+            [1000, 800],
+            duration=0.1,
             sample_rate=sample_rate,
             leading_silence=leading_silence,
             trailing_silence=trailing_silence
         )
-        sd.play(chime, sample_rate)
-        sd.wait()
+        # Use non-blocking audio player to avoid interference with concurrent playback
+        player = NonBlockingAudioPlayer()
+        player.play(chime, sample_rate, blocking=True)
         return True
     except Exception as e:
         logger.debug(f"Could not play end chime: {e}")
@@ -690,7 +690,6 @@ async def play_system_audio(message_key: str, fallback_text: Optional[str] = Non
     Returns:
         True if audio was played successfully, False otherwise
     """
-    import sounddevice as sd
     from pathlib import Path
     from pydub import AudioSegment
     import numpy as np
@@ -714,8 +713,11 @@ async def play_system_audio(message_key: str, fallback_text: Optional[str] = Non
             if audio.channels == 2:
                 samples = samples.reshape((-1, 2))
             samples = samples / (2**15)  # Normalize to [-1, 1]
-            sd.play(samples, audio.frame_rate)
-            sd.wait()
+
+            # Use non-blocking audio player to avoid interference with concurrent playback
+            player = NonBlockingAudioPlayer()
+            player.play(samples, audio.frame_rate, blocking=True)
+
             logger.info(f"✓ System audio played successfully: {message_key}")
             return True
         except Exception as e:

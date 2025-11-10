@@ -72,6 +72,7 @@ from voice_mode.core import (
     play_chime_end,
     play_system_audio
 )
+from voice_mode.audio_player import NonBlockingAudioPlayer
 from voice_mode.statistics_tracking import track_voice_interaction
 from voice_mode.utils import (
     get_event_logger,
@@ -1494,12 +1495,12 @@ consult the MCP resources listed above.
                             audio_path = tts_metrics.get('audio_path') if 'tts_metrics' in locals() and tts_metrics else None
                             if audio_path and os.path.exists(audio_path):
                                 try:
-                                    import sounddevice as sd
                                     import soundfile as sf
 
-                                    # Read and play the audio file
+                                    # Read and play the audio file using non-blocking player
                                     data, samplerate = sf.read(audio_path)
-                                    sd.play(data, samplerate, blocking=True)
+                                    player = NonBlockingAudioPlayer()
+                                    player.play(data, samplerate, blocking=True)
                                     logger.info("Audio replay completed")
                                 except Exception as e:
                                     logger.warning(f"Failed to replay cached audio: {e}. Regenerating...")
