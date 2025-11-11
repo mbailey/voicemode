@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.1.1] - 2025-11-11
+
+### Fixed
+- **TTS Fallback for System Messages** - Fixed play_system_audio TTS fallback behavior
+  - Changed incorrect `initial_provider=None` parameter to `model="tts-1"`
+  - Ensures TTS model is properly specified when falling back from audio files
+  - Fixes issue where system messages could fail if audio files were missing
+  - Affects wait/repeat commands and other system audio playback
+
+### Added
+- **Comprehensive Wait/Repeat Test Suite**
+  - Added 291 lines of test coverage for wait and repeat functionality
+  - Tests for play_system_audio with audio files and TTS fallback
+  - Command detection tests for wait and repeat phrases
+  - Integration tests for complete wait/repeat flows
+  - Edge case coverage for error conditions
+
 ## [6.1.0] - 2025-11-10
 
 ### 🎉 Major Features
