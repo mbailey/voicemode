@@ -1097,13 +1097,16 @@ consult the MCP resources listed above.
             return f"❌ Error: speed must be a number (got '{speed}')"
 
     # Apply default speed from config if not provided
+    speed_from_config = False
     if speed is None:
         speed = TTS_SPEED
+        speed_from_config = True
 
     # Validate speed parameter range
     if speed is not None:
         if not (0.25 <= speed <= 4.0):
-            return f"❌ Error: speed must be between 0.25 and 4.0 (got {speed})"
+            source = " from VOICEMODE_TTS_SPEED environment variable" if speed_from_config else ""
+            return f"❌ Error: speed must be between 0.25 and 4.0 (got {speed}{source})"
     
     logger.info(f"Converse: '{message[:50]}{'...' if len(message) > 50 else ''}' (wait_for_response: {wait_for_response})")
     

@@ -171,7 +171,7 @@ class TestSpeedParameter:
 
     @pytest.mark.asyncio
     async def test_speed_config_out_of_range_error(self):
-        """Test that out-of-range TTS_SPEED config value returns error."""
+        """Test that out-of-range TTS_SPEED config value returns error with source."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.TTS_SPEED', 10.0):  # Invalid value
                 result = await converse(
@@ -182,3 +182,20 @@ class TestSpeedParameter:
 
                 assert "Error: speed must be between 0.25 and 4.0" in result
                 assert "10.0" in result
+                assert "VOICEMODE_TTS_SPEED environment variable" in result
+
+    @pytest.mark.asyncio
+    async def test_speed_explicit_out_of_range_no_env_mention(self):
+        """Test that explicit out-of-range speed doesn't mention environment variable."""
+        with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
+            with patch('voice_mode.tools.converse.TTS_SPEED', 1.5):  # Valid config value
+                result = await converse(
+                    message="Test",
+                    wait_for_response=False,
+                    speed=10.0  # Explicit invalid value
+                )
+
+                assert "Error: speed must be between 0.25 and 4.0" in result
+                assert "10.0" in result
+                # Should NOT mention environment variable since it was explicitly provided
+                assert "VOICEMODE_TTS_SPEED" not in result
