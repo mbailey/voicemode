@@ -217,32 +217,55 @@ exec "$SERVER_BIN" \\
         logger.info("Updating systemd user service for whisper-server...")
         systemd_user_dir = os.path.expanduser("~/.config/systemd/user")
         os.makedirs(systemd_user_dir, exist_ok=True)
-        
+
         # Create log directory
         log_dir = os.path.join(voicemode_dir, 'logs', 'whisper')
         os.makedirs(log_dir, exist_ok=True)
-        
+
         service_name = "voicemode-whisper.service"
         service_path = os.path.join(systemd_user_dir, service_name)
-        
-        service_content = f"""[Unit]
+
+        # Load systemd service template
+        source_template = Path(__file__).parent.parent.parent.parent / "templates" / "systemd" / "voicemode-whisper.service"
+        if source_template.exists():
+            logger.info(f"Loading systemd template from source: {source_template}")
+            service_content = source_template.read_text()
+        else:
+            try:
+                template_resource = files("voice_mode.templates.systemd").joinpath("voicemode-whisper.service")
+                service_content = template_resource.read_text()
+                logger.info("Loaded systemd template from package resources")
+            except Exception as e:
+                logger.warning(f"Failed to load template: {e}. Using fallback inline template.")
+                # Fallback inline template if loading fails
+                service_content = f"""# voicemode-whisper.service v1.1.0
+# Last updated: 2025-11-12
+# Uses unified startup script for dynamic model selection
+
+[Unit]
 Description=Whisper.cpp Speech Recognition Server
 After=network.target
 
 [Service]
 Type=simple
-ExecStart={start_script_path}
+ExecStart={{START_SCRIPT_PATH}}
 Restart=on-failure
 RestartSec=10
-WorkingDirectory={install_dir}
-StandardOutput=append:{os.path.join(voicemode_dir, 'logs', 'whisper', 'whisper.out.log')}
-StandardError=append:{os.path.join(voicemode_dir, 'logs', 'whisper', 'whisper.err.log')}
+WorkingDirectory={{INSTALL_DIR}}
+StandardOutput=append:{{LOG_DIR}}/whisper/whisper.out.log
+StandardError=append:{{LOG_DIR}}/whisper/whisper.err.log
 Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/cuda/bin"
 
 [Install]
 WantedBy=default.target
 """
-        
+
+        # Replace placeholders with expanded paths
+        service_content = service_content.replace("{START_SCRIPT_PATH}", start_script_path)
+        service_content = service_content.replace("{LOG_DIR}", os.path.join(voicemode_dir, 'logs'))
+        service_content = service_content.replace("{INSTALL_DIR}", install_dir)
+
+        # Write systemd service file
         with open(service_path, 'w') as f:
             f.write(service_content)
         
