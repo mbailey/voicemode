@@ -50,6 +50,7 @@ from voice_mode.config import (
     SILENCE_THRESHOLD_MS,
     MIN_RECORDING_DURATION,
     SKIP_TTS,
+    TTS_SPEED,
     VAD_CHUNK_DURATION_MS,
     INITIAL_SILENCE_GRACE_PERIOD,
     DEFAULT_LISTEN_DURATION,
@@ -1094,7 +1095,11 @@ consult the MCP resources listed above.
             speed = float(speed)
         except ValueError:
             return f"❌ Error: speed must be a number (got '{speed}')"
-    
+
+    # Apply default speed from config if not provided
+    if speed is None:
+        speed = TTS_SPEED
+
     # Validate speed parameter range
     if speed is not None:
         if not (0.25 <= speed <= 4.0):
