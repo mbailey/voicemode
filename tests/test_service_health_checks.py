@@ -89,8 +89,9 @@ def test_template_placeholders():
         assert "{KOKORO_DIR}" in kokoro_systemd
         assert "{START_SCRIPT}" in kokoro_systemd
         
-        # Whisper templates
+        # Whisper templates (v1.1.0 uses startup script approach)
         whisper_systemd = load_service_template("whisper")
-        assert "{WHISPER_PORT}" in whisper_systemd
-        assert "{WHISPER_BIN}" in whisper_systemd
-        assert "{MODEL_FILE}" in whisper_systemd
+        assert "{WHISPER_PORT}" in whisper_systemd  # Used in health check
+        assert "{START_SCRIPT_PATH}" in whisper_systemd  # New startup script approach
+        assert "{LOG_DIR}" in whisper_systemd  # File-based logging
+        assert "{INSTALL_DIR}" in whisper_systemd  # Working directory

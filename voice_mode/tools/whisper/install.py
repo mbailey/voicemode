@@ -18,7 +18,7 @@ except ImportError:
     from importlib_resources import files
 
 from voice_mode.server import mcp
-from voice_mode.config import SERVICE_AUTO_ENABLE, DEFAULT_WHISPER_MODEL
+from voice_mode.config import SERVICE_AUTO_ENABLE, DEFAULT_WHISPER_MODEL, WHISPER_PORT
 from voice_mode.utils.services.whisper_helpers import download_whisper_model
 from voice_mode.utils.version_helpers import (
     get_git_tags, get_latest_stable_tag, get_current_version,
@@ -249,6 +249,8 @@ After=network.target
 [Service]
 Type=simple
 ExecStart={{START_SCRIPT_PATH}}
+# Wait for service to be ready by checking health endpoint
+ExecStartPost=/bin/sh -c 'while ! curl -sf http://127.0.0.1:{{WHISPER_PORT}}/health >/dev/null 2>&1; do echo "Waiting for Whisper to be ready..."; sleep 1; done; echo "Whisper is ready!"'
 Restart=on-failure
 RestartSec=10
 WorkingDirectory={{INSTALL_DIR}}
@@ -264,6 +266,7 @@ WantedBy=default.target
         service_content = service_content.replace("{START_SCRIPT_PATH}", start_script_path)
         service_content = service_content.replace("{LOG_DIR}", os.path.join(voicemode_dir, 'logs'))
         service_content = service_content.replace("{INSTALL_DIR}", install_dir)
+        service_content = service_content.replace("{WHISPER_PORT}", str(WHISPER_PORT))
 
         # Write systemd service file
         with open(service_path, 'w') as f:

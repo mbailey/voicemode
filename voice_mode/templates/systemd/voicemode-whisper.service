@@ -9,6 +9,8 @@ After=network.target
 [Service]
 Type=simple
 ExecStart={START_SCRIPT_PATH}
+# Wait for service to be ready by checking health endpoint
+ExecStartPost=/bin/sh -c 'while ! curl -sf http://127.0.0.1:{WHISPER_PORT}/health >/dev/null 2>&1; do echo "Waiting for Whisper to be ready..."; sleep 1; done; echo "Whisper is ready!"'
 Restart=on-failure
 RestartSec=10
 WorkingDirectory={INSTALL_DIR}
