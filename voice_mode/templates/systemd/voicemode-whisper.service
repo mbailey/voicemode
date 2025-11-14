@@ -1,30 +1,22 @@
-# voicemode-whisper.service v1.0.0
-# Last updated: 2025-01-25
-# Compatible with: whisper.cpp v1.5.0+
+# voicemode-whisper.service v1.1.0
+# Last updated: 2025-11-12
+# Uses unified startup script for dynamic model selection
 
 [Unit]
-Description=Voice Mode Whisper Speech-to-Text Service
+Description=Whisper.cpp Speech Recognition Server
 After=network.target
 
 [Service]
 Type=simple
-ExecStart={WHISPER_BIN} --host 0.0.0.0 --port {WHISPER_PORT} --model {MODEL_FILE}
-WorkingDirectory={WORKING_DIR}
+ExecStart={START_SCRIPT_PATH}
 # Wait for service to be ready by checking health endpoint
 ExecStartPost=/bin/sh -c 'while ! curl -sf http://127.0.0.1:{WHISPER_PORT}/health >/dev/null 2>&1; do echo "Waiting for Whisper to be ready..."; sleep 1; done; echo "Whisper is ready!"'
 Restart=on-failure
 RestartSec=10
-# Don't restart if the executable is missing
-RestartPreventExitStatus=127
-
-# Resource limits
-MemoryLimit=2G
-CPUQuota=80%
-
-# Logging
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=voicemode-whisper
+WorkingDirectory={INSTALL_DIR}
+StandardOutput=append:{LOG_DIR}/whisper/whisper.out.log
+StandardError=append:{LOG_DIR}/whisper/whisper.err.log
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/cuda/bin"
 
 [Install]
 WantedBy=default.target

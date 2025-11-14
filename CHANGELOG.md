@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Linux systemd Service Template** (VM-212, fixes #113)
+  - Refactored Linux installation to use template-based approach matching macOS
+  - Updated systemd template from v1.0.0 to v1.1.0
+  - Template now uses `{START_SCRIPT_PATH}` placeholder instead of direct binary invocation
+  - Eliminates template drift by making template the source of truth
+  - Linux installer now loads and processes template like macOS does
+  - Consistent cross-platform service management architecture
+  - Resolves issue where template file was outdated and unused
+
 ## [6.1.1] - 2025-11-11
 
 ### Fixed
