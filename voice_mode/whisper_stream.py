@@ -284,7 +284,8 @@ async def continuous_listen_with_whisper_stream(
     max_idle_time: float = 3600.0,  # 1 hour idle timeout
     model_path: Optional[Path] = None,
     show_audio_level: bool = True,  # Show audio level visualization
-    debug_mode: bool = False  # Show transcribed text for debugging
+    debug_mode: bool = False,  # Show transcribed text for debugging
+    conversation_mode_check=None  # Callable[[], bool] to check if in conversation mode
 ) -> None:
     """
     Continuous listening mode with wake word detection.
@@ -444,37 +445,56 @@ async def continuous_listen_with_whisper_stream(
             logger.debug(f"Transcription: {line}")
             buffer.append(line)
             
-            # Combine recent buffer for wake word detection
-            # Look at last few segments to catch wake words that might span segments
-            recent_text = " ".join(list(buffer)[-5:])
+            # Check if we're in conversation mode
+            in_conversation = conversation_mode_check() if conversation_mode_check else False
             
-            # Use improved wake word detector
-            detected, wake_word, command_text, confidence = detector.detect(recent_text)
-            
-            if detected:
-                logger.info(f"Wake word detected: '{wake_word}' (confidence: {confidence:.2f})")
-                
-                if debug_mode:
-                    print(f"[Wake Word Detected] '{wake_word}' with confidence {confidence:.2f}")
-                
-                # If we have a command, process it
-                if command_text:
-                    logger.info(f"Command extracted: '{command_text}'")
+            if in_conversation:
+                # In conversation mode, treat all speech as commands
+                # No wake word needed
+                if line and len(line) > 2:  # Filter out very short utterances
+                    logger.info(f"Conversation input: '{line}'")
                     if debug_mode:
-                        print(f"[Command] '{command_text}'")
+                        print(f"[Conversation] '{line}'")
                     
-                    await command_callback(wake_word, command_text)
+                    # Send directly to command callback with empty wake word
+                    await command_callback("", line)
                     
-                    # Clear buffer after processing to avoid re-triggering
+                    # Clear buffer to avoid duplicate processing
                     buffer.clear()
                     last_activity = time.time()
-                else:
-                    # Wake word detected but no command yet, keep listening
-                    logger.debug("Wake word detected, waiting for command...")
+            else:
+                # Normal mode: look for wake words
+                # Combine recent buffer for wake word detection
+                # Look at last few segments to catch wake words that might span segments
+                recent_text = " ".join(list(buffer)[-5:])
+                
+                # Use improved wake word detector
+                detected, wake_word, command_text, confidence = detector.detect(recent_text)
+                
+                if detected:
+                    logger.info(f"Wake word detected: '{wake_word}' (confidence: {confidence:.2f})")
+                    
                     if debug_mode:
-                        print("[Waiting for command after wake word...]")
-                    # Don't clear buffer yet, command might come in next segment
-                    last_activity = time.time()
+                        print(f"[Wake Word Detected] '{wake_word}' with confidence {confidence:.2f}")
+                    
+                    # If we have a command, process it
+                    if command_text:
+                        logger.info(f"Command extracted: '{command_text}'")
+                        if debug_mode:
+                            print(f"[Command] '{command_text}'")
+                        
+                        await command_callback(wake_word, command_text)
+                        
+                        # Clear buffer after processing to avoid re-triggering
+                        buffer.clear()
+                        last_activity = time.time()
+                    else:
+                        # Wake word detected but no command yet, keep listening
+                        logger.debug("Wake word detected, waiting for command...")
+                        if debug_mode:
+                            print("[Waiting for command after wake word...]")
+                        # Don't clear buffer yet, command might come in next segment
+                        last_activity = time.time()
     
     finally:
         # Stop visualizer if running

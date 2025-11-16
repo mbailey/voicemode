@@ -21,6 +21,12 @@ class SimpleCommandRouter:
         self.last_command = None
         self.command_count = 0
         
+        # Conversation mode state
+        self.conversation_mode = False
+        self.conversation_history = []  # Message history for context
+        self.conversation_start_time = None
+        self.max_conversation_history = 20  # Keep last N messages
+        
     async def route(self, wake_word: str, command: str):
         """Route command to appropriate handler.
         
@@ -32,8 +38,33 @@ class SimpleCommandRouter:
         self.command_count += 1
         command_lower = command.lower().strip()
         
-        logger.info(f"Routing command #{self.command_count}: '{command}' (wake: '{wake_word}')")
-        print(f"\n🎤 Heard: '{wake_word}, {command}'")
+        # In conversation mode, we show commands differently
+        if self.conversation_mode:
+            logger.info(f"Conversation #{self.command_count}: '{command}'")
+            print(f"\n💬 You: {command}")
+            
+            # Check for conversation exit triggers
+            if any(phrase in command_lower for phrase in [
+                "stop conversation", "exit chat", "stop chatting", 
+                "end conversation", "stop talking", "back to listening"
+            ]):
+                await self._exit_conversation_mode()
+                return
+            
+            # In conversation mode, everything goes to Ollama with context
+            await self._continue_conversation(command)
+            return
+        else:
+            logger.info(f"Routing command #{self.command_count}: '{command}' (wake: '{wake_word}')")
+            print(f"\n🎤 Heard: '{wake_word}, {command}'")
+        
+        # Check for conversation entry triggers
+        if any(phrase in command_lower for phrase in [
+            "let's chat", "let's talk", "start conversation",
+            "chat with me", "talk to me", "conversation mode"
+        ]):
+            await self._enter_conversation_mode()
+            return
         
         # Time commands
         if any(phrase in command_lower for phrase in ["time", "what time", "current time", "what's the time"]):
@@ -284,6 +315,111 @@ class SimpleCommandRouter:
         # 2. Launch new Claude session if needed
         # 3. Send command via IPC
     
+    async def _enter_conversation_mode(self):
+        """Enter conversation mode for continuous chat."""
+        self.conversation_mode = True
+        self.conversation_history = []
+        self.conversation_start_time = datetime.now()
+        
+        # Play enter chime (rising tone)
+        await self._play_chime("enter")
+        
+        response = "Entering conversation mode. Let's chat! Say 'stop conversation' when you're done."
+        await self._speak(response)
+        print("\n🤖 [Conversation Mode Active]")
+        logger.info("Entered conversation mode")
+    
+    async def _exit_conversation_mode(self):
+        """Exit conversation mode and return to wake word listening."""
+        self.conversation_mode = False
+        duration = (datetime.now() - self.conversation_start_time).total_seconds() if self.conversation_start_time else 0
+        
+        # Play exit chime (falling tone)
+        await self._play_chime("exit")
+        
+        response = "Exiting conversation mode. Back to listening for wake words."
+        await self._speak(response)
+        print(f"\n🤖 [Conversation Mode Ended - Duration: {duration:.0f}s]")
+        logger.info(f"Exited conversation mode after {duration:.0f} seconds")
+        
+        # Clear conversation history
+        self.conversation_history = []
+        self.conversation_start_time = None
+    
+    async def _continue_conversation(self, user_input: str):
+        """Continue conversation with context."""
+        # Add user message to history
+        self.conversation_history.append({"role": "user", "content": user_input})
+        
+        # Trim history if too long
+        if len(self.conversation_history) > self.max_conversation_history:
+            # Keep system message if present, then trim oldest messages
+            self.conversation_history = self.conversation_history[-self.max_conversation_history:]
+        
+        # Get response from Ollama with conversation context
+        response = await self._try_ollama_with_context(self.conversation_history)
+        
+        if response:
+            # Add assistant response to history
+            self.conversation_history.append({"role": "assistant", "content": response})
+            print(f"🤖 Assistant: {response}")
+            await self._speak(response)
+        else:
+            # Fallback if Ollama isn't available
+            fallback = "I'm having trouble connecting to the conversation service."
+            print(f"🤖 Assistant: {fallback}")
+            await self._speak(fallback)
+    
+    async def _try_ollama_with_context(self, messages: list) -> Optional[str]:
+        """Try to get response from Ollama with full conversation context."""
+        try:
+            from openai import AsyncOpenAI
+        except ImportError:
+            logger.debug("OpenAI SDK not available")
+            return None
+        
+        # Check if Ollama is configured
+        ollama_model = os.getenv("OLLAMA_MODEL", "voice-assistant")
+        ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        
+        try:
+            # Create OpenAI client pointing to Ollama
+            client = AsyncOpenAI(
+                base_url=f"{ollama_url}/v1",
+                api_key="ollama"
+            )
+            
+            # Get completion from Ollama with full conversation history
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=ollama_model,
+                    messages=messages,
+                    max_tokens=200,  # Slightly longer for conversation
+                    temperature=0.8
+                ),
+                timeout=30
+            )
+            
+            if response and response.choices:
+                llm_response = response.choices[0].message.content.strip()
+                
+                if llm_response:
+                    logger.info(f"Got Ollama conversation response")
+                    # Clean up response for speech
+                    llm_response = llm_response.replace("*", "").replace("#", "")
+                    # Keep response conversational length
+                    sentences = llm_response.split(". ")[:4]  # Allow up to 4 sentences in conversation
+                    return ". ".join(sentences)
+            
+            return None
+                        
+        except asyncio.TimeoutError:
+            logger.debug("Ollama request timed out")
+            return None
+        except Exception as e:
+            logger.debug(f"Ollama error: {e}")
+            return None
+    
     async def _try_ollama(self, command: str) -> Optional[str]:
         """Try to get response from local Ollama server using OpenAI SDK."""
         try:
@@ -293,7 +429,7 @@ class SimpleCommandRouter:
             return None
         
         # Check if Ollama is configured
-        ollama_model = os.getenv("OLLAMA_MODEL", "gemma3:latest")
+        ollama_model = os.getenv("OLLAMA_MODEL", "voice-assistant")
         ollama_url = os.getenv("OLLAMA_URL", "http://localhost:11434")
         
         try:
@@ -308,11 +444,10 @@ class SimpleCommandRouter:
                 client.chat.completions.create(
                     model=ollama_model,
                     messages=[
-                        {"role": "system", "content": "You are a helpful voice assistant. Keep responses concise and natural for speech."},
                         {"role": "user", "content": command}
                     ],
                     max_tokens=150,
-                    temperature=0.7
+                    temperature=0.8  # Match our model's temperature setting
                 ),
                 timeout=30
             )
@@ -338,6 +473,20 @@ class SimpleCommandRouter:
         except Exception as e:
             logger.debug(f"Ollama error: {e}")
             return None
+    
+    async def _play_chime(self, chime_type: str):
+        """Play an audio chime for mode transitions."""
+        try:
+            # Use macOS system sounds for now
+            if chime_type == "enter":
+                # Rising tone - entering conversation
+                subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], timeout=1)
+            elif chime_type == "exit":
+                # Falling tone - exiting conversation
+                subprocess.run(["afplay", "/System/Library/Sounds/Blow.aiff"], timeout=1)
+        except Exception as e:
+            logger.debug(f"Could not play chime: {e}")
+            # Fail silently - chimes are nice but not essential
     
     async def _speak(self, text: str):
         """Speak response using TTS."""
@@ -461,6 +610,11 @@ async def run_listener(
             logger.error(f"Error handling command: {e}")
             await router._speak("Sorry, I encountered an error processing that command")
     
+    # Define conversation mode check
+    def is_in_conversation_mode():
+        """Check if we're in conversation mode."""
+        return router.conversation_mode
+    
     # Start listening
     logger.info(f"Starting voice listener with wake words: {config.wake_words}")
     print(f"🎧 Listening for wake words: {', '.join(config.wake_words)}")
@@ -479,7 +633,8 @@ async def run_listener(
             command_callback=handle_command,
             max_idle_time=config.max_idle_time,
             show_audio_level=show_audio_level,
-            debug_mode=debug_mode
+            debug_mode=debug_mode,
+            conversation_mode_check=is_in_conversation_mode
         )
     except KeyboardInterrupt:
         logger.info("Listener stopped by user")
