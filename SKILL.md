@@ -122,6 +122,16 @@ VoiceMode uses OpenAI-compatible endpoints for all services:
 
 ## Common Workflows
 
+### Token Efficiency Note
+
+When using `voicemode converse` via CLI commands, redirect STDERR to `/dev/null` to save tokens by suppressing verbose diagnostic output. This prevents FFmpeg warnings and debug messages from consuming context:
+
+```bash
+voicemode converse -m "Hello" 2>/dev/null
+```
+
+**Note**: Omit the `2>/dev/null` redirection when debugging issues or troubleshooting audio problems, as STDERR contains useful diagnostic information.
+
 ### Starting a Voice Conversation
 
 When using MCP tools:
@@ -139,17 +149,19 @@ voicemode:converse(
 
 When using CLI directly:
 ```bash
-# Simple conversation
-voicemode converse
+# Simple conversation (redirect STDERR to save tokens)
+voicemode converse 2>/dev/null
 
 # Speak without waiting
-voicemode converse -m "Hello there!" --no-wait
+voicemode converse -m "Hello there!" --no-wait 2>/dev/null
 
 # Continuous conversation mode
-voicemode converse --continuous
+voicemode converse --continuous 2>/dev/null
 
 # With specific voice
-voicemode converse --voice nova
+voicemode converse --voice nova 2>/dev/null
+
+# Note: Omit 2>/dev/null for debugging or diagnostics
 ```
 
 ### Checking Voice Setup
@@ -282,9 +294,11 @@ Grep(pattern="search_term", path="/path")  # Runs while speaking
 
 When using CLI commands with Bash tool:
 ```bash
-# Run voice announcement and action in parallel
-voicemode converse -m "Let me check the service status" --no-wait &
+# Run voice announcement and action in parallel (redirect STDERR to save tokens)
+voicemode converse -m "Let me check the service status" --no-wait 2>/dev/null &
 voicemode whisper service status
+
+# Note: Omit 2>/dev/null for debugging or diagnostics
 ```
 
 Only wait for response when:
