@@ -14,44 +14,32 @@ VoiceMode provides:
 
 The fastest way to get started is using VoiceMode with Claude Code.
 
-### Option 1: Universal Installer (Recommended)
+### Installation
 
-The easiest way - installs UV and all dependencies automatically:
+Install UV package manager (if not already installed), then run the VoiceMode installer:
 
 ```bash
-curl -O https://getvoicemode.com/install.sh && bash install.sh
+# Install UV package manager (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install VoiceMode and configure services
+uvx voice-mode-install
+
+# Add to Claude Code MCP
+claude mcp add --scope user voicemode -- uvx --refresh voice-mode
 ```
 
-This installer will:
+The installer will:
 
-- Install UV package manager
-- Install missing system dependencies (Node.js, FFmpeg, PortAudio, etc.)
+- Install missing system dependencies (FFmpeg, PortAudio, etc.)
 - Set up your environment for VoiceMode
 - Offer to install local voice services (Whisper STT and Kokoro TTS)
 
-### Option 2: Manual UV Installation
-
-If you prefer to install UV manually:
-
-```bash
-# macOS/Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Or with pip (if available)
-pip install uv
-```
-
-**Note**: You'll also need these system dependencies:
-- **macOS**: PortAudio, FFmpeg (`brew install portaudio ffmpeg`)
-- **Linux**: PortAudio, FFmpeg, ALSA libraries
+**Alternative UV installation methods:**
+- **macOS**: `brew install uv`
+- **With pip**: `pip install uv`
 
 Learn more: [UV Installation Guide](https://docs.astral.sh/uv/getting-started/installation/)
-
-### 1. Add VoiceMode to Claude
-
-```bash
-claude mcp add --user voicemode -- uvx --refresh voice-mode
-```
 
 ### 2. Configure Your API Key
 
