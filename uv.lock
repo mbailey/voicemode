@@ -5519,10 +5519,6 @@ dependencies = [
     { name = "click" },
     { name = "fastmcp" },
     { name = "httpx" },
-    { name = "livekit" },
-    { name = "livekit-agents" },
-    { name = "livekit-plugins-openai" },
-    { name = "livekit-plugins-silero" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "openai" },
@@ -5560,6 +5556,12 @@ docs = [
     { name = "mkdocs-material", extra = ["imaging"] },
     { name = "mkdocs-minify-plugin" },
     { name = "pymdown-extensions" },
+]
+livekit = [
+    { name = "livekit" },
+    { name = "livekit-agents" },
+    { name = "livekit-plugins-openai" },
+    { name = "livekit-plugins-silero" },
 ]
 notebooks = [
     { name = "gradio" },
@@ -5601,10 +5603,10 @@ requires-dist = [
     { name = "gradio", marker = "extra == 'notebooks'", specifier = ">=4.0.0" },
     { name = "httpx" },
     { name = "jupyter", marker = "extra == 'notebooks'", specifier = ">=1.0.0" },
-    { name = "livekit", specifier = ">=0.13.1" },
-    { name = "livekit-agents", specifier = ">=0.10.2" },
-    { name = "livekit-plugins-openai", specifier = ">=0.10.1" },
-    { name = "livekit-plugins-silero", specifier = ">=0.6.5" },
+    { name = "livekit", marker = "extra == 'livekit'", specifier = ">=0.13.1" },
+    { name = "livekit-agents", marker = "extra == 'livekit'", specifier = ">=0.10.2" },
+    { name = "livekit-plugins-openai", marker = "extra == 'livekit'", specifier = ">=0.10.1" },
+    { name = "livekit-plugins-silero", marker = "extra == 'livekit'", specifier = ">=0.6.5" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.5.0" },
     { name = "mkdocs-gen-files", marker = "extra == 'docs'", specifier = ">=0.5.0" },
     { name = "mkdocs-git-revision-date-localized-plugin", marker = "extra == 'docs'", specifier = ">=1.2.0" },
@@ -5638,7 +5640,7 @@ requires-dist = [
     { name = "uv", specifier = ">=0.4.0" },
     { name = "webrtcvad", specifier = ">=2.0.10" },
 ]
-provides-extras = ["coreml", "dev", "docs", "notebooks", "scripts", "test"]
+provides-extras = ["coreml", "dev", "docs", "livekit", "notebooks", "scripts", "test"]
 
 [package.metadata.requires-dev]
 dev = [
