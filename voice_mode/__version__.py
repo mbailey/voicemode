@@ -1,3 +1,3 @@
 # This file is automatically updated by 'make release'
 # Do not edit manually
-__version__ = "6.1.1"
+__version__ = "6.2.0"
