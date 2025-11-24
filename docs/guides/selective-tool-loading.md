@@ -30,9 +30,6 @@ export VOICEMODE_TOOLS_ENABLED=converse,service,statistics
 Use `VOICEMODE_TOOLS_DISABLED` to load all tools except specific ones. Useful when you want most tools but need to exclude a few.
 
 ```bash
-# Load all tools except pronunciation
-export VOICEMODE_TOOLS_DISABLED=pronunciation_add,pronunciation_remove,pronunciation_list
-
 # Load all tools except service installation
 export VOICEMODE_TOOLS_DISABLED=whisper_install,kokoro_install,livekit_install
 ```
@@ -50,9 +47,6 @@ Create or edit `~/.voicemode/voicemode.env`:
 ```bash
 # Whitelist mode - only load specified tools (most efficient)
 VOICEMODE_TOOLS_ENABLED=converse,service
-
-# Or blacklist mode - load all except specified
-# VOICEMODE_TOOLS_DISABLED=pronunciation_add,pronunciation_remove
 ```
 
 ### Method 3: .mcp.json Configuration
@@ -89,10 +83,11 @@ Edit your `.mcp.json` file:
 
 ### Utility Tools
 - `claude_thinking` - Claude thinking mode tools
-- `pronounce` - Pronunciation customization
 - `dependencies` - Dependency checking
 - `diagnostics` - System diagnostics
 - `voice_registry` - Voice registry management
+
+> **Note**: Pronunciation rules are now configured via environment variables (`VOICEMODE_PRONOUNCE`) in your voicemode.env file. See the Configuration guide for details.
 
 ## Examples
 

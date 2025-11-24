@@ -281,17 +281,18 @@ def load_voicemode_env():
 # Pronunciation System
 #############
 
-# Enable pronunciation rules (true/false, default: true)
+# Enable pronunciation middleware (true/false, default: true)
 # VOICEMODE_PRONUNCIATION_ENABLED=true
 
-# Custom pronunciation config paths (comma-separated)
-# VOICEMODE_PRONUNCIATION_CONFIG=
+# Pronunciation rules (format: DIRECTION pattern replacement # description)
+# Use VOICEMODE_PRONOUNCE or VOICEMODE_PRONOUNCE_* for organizing rules
+# Example: VOICEMODE_PRONOUNCE='TTS \bTali\b Tar-lee # Dog name'
+# VOICEMODE_PRONOUNCE=
+# VOICEMODE_PRONOUNCE_NETWORKING=
+# VOICEMODE_PRONOUNCE_STT=
 
-# Log pronunciation substitutions (true/false, default: false)
+# Log pronunciation substitutions for debugging (true/false, default: false)
 # VOICEMODE_PRONUNCIATION_LOG_SUBSTITUTIONS=false
-
-# Privacy mode - hide pronunciations from LLM tool listings (true/false, default: false)
-# VOICEMODE_PRONUNCIATION_PRIVATE_MODE=false
 
 #############
 # Think Out Loud Mode (Experimental)
@@ -346,19 +347,49 @@ def load_voicemode_env():
     for config_path in config_files:
         if config_path.exists():
             with open(config_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
+                lines = f.readlines()
+                i = 0
+                while i < len(lines):
+                    line = lines[i].strip()
+
                     # Skip comments and empty lines
                     if not line or line.startswith('#'):
+                        i += 1
                         continue
+
                     # Parse KEY=VALUE format
                     if '=' in line:
                         key, value = line.split('=', 1)
                         key = key.strip()
                         value = value.strip()
+
+                        # Handle multiline quoted values
+                        if value and value[0] in ('"', "'"):
+                            quote_char = value[0]
+                            # Check if the quote is closed on the same line
+                            if len(value) > 1 and value[-1] == quote_char:
+                                # Single line quoted value - strip quotes
+                                value = value[1:-1]
+                            else:
+                                # Multiline quoted value - collect lines until closing quote
+                                value_parts = [value[1:]]  # Start after opening quote
+                                i += 1
+                                while i < len(lines):
+                                    next_line = lines[i].rstrip('\n')
+                                    if next_line.endswith(quote_char):
+                                        # Found closing quote
+                                        value_parts.append(next_line[:-1])
+                                        break
+                                    else:
+                                        value_parts.append(next_line)
+                                    i += 1
+                                value = '\n'.join(value_parts)
+
                         # Only set if not already in environment (env vars take precedence)
                         if key and key not in os.environ:
                             os.environ[key] = value
+
+                    i += 1
 
 # Load configuration file before other configuration
 load_voicemode_env()

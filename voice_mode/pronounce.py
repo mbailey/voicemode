@@ -3,13 +3,17 @@ Pronunciation middleware for TTS and STT text processing.
 
 This module provides regex-based text substitutions to improve TTS pronunciation
 and correct STT transcription errors.
+
+Format: DIRECTION pattern replacement # description
+Example: TTS \bTali\b Tar-lee # Dog name
+         STT \b3M\b "three M" # Company name
 """
 
 import logging
 import re
+import shlex
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import yaml
 from dataclasses import dataclass, field
 import os
 
@@ -19,312 +23,220 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PronounceRule:
     """A single pronunciation rule."""
-    name: str
     pattern: str
     replacement: str
-    order: int = 100
-    enabled: bool = True
     description: str = ""
-    private: bool = True  # Default to private for security
     _compiled: Optional[re.Pattern] = field(default=None, init=False, repr=False)
-    
+
     def __post_init__(self):
         """Compile the regex pattern after initialization."""
         try:
             self._compiled = re.compile(self.pattern)
         except re.error as e:
-            logger.error(f"Invalid regex pattern in rule '{self.name}': {e}")
+            logger.error(f"Invalid regex pattern '{self.pattern}': {e}")
             self._compiled = None
-    
+
     def apply(self, text: str) -> Tuple[str, bool]:
         """Apply this rule to text. Returns (modified_text, was_applied)."""
-        if not self.enabled or not self._compiled:
+        if not self._compiled:
             return text, False
-        
+
         original = text
         try:
             text = self._compiled.sub(self.replacement, text)
             return text, text != original
         except Exception as e:
-            logger.error(f"Error applying rule '{self.name}': {e}")
+            logger.error(f"Error applying rule '{self.pattern}': {e}")
             return original, False
+
+
+def parse_compact_rules(text: str) -> Dict[str, List[PronounceRule]]:
+    """
+    Parse pronunciation rules from compact format.
+
+    Format: DIRECTION pattern replacement # description
+    - Lines starting with # are comments (disabled rules)
+    - Direction must be TTS or STT
+    - Pattern and replacement can be quoted for spaces
+    - Everything after # is the description
+
+    Args:
+        text: Multi-line string with pronunciation rules
+
+    Returns:
+        Dictionary with 'tts' and 'stt' lists of PronounceRule objects
+    """
+    rules = {'tts': [], 'stt': []}
+
+    for line_num, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+
+        # Skip empty lines and comment lines
+        if not line or line.startswith('#'):
+            continue
+
+        # Split on # to separate rule from description
+        parts = line.split('#', 1)
+        rule_part = parts[0].strip()
+        description = parts[1].strip() if len(parts) > 1 else ""
+
+        # Parse the rule part - split on whitespace but respect quotes
+        # Use shlex for quote handling but keep backslashes raw
+        try:
+            tokens = shlex.split(rule_part, posix=False)
+        except ValueError as e:
+            logger.warning(f"Line {line_num}: Parse error in '{rule_part}': {e}")
+            logger.warning(f"  Expected format: DIRECTION pattern replacement # description")
+            logger.warning(f"  Example: TTS \\bword\\b replacement # comment")
+            continue
+
+        # Remove quotes from tokens but preserve content
+        tokens = [t.strip('"').strip("'") for t in tokens]
+
+        if len(tokens) < 3:
+            logger.warning(f"Line {line_num}: Need at least 3 fields (direction, pattern, replacement), got {len(tokens)}")
+            logger.warning(f"  Got: {rule_part}")
+            logger.warning(f"  Expected format: DIRECTION pattern replacement # description")
+            continue
+
+        direction = tokens[0].lower()
+        pattern = tokens[1]
+        replacement = tokens[2]
+
+        if direction not in ('tts', 'stt'):
+            logger.warning(f"Line {line_num}: Direction must be TTS or STT (case insensitive), got '{tokens[0]}'")
+            continue
+
+        rule = PronounceRule(
+            pattern=pattern,
+            replacement=replacement,
+            description=description
+        )
+
+        if rule._compiled:  # Only add if pattern compiled successfully
+            rules[direction].append(rule)
+        else:
+            logger.warning(f"Line {line_num}: Invalid regex pattern '{pattern}'")
+
+    return rules
 
 
 class PronounceManager:
     """Manages pronunciation rules for TTS and STT corrections."""
     
-    def __init__(self, config_paths: Optional[List[Path]] = None):
-        """
-        Initialize the pronunciation rule manager.
-        
-        Args:
-            config_paths: List of config file paths. If None, uses default locations.
-        """
+    def __init__(self):
+        """Initialize the pronunciation rule manager."""
         self.rules: Dict[str, List[PronounceRule]] = {
             'tts': [],
             'stt': []
         }
-        self.config_paths = config_paths or self._get_default_config_paths()
         self._load_all_rules()
     
-    def _get_default_config_paths(self) -> List[Path]:
-        """Get default configuration file paths."""
-        paths = []
-        
-        # System defaults
-        default_path = Path(__file__).parent / 'data' / 'default_pronunciation.yaml'
-        if default_path.exists():
-            paths.append(default_path)
-        
-        # User config
-        user_config = Path.home() / '.voicemode' / 'config' / 'pronunciation.yaml'
-        if user_config.exists():
-            paths.append(user_config)
-        
-        # Project config (like Claude Code hooks)
-        project_config = Path.cwd() / '.pronunciation.yaml'
-        if project_config.exists():
-            paths.append(project_config)
-        
-        # Environment variable paths
-        env_paths = os.environ.get('VOICEMODE_PRONUNCIATION_CONFIG', '')
-        if env_paths:
-            for path_str in env_paths.split(':'):
-                path = Path(path_str).expanduser()
-                if path.exists():
-                    paths.append(path)
-        
-        return paths
+    def _load_from_env_vars(self) -> List[str]:
+        """Load pronunciation rules from environment variables.
+
+        Looks for VOICEMODE_PRONOUNCE and VOICEMODE_PRONOUNCE_* variables.
+        Returns list of rule texts to parse.
+        """
+        rule_texts = []
+
+        # Collect all VOICEMODE_PRONOUNCE* environment variables
+        for key, value in os.environ.items():
+            if key == 'VOICEMODE_PRONOUNCE' or key.startswith('VOICEMODE_PRONOUNCE_'):
+                if value.strip():
+                    # Strip surrounding quotes if present (from .env file parsing)
+                    value = value.strip()
+                    if (value.startswith('"') and value.endswith('"')) or \
+                       (value.startswith("'") and value.endswith("'")):
+                        value = value[1:-1]
+                    rule_texts.append(value)
+
+        return rule_texts
     
     def _load_all_rules(self):
-        """Load rules from all configured paths."""
+        """Load rules from environment variables."""
         self.rules = {'tts': [], 'stt': []}
-        
-        for config_path in self.config_paths:
+
+        # Load from environment variables
+        rule_texts = self._load_from_env_vars()
+
+        for rule_text in rule_texts:
             try:
-                self._load_rules_from_file(config_path)
-                logger.info(f"Loaded pronunciation rules from {config_path}")
+                parsed_rules = parse_compact_rules(rule_text)
+                self.rules['tts'].extend(parsed_rules['tts'])
+                self.rules['stt'].extend(parsed_rules['stt'])
             except Exception as e:
-                logger.error(f"Failed to load rules from {config_path}: {e}")
-    
-    def _load_rules_from_file(self, config_path: Path):
-        """Load rules from a single YAML file."""
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        
-        if not config:
-            return
-        
-        # Load TTS rules
-        for rule_dict in config.get('tts_rules', []):
-            rule = self._dict_to_rule(rule_dict)
-            if rule:
-                # Check for duplicate names and override
-                self.rules['tts'] = [r for r in self.rules['tts'] if r.name != rule.name]
-                self.rules['tts'].append(rule)
-        
-        # Load STT rules
-        for rule_dict in config.get('stt_rules', []):
-            rule = self._dict_to_rule(rule_dict)
-            if rule:
-                # Check for duplicate names and override
-                self.rules['stt'] = [r for r in self.rules['stt'] if r.name != rule.name]
-                self.rules['stt'].append(rule)
-        
-        # Sort rules by order
-        self.rules['tts'].sort(key=lambda r: r.order)
-        self.rules['stt'].sort(key=lambda r: r.order)
-    
-    def _dict_to_rule(self, rule_dict: dict) -> Optional[PronounceRule]:
-        """Convert a dictionary to a PronounceRule."""
-        try:
-            return PronounceRule(
-                name=rule_dict['name'],
-                pattern=rule_dict['pattern'],
-                replacement=rule_dict['replacement'],
-                order=rule_dict.get('order', 100),
-                enabled=rule_dict.get('enabled', True),
-                description=rule_dict.get('description', ''),
-                private=rule_dict.get('private', True)  # Default to private
-            )
-        except (KeyError, TypeError) as e:
-            logger.error(f"Invalid rule configuration: {e}")
-            return None
+                logger.error(f"Failed to parse pronunciation rules: {e}")
+
+        logger.info(f"Loaded {len(self.rules['tts'])} TTS rules and {len(self.rules['stt'])} STT rules")
     
     def process_tts(self, text: str) -> str:
         """
         Apply TTS substitutions before speech generation.
-        
+
         Args:
             text: Text to be spoken by TTS
-            
+
         Returns:
             Modified text with pronunciation improvements
         """
         log_substitutions = os.environ.get('VOICEMODE_PRONUNCIATION_LOG_SUBSTITUTIONS', '').lower() == 'true'
-        
+
         for rule in self.rules['tts']:
             original = text
             text, applied = rule.apply(text)
             if applied and log_substitutions:
-                logger.info(f"Pronunciation TTS: Applied rule '{rule.name}': \"{original}\" → \"{text}\"")
-        
+                logger.info(f"Pronunciation TTS: {rule.pattern} → {rule.replacement}: \"{original}\" → \"{text}\"")
+
         return text
-    
+
     def process_stt(self, text: str) -> str:
         """
         Apply STT corrections after transcription.
-        
+
         Args:
             text: Text transcribed from speech
-            
+
         Returns:
             Corrected text
         """
         log_substitutions = os.environ.get('VOICEMODE_PRONUNCIATION_LOG_SUBSTITUTIONS', '').lower() == 'true'
-        
+
         for rule in self.rules['stt']:
             original = text
             text, applied = rule.apply(text)
             if applied and log_substitutions:
-                logger.info(f"Pronunciation STT: Applied rule '{rule.name}': \"{original}\" → \"{text}\"")
-        
+                logger.info(f"Pronunciation STT: {rule.pattern} → {rule.replacement}: \"{original}\" → \"{text}\"")
+
         return text
-    
-    # CRUD Operations
-    def add_rule(self, direction: str, pattern: str, replacement: str,
-                 name: Optional[str] = None, description: str = "",
-                 enabled: bool = True, order: int = 100,
-                 private: bool = False) -> bool:
-        """
-        Add a new pronunciation rule.
-        
-        Args:
-            direction: 'tts' or 'stt'
-            pattern: Regex pattern to match
-            replacement: Replacement text
-            name: Rule name (auto-generated if not provided)
-            description: Human-readable description
-            enabled: Whether rule is active
-            order: Processing order
-            private: Whether rule is hidden from LLM
-            
-        Returns:
-            True if rule was added successfully
-        """
-        if direction not in ['tts', 'stt']:
-            logger.error(f"Invalid direction: {direction}")
-            return False
-        
-        # Auto-generate name if not provided
-        if not name:
-            name = f"{direction}_rule_{len(self.rules[direction])}"
-        
-        # Check for duplicate names
-        if any(r.name == name for r in self.rules[direction]):
-            logger.error(f"Rule with name '{name}' already exists")
-            return False
-        
-        rule = PronounceRule(
-            name=name,
-            pattern=pattern,
-            replacement=replacement,
-            order=order,
-            enabled=enabled,
-            description=description,
-            private=private
-        )
-        
-        if not rule._compiled:
-            return False
-        
-        self.rules[direction].append(rule)
-        self.rules[direction].sort(key=lambda r: r.order)
-        
-        # Save to user config
-        self._save_user_rules()
-        return True
-    
-    def remove_rule(self, direction: str, name: str) -> bool:
-        """Remove a pronunciation rule by name."""
-        if direction not in ['tts', 'stt']:
-            return False
-        
-        original_count = len(self.rules[direction])
-        self.rules[direction] = [r for r in self.rules[direction] if r.name != name]
-        
-        if len(self.rules[direction]) < original_count:
-            self._save_user_rules()
-            return True
-        return False
-    
-    def list_rules(self, direction: Optional[str] = None, 
-                   include_private: bool = False) -> List[dict]:
+
+    def list_rules(self, direction: Optional[str] = None) -> List[dict]:
         """
         List all rules or rules for specific direction.
-        
+
         Args:
             direction: 'tts', 'stt', or None for all
-            include_private: Whether to include private rules (for CLI, not MCP)
-            
+
         Returns:
             List of rule dictionaries
         """
         rules = []
-        
+
         directions = [direction] if direction else ['tts', 'stt']
-        
+
         for dir in directions:
             if dir not in self.rules:
                 continue
-            
+
             for rule in self.rules[dir]:
-                # Skip private rules unless explicitly requested
-                if rule.private and not include_private:
-                    continue
-                
                 rules.append({
                     'direction': dir,
-                    'name': rule.name,
                     'pattern': rule.pattern,
                     'replacement': rule.replacement,
-                    'order': rule.order,
-                    'enabled': rule.enabled,
-                    'description': rule.description,
-                    'private': rule.private
+                    'description': rule.description
                 })
-        
+
         return rules
-    
-    def enable_rule(self, direction: str, name: str) -> bool:
-        """Enable a specific rule."""
-        if direction not in ['tts', 'stt']:
-            return False
-        
-        for rule in self.rules[direction]:
-            if rule.name == name:
-                if rule.private:
-                    logger.warning(f"Cannot enable private rule '{name}' via API")
-                    return False
-                rule.enabled = True
-                self._save_user_rules()
-                return True
-        return False
-    
-    def disable_rule(self, direction: str, name: str) -> bool:
-        """Disable a specific rule."""
-        if direction not in ['tts', 'stt']:
-            return False
-        
-        for rule in self.rules[direction]:
-            if rule.name == name:
-                if rule.private:
-                    logger.warning(f"Cannot disable private rule '{name}' via API")
-                    return False
-                rule.enabled = False
-                self._save_user_rules()
-                return True
-        return False
     
     def test_rule(self, text: str, direction: str = "tts") -> str:
         """Test what a text would become after applying rules."""
@@ -336,48 +248,9 @@ class PronounceManager:
             return text
     
     def reload_rules(self):
-        """Reload all rules from configuration files."""
+        """Reload all rules from environment variables."""
         self._load_all_rules()
         logger.info("Reloaded pronunciation rules")
-    
-    def _save_user_rules(self):
-        """Save current rules to user config file."""
-        user_config = Path.home() / '.voicemode' / 'config' / 'pronunciation.yaml'
-        user_config.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Only save non-default rules
-        config = {
-            'version': 1,
-            'tts_rules': [],
-            'stt_rules': []
-        }
-        
-        for rule in self.rules['tts']:
-            config['tts_rules'].append({
-                'name': rule.name,
-                'order': rule.order,
-                'pattern': rule.pattern,
-                'replacement': rule.replacement,
-                'enabled': rule.enabled,
-                'description': rule.description,
-                'private': rule.private
-            })
-        
-        for rule in self.rules['stt']:
-            config['stt_rules'].append({
-                'name': rule.name,
-                'order': rule.order,
-                'pattern': rule.pattern,
-                'replacement': rule.replacement,
-                'enabled': rule.enabled,
-                'description': rule.description,
-                'private': rule.private
-            })
-        
-        with open(user_config, 'w') as f:
-            yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
-        
-        logger.info(f"Saved pronunciation rules to {user_config}")
 
 
 # Global instance (lazy loaded)
