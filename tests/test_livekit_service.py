@@ -12,18 +12,9 @@ import json
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Check if LiveKit is available
-try:
-    import livekit
-    LIVEKIT_AVAILABLE = True
-except ImportError:
-    LIVEKIT_AVAILABLE = False
-
-# Skip all tests in this module if LiveKit is not installed
-pytestmark = pytest.mark.skipif(
-    not LIVEKIT_AVAILABLE,
-    reason="LiveKit not installed (install with: pip install voice-mode[livekit])"
-)
+# Skip all tests in this module if LiveKit dependencies are not installed
+# Check for livekit-agents which pulls in aiohttp and other dependencies
+pytest.importorskip("livekit.agents", reason="LiveKit not installed (install with: pip install voice-mode[livekit])")
 
 # Import LiveKit-related functions
 from voice_mode.tools.livekit.install import livekit_install
