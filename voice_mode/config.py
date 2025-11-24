@@ -408,6 +408,9 @@ AUDIO_FEEDBACK_ENABLED = os.getenv("VOICEMODE_AUDIO_FEEDBACK", "true").lower() i
 # Skip TTS configuration (skip text-to-speech for faster responses)
 SKIP_TTS = os.getenv("VOICEMODE_SKIP_TTS", "false").lower() in ("true", "1", "yes", "on")
 
+# TTS speed configuration (0.25-4.0, default None uses provider default)
+TTS_SPEED = float(os.getenv("VOICEMODE_TTS_SPEED")) if os.getenv("VOICEMODE_TTS_SPEED") else None
+
 # Local provider preference configuration
 PREFER_LOCAL = os.getenv("VOICEMODE_PREFER_LOCAL", "true").lower() in ("true", "1", "yes", "on")
 
