@@ -103,11 +103,23 @@ def whisper():
     pass
 
 
+# Check if LiveKit is available
+try:
+    import livekit
+    LIVEKIT_CLI_AVAILABLE = True
+except ImportError:
+    LIVEKIT_CLI_AVAILABLE = False
+
+
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def livekit():
-    """Manage LiveKit RTC service."""
-    pass
+    """Manage LiveKit RTC service (requires: uv tool install voice-mode[livekit])."""
+    if not LIVEKIT_CLI_AVAILABLE:
+        click.echo("❌ LiveKit is not installed.")
+        click.echo("   Install with: uv tool install voice-mode[livekit]")
+        click.echo("   Note: LiveKit requires Python 3.10-3.13 (not yet available for Python 3.14)")
+        raise click.Abort()
 
 
 # Service functions are imported lazily in their respective command handlers to improve startup time

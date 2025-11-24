@@ -24,6 +24,13 @@ except ImportError as e:
     webrtcvad = None
     VAD_AVAILABLE = False
 
+# Optional LiveKit for room-based communication
+try:
+    from livekit import rtc, api
+    LIVEKIT_AVAILABLE = True
+except ImportError:
+    LIVEKIT_AVAILABLE = False
+
 from voice_mode.server import mcp
 from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
@@ -837,12 +844,17 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
 
 async def check_livekit_available() -> bool:
     """Check if LiveKit is available and has active rooms"""
+    # First check if LiveKit is installed
+    if not LIVEKIT_AVAILABLE:
+        logger.debug("LiveKit not available (not installed)")
+        return False
+
     start_time = time.time()
     logger.debug("Starting LiveKit availability check")
-    
+
     try:
         from livekit import api
-        
+
         api_url = LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
         lk_api = api.LiveKitAPI(api_url, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
         
@@ -868,6 +880,9 @@ async def check_livekit_available() -> bool:
 
 async def livekit_converse(message: str, room_name: str = "", timeout: float = 60.0) -> str:
     """Have a conversation using LiveKit transport"""
+    if not LIVEKIT_AVAILABLE:
+        return "Error: LiveKit not installed. Install with: uv tool install voice-mode[livekit]"
+
     try:
         from livekit import rtc, api
         from livekit.agents import Agent, AgentSession

@@ -24,6 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries",
     "Topic :: Multimedia :: Sound/Audio :: Speech",
 ]
@@ -42,15 +43,17 @@ dependencies = [
     "psutil>=5.9.0",
     "setuptools",  # Required for pkg_resources used by webrtcvad
     "webrtcvad>=2.0.10",
-    "livekit>=0.13.1",
-    "livekit-agents>=0.10.2",
-    "livekit-plugins-openai>=0.10.1",
-    "livekit-plugins-silero>=0.6.5",
     "click>=8.0.0",
     "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
+livekit = [
+    "livekit>=0.13.1",
+    "livekit-agents>=0.10.2",
+    "livekit-plugins-openai>=0.10.1",
+    "livekit-plugins-silero>=0.6.5",
+]
 coreml = [
     "torch>=2.0.0",
     "coremltools>=7.0",
