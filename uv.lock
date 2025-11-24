@@ -5515,6 +5515,7 @@ wheels = [
 name = "voice-mode"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
     { name = "click" },
     { name = "fastmcp" },
@@ -5592,6 +5593,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp" },
     { name = "ane-transformers", marker = "extra == 'coreml'" },
     { name = "audioop-lts", marker = "python_full_version >= '3.13'" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.0.0" },

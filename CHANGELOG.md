@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Python 3.14 Support** (VM-217)
+  - VoiceMode now supports Python 3.14
+  - LiveKit dependencies made optional to avoid compatibility issues
+  - LiveKit functionality requires manual installation of livekit package
+
+### ChangedS
+
+- **Documentation Updates**
+  - Getting started guide now uses `uvx voice-mode-install` for installation
+  - Simplified installation instructions with uvx approach
+
 ### Fixed
+
+- **ReadTheDocs Build System**
+  - Restored `docs/gen_pages.py` to fix ReadTheDocs builds
+  - Documentation builds now working correctly
+
+- **Dependency Management**
+  - Added aiohttp as core dependency for async HTTP operations
+  - Prevents missing dependency errors during normal operation
+
+- **LiveKit Optional Support**
+  - `--help` flag now works on LiveKit commands without LiveKit installed
+  - LiveKit tests automatically skipped when package not installed
+  - Uses `pytest.importorskip` for proper test dependency handling
+
+- **Test Reliability**
+  - Skipped flaky TTS test to improve CI reliability
+
 - **Linux systemd Service Template** (VM-212, fixes #113)
   - Refactored Linux installation to use template-based approach matching macOS
   - Updated systemd template from v1.0.0 to v1.1.0
