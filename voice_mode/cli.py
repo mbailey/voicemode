@@ -113,8 +113,18 @@ except ImportError:
 
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
-def livekit():
+@click.pass_context
+def livekit(ctx):
     """Manage LiveKit RTC service (requires: uv tool install voice-mode[livekit])."""
+    # Allow --help to work even without LiveKit installed
+    if ctx.invoked_subcommand is None:
+        return
+
+    # Check if this is a help request
+    import sys
+    if '--help' in sys.argv or '-h' in sys.argv:
+        return
+
     if not LIVEKIT_CLI_AVAILABLE:
         click.echo("❌ LiveKit is not installed.")
         click.echo("   Install with: uv tool install voice-mode[livekit]")
