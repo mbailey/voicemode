@@ -1028,7 +1028,7 @@ async def converse(
     wait_for_response: Union[bool, str] = True,
     listen_duration_max: float = DEFAULT_LISTEN_DURATION,
     listen_duration_min: float = 2.0,
-    transport: Literal["auto", "local", "livekit"] = "local",
+    transport: Literal["auto", "local", "livekit"] = "auto",
     room_name: str = "",
     timeout: float = 60.0,
     voice: Optional[str] = None,
