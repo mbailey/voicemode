@@ -18,7 +18,7 @@ def transcribe():
 @click.option('--words', is_flag=True, help='Include word-level timestamps')
 @click.option(
     '--backend',
-    type=click.Choice(['openai', 'whisperx', 'whisper-cpp']),
+    type=click.Choice(['openai', 'whisperx', 'whisper-cpp', 'whisper-cli']),
     default='openai',
     help='Transcription backend to use'
 )
@@ -107,7 +107,7 @@ def audio_command(
 @click.option('--words', is_flag=True, help='Include word-level timestamps')
 @click.option(
     '--backend',
-    type=click.Choice(['openai', 'whisperx', 'whisper-cpp']),
+    type=click.Choice(['openai', 'whisperx', 'whisper-cpp', 'whisper-cli']),
     default='openai',
     help='Transcription backend'
 )

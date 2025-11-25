@@ -8,7 +8,8 @@ from .types import TranscriptionResult, TranscriptionBackend, OutputFormat
 from .backends import (
     transcribe_with_openai,
     transcribe_with_whisperx,
-    transcribe_with_whisper_cpp
+    transcribe_with_whisper_cpp,
+    transcribe_with_whisper_cli
 )
 from .formats import convert_to_format
 
@@ -77,6 +78,12 @@ async def transcribe_audio(
             )
         elif backend == TranscriptionBackend.WHISPER_CPP:
             result = await transcribe_with_whisper_cpp(
+                audio_path,
+                word_timestamps=word_timestamps,
+                language=language
+            )
+        elif backend == TranscriptionBackend.WHISPER_CLI:
+            result = await transcribe_with_whisper_cli(
                 audio_path,
                 word_timestamps=word_timestamps,
                 language=language
