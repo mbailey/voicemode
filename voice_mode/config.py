@@ -284,12 +284,17 @@ def load_voicemode_env():
 # Enable pronunciation middleware (true/false, default: true)
 # VOICEMODE_PRONUNCIATION_ENABLED=true
 
-# Pronunciation rules (format: DIRECTION pattern replacement # description)
-# Use VOICEMODE_PRONOUNCE or VOICEMODE_PRONOUNCE_* for organizing rules
-# Example: VOICEMODE_PRONOUNCE='TTS \bTali\b Tar-lee # Dog name'
-# VOICEMODE_PRONOUNCE=
-# VOICEMODE_PRONOUNCE_NETWORKING=
-# VOICEMODE_PRONOUNCE_STT=
+# Default pronunciation rules - common technical terms
+# Format: DIRECTION pattern replacement # description
+# See docs for full format details
+VOICEMODE_PRONOUNCE="
+TTS \\bJSON\\b jason # JSON as jason
+TTS \\bYAML\\b yammel # YAML as yammel
+TTS \\bAPI\\b A P I # API as individual letters
+"
+
+# Add custom rules with VOICEMODE_PRONOUNCE_* variables
+# VOICEMODE_PRONOUNCE_CUSTOM=
 
 # Log pronunciation substitutions for debugging (true/false, default: false)
 # VOICEMODE_PRONUNCIATION_LOG_SUBSTITUTIONS=false
