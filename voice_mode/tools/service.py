@@ -92,6 +92,7 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "KOKORO_PORT": str(KOKORO_PORT),
             "START_SCRIPT": str(start_script) if start_script and start_script.exists() else "",
             "LOG_DIR": os.path.join(voicemode_dir, "logs", "kokoro"),
+            "HOME": os.path.expanduser("~"),
         }
     elif service_name == "livekit":
         livekit_bin = "/opt/homebrew/bin/livekit-server" if platform.system() == "Darwin" else "/usr/local/bin/livekit-server"

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- com.voicemode.kokoro.plist v1.0.0 -->
-<!-- Last updated: 2025-01-25 -->
+<!-- com.voicemode.kokoro.plist v1.2.0 -->
+<!-- Last updated: 2025-11-25 -->
 <!-- Compatible with: kokoro-fastapi v1.0.0+ -->
 <plist version="1.0">
 <dict>
@@ -24,7 +24,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <string>{HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
         <key>VOICEMODE_KOKORO_PORT</key>
         <string>{KOKORO_PORT}</string>
     </dict>
