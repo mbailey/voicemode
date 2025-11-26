@@ -1,13 +1,13 @@
 {
   "service_files": {
     "com.voicemode.whisper.plist": "1.1.0",
-    "com.voicemode.kokoro.plist": "1.1.0",
+    "com.voicemode.kokoro.plist": "1.2.0",
     "voicemode-whisper.service": "1.1.0",
     "voicemode-kokoro.service": "1.1.1",
     "start-whisper-with-health-check.sh": "1.0.0",
     "start-kokoro-with-health-check.sh": "1.0.0"
   },
-  "last_updated": "2025-01-29",
+  "last_updated": "2025-11-25",
   "min_tool_version": "2.15.0",
   "changelog": {
     "1.0.0": {
@@ -33,6 +33,13 @@
         "Fixed systemd PATH to use %h specifier for home directory",
         "Fixed GPU-aware script selection for Linux systems",
         "Added centralized GPU detection utility"
+      ]
+    },
+    "1.2.0": {
+      "date": "2025-11-25",
+      "changes": [
+        "Added ~/.local/bin to PATH in Kokoro plist for uv compatibility",
+        "Supports uv installed via curl installer (not just Homebrew)"
       ]
     }
   }
