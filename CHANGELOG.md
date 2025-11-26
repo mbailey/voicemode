@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2025-11-27
+
+### ⚠️ BREAKING CHANGE
+
+- **Pronunciation System Replaced** (VM-183)
+  - Old YAML-based pronunciation files are no longer loaded
+  - Rules now defined via environment variables (VOICEMODE_PRONOUNCE)
+  - New compact one-line format: `DIRECTION pattern replacement # description`
+  - Default rules included for JSON, YAML, and API
+  - **Migration**: Convert YAML rules to env var format in voicemode.env (or other files)
+
+### Fixed
+
+- **Kokoro Service PATH for uv Curl Installer** (VM-221)
+  - Added `~/.local/bin` to Kokoro launchd plist PATH
+  - Fixes Kokoro service startup when uv is installed via curl instead of Homebrew
+
+- **TTS Speed Configuration**
+  - Standardized TTS speed config to match codebase patterns
+  - Added helpful error message when TTS speed from env var is invalid
+
+### Refactored
+
+- **Removed Unused Opuslib Code** (VM-185)
+  - Removed opuslib code that logged confusing warnings on every run
+  - Cleaner startup experience
+
 ## [6.2.0] - 2025-11-25
 
 ### Added
