@@ -8,6 +8,9 @@ import tempfile
 
 from voice_mode.simple_failover import simple_stt_failover
 
+# Test config: use exactly 2 endpoints (local Whisper + OpenAI)
+TEST_STT_BASE_URLS = ["http://127.0.0.1:2022/v1", "https://api.openai.com/v1"]
+
 
 class TestSTTErrorHandling:
     """Test STT error handling and structured response generation"""
@@ -18,59 +21,61 @@ class TestSTTErrorHandling:
         # Mock file object
         mock_file = MagicMock()
 
-        with patch('voice_mode.simple_failover.AsyncOpenAI') as MockClient:
-            # Mock connection refused for both Whisper and OpenAI
-            mock_client = MockClient.return_value
-            mock_client.audio.transcriptions.create = AsyncMock(
-                side_effect=APIConnectionError(
-                    message="Connection error.",
-                    request=MagicMock()
+        with patch('voice_mode.simple_failover.STT_BASE_URLS', TEST_STT_BASE_URLS):
+            with patch('voice_mode.simple_failover.AsyncOpenAI') as MockClient:
+                # Mock connection refused for both Whisper and OpenAI
+                mock_client = MockClient.return_value
+                mock_client.audio.transcriptions.create = AsyncMock(
+                    side_effect=APIConnectionError(
+                        message="Connection error.",
+                        request=MagicMock()
+                    )
                 )
-            )
 
-            result = await simple_stt_failover(mock_file)
+                result = await simple_stt_failover(mock_file)
 
-            assert result is not None
-            assert result["error_type"] == "connection_failed"
-            assert "attempted_endpoints" in result
-            assert len(result["attempted_endpoints"]) == 2  # Whisper and OpenAI
+                assert result is not None
+                assert result["error_type"] == "connection_failed"
+                assert "attempted_endpoints" in result
+                assert len(result["attempted_endpoints"]) == 2  # Whisper and OpenAI
 
-            # Check Whisper error
-            whisper_attempt = result["attempted_endpoints"][0]
-            assert "127.0.0.1:2022" in whisper_attempt["endpoint"]
-            assert whisper_attempt["provider"] == "whisper"
-            assert "Connection error" in whisper_attempt["error"]
+                # Check Whisper error
+                whisper_attempt = result["attempted_endpoints"][0]
+                assert "127.0.0.1:2022" in whisper_attempt["endpoint"]
+                assert whisper_attempt["provider"] == "whisper"
+                assert "Connection error" in whisper_attempt["error"]
 
     @pytest.mark.asyncio
     async def test_authentication_error_openai(self):
         """Test when OpenAI fails with authentication error"""
         mock_file = MagicMock()
 
-        with patch('voice_mode.simple_failover.AsyncOpenAI') as MockClient:
-            mock_client = MockClient.return_value
+        with patch('voice_mode.simple_failover.STT_BASE_URLS', TEST_STT_BASE_URLS):
+            with patch('voice_mode.simple_failover.AsyncOpenAI') as MockClient:
+                mock_client = MockClient.return_value
 
-            # First call (Whisper) - connection refused
-            # Second call (OpenAI) - auth error
-            mock_client.audio.transcriptions.create = AsyncMock(
-                side_effect=[
-                    APIConnectionError(message="Connection error.", request=MagicMock()),
-                    AuthenticationError(
-                        message="Error code: 401 - Incorrect API key provided",
-                        response=MagicMock(status_code=401),
-                        body={'error': {'message': 'Incorrect API key'}},
-                    )
-                ]
-            )
+                # First call (Whisper) - connection refused
+                # Second call (OpenAI) - auth error
+                mock_client.audio.transcriptions.create = AsyncMock(
+                    side_effect=[
+                        APIConnectionError(message="Connection error.", request=MagicMock()),
+                        AuthenticationError(
+                            message="Error code: 401 - Incorrect API key provided",
+                            response=MagicMock(status_code=401),
+                            body={'error': {'message': 'Incorrect API key'}},
+                        )
+                    ]
+                )
 
-            result = await simple_stt_failover(mock_file)
+                result = await simple_stt_failover(mock_file)
 
-            assert result["error_type"] == "connection_failed"
-            assert len(result["attempted_endpoints"]) == 2
+                assert result["error_type"] == "connection_failed"
+                assert len(result["attempted_endpoints"]) == 2
 
-            # Check OpenAI error
-            openai_attempt = result["attempted_endpoints"][1]
-            assert openai_attempt["provider"] == "openai"
-            assert "401" in openai_attempt["error"] or "Incorrect API key" in openai_attempt["error"]
+                # Check OpenAI error
+                openai_attempt = result["attempted_endpoints"][1]
+                assert openai_attempt["provider"] == "openai"
+                assert "401" in openai_attempt["error"] or "Incorrect API key" in openai_attempt["error"]
 
     @pytest.mark.asyncio
     async def test_no_api_key_error(self):
@@ -190,38 +195,39 @@ class TestSTTErrorHandling:
         """Test fallback from Whisper to OpenAI"""
         mock_file = MagicMock()
 
-        with patch('voice_mode.simple_failover.AsyncOpenAI') as MockClient:
-            # Need to handle different clients for Whisper and OpenAI
-            whisper_client = MagicMock()
-            openai_client = MagicMock()
+        with patch('voice_mode.simple_failover.STT_BASE_URLS', TEST_STT_BASE_URLS):
+            with patch('voice_mode.simple_failover.AsyncOpenAI') as MockClient:
+                # Need to handle different clients for Whisper and OpenAI
+                whisper_client = MagicMock()
+                openai_client = MagicMock()
 
-            # Track which client is being created
-            call_count = 0
+                # Track which client is being created
+                call_count = 0
 
-            def create_client(*args, **kwargs):
-                nonlocal call_count
-                call_count += 1
-                if call_count == 1:  # First call is Whisper
-                    whisper_client.audio.transcriptions.create = AsyncMock(
-                        side_effect=APIConnectionError(
-                            message="Connection error.",
-                            request=MagicMock()
+                def create_client(*args, **kwargs):
+                    nonlocal call_count
+                    call_count += 1
+                    if call_count == 1:  # First call is Whisper
+                        whisper_client.audio.transcriptions.create = AsyncMock(
+                            side_effect=APIConnectionError(
+                                message="Connection error.",
+                                request=MagicMock()
+                            )
                         )
-                    )
-                    return whisper_client
-                else:  # Second call is OpenAI
-                    openai_client.audio.transcriptions.create = AsyncMock(
-                        return_value="Transcribed by OpenAI"
-                    )
-                    return openai_client
+                        return whisper_client
+                    else:  # Second call is OpenAI
+                        openai_client.audio.transcriptions.create = AsyncMock(
+                            return_value="Transcribed by OpenAI"
+                        )
+                        return openai_client
 
-            MockClient.side_effect = create_client
+                MockClient.side_effect = create_client
 
-            result = await simple_stt_failover(mock_file)
+                result = await simple_stt_failover(mock_file)
 
-            assert "text" in result
-            assert result["text"] == "Transcribed by OpenAI"
-            assert result["provider"] == "openai"
+                assert "text" in result
+                assert result["text"] == "Transcribed by OpenAI"
+                assert result["provider"] == "openai"
 
     @pytest.mark.asyncio
     async def test_mixed_results_prefer_successful(self):
