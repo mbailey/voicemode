@@ -20,8 +20,8 @@ def test_load_service_file_version():
     """Test loading service file versions from versions.json."""
     # Test for kokoro on macOS
     version = load_service_file_version("kokoro", "plist")
-    assert version == "1.1.0"
-    
+    assert version == "1.2.0"  # Updated in v7.0.0 for uv curl installer PATH fix
+
     # Test for whisper on Linux
     version = load_service_file_version("whisper", "service")
     assert version == "1.1.0"

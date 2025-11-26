@@ -111,11 +111,8 @@ def discover_all_commands() -> List[List[str]]:
         if sub in config_with_options:
             commands.append(base_cmd + ['config', sub, '-h'])
 
-    # Config pronounce subgroup
-    commands.append(base_cmd + ['config', 'pronounce', '--help'])
-    pronounce_cmds = ['add', 'disable', 'edit', 'enable', 'list', 'reload', 'remove', 'test']
-    for cmd in pronounce_cmds:
-        commands.append(base_cmd + ['config', 'pronounce', cmd, '--help'])
+    # Note: config pronounce subgroup was removed in v7.0.0
+    # Pronunciation now uses environment variables (VOICEMODE_PRONOUNCE)
 
     # === EXCHANGES COMMANDS ===
     exchanges_subcommands = ['export', 'search', 'stats', 'tail', 'view']
