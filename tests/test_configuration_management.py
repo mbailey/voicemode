@@ -1,10 +1,16 @@
 """Unit tests for configuration management functions."""
 import asyncio
+import os
 import pytest
 import tempfile
 from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
-from voice_mode.tools.configuration_management import update_config, list_config_keys
+from voice_mode.tools.configuration_management import (
+    update_config,
+    list_config_keys,
+    write_env_file,
+    parse_env_file,
+)
 
 
 class TestConfigurationManagement:
@@ -117,3 +123,185 @@ class TestConfigurationManagement:
             if 'VOICEMODE_' in line and ':' in line:
                 # Should have format like "VOICEMODE_KEY: description"
                 assert line.count(':') >= 1
+
+
+class TestWriteEnvFileCommentedDefaults:
+    """Test handling of commented-out default values in config files."""
+
+    def test_replace_commented_default_with_active_value(self):
+        """When setting a key that exists as a commented default, replace in-place."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            # Write a file with a commented default
+            with os.fdopen(fd, 'w') as f:
+                f.write("# Core Config\n")
+                f.write("# VOICEMODE_WHISPER_MODEL=base\n")
+                f.write("OTHER_KEY=value\n")
+
+            temp_file = Path(temp_path)
+
+            # Set the commented key to a new value
+            write_env_file(temp_file, {"VOICEMODE_WHISPER_MODEL": "large"})
+
+            # Read back and verify
+            content = temp_file.read_text()
+            lines = content.strip().split('\n')
+
+            # Should have 3 lines: comment, active value (replacing commented), other key
+            assert len(lines) == 3
+            assert lines[0] == "# Core Config"
+            assert lines[1] == "VOICEMODE_WHISPER_MODEL=large"
+            assert lines[2] == "OTHER_KEY=value"
+
+            # Should NOT have the commented version anymore
+            assert "# VOICEMODE_WHISPER_MODEL" not in content
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_replace_active_value(self):
+        """When setting a key that exists as active config, replace as before."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            # Write a file with an active config
+            with os.fdopen(fd, 'w') as f:
+                f.write("# Core Config\n")
+                f.write("VOICEMODE_TTS_VOICE=alloy\n")
+
+            temp_file = Path(temp_path)
+
+            # Update the active key
+            write_env_file(temp_file, {"VOICEMODE_TTS_VOICE": "nova"})
+
+            # Read back and verify
+            content = temp_file.read_text()
+            lines = content.strip().split('\n')
+
+            assert len(lines) == 2
+            assert lines[0] == "# Core Config"
+            assert lines[1] == "VOICEMODE_TTS_VOICE=nova"
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_add_new_key_not_in_file(self):
+        """When setting a key that doesn't exist at all, add at end."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            # Write a file without the key
+            with os.fdopen(fd, 'w') as f:
+                f.write("# Core Config\n")
+                f.write("EXISTING_KEY=value\n")
+
+            temp_file = Path(temp_path)
+
+            # Add a new key
+            write_env_file(temp_file, {"NEW_KEY": "new_value"})
+
+            # Read back and verify
+            content = temp_file.read_text()
+
+            # Should preserve existing content
+            assert "# Core Config" in content
+            assert "EXISTING_KEY=value" in content
+            # New key should be added
+            assert "NEW_KEY=new_value" in content
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_preserve_regular_comments(self):
+        """Regular comments (not config defaults) should be preserved."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            # Write a file with various comments
+            with os.fdopen(fd, 'w') as f:
+                f.write("# This is a section header\n")
+                f.write("# Description of what this section does\n")
+                f.write("VOICEMODE_DEBUG=false\n")
+                f.write("\n")
+                f.write("# Another comment\n")
+
+            temp_file = Path(temp_path)
+
+            # Update a value
+            write_env_file(temp_file, {"VOICEMODE_DEBUG": "true"})
+
+            # Read back and verify
+            content = temp_file.read_text()
+
+            # All regular comments should be preserved
+            assert "# This is a section header" in content
+            assert "# Description of what this section does" in content
+            assert "# Another comment" in content
+            # Value should be updated
+            assert "VOICEMODE_DEBUG=true" in content
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_handle_commented_default_with_space(self):
+        """Handle commented defaults with space after hash: '# KEY=value'."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write("# VOICEMODE_KOKORO_PORT=8880\n")
+
+            temp_file = Path(temp_path)
+            write_env_file(temp_file, {"VOICEMODE_KOKORO_PORT": "9999"})
+
+            content = temp_file.read_text()
+            assert content.strip() == "VOICEMODE_KOKORO_PORT=9999"
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_handle_commented_default_without_space(self):
+        """Handle commented defaults without space: '#KEY=value'."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write("#VOICEMODE_KOKORO_PORT=8880\n")
+
+            temp_file = Path(temp_path)
+            write_env_file(temp_file, {"VOICEMODE_KOKORO_PORT": "9999"})
+
+            content = temp_file.read_text()
+            assert content.strip() == "VOICEMODE_KOKORO_PORT=9999"
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_multiple_commented_defaults(self):
+        """Multiple commented defaults can be replaced."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write("# Whisper settings\n")
+                f.write("# VOICEMODE_WHISPER_MODEL=base\n")
+                f.write("# VOICEMODE_WHISPER_PORT=2022\n")
+                f.write("\n")
+                f.write("# Kokoro settings\n")
+                f.write("# VOICEMODE_KOKORO_PORT=8880\n")
+
+            temp_file = Path(temp_path)
+            write_env_file(temp_file, {
+                "VOICEMODE_WHISPER_MODEL": "large-v3",
+                "VOICEMODE_KOKORO_PORT": "9000"
+            })
+
+            content = temp_file.read_text()
+
+            # Section comments preserved
+            assert "# Whisper settings" in content
+            assert "# Kokoro settings" in content
+
+            # Values replaced
+            assert "VOICEMODE_WHISPER_MODEL=large-v3" in content
+            assert "VOICEMODE_KOKORO_PORT=9000" in content
+
+            # Unchanged commented default preserved
+            assert "# VOICEMODE_WHISPER_PORT=2022" in content
+
+        finally:
+            os.unlink(temp_path)
