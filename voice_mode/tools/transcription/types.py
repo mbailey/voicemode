@@ -9,6 +9,7 @@ class TranscriptionBackend(str, Enum):
     OPENAI = "openai"
     WHISPERX = "whisperx"
     WHISPER_CPP = "whisper-cpp"
+    WHISPER_CLI = "whisper-cli"
 
 
 class OutputFormat(str, Enum):
