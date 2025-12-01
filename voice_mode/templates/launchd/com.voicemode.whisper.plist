@@ -1,30 +1,28 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- com.voicemode.whisper.plist v1.1.0 -->
-<!-- Last updated: 2025-08-25 -->
-<!-- Uses unified startup script for dynamic model selection -->
+<!-- com.voicemode.whisper.plist v1.2.0 -->
+<!-- Last updated: 2025-12-01 -->
+<!-- Simplified: start script handles config via voicemode.env -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.voicemode.whisper</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{START_SCRIPT_PATH}</string>
+        <string>{START_SCRIPT}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{LOG_DIR}/whisper/whisper.out.log</string>
+    <string>{HOME}/.voicemode/logs/whisper/whisper.out.log</string>
     <key>StandardErrorPath</key>
-    <string>{LOG_DIR}/whisper/whisper.err.log</string>
-    <key>WorkingDirectory</key>
-    <string>{INSTALL_DIR}</string>
+    <string>{HOME}/.voicemode/logs/whisper/whisper.err.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <string>{HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
     </dict>
 </dict>
 </plist>

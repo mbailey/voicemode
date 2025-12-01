@@ -1,3 +1,6 @@
+# voicemode-frontend.service v1.1.0
+# Last updated: 2025-12-01
+
 [Unit]
 Description=VoiceMode LiveKit Frontend
 Documentation=https://github.com/mbailey/voicemode
@@ -9,8 +12,8 @@ Type=simple
 WorkingDirectory={FRONTEND_DIR}
 EnvironmentFile=%h/.voicemode/voicemode.env
 Environment=NODE_ENV=development
-Environment=PORT={PORT}
-Environment=HOST={HOST}
+Environment=HOST=127.0.0.1
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
 ExecStartPre=/bin/bash -c 'cd {FRONTEND_DIR} && npm install'
 ExecStart=/bin/bash -c 'cd {FRONTEND_DIR} && exec npm run dev'
 StandardOutput=journal

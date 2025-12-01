@@ -1,5 +1,5 @@
-# voicemode-livekit.service v1.0.0
-# Last updated: 2025-08-12
+# voicemode-livekit.service v1.1.0
+# Last updated: 2025-12-01
 # Compatible with: LiveKit v1.7.0+
 
 [Unit]
@@ -8,12 +8,14 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={LIVEKIT_BIN} --config {CONFIG_FILE}
-WorkingDirectory={WORKING_DIR}
+ExecStart={LIVEKIT_BIN} --config %h/.voicemode/config/livekit.yaml
 Restart=on-failure
 RestartSec=10
 # Don't restart if the executable is missing
 RestartPreventExitStatus=127
+
+# Environment
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
 
 # Resource limits
 MemoryLimit=1G
@@ -23,11 +25,6 @@ CPUQuota=50%
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=voicemode-livekit
-
-# Environment
-Environment="LIVEKIT_URL=ws://localhost:{LIVEKIT_PORT}"
-Environment="LIVEKIT_API_KEY=devkey"
-Environment="LIVEKIT_API_SECRET=secret"
 
 [Install]
 WantedBy=default.target

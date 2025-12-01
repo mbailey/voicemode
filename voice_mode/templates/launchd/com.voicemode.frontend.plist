@@ -1,38 +1,38 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.voicemode.frontend.plist v1.1.0 -->
+<!-- Last updated: 2025-12-01 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.voicemode.frontend</string>
-    
+
     <key>Program</key>
     <string>/bin/bash</string>
-    
+
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>-c</string>
         <string>cd {FRONTEND_DIR} && npm install && exec npm run dev</string>
     </array>
-    
+
     <key>WorkingDirectory</key>
     <string>{FRONTEND_DIR}</string>
-    
+
     <key>EnvironmentVariables</key>
     <dict>
         <key>NODE_ENV</key>
         <string>production</string>
-        <key>PORT</key>
-        <string>{PORT}</string>
         <key>HOST</key>
         <string>127.0.0.1</string>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:{NODE_PATH}</string>
+        <string>{HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
     </dict>
-    
+
     <key>RunAtLoad</key>
     <false/>
-    
+
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>
@@ -40,16 +40,16 @@
         <key>Crashed</key>
         <true/>
     </dict>
-    
+
     <key>StandardOutPath</key>
-    <string>{LOG_DIR}/frontend.log</string>
-    
+    <string>{HOME}/.voicemode/logs/frontend/frontend.log</string>
+
     <key>StandardErrorPath</key>
-    <string>{LOG_DIR}/frontend.log</string>
-    
+    <string>{HOME}/.voicemode/logs/frontend/frontend.log</string>
+
     <key>ProcessType</key>
     <string>Background</string>
-    
+
     <key>ThrottleInterval</key>
     <integer>10</integer>
 </dict>

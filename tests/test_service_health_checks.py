@@ -8,25 +8,27 @@ import pytest
 from voice_mode.tools.service import load_service_template
 
 
-def test_systemd_template_has_health_check():
-    """Test that systemd templates include health check commands."""
+def test_systemd_template_simplified():
+    """Test that systemd templates are simplified (v1.2.0+).
+
+    Note: As of v1.2.0, templates were simplified to only need START_SCRIPT.
+    Health checks were removed in favor of letting start scripts handle config.
+    """
     from unittest.mock import patch
-    
+
     # Mock platform to get Linux templates
     with patch('voice_mode.tools.service.platform.system', return_value='Linux'):
-        # Test Kokoro systemd template
+        # Test Kokoro systemd template - simplified
         kokoro_template = load_service_template("kokoro")
-        assert "ExecStartPost=" in kokoro_template
-        assert "curl" in kokoro_template
-        assert "/health" in kokoro_template
-        assert "Waiting for Kokoro to be ready" in kokoro_template
-        
-        # Test Whisper systemd template  
+        assert "{START_SCRIPT}" in kokoro_template
+        assert "[Service]" in kokoro_template
+        assert "[Unit]" in kokoro_template
+        assert "[Install]" in kokoro_template
+
+        # Test Whisper systemd template - simplified
         whisper_template = load_service_template("whisper")
-        assert "ExecStartPost=" in whisper_template
-        assert "curl" in whisper_template
-        assert "/health" in whisper_template
-        assert "Waiting for Whisper to be ready" in whisper_template
+        assert "{START_SCRIPT}" in whisper_template
+        assert "[Service]" in whisper_template
 
 
 def test_unified_startup_scripts_exist():
@@ -67,20 +69,21 @@ def test_startup_script_content():
 
 
 def test_template_placeholders():
-    """Test that templates use consistent placeholders."""
+    """Test that templates use consistent placeholders.
+
+    Note: As of v1.2.0, templates were simplified to only need START_SCRIPT.
+    Port, directory, and log configs are handled by start scripts via voicemode.env.
+    """
     from unittest.mock import patch
-    
+
     # Mock platform to get Linux templates
     with patch('voice_mode.tools.service.platform.system', return_value='Linux'):
-        # Kokoro templates
+        # Kokoro templates - simplified to just START_SCRIPT
         kokoro_systemd = load_service_template("kokoro")
-        assert "{KOKORO_PORT}" in kokoro_systemd
-        assert "{KOKORO_DIR}" in kokoro_systemd
         assert "{START_SCRIPT}" in kokoro_systemd
-        
-        # Whisper templates (v1.1.0 uses startup script approach)
+        # Removed in v1.2.0: KOKORO_PORT, KOKORO_DIR (handled by start script)
+
+        # Whisper templates - simplified to just START_SCRIPT
         whisper_systemd = load_service_template("whisper")
-        assert "{WHISPER_PORT}" in whisper_systemd  # Used in health check
-        assert "{START_SCRIPT_PATH}" in whisper_systemd  # New startup script approach
-        assert "{LOG_DIR}" in whisper_systemd  # File-based logging
-        assert "{INSTALL_DIR}" in whisper_systemd  # Working directory
+        assert "{START_SCRIPT}" in whisper_systemd
+        # Removed in v1.2.0: WHISPER_PORT, LOG_DIR, INSTALL_DIR (handled by start script)

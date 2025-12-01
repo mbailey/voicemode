@@ -30,143 +30,64 @@ async def update_kokoro_service_files(
     auto_enable: Optional[bool] = None
 ) -> Dict[str, Any]:
     """Update service files (plist/systemd) for kokoro service.
-    
-    This function updates the service files without reinstalling kokoro itself.
-    It ensures paths are properly expanded and templates are up to date.
-    
+
+    Uses create_service_file() from service.py as the single source of truth.
+    The parameters are kept for backwards compatibility but install_dir, port,
+    and start_script_path are now derived from templates and config.
+
     Returns:
         Dict with success status and details about what was updated
     """
+    from voice_mode.tools.service import create_service_file, enable_service
+
     system = platform.system()
     result = {"success": False, "updated": False}
-    
-    # Create log directory
-    log_dir = os.path.join(voicemode_dir, 'logs', 'kokoro')
-    os.makedirs(log_dir, exist_ok=True)
-    
-    if system == "Darwin":
-        logger.info("Updating launchagent for kokoro...")
-        launchagents_dir = os.path.expanduser("~/Library/LaunchAgents")
-        os.makedirs(launchagents_dir, exist_ok=True)
-        
-        plist_name = "com.voicemode.kokoro.plist"
-        plist_path = os.path.join(launchagents_dir, plist_name)
-        
-        plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.voicemode.kokoro</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{start_script_path}</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>{install_dir}</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>{os.path.join(voicemode_dir, 'logs', 'kokoro', 'kokoro.log')}</string>
-    <key>StandardErrorPath</key>
-    <string>{os.path.join(voicemode_dir, 'logs', 'kokoro', 'kokoro.error.log')}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>{os.path.expanduser("~/.local/bin")}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
-    </dict>
-</dict>
-</plist>"""
-        
-        # Unload if already loaded (ignore errors)
-        try:
-            subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
-        except:
-            pass
-        
-        # Write updated plist
-        with open(plist_path, 'w') as f:
-            f.write(plist_content)
-        
+
+    try:
+        # Create service file using the unified function
+        service_path, content = create_service_file("kokoro")
+
+        # Unload if already loaded (macOS only, ignore errors)
+        if system == "Darwin":
+            try:
+                subprocess.run(["launchctl", "unload", str(service_path)], capture_output=True)
+            except Exception:
+                pass
+
+        # Write service file
+        service_path.parent.mkdir(parents=True, exist_ok=True)
+        service_path.write_text(content)
+
         result["success"] = True
         result["updated"] = True
-        result["plist_path"] = plist_path
-        
+
+        if system == "Darwin":
+            result["plist_path"] = str(service_path)
+        else:
+            result["service_path"] = str(service_path)
+            # Reload systemd
+            try:
+                subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Failed to reload systemd: {e}")
+
         # Handle auto_enable if specified
         if auto_enable is None:
             auto_enable = SERVICE_AUTO_ENABLE
-        
+
         if auto_enable:
             logger.info("Auto-enabling kokoro service...")
-            from voice_mode.tools.service import enable_service
             enable_result = await enable_service("kokoro")
             if "✅" in enable_result:
                 result["enabled"] = True
             else:
                 logger.warning(f"Auto-enable failed: {enable_result}")
                 result["enabled"] = False
-    
-    elif system == "Linux":
-        logger.info("Updating systemd user service for kokoro...")
-        systemd_user_dir = os.path.expanduser("~/.config/systemd/user")
-        os.makedirs(systemd_user_dir, exist_ok=True)
-        
-        service_name = "voicemode-kokoro.service"
-        service_path = os.path.join(systemd_user_dir, service_name)
-        
-        service_content = f"""[Unit]
-Description=VoiceMode Kokoro TTS Service
-After=network.target
 
-[Service]
-Type=simple
-ExecStart={start_script_path}
-Restart=on-failure
-RestartSec=10
-WorkingDirectory={install_dir}
-StandardOutput=append:{os.path.join(voicemode_dir, 'logs', 'kokoro', 'kokoro.log')}
-StandardError=append:{os.path.join(voicemode_dir, 'logs', 'kokoro', 'kokoro.error.log')}
-Environment="PATH={os.path.expanduser('~/.local/bin')}:/usr/local/bin:/usr/bin:/bin"
-
-[Install]
-WantedBy=default.target
-"""
-        
-        with open(service_path, 'w') as f:
-            f.write(service_content)
-        
-        # Reload systemd
-        try:
-            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-            result["success"] = True
-            result["updated"] = True
-            result["service_path"] = service_path
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Failed to reload systemd: {e}")
-            result["success"] = True  # Still consider it success if file was written
-            result["updated"] = True
-            result["service_path"] = service_path
-        
-        # Handle auto_enable if specified
-        if auto_enable is None:
-            auto_enable = SERVICE_AUTO_ENABLE
-        
-        if auto_enable:
-            logger.info("Auto-enabling kokoro service...")
-            from voice_mode.tools.service import enable_service
-            enable_result = await enable_service("kokoro")
-            if "✅" in enable_result:
-                result["enabled"] = True
-            else:
-                logger.warning(f"Auto-enable failed: {enable_result}")
-                result["enabled"] = False
-    
-    else:
+    except Exception as e:
         result["success"] = False
-        result["error"] = f"Unsupported platform: {system}"
-    
+        result["error"] = str(e)
+
     return result
 
 
@@ -434,231 +355,41 @@ async def kokoro_install(
             "message": f"Kokoro-fastapi {current_version} installed. Run: cd {install_dir} && ./{os.path.basename(start_script_path)}{' (' + migration_msg + ')' if migration_msg else ''}"
         }
         
-        # Install/update service files
-        # Don't auto-enable yet - we need to handle platform-specific setup first
+        # Install/update service files using centralized function
+        # This uses templates from service.py for consistency
         service_update_result = await update_kokoro_service_files(
             install_dir=install_dir,
             voicemode_dir=voicemode_dir,
             port=port,
             start_script_path=start_script_path,
-            auto_enable=False  # Don't auto-enable yet for any platform
+            auto_enable=auto_enable
         )
 
         if not service_update_result.get("success"):
             logger.error(f"Failed to update service files: {service_update_result.get('error', 'Unknown error')}")
             result["error"] = f"Service file update failed: {service_update_result.get('error', 'Unknown error')}"
             return result
-        
-        # Update result with service file information based on platform
+
+        # Update result with service file information
         if system == "Darwin":
-            logger.info("Installing launchagent for automatic startup...")
-            launchagents_dir = os.path.expanduser("~/Library/LaunchAgents")
-            os.makedirs(launchagents_dir, exist_ok=True)
-            
-            # Create log directory
-            log_dir = os.path.join(voicemode_dir, 'logs', 'kokoro')
-            os.makedirs(log_dir, exist_ok=True)
-            
-            plist_name = "com.voicemode.kokoro.plist"
-            plist_path = os.path.join(launchagents_dir, plist_name)
-            
-            plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.voicemode.kokoro</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{start_script_path}</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>{install_dir}</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>{os.path.join(voicemode_dir, 'logs', 'kokoro', 'kokoro.log')}</string>
-    <key>StandardErrorPath</key>
-    <string>{os.path.join(voicemode_dir, 'logs', 'kokoro', 'kokoro.error.log')}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>{os.path.expanduser("~/.local/bin")}:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
-    </dict>
-</dict>
-</plist>"""
-            
-            with open(plist_path, 'w') as f:
-                f.write(plist_content)
-            
-            # Unload if already loaded (ignore errors)
-            try:
-                subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
-            except:
-                pass  # Ignore if not loaded
-            
-            # Don't load here - let enable_service handle it with the -w flag
-            # This prevents the "already loaded" error when enable_service runs
-            result["launchagent"] = plist_path
-            result["message"] += f"\nLaunchAgent installed: {plist_name}"
-            
-            # Handle auto_enable
-            enable_message = ""
-            if auto_enable is None:
-                auto_enable = SERVICE_AUTO_ENABLE
-            
-            if auto_enable:
-                logger.info("Auto-enabling kokoro service...")
-                from voice_mode.tools.service import enable_service
-                enable_result = await enable_service("kokoro")
-                if "✅" in enable_result:
-                    enable_message = " Service auto-enabled."
-                else:
-                    logger.warning(f"Auto-enable failed: {enable_result}")
-                result["message"] += enable_message
-        
-        # Install systemd service on Linux
-        elif system == "Linux":
-            logger.info("Installing systemd user service for kokoro-fastapi...")
-
-            # First, start kokoro manually to download models and install dependencies
-            # This avoids systemd timeout issues on first start
-            logger.info("Starting kokoro manually to download models and dependencies...")
-            process = subprocess.Popen(
-                ["bash", start_script_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=install_dir
-            )
-
-            # Wait for kokoro to be ready (check health endpoint)
-            max_wait = 180  # 3 minutes should be enough for first download
-            wait_interval = 5
-            waited = 0
-            kokoro_ready = False
-
-            while waited < max_wait:
-                await asyncio.sleep(wait_interval)
-                waited += wait_interval
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(f"http://127.0.0.1:{port}/health", timeout=aiohttp.ClientTimeout(total=2)) as response:
-                            if response.status == 200:
-                                logger.info("Kokoro is ready!")
-                                kokoro_ready = True
-                                break
-                except:
-                    pass  # Not ready yet, keep waiting
-
-            # Stop the manually started process
-            if kokoro_ready:
-                logger.info("Stopping manually started kokoro...")
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-            else:
-                logger.warning(f"Kokoro did not become ready after {max_wait}s, continuing anyway...")
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-
-            # Now create systemd service file
-            systemd_user_dir = os.path.expanduser("~/.config/systemd/user")
-            os.makedirs(systemd_user_dir, exist_ok=True)
-
-            # Create log directory
-            log_dir = os.path.join(voicemode_dir, 'logs', 'kokoro')
-            os.makedirs(log_dir, exist_ok=True)
-
-            service_name = "voicemode-kokoro.service"
-            service_path = os.path.join(systemd_user_dir, service_name)
-
-            service_content = f"""[Unit]
-Description=VoiceMode Kokoro TTS Service
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={start_script_path}
-Restart=on-failure
-RestartSec=10
-WorkingDirectory={install_dir}
-StandardOutput=append:{os.path.join(voicemode_dir, 'logs', 'kokoro', 'kokoro.log')}
-StandardError=append:{os.path.join(voicemode_dir, 'logs', 'kokoro', 'kokoro.error.log')}
-Environment="PATH={os.path.expanduser('~/.local/bin')}:/usr/local/bin:/usr/bin:/bin"
-
-[Install]
-WantedBy=default.target
-"""
-
-            with open(service_path, 'w') as f:
-                f.write(service_content)
-
-            # Reload systemd
-            try:
-                subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-                result["systemd_service"] = service_path
-                result["message"] += f"\nSystemd service created: {service_name}"
-            except subprocess.CalledProcessError as e:
-                logger.warning(f"Failed to reload systemd: {e}")
-                result["systemd_service"] = service_path
-                result["message"] += f"\nSystemd service created: {service_name}"
-
-            # Handle auto_enable - this will enable and start the service
-            if auto_enable is None:
-                auto_enable = SERVICE_AUTO_ENABLE
-
-            if auto_enable:
-                logger.info("Auto-enabling kokoro service...")
-                from voice_mode.tools.service import enable_service
-                enable_result = await enable_service("kokoro")
-                if "✅" in enable_result:
-                    result["message"] += " Service auto-enabled."
-                    result["service_status"] = "managed_by_systemd"
-                else:
-                    logger.warning(f"Auto-enable failed: {enable_result}")
-                    result["message"] += f" Warning: {enable_result}"
-        
-        # Start service if requested (skip if launchagent or systemd was installed)
-        if auto_start and system not in ["Darwin", "Linux"]:
-            logger.info("Starting kokoro-fastapi service...")
-            # Start in background
-            process = subprocess.Popen(
-                ["bash", start_script_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            
-            # Wait a moment for service to start
-            await asyncio.sleep(3)
-            
-            # Check if service is running
-            try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f"http://127.0.0.1:{port}/health") as response:
-                        if response.status == 200:
-                            result["service_status"] = "running"
-                            result["service_pid"] = process.pid
-                        else:
-                            result["service_status"] = "failed"
-                            result["error"] = "Health check failed"
-            except:
-                result["service_status"] = "failed"
-                result["error"] = "Could not connect to service"
-        elif system == "Darwin" and "launchagent" in result:
+            if service_update_result.get("plist_path"):
+                result["launchagent"] = service_update_result["plist_path"]
+                result["message"] += f"\nLaunchAgent installed: {os.path.basename(service_update_result['plist_path'])}"
+            if service_update_result.get("enabled"):
+                result["message"] += " Service auto-enabled."
             result["service_status"] = "managed_by_launchd"
-        elif system == "Linux" and "systemd_enabled" in result and result["systemd_enabled"]:
-            # Service status already set to "managed_by_systemd" in the systemd section
-            pass
+        elif system == "Linux":
+            if service_update_result.get("service_path"):
+                result["systemd_service"] = service_update_result["service_path"]
+                result["message"] += f"\nSystemd service created: {os.path.basename(service_update_result['service_path'])}"
+            if service_update_result.get("enabled"):
+                result["message"] += " Service auto-enabled."
+                result["service_status"] = "managed_by_systemd"
+            else:
+                result["service_status"] = "not_started"
         else:
             result["service_status"] = "not_started"
-        
+
         return result
     
     except subprocess.CalledProcessError as e:
