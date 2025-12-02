@@ -3,13 +3,84 @@
 import os
 import sys
 import tempfile
+import subprocess
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
 # Add voice_mode to path for testing
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+# Commands that should never run in tests - these affect system services
+BLOCKED_COMMANDS = {
+    "launchctl",
+    "systemctl",
+    "brew",
+}
+
+
+def _safe_subprocess_run(original_run):
+    """Wrapper that blocks dangerous system commands during tests."""
+    def wrapper(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        if isinstance(cmd, str):
+            cmd_parts = cmd.split()
+        else:
+            cmd_parts = list(cmd) if cmd else []
+
+        if cmd_parts and cmd_parts[0] in BLOCKED_COMMANDS:
+            # Return a mock result instead of running the command
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_result.stderr = ""
+            return mock_result
+
+        return original_run(*args, **kwargs)
+    return wrapper
+
+
+def _safe_subprocess_popen(original_popen):
+    """Wrapper that blocks dangerous system commands during tests."""
+    def wrapper(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args", [])
+        if isinstance(cmd, str):
+            cmd_parts = cmd.split()
+        else:
+            cmd_parts = list(cmd) if cmd else []
+
+        if cmd_parts and cmd_parts[0] in BLOCKED_COMMANDS:
+            # Return a mock process instead of running the command
+            mock_proc = MagicMock()
+            mock_proc.pid = 99999
+            mock_proc.poll.return_value = 0
+            mock_proc.returncode = 0
+            mock_proc.communicate.return_value = (b"", b"")
+            mock_proc.stdout = MagicMock()
+            mock_proc.stderr = MagicMock()
+            return mock_proc
+
+        return original_popen(*args, **kwargs)
+    return wrapper
+
+
+@pytest.fixture(autouse=True)
+def block_dangerous_commands(monkeypatch):
+    """
+    Automatically block dangerous system commands in all tests.
+
+    This prevents tests from accidentally running launchctl, systemctl,
+    or other system commands that could affect running services.
+    Tests that need to verify these commands are called should use
+    explicit mocking with patch().
+    """
+    original_run = subprocess.run
+    original_popen = subprocess.Popen
+
+    monkeypatch.setattr("subprocess.run", _safe_subprocess_run(original_run))
+    monkeypatch.setattr("subprocess.Popen", _safe_subprocess_popen(original_popen))
 
 
 @pytest.fixture
