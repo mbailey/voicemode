@@ -153,7 +153,7 @@ class TestUnifiedServiceTool:
              patch('pathlib.Path.home') as mock_home, \
              patch('subprocess.run') as mock_run:
             
-            # Mock the template content with proper format string
+            # Mock the template content with proper format string (v1.2.0+ uses START_SCRIPT and HOME)
             mock_template.return_value = """<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
@@ -161,8 +161,10 @@ class TestUnifiedServiceTool:
     <string>com.voicemode.whisper</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{START_SCRIPT_PATH}</string>
+        <string>{START_SCRIPT}</string>
     </array>
+    <key>StandardOutPath</key>
+    <string>{HOME}/.voicemode/logs/whisper/whisper.out.log</string>
 </dict>
 </plist>"""
             
@@ -181,18 +183,21 @@ class TestUnifiedServiceTool:
     @pytest.mark.asyncio
     async def test_enable_service_linux(self):
         """Test enabling service on Linux"""
+        # Template with proper placeholders (v1.2.0+ uses START_SCRIPT)
+        mock_template_content = "[Service]\nExecStart={START_SCRIPT}\n"
+
         with patch('platform.system', return_value='Linux'), \
              patch('voice_mode.tools.service.get_installed_service_version', return_value="1.0.0"), \
              patch('voice_mode.tools.service.load_service_file_version', return_value="1.0.0"), \
-             patch('voice_mode.tools.service.load_service_template', return_value="template content"), \
+             patch('voice_mode.tools.service.load_service_template', return_value=mock_template_content), \
              patch('voice_mode.tools.service.find_kokoro_fastapi', return_value="/path/to/kokoro"), \
              patch('pathlib.Path.exists', return_value=True), \
              patch('pathlib.Path.mkdir'), \
              patch('pathlib.Path.write_text'), \
              patch('subprocess.run') as mock_run:
-            
+
             mock_run.return_value = MagicMock(returncode=0)
-            
+
             result = await service("kokoro", "enable")
             assert "✅" in result
             assert "enabled and started" in result
@@ -275,26 +280,35 @@ class TestUnifiedServiceTool:
         assert "Unknown action" in result
     
     @pytest.mark.asyncio
-    async def test_version_update_detection(self):
-        """Test that version updates are detected when enabling"""
+    async def test_enable_with_version_mismatch(self):
+        """Test enabling service when installed and file versions differ.
+
+        Note: The enable action regenerates the service file from the template,
+        so version mismatches are resolved by overwriting with current template.
+        """
+        # Template with proper placeholders (v1.2.0+ uses START_SCRIPT and HOME)
+        mock_template_content = "<plist><string>{START_SCRIPT}</string><string>{HOME}</string></plist>"
+
         with patch('platform.system', return_value='Darwin'), \
              patch('voice_mode.tools.service.get_installed_service_version', return_value="1.0.0"), \
              patch('voice_mode.tools.service.load_service_file_version', return_value="1.1.0"), \
-             patch('voice_mode.tools.service.load_service_template', return_value="template"), \
+             patch('voice_mode.tools.service.load_service_template', return_value=mock_template_content), \
              patch('voice_mode.tools.service.find_whisper_server', return_value="/Users/test/.voicemode/services/whisper/build/bin/whisper-server"), \
              patch('voice_mode.tools.service.find_whisper_model', return_value="/path/to/model.bin"), \
              patch('pathlib.Path.exists', return_value=True), \
              patch('pathlib.Path.mkdir'), \
-             patch('pathlib.Path.write_text'), \
-             patch('subprocess.run') as mock_run, \
-             patch('logging.Logger.info') as mock_log:
-            
+             patch('pathlib.Path.write_text') as mock_write, \
+             patch('subprocess.run') as mock_run:
+
             mock_run.return_value = MagicMock(returncode=0)
-            
-            await service("whisper", "enable")
-            
-            # Verify version update was logged
-            mock_log.assert_any_call("Service file update available: 1.0.0 -> 1.1.0")
+
+            result = await service("whisper", "enable")
+
+            # Verify service was enabled successfully despite version mismatch
+            assert "✅" in result
+            assert "enabled" in result
+            # Verify service file was written (regenerated from template)
+            mock_write.assert_called_once()
 
 
 class TestServicePrompts:
