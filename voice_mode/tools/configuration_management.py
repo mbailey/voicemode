@@ -40,16 +40,28 @@ def parse_env_file(file_path: Path) -> Dict[str, str]:
 
 
 def write_env_file(file_path: Path, config: Dict[str, str], preserve_comments: bool = True):
-    """Write configuration to an environment file."""
+    """Write configuration to an environment file.
+
+    Handles three cases:
+    1. Active config line (KEY=value) - replace with new value if key in config
+    2. Commented config line (# KEY=value) - replace with active value if key in config
+    3. Regular comments (# some text) - preserve as-is
+    """
     # Read existing file to preserve comments and structure
     existing_lines = []
     existing_keys = set()
-    
+    # Track keys that were found as commented defaults (to avoid adding them again)
+    commented_keys_replaced = set()
+
+    # Pattern for commented-out config lines: # KEY=value or #KEY=value
+    commented_config_pattern = re.compile(r'^#\s*([A-Z][A-Z0-9_]*)=')
+
     if file_path.exists() and preserve_comments:
         with open(file_path, 'r') as f:
             for line in f:
                 stripped = line.strip()
                 if stripped and not stripped.startswith('#'):
+                    # Active config line
                     match = re.match(r'^([A-Z_]+)=', stripped)
                     if match:
                         key = match.group(1)
@@ -62,8 +74,24 @@ def write_env_file(file_path: Path, config: Dict[str, str], preserve_comments: b
                             existing_lines.append(line)
                     else:
                         existing_lines.append(line)
+                elif stripped.startswith('#'):
+                    # Check if this is a commented-out config line
+                    commented_match = commented_config_pattern.match(stripped)
+                    if commented_match:
+                        key = commented_match.group(1)
+                        if key in config:
+                            # Replace commented default with active value
+                            existing_lines.append(f"{key}={config[key]}\n")
+                            existing_keys.add(key)
+                            commented_keys_replaced.add(key)
+                        else:
+                            # Keep the commented default as-is
+                            existing_lines.append(line)
+                    else:
+                        # Regular comment - preserve as-is
+                        existing_lines.append(line)
                 else:
-                    # Keep comments and empty lines
+                    # Empty lines
                     existing_lines.append(line)
     
     # Add new keys that weren't in the file
