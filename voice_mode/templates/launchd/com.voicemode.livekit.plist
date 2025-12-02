@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- com.voicemode.livekit.plist v1.0.0 -->
-<!-- Last updated: 2025-08-12 -->
+<!-- com.voicemode.livekit.plist v1.1.0 -->
+<!-- Last updated: 2025-12-01 -->
 <!-- Compatible with: LiveKit v1.7.0+ -->
 <plist version="1.0">
 <dict>
@@ -11,28 +11,20 @@
     <array>
         <string>{LIVEKIT_BIN}</string>
         <string>--config</string>
-        <string>{CONFIG_FILE}</string>
+        <string>{HOME}/.voicemode/config/livekit.yaml</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>{LOG_DIR}/livekit.out.log</string>
+    <string>{HOME}/.voicemode/logs/livekit/livekit.out.log</string>
     <key>StandardErrorPath</key>
-    <string>{LOG_DIR}/livekit.err.log</string>
-    <key>WorkingDirectory</key>
-    <string>{WORKING_DIR}</string>
+    <string>{HOME}/.voicemode/logs/livekit/livekit.err.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
-        <key>LIVEKIT_URL</key>
-        <string>ws://localhost:{LIVEKIT_PORT}</string>
-        <key>LIVEKIT_API_KEY</key>
-        <string>devkey</string>
-        <key>LIVEKIT_API_SECRET</key>
-        <string>secret</string>
+        <string>{HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
     </dict>
 </dict>
 </plist>

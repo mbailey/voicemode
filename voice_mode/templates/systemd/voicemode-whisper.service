@@ -1,6 +1,6 @@
-# voicemode-whisper.service v1.1.0
-# Last updated: 2025-11-12
-# Uses unified startup script for dynamic model selection
+# voicemode-whisper.service v1.2.0
+# Last updated: 2025-12-01
+# Simplified: start script handles config via voicemode.env
 
 [Unit]
 Description=Whisper.cpp Speech Recognition Server
@@ -8,15 +8,17 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={START_SCRIPT_PATH}
-# Wait for service to be ready by checking health endpoint
-ExecStartPost=/bin/sh -c 'while ! curl -sf http://127.0.0.1:{WHISPER_PORT}/health >/dev/null 2>&1; do echo "Waiting for Whisper to be ready..."; sleep 1; done; echo "Whisper is ready!"'
+ExecStart={START_SCRIPT}
 Restart=on-failure
 RestartSec=10
-WorkingDirectory={INSTALL_DIR}
-StandardOutput=append:{LOG_DIR}/whisper/whisper.out.log
-StandardError=append:{LOG_DIR}/whisper/whisper.err.log
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/cuda/bin"
+
+# Environment - start script sources voicemode.env for port/model config
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/cuda/bin"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-whisper
 
 [Install]
 WantedBy=default.target

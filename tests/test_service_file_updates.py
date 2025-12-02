@@ -20,33 +20,28 @@ def test_load_service_file_version():
     """Test loading service file versions from versions.json."""
     # Test for kokoro on macOS
     version = load_service_file_version("kokoro", "plist")
-    assert version == "1.2.0"  # Updated in v7.0.0 for uv curl installer PATH fix
+    assert version == "1.3.0"  # Updated in v1.3.0 for simplified templates
 
     # Test for whisper on Linux
     version = load_service_file_version("whisper", "service")
-    assert version == "1.1.0"
+    assert version == "1.2.0"  # Updated in v1.2.0 for simplified templates
 
 
 def test_get_service_config_vars():
-    """Test getting configuration variables for service templates."""
-    # Test whisper config
+    """Test getting configuration variables for service templates.
+
+    Note: In v1.3.0, templates were simplified to only need HOME and START_SCRIPT.
+    Config like ports and models is now handled by start scripts via voicemode.env.
+    """
+    # Test whisper config - now only has HOME and START_SCRIPT
     whisper_vars = get_service_config_vars("whisper")
-    assert "WHISPER_BIN" in whisper_vars
-    assert "WHISPER_PORT" in whisper_vars
-    assert whisper_vars["WHISPER_PORT"] == "2022"
-    assert "MODEL_FILE" in whisper_vars
-    assert "WORKING_DIR" in whisper_vars
-    assert "LOG_DIR" in whisper_vars
-    assert whisper_vars["LOG_DIR"].endswith("logs/whisper")
-    
-    # Test kokoro config
+    assert "HOME" in whisper_vars
+    assert "START_SCRIPT" in whisper_vars
+
+    # Test kokoro config - now only has HOME and START_SCRIPT
     kokoro_vars = get_service_config_vars("kokoro")
-    assert "KOKORO_DIR" in kokoro_vars
-    assert "KOKORO_PORT" in kokoro_vars
-    assert kokoro_vars["KOKORO_PORT"] == "8880"
+    assert "HOME" in kokoro_vars
     assert "START_SCRIPT" in kokoro_vars
-    assert "LOG_DIR" in kokoro_vars
-    assert kokoro_vars["LOG_DIR"].endswith("logs/kokoro")
 
 
 @pytest.mark.asyncio

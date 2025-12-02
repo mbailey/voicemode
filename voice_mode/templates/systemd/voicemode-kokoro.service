@@ -1,6 +1,7 @@
-# voicemode-kokoro.service v1.1.1
-# Last updated: 2025-01-29
+# voicemode-kokoro.service v1.2.0
+# Last updated: 2025-12-01
 # Compatible with: kokoro-fastapi v1.0.0+
+# Simplified: start script handles config via voicemode.env
 
 [Unit]
 Description=Voice Mode Kokoro Text-to-Speech Service
@@ -8,17 +9,13 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory={KOKORO_DIR}
 ExecStart={START_SCRIPT}
-# Wait for service to be ready by checking health endpoint
-ExecStartPost=/bin/sh -c 'while ! curl -sf http://127.0.0.1:{KOKORO_PORT}/health >/dev/null 2>&1; do echo "Waiting for Kokoro to be ready..."; sleep 1; done; echo "Kokoro is ready!"'
 Restart=on-failure
 RestartSec=10
 # Don't restart if the executable is missing
 RestartPreventExitStatus=127
 
-# Environment
-Environment="VOICEMODE_KOKORO_PORT={KOKORO_PORT}"
+# Environment - start script sources voicemode.env for port config
 Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Resource limits

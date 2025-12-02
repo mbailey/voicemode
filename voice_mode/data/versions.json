@@ -1,13 +1,17 @@
 {
   "service_files": {
-    "com.voicemode.whisper.plist": "1.1.0",
-    "com.voicemode.kokoro.plist": "1.2.0",
-    "voicemode-whisper.service": "1.1.0",
-    "voicemode-kokoro.service": "1.1.1",
+    "com.voicemode.whisper.plist": "1.2.0",
+    "com.voicemode.kokoro.plist": "1.3.0",
+    "com.voicemode.livekit.plist": "1.1.0",
+    "com.voicemode.frontend.plist": "1.1.0",
+    "voicemode-whisper.service": "1.2.0",
+    "voicemode-kokoro.service": "1.2.0",
+    "voicemode-livekit.service": "1.1.0",
+    "voicemode-frontend.service": "1.1.0",
     "start-whisper-with-health-check.sh": "1.0.0",
     "start-kokoro-with-health-check.sh": "1.0.0"
   },
-  "last_updated": "2025-11-25",
+  "last_updated": "2025-12-01",
   "min_tool_version": "2.15.0",
   "changelog": {
     "1.0.0": {
@@ -40,6 +44,25 @@
       "changes": [
         "Added ~/.local/bin to PATH in Kokoro plist for uv compatibility",
         "Supports uv installed via curl installer (not just Homebrew)"
+      ]
+    },
+    "1.2.1": {
+      "date": "2025-11-30",
+      "changes": [
+        "Fixed HOME variable substitution in Kokoro plist enable_service",
+        "HOME was not being expanded, causing literal {HOME} in PATH"
+      ]
+    },
+    "1.3.0": {
+      "date": "2025-12-01",
+      "changes": [
+        "Major simplification: templates now only need HOME and START_SCRIPT",
+        "Start scripts now source voicemode.env for all config (ports, models)",
+        "Single source of truth: create_service_file() in service.py",
+        "Removed inline service file generation from install.py",
+        "Added ~/.local/bin to PATH in all templates for uv compatibility",
+        "Standardized log paths to ~/.voicemode/logs/<service>/",
+        "Removed WorkingDirectory from templates (start scripts handle it)"
       ]
     }
   }

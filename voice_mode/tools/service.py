@@ -43,26 +43,32 @@ def load_service_file_version(service_name: str, file_type: str) -> Optional[str
 
 
 def get_service_config_vars(service_name: str) -> Dict[str, Any]:
-    """Get configuration variables for service templates."""
+    """Get configuration variables for service templates.
+
+    Returns minimal vars needed by simplified templates:
+    - HOME: For paths that need absolute paths (macOS plist only)
+    - START_SCRIPT: Path to the service start script
+    - Service-specific binaries/dirs as needed
+
+    Config like ports/models is now handled by start scripts via voicemode.env
+    """
     voicemode_dir = os.path.expanduser(os.environ.get("VOICEMODE_BASE_DIR", "~/.voicemode"))
-    
+    home = os.path.expanduser("~")
+
     if service_name == "whisper":
-        whisper_bin = find_whisper_server()
-        model_file = find_whisper_model()
-        working_dir = Path(whisper_bin).parent if whisper_bin else voicemode_dir
-        
+        # Find whisper start script
+        whisper_dir = os.path.join(voicemode_dir, "services", "whisper")
+        start_script = os.path.join(whisper_dir, "bin", "start-whisper-server.sh")
+
         return {
-            "WHISPER_BIN": str(whisper_bin) if whisper_bin else "",
-            "WHISPER_PORT": str(WHISPER_PORT),
-            "MODEL_FILE": str(model_file) if model_file else "",
-            "WORKING_DIR": str(working_dir),
-            "LOG_DIR": os.path.join(voicemode_dir, "logs", "whisper"),
+            "HOME": home,
+            "START_SCRIPT": start_script,
         }
     elif service_name == "kokoro":
         kokoro_dir = find_kokoro_fastapi()
         if not kokoro_dir:
             kokoro_dir = os.path.join(voicemode_dir, "services", "kokoro")
-        
+
         # Find start script
         start_script = None
         if platform.system() == "Darwin":
@@ -70,73 +76,43 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
         else:
             # On Linux, prefer GPU script if GPU is available, otherwise use CPU script
             if has_gpu_support():
-                # Try GPU scripts first
                 possible_scripts = [
                     Path(kokoro_dir) / "start-gpu.sh",
-                    Path(kokoro_dir) / "start-cpu.sh"  # last resort
+                    Path(kokoro_dir) / "start-cpu.sh"
                 ]
             else:
-                # No GPU, prefer CPU script
                 possible_scripts = [
                     Path(kokoro_dir) / "start-cpu.sh",
-                    Path(kokoro_dir) / "start-gpu.sh"  # might work with CPU fallback
+                    Path(kokoro_dir) / "start-gpu.sh"
                 ]
-            
+
             for script in possible_scripts:
                 if script.exists():
                     start_script = script
                     break
-        
+
         return {
-            "KOKORO_DIR": str(kokoro_dir),
-            "KOKORO_PORT": str(KOKORO_PORT),
+            "HOME": home,
             "START_SCRIPT": str(start_script) if start_script and start_script.exists() else "",
-            "LOG_DIR": os.path.join(voicemode_dir, "logs", "kokoro"),
-            "HOME": os.path.expanduser("~"),
+            "KOKORO_DIR": kokoro_dir,
         }
     elif service_name == "livekit":
         livekit_bin = "/opt/homebrew/bin/livekit-server" if platform.system() == "Darwin" else "/usr/local/bin/livekit-server"
-        config_file = os.path.join(voicemode_dir, "config", "livekit.yaml")
-        
+
         return {
+            "HOME": home,
             "LIVEKIT_BIN": livekit_bin,
-            "LIVEKIT_PORT": str(LIVEKIT_PORT),
-            "CONFIG_FILE": config_file,
-            "LOG_DIR": os.path.join(voicemode_dir, "logs", "livekit"),
-            "WORKING_DIR": voicemode_dir,
         }
     else:  # frontend
-        # Get frontend directory
         from voice_mode.tools.livekit.frontend import find_frontend_dir
-        
+
         frontend_dir = find_frontend_dir()
         if not frontend_dir:
             raise RuntimeError("Frontend directory not found")
-        
-        # Find node binary
-        node_bin = "/usr/local/bin/node"
-        possible_node_paths = [
-            "/usr/local/bin/node",
-            "/opt/homebrew/bin/node", 
-            "/usr/bin/node",
-        ]
-        
-        for node_path in possible_node_paths:
-            if Path(node_path).exists():
-                node_bin = node_path
-                break
-        
-        # Import config to get HOST and PORT values
-        from voice_mode.config import FRONTEND_HOST, FRONTEND_PORT
-        
+
         return {
+            "HOME": home,
             "FRONTEND_DIR": str(frontend_dir),
-            "NODE_BIN": node_bin,
-            "NODE_PATH": str(Path(node_bin).parent),
-            "PORT": str(FRONTEND_PORT),
-            "HOST": FRONTEND_HOST,
-            "LOG_DIR": os.path.join(voicemode_dir, "logs", "frontend"),
-            "WORKING_DIR": str(frontend_dir),
         }
 
 
@@ -172,16 +148,53 @@ def load_service_template(service_name: str) -> str:
     """Load service file template from templates."""
     system = platform.system()
     templates_dir = Path(__file__).parent.parent / "templates"
-    
+
     if system == "Darwin":
         template_path = templates_dir / "launchd" / f"com.voicemode.{service_name}.plist"
     else:
         template_path = templates_dir / "systemd" / f"voicemode-{service_name}.service"
-    
+
     if not template_path.exists():
         raise FileNotFoundError(f"Service template not found: {template_path}")
-    
+
     return template_path.read_text()
+
+
+def create_service_file(service_name: str) -> tuple[Path, str]:
+    """Create service file content from template with config vars.
+
+    This is the single source of truth for generating service files.
+    Templates are simplified - start scripts handle config via voicemode.env.
+
+    Args:
+        service_name: Name of the service (whisper, kokoro, livekit, frontend)
+
+    Returns:
+        Tuple of (destination_path, file_content)
+    """
+    system = platform.system()
+    home = os.path.expanduser("~")
+
+    # Load template
+    template = load_service_template(service_name)
+
+    # Get config variables
+    config_vars = get_service_config_vars(service_name)
+
+    # Format template with config vars
+    content = template.format(**config_vars)
+
+    # Determine destination path
+    if system == "Darwin":
+        dest_path = Path(home) / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
+    else:
+        dest_path = Path(home) / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
+
+    # Ensure log directory exists
+    log_dir = Path(home) / ".voicemode" / "logs" / service_name
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    return dest_path, content
 
 
 async def status_service(service_name: str) -> str:
@@ -552,199 +565,68 @@ async def restart_service(service_name: str) -> str:
 
 
 async def enable_service(service_name: str) -> str:
-    """Enable a service to start at boot/login."""
+    """Enable a service to start at boot/login.
+
+    Uses create_service_file() as single source of truth for service file generation.
+    """
     system = platform.system()
-    
-    # Check version and offer update if needed
-    installed_version = get_installed_service_version(service_name)
-    current_version = load_service_file_version(service_name, "plist" if system == "Darwin" else "service")
-    
-    if installed_version and current_version and installed_version != current_version:
-        logger.info(f"Service file update available: {installed_version} -> {current_version}")
-    
+
     try:
+        # Create service file using the unified function
+        service_path, content = create_service_file(service_name)
+
+        # Validate required components exist
+        config_vars = get_service_config_vars(service_name)
+
+        if service_name == "whisper":
+            start_script = config_vars.get("START_SCRIPT", "")
+            if not start_script or not Path(start_script).exists():
+                return "❌ Whisper start script not found. Please run whisper_install first."
+
+        elif service_name == "kokoro":
+            start_script = config_vars.get("START_SCRIPT", "")
+            if not start_script or not Path(start_script).exists():
+                return "❌ Kokoro start script not found. Please run kokoro_install first."
+
+        elif service_name == "livekit":
+            livekit_bin = config_vars.get("LIVEKIT_BIN", "")
+            if not Path(livekit_bin).exists():
+                return "❌ LiveKit server not found. Please run 'voice-mode livekit install' first."
+
+        elif service_name == "frontend":
+            frontend_dir = config_vars.get("FRONTEND_DIR", "")
+            if not frontend_dir or not Path(frontend_dir).exists():
+                return "❌ Frontend directory not found"
+
+        # Create parent directories
+        service_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write service file
+        service_path.write_text(content)
+
         if system == "Darwin":
-            # Load template
-            template = load_service_template(service_name)
-            plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
-            logs_dir = Path.home() / ".voicemode" / "logs"
-            
-            # Prepare substitutions
-            if service_name == "whisper":
-                whisper_bin = find_whisper_server()
-                if not whisper_bin:
-                    return "❌ whisper-server not found. Please run whisper_install first."
-                
-                model_file = find_whisper_model()
-                if not model_file:
-                    return "❌ No Whisper model found. Please run download_model first."
-                
-                # Find the start script
-                # whisper_bin is at ~/.voicemode/services/whisper/build/bin/whisper-server
-                # start script is at ~/.voicemode/services/whisper/bin/start-whisper-server.sh
-                install_dir = Path(whisper_bin).parent.parent.parent  # Go up from build/bin/whisper-server to whisper dir
-                start_script_path = install_dir / "bin" / "start-whisper-server.sh"
-                if not start_script_path.exists():
-                    return f"❌ Start script not found: {start_script_path}"
-                
-                content = template.format(
-                    START_SCRIPT_PATH=str(start_script_path),
-                    LOG_DIR=str(logs_dir),
-                    INSTALL_DIR=str(install_dir)
-                )
-            elif service_name == "kokoro":
-                kokoro_dir = find_kokoro_fastapi()
-                if not kokoro_dir:
-                    return "❌ kokoro-fastapi not found. Please run kokoro_install first."
-                
-                start_script = Path(kokoro_dir) / "start-gpu_mac.sh"
-                if not start_script.exists():
-                    return f"❌ Start script not found: {start_script}"
-                
-                content = template.format(
-                    START_SCRIPT=start_script,
-                    KOKORO_DIR=kokoro_dir,
-                    KOKORO_PORT=KOKORO_PORT,
-                    LOG_DIR=logs_dir
-                )
-            elif service_name == "livekit":
-                # Use livekit binary path and config
-                livekit_bin = "/opt/homebrew/bin/livekit-server" if platform.system() == "Darwin" else "/usr/local/bin/livekit-server"
-                config_file = Path.home() / ".voicemode" / "config" / "livekit.yaml"
-                
-                if not Path(livekit_bin).exists():
-                    return "❌ LiveKit server not found. Please run 'voice-mode livekit install' first."
-                
-                content = template.format(
-                    LIVEKIT_BIN=livekit_bin,
-                    LIVEKIT_PORT=LIVEKIT_PORT,
-                    CONFIG_FILE=config_file,
-                    LOG_DIR=logs_dir,
-                    WORKING_DIR=Path.home() / ".voicemode"
-                )
-            else:  # frontend
-                # Get service config vars which includes all needed variables
-                config_vars = get_service_config_vars(service_name)
-                if "FRONTEND_DIR" not in config_vars:
-                    return "❌ Frontend directory not found"
-                
-                # Add log directory to config vars
-                config_vars["LOG_DIR"] = str(logs_dir)
-                
-                # Format template with all config vars
-                content = template.format(**config_vars)
-            
-            # Create directories
-            plist_path.parent.mkdir(parents=True, exist_ok=True)
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Write plist
-            plist_path.write_text(content)
-            
             # Load with launchctl
             result = subprocess.run(
-                ["launchctl", "load", "-w", str(plist_path)],
+                ["launchctl", "load", "-w", str(service_path)],
                 capture_output=True,
                 text=True
             )
-            
+
             if result.returncode == 0:
-                return f"✅ {service_name.capitalize()} service enabled. It will start automatically at login.\nPlist: {plist_path}"
+                return f"✅ {service_name.capitalize()} service enabled. It will start automatically at login.\nPlist: {service_path}"
             else:
                 error = result.stderr or result.stdout
                 return f"❌ Failed to enable {service_name} service: {error}"
-                
+
         else:  # Linux
-            # Load template
-            template = load_service_template(service_name)
-            service_path = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
-            
-            # Prepare substitutions
-            if service_name == "whisper":
-                whisper_bin = find_whisper_server()
-                if not whisper_bin:
-                    return "❌ whisper-server not found. Please run whisper_install first."
-                
-                model_file = find_whisper_model()
-                if not model_file:
-                    return "❌ No Whisper model found. Please run download_model first."
-                
-                content = template.format(
-                    WHISPER_BIN=whisper_bin,
-                    WHISPER_PORT=WHISPER_PORT,
-                    MODEL_FILE=model_file,
-                    WORKING_DIR=Path(whisper_bin).parent
-                )
-            elif service_name == "kokoro":
-                kokoro_dir = find_kokoro_fastapi()
-                if not kokoro_dir:
-                    return "❌ kokoro-fastapi not found. Please run kokoro_install first."
-                
-                # On Linux, prefer GPU script if GPU is available, otherwise use CPU script
-                if has_gpu_support():
-                    # Try GPU scripts first
-                    possible_scripts = [
-                        Path(kokoro_dir) / "start-gpu.sh",
-                        Path(kokoro_dir) / "start-cpu.sh"  # last resort
-                    ]
-                else:
-                    # No GPU, prefer CPU script
-                    possible_scripts = [
-                        Path(kokoro_dir) / "start-cpu.sh",
-                        Path(kokoro_dir) / "start-gpu.sh"  # might work with CPU fallback
-                    ]
-                
-                start_script = None
-                for script in possible_scripts:
-                    if script.exists():
-                        start_script = script
-                        break
-                
-                if not start_script:
-                    gpu_status = "GPU detected" if has_gpu_support() else "No GPU detected"
-                    return f"❌ No start script found in {kokoro_dir}. {gpu_status}. Expected one of: start.sh, start-gpu.sh, or start-cpu.sh"
-                
-                content = template.format(
-                    START_SCRIPT=start_script,
-                    KOKORO_DIR=kokoro_dir,
-                    KOKORO_PORT=KOKORO_PORT
-                )
-            elif service_name == "livekit":
-                # Use livekit binary path and config
-                livekit_bin = "/usr/local/bin/livekit-server"
-                config_file = Path.home() / ".voicemode" / "config" / "livekit.yaml"
-                
-                if not Path(livekit_bin).exists():
-                    return "❌ LiveKit server not found. Please run 'voice-mode livekit install' first."
-                
-                content = template.format(
-                    LIVEKIT_BIN=livekit_bin,
-                    LIVEKIT_PORT=LIVEKIT_PORT,
-                    CONFIG_FILE=config_file,
-                    LOG_DIR=Path.home() / ".voicemode" / "logs",
-                    WORKING_DIR=Path.home() / ".voicemode"
-                )
-            else:  # frontend
-                # Get service config vars which includes all needed variables
-                config_vars = get_service_config_vars(service_name)
-                if "FRONTEND_DIR" not in config_vars:
-                    return "❌ Frontend directory not found"
-                
-                # Format template with all config vars
-                content = template.format(**config_vars)
-            
-            # Write service file
-            service_path.parent.mkdir(parents=True, exist_ok=True)
-            service_path.write_text(content)
-            
-            # Reload and enable
+            # Reload and enable systemd
             subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
             result = subprocess.run(
                 ["systemctl", "--user", "enable", f"voicemode-{service_name}.service"],
                 capture_output=True,
                 text=True
             )
-            
+
             if result.returncode == 0:
                 # Also start it now
                 subprocess.run(["systemctl", "--user", "start", f"voicemode-{service_name}.service"], check=True)
@@ -752,7 +634,7 @@ async def enable_service(service_name: str) -> str:
             else:
                 error = result.stderr or result.stdout
                 return f"❌ Failed to enable {service_name} service: {error}"
-                
+
     except Exception as e:
         logger.error(f"Error enabling {service_name} service: {e}")
         return f"❌ Error enabling {service_name} service: {str(e)}"
