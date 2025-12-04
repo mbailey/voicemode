@@ -158,6 +158,8 @@ async def simple_tts_failover(
 async def simple_stt_failover(
     audio_file,
     model: str = "whisper-1",
+    diarize: bool = False,
+    num_speakers: Optional[int] = None,
     **kwargs
 ) -> Optional[Dict[str, Any]]:
     """
@@ -201,19 +203,54 @@ async def simple_stt_failover(
             )
 
             # Try STT with this endpoint
+            # Build extra parameters for diarization if requested
+            extra_params = {}
+            if diarize:
+                extra_params["diarize"] = True
+                if num_speakers:
+                    extra_params["num_speakers"] = num_speakers
+                # Use verbose_json to get word-level speaker info
+                response_format = "verbose_json"
+            else:
+                response_format = "text"
+            
             transcription = await client.audio.transcriptions.create(
                 model=model,
                 file=audio_file,
-                response_format="text"
+                response_format=response_format,
+                **extra_params
             )
 
-            text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
+            # Handle response based on format
+            if diarize:
+                # verbose_json response - extract text and speaker info
+                if isinstance(transcription, str):
+                    import json
+                    result_data = json.loads(transcription)
+                else:
+                    result_data = transcription.model_dump() if hasattr(transcription, 'model_dump') else dict(transcription)
+                
+                text = result_data.get("text", "").strip()
+                words = result_data.get("words", [])
+                
+                if text:
+                    logger.info(f"✓ STT succeeded with {provider_type} at {base_url} (diarization enabled)")
+                    logger.info(f"  Transcribed: {text[:100]}{'...' if len(text) > 100 else ''}")
+                    return {
+                        "text": text,
+                        "words": words,
+                        "diarized": True,
+                        "provider": provider_type,
+                        "endpoint": base_url
+                    }
+            else:
+                text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
 
-            if text:
-                logger.info(f"✓ STT succeeded with {provider_type} at {base_url}")
-                logger.info(f"  Transcribed: {text[:100]}{'...' if len(text) > 100 else ''}")
-                # Return both text and provider info for display
-                return {"text": text, "provider": provider_type, "endpoint": base_url}
+                if text:
+                    logger.info(f"✓ STT succeeded with {provider_type} at {base_url}")
+                    logger.info(f"  Transcribed: {text[:100]}{'...' if len(text) > 100 else ''}")
+                    # Return both text and provider info for display
+                    return {"text": text, "provider": provider_type, "endpoint": base_url}
             else:
                 # Successful connection but no speech detected
                 logger.warning(f"STT returned empty result from {base_url} ({provider_type})")

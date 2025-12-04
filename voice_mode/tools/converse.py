@@ -325,7 +325,9 @@ async def speech_to_text(
     audio_data: np.ndarray,
     save_audio: bool = False,
     audio_dir: Optional[Path] = None,
-    transport: str = "local"
+    transport: str = "local",
+    diarize: bool = False,
+    num_speakers: Optional[int] = None
 ) -> Optional[Dict]:
     """
     Convert audio to text with automatic failover.
@@ -374,7 +376,9 @@ async def speech_to_text(
         with open(wav_file_path, 'rb') as audio_file:
             result = await simple_stt_failover(
                 audio_file=audio_file,
-                model="whisper-1"
+                model="whisper-1",
+                diarize=diarize,
+                num_speakers=num_speakers
             )
         # Don't delete - it's our saved audio file
     else:
@@ -386,7 +390,9 @@ async def speech_to_text(
             with open(tmp_file.name, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
-                    model="whisper-1"
+                    model="whisper-1",
+                    diarize=diarize,
+                    num_speakers=num_speakers
                 )
 
             # Clean up temp file
@@ -1043,7 +1049,9 @@ async def converse(
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
     chime_leading_silence: Optional[float] = None,
-    chime_trailing_silence: Optional[float] = None
+    chime_trailing_silence: Optional[float] = None,
+    diarize: Union[bool, str] = False,
+    num_speakers: Optional[int] = None
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -1070,6 +1078,8 @@ KEY PARAMETERS:
 • chime_enabled (bool): Enable/disable audio feedback chimes
 • chime_leading_silence (float): Silence before chime in seconds
 • chime_trailing_silence (float): Silence after chime in seconds
+• diarize (bool, default: false): Enable speaker diarization (identify who's speaking)
+• num_speakers (int, optional): Expected number of speakers (helps accuracy)
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
@@ -1086,6 +1096,8 @@ consult the MCP resources listed above.
         chime_enabled = chime_enabled.lower() in ('true', '1', 'yes', 'on')
     if skip_tts is not None and isinstance(skip_tts, str):
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
+    if isinstance(diarize, str):
+        diarize = diarize.lower() in ('true', '1', 'yes', 'on')
     
     # Convert vad_aggressiveness to integer if provided as string
     if vad_aggressiveness is not None and isinstance(vad_aggressiveness, str):
@@ -1454,7 +1466,7 @@ consult the MCP resources listed above.
                             event_logger.log_event(event_logger.STT_START)
                         
                         stt_start = time.perf_counter()
-                        stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                        stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport, diarize=diarize, num_speakers=num_speakers)
                         timings['stt'] = time.perf_counter() - stt_start
 
                         # Handle structured STT result
@@ -1588,7 +1600,7 @@ consult the MCP resources listed above.
                             if len(audio_data) > 0 and speech_detected:
                                 # Transcribe the audio
                                 stt_start = time.perf_counter()
-                                stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                                stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport, diarize=diarize, num_speakers=num_speakers)
                                 stt_time = time.perf_counter() - stt_start
                                 timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
 
@@ -1644,7 +1656,7 @@ consult the MCP resources listed above.
                             if len(audio_data) > 0 and speech_detected:
                                 # Transcribe the audio
                                 stt_start = time.perf_counter()
-                                stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                                stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport, diarize=diarize, num_speakers=num_speakers)
                                 stt_time = time.perf_counter() - stt_start
                                 timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
 
