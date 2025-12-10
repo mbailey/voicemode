@@ -2,23 +2,23 @@
 
 VoiceMode provides flexible configuration through environment variables and configuration files, following standard precedence rules while maintaining sensible defaults.
 
-*Note: The python package is called `voice-mode` but 
+*Note: The Python package is called `voice-mode` but the preferred command is `voicemode`.*
 
 ## Quick Start
 
 VoiceMode works out of the box with minimal configuration:
 
-### Cloud Setup (Easiest)
+### With Cloud Voice Services
 ```bash
 # Just need an OpenAI API key
 export OPENAI_API_KEY="your-api-key"
 ```
 
-### Local Setup
+### With Local Voice Services
 ```bash
-# Run local services (Whisper + Kokoro)
-voicemode kokoro start
-voicemode whisper start
+# Install local services (auto-start on boot)
+voicemode kokoro install
+voicemode whisper install
 # VoiceMode auto-detects them!
 ```
 
@@ -35,11 +35,12 @@ export OPENAI_API_KEY="your-api-key"  # Fallback
 
 VoiceMode follows standard configuration precedence (highest to lowest):
 
-1. **Environment variables** - Always win
-2. **Project config** - `./voicemode.env` in current directory
-3. **User config** - `~/.voicemode/voicemode.env`
-4. **Auto-discovered services** - Running local services
-5. **Built-in defaults** - Sensible fallbacks
+1. **Command line flags** - Always win
+2. **Environment variables** - Override config files
+3. **Project config** - `./voicemode.env` in current directory
+4. **User config** - `~/.voicemode/voicemode.env`
+5. **Auto-discovered services** - Running local services
+6. **Built-in defaults** - Sensible fallbacks
 
 ### Configuration Files
 
@@ -61,10 +62,9 @@ When used as an MCP server, add to your Claude or other MCP client configuration
   "mcpServers": {
     "voicemode": {
       "command": "uvx",
-      "args": ["voice-mode"],
+      "args": ["--refresh", "voice-mode"],
       "env": {
-        "OPENAI_API_KEY": "your-key-here",
-        "VOICEMODE_VOICES": "nova,shimmer"
+        "OPENAI_API_KEY": "your-key-here"
       }
     }
   }
@@ -294,6 +294,65 @@ mv ~/.voicemode/voicemode.env ~/.voicemode/voicemode.env.backup
 # Edit the configuration file to reset
 voicemode config edit
 ```
+
+## Claude Code Permissions
+
+When using VoiceMode with Claude Code, you can configure automatic tool approval to skip permission prompts.
+
+### Quick Setup
+
+Add to `.claude/settings.local.json` in your project:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__voicemode__converse"
+    ]
+  }
+}
+```
+
+To also allow service management (start/stop/status):
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__voicemode__converse",
+      "mcp__voicemode__service"
+    ]
+  }
+}
+```
+
+### Settings File Locations
+
+| File | Scope | Git |
+|------|-------|-----|
+| `~/.claude/settings.json` | All projects | N/A |
+| `.claude/settings.json` | Project (shared) | Commit |
+| `.claude/settings.local.json` | Project (personal) | Ignore |
+
+### Allowing All VoiceMode Tools
+
+To allow all tools from the VoiceMode server:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__voicemode"]
+  }
+}
+```
+
+> **Note**: Wildcards like `mcp__voicemode__*` are not supported. Use `mcp__voicemode` without a tool suffix.
+
+### Useful Commands
+
+- `/permissions` - View and manage tool permission rules
+
+See the [Claude Code Settings documentation](https://code.claude.com/docs/en/settings) for more details.
 
 ## Security Considerations
 
