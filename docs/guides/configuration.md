@@ -295,6 +295,66 @@ mv ~/.voicemode/voicemode.env ~/.voicemode/voicemode.env.backup
 voicemode config edit
 ```
 
+## Claude Code Permissions
+
+When using VoiceMode with Claude Code, you can configure automatic tool approval to skip permission prompts.
+
+### Quick Setup
+
+Add to `.claude/settings.local.json` in your project:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__voicemode__converse"
+    ]
+  }
+}
+```
+
+To also allow service management (start/stop/status):
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__voicemode__converse",
+      "mcp__voicemode__service"
+    ]
+  }
+}
+```
+
+### Settings File Locations
+
+| File | Scope | Git |
+|------|-------|-----|
+| `~/.claude/settings.json` | All projects | N/A |
+| `.claude/settings.json` | Project (shared) | Commit |
+| `.claude/settings.local.json` | Project (personal) | Ignore |
+
+### Allowing All VoiceMode Tools
+
+To allow all tools from the VoiceMode server:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__voicemode"]
+  }
+}
+```
+
+> **Note**: Wildcards like `mcp__voicemode__*` are not supported. Use `mcp__voicemode` without a tool suffix.
+
+### Useful Commands
+
+- `/allowed-tools` - View and configure allowed tools
+- `/permissions` - View current permission rules
+
+See the [Claude Code Settings documentation](https://code.claude.com/docs/en/settings) for more details.
+
 ## Security Considerations
 
 - **Never commit API keys** to version control
