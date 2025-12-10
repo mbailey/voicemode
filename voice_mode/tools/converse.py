@@ -1045,38 +1045,7 @@ async def converse(
     chime_leading_silence: Optional[float] = None,
     chime_trailing_silence: Optional[float] = None
 ) -> str:
-    """Have an ongoing voice conversation - speak a message and optionally listen for response.
-
-🔌 ENDPOINT: STT/TTS services must expose OpenAI-compatible endpoints:
-   /v1/audio/transcriptions and /v1/audio/speech
-
-📚 DOCUMENTATION: See MCP resources for detailed information:
-   - voicemode://docs/quickstart - Basic usage and common examples
-   - voicemode://docs/parameters - Complete parameter reference
-   - voicemode://docs/languages - Non-English language support guide
-   - voicemode://docs/patterns - Best practices and conversation patterns
-   - voicemode://docs/troubleshooting - Audio, VAD, and connectivity issues
-
-KEY PARAMETERS:
-• message (required): The message to speak
-• wait_for_response (bool, default: true): Listen for response after speaking
-• listen_duration_max (number, default: 120): Max listen time in seconds
-• listen_duration_min (number, default: 2.0): Min recording time before silence detection
-• voice (string): TTS voice name (auto-selected unless specified)
-• tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)
-• disable_silence_detection (bool, default: false): Disable auto-stop on silence
-• vad_aggressiveness (0-3, default: 2): Voice detection strictness (0=permissive, 3=strict)
-• speed (0.25-4.0): Speech rate (1.0=normal, 2.0=double speed)
-• chime_enabled (bool): Enable/disable audio feedback chimes
-• chime_leading_silence (float): Silence before chime in seconds
-• chime_trailing_silence (float): Silence after chime in seconds
-
-PRIVACY: Microphone access required when wait_for_response=true.
-         Audio processed via STT service, not stored.
-
-For complete parameter list, advanced options, and detailed examples,
-consult the MCP resources listed above.
-    """
+    """Speak a message and optionally listen for user response. Load voicemode skill for usage details."""
     # Convert string booleans to actual booleans
     if isinstance(wait_for_response, str):
         wait_for_response = wait_for_response.lower() in ('true', '1', 'yes', 'on')
