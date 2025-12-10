@@ -350,8 +350,7 @@ To allow all tools from the VoiceMode server:
 
 ### Useful Commands
 
-- `/allowed-tools` - View and configure allowed tools
-- `/permissions` - View current permission rules
+- `/permissions` - View and manage tool permission rules
 
 See the [Claude Code Settings documentation](https://code.claude.com/docs/en/settings) for more details.
 
