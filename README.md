@@ -1,5 +1,8 @@
 # VoiceMode
 
+[![Run in Smithery](https://smithery.ai/badge/skills/mbailey)](https://smithery.ai/skills?ns=mbailey&utm_source=github&utm_medium=badge)
+
+
 
 > **Install via:** `uv tool install voice-mode` | [getvoicemode.com](https://getvoicemode.com)
 
