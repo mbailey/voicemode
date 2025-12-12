@@ -1,5 +1,8 @@
 # VoiceMode
 
+[![Run in Smithery](https://smithery.ai/badge/skills/mbailey)](https://smithery.ai/skills?ns=mbailey&utm_source=github&utm_medium=badge)
+
+
 
 > **Install via:** `uv tool install voice-mode` | [getvoicemode.com](https://getvoicemode.com)
 
@@ -11,7 +14,7 @@ Natural voice conversations for AI assistants. VoiceMode brings human-like voice
 
 ## 🖥️ Compatibility
 
-**Runs on:** Linux • macOS • Windows (WSL) • NixOS | **Python:** 3.10+
+**Runs on:** Linux • macOS • Windows (WSL) • NixOS | **Python:** 3.10-3.14
 
 ## ✨ Features
 
@@ -20,7 +23,7 @@ Natural voice conversations for AI assistants. VoiceMode brings human-like voice
 - **⚡ Real-time** - low-latency voice interactions with automatic transport selection
 - **🔧 MCP Integration** - seamless with Claude Code (and other MCP clients)
 - **🎯 Silence detection** - automatically stops recording when you stop speaking (no more waiting!)
-- **🔄 Multiple transports** - local microphone or LiveKit room-based communication  
+- **🔄 Multiple transports** - local microphone or LiveKit room-based communication (optional)  
 
 ## 🎯 Simple Requirements
 
@@ -68,9 +71,11 @@ The `converse` function makes voice interactions natural - it automatically wait
 ## Installation
 
 ### Prerequisites
-- Python >= 3.10
+- Python 3.10-3.14
 - [Astral UV](https://github.com/astral-sh/uv) - Package manager (install with `curl -LsSf https://astral.sh/uv/install.sh | sh`)
 - OpenAI API Key (or compatible service)
+
+> **Note on LiveKit:** LiveKit integration is optional and requires Python 3.10-3.13 (Python 3.14 support pending upstream dependencies). Install with: `uv tool install voice-mode[livekit]`. See [LiveKit Integration Guide](docs/guides/livekit-setup.md) for details.
 
 #### System Dependencies
 
