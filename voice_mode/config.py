@@ -636,11 +636,20 @@ CHIME_TRAILING_SILENCE = float(os.getenv("VOICEMODE_CHIME_TRAILING_SILENCE", "0.
 # Audio format configuration
 AUDIO_FORMAT = os.getenv("VOICEMODE_AUDIO_FORMAT", "pcm").lower()
 TTS_AUDIO_FORMAT = os.getenv("VOICEMODE_TTS_AUDIO_FORMAT", "pcm").lower()  # Default to PCM for optimal streaming
-# STT requires a format supported by the STT provider - PCM is not supported by OpenAI Whisper
+
+# STT upload format - compressed for bandwidth efficiency
+# Supported: mp3, wav, flac, m4a, ogg (must be supported by STT provider)
+# Default: mp3 (32kbps, ~90% bandwidth reduction vs WAV)
 STT_AUDIO_FORMAT = os.getenv("VOICEMODE_STT_AUDIO_FORMAT", "mp3" if AUDIO_FORMAT == "pcm" else AUDIO_FORMAT).lower()
+
+# STT save format - format for saved recordings when SAVE_AUDIO is enabled
+# Supported: wav, mp3, flac (wav recommended for full quality archival)
+# Default: wav (uncompressed, full quality)
+STT_SAVE_FORMAT = os.getenv("VOICEMODE_STT_SAVE_FORMAT", "wav").lower()
 
 # Supported audio formats
 SUPPORTED_AUDIO_FORMATS = ["pcm", "opus", "mp3", "wav", "flac", "aac"]
+SUPPORTED_SAVE_FORMATS = ["wav", "mp3", "flac"]  # Formats suitable for saving recordings
 
 # Validate formats (validation messages will be logged after logger is initialized)
 if AUDIO_FORMAT not in SUPPORTED_AUDIO_FORMATS:
@@ -654,6 +663,10 @@ if TTS_AUDIO_FORMAT not in SUPPORTED_AUDIO_FORMATS:
 if STT_AUDIO_FORMAT not in SUPPORTED_AUDIO_FORMATS:
     _invalid_stt_format = STT_AUDIO_FORMAT
     STT_AUDIO_FORMAT = AUDIO_FORMAT
+
+if STT_SAVE_FORMAT not in SUPPORTED_SAVE_FORMATS:
+    _invalid_stt_save_format = STT_SAVE_FORMAT
+    STT_SAVE_FORMAT = "wav"
 
 # Format-specific quality settings
 OPUS_BITRATE = int(os.getenv("VOICEMODE_OPUS_BITRATE", "32000"))  # Default 32kbps for voice

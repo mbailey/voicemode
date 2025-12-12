@@ -68,6 +68,7 @@ from voice_mode.config import (
     WAIT_DURATION,
     METRICS_LEVEL,
     STT_AUDIO_FORMAT,
+    STT_SAVE_FORMAT,
     MP3_BITRATE
 )
 import voice_mode.config
@@ -440,11 +441,20 @@ async def speech_to_text(
         month_dir = year_dir / f"{now.month:02d}"
         month_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save original full-quality WAV for archival
-        wav_filename = get_debug_filename("stt", "wav", conversation_id)
-        wav_file_path = month_dir / wav_filename
-        write(str(wav_file_path), SAMPLE_RATE, audio_data)
-        logger.info(f"STT audio (full quality) saved to: {wav_file_path}")
+        # Save recording in configured format (default: wav for full quality)
+        save_filename = get_debug_filename("stt", STT_SAVE_FORMAT, conversation_id)
+        save_file_path = month_dir / save_filename
+
+        if STT_SAVE_FORMAT == "wav":
+            # Save as uncompressed WAV for full quality archival
+            write(str(save_file_path), SAMPLE_RATE, audio_data)
+        else:
+            # Save in configured compressed format
+            saved_audio = prepare_audio_for_stt(audio_data, STT_SAVE_FORMAT)
+            with open(save_file_path, 'wb') as f:
+                f.write(saved_audio)
+
+        logger.info(f"STT audio saved to: {save_file_path} (format: {STT_SAVE_FORMAT})")
 
         # Use compressed audio for upload (temporary file)
         with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:
