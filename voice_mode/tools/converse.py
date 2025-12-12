@@ -400,6 +400,7 @@ async def speech_to_text(
 
     Audio is compressed (default: MP3 at 32kbps) and downsampled to 16kHz
     to reduce bandwidth usage when uploading to remote STT services.
+    Original full-quality WAV is saved separately when save_audio is enabled.
 
     Args:
         audio_data: Raw audio data as numpy array
@@ -419,7 +420,7 @@ async def speech_to_text(
     from voice_mode.core import save_debug_file, get_debug_filename
     from voice_mode.simple_failover import simple_stt_failover
 
-    # Prepare compressed audio for upload
+    # Prepare compressed audio for upload (reduces bandwidth by ~90%)
     # Use configured format (default: mp3) for optimal bandwidth
     stt_format = STT_AUDIO_FORMAT if STT_AUDIO_FORMAT != "pcm" else "mp3"
     compressed_audio = prepare_audio_for_stt(audio_data, stt_format)
@@ -429,7 +430,7 @@ async def speech_to_text(
 
     # Determine if we should save the file permanently or use a temp file
     if save_audio and audio_dir:
-        # Save directly to final location for debugging/analysis
+        # Save files for debugging/analysis
         conversation_logger = get_conversation_logger()
         conversation_id = conversation_logger.conversation_id
 
@@ -439,22 +440,25 @@ async def speech_to_text(
         month_dir = year_dir / f"{now.month:02d}"
         month_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename and path (use compressed format extension)
-        filename = get_debug_filename("stt", file_extension, conversation_id)
-        audio_file_path = month_dir / filename
+        # Save original full-quality WAV for archival
+        wav_filename = get_debug_filename("stt", "wav", conversation_id)
+        wav_file_path = month_dir / wav_filename
+        write(str(wav_file_path), SAMPLE_RATE, audio_data)
+        logger.info(f"STT audio (full quality) saved to: {wav_file_path}")
 
-        # Write compressed audio data directly to final location
-        with open(audio_file_path, 'wb') as f:
-            f.write(compressed_audio)
-        logger.info(f"STT audio saved to: {audio_file_path}")
+        # Use compressed audio for upload (temporary file)
+        with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:
+            tmp_file.write(compressed_audio)
+            tmp_file.flush()
 
-        # Use the saved file for STT
-        with open(audio_file_path, 'rb') as audio_file:
-            result = await simple_stt_failover(
-                audio_file=audio_file,
-                model="whisper-1"
-            )
-        # Don't delete - it's our saved audio file
+            with open(tmp_file.name, 'rb') as audio_file:
+                result = await simple_stt_failover(
+                    audio_file=audio_file,
+                    model="whisper-1"
+                )
+
+            # Clean up temp file (we keep the WAV)
+            os.unlink(tmp_file.name)
     else:
         # Use temporary file that will be deleted
         with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:

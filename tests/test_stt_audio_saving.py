@@ -17,8 +17,8 @@ from voice_mode import config
 async def test_stt_audio_saved_with_simple_failover():
     """Test that STT audio files are saved when SAVE_ALL is true and simple failover is enabled.
 
-    Note: STT audio is now saved as compressed MP3 format (not WAV) to reduce bandwidth
-    when uploading to remote STT services.
+    Note: Full-quality WAV is saved for archival, while compressed MP3 is used
+    for upload to reduce bandwidth.
     """
 
     # Create test audio data (1 second of silence at 24kHz to match SAMPLE_RATE)
@@ -46,8 +46,6 @@ async def test_stt_audio_saved_with_simple_failover():
                     mock_logger.return_value = mock_conv_logger
 
                     # Call the function with save_audio enabled
-                    # Note: We don't mock scipy.io.wavfile.write anymore since
-                    # STT now uses pydub for compression (MP3 by default)
                     result = await speech_to_text(
                         audio_data=audio_data,
                         save_audio=True,
@@ -64,11 +62,11 @@ async def test_stt_audio_saved_with_simple_failover():
                     expected_dir = test_audio_dir / str(now.year) / f"{now.month:02d}"
                     assert expected_dir.exists()
 
-                    # Find the saved STT file - now saved as MP3 for compression
-                    stt_files = list(expected_dir.glob("*_stt.mp3"))
-                    assert len(stt_files) == 1, f"Expected 1 STT file, found: {list(expected_dir.glob('*'))}"
+                    # Find the saved STT file - full quality WAV is saved for archival
+                    stt_files = list(expected_dir.glob("*_stt.wav"))
+                    assert len(stt_files) == 1, f"Expected 1 STT WAV file, found: {list(expected_dir.glob('*'))}"
                     # Verify it's an STT file with proper naming format
-                    assert stt_files[0].name.endswith("_stt.mp3")
+                    assert stt_files[0].name.endswith("_stt.wav")
 
                     # Verify file exists and has content
                     assert stt_files[0].stat().st_size > 0
