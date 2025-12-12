@@ -15,84 +15,81 @@ from voice_mode import config
 
 @pytest.mark.asyncio
 async def test_stt_audio_saved_with_simple_failover():
-    """Test that STT audio files are saved when SAVE_ALL is true and simple failover is enabled"""
-    
-    # Create test audio data (1 second of silence)
-    sample_rate = 16000
+    """Test that STT audio files are saved when SAVE_ALL is true and simple failover is enabled.
+
+    Note: STT audio is now saved as compressed MP3 format (not WAV) to reduce bandwidth
+    when uploading to remote STT services.
+    """
+
+    # Create test audio data (1 second of silence at 24kHz to match SAMPLE_RATE)
+    sample_rate = 24000  # Match SAMPLE_RATE from config
     audio_data = np.zeros(sample_rate, dtype=np.int16)
-    
+
     # Create a temporary directory for testing
     with tempfile.TemporaryDirectory() as temp_dir:
         test_audio_dir = Path(temp_dir) / "audio"
         test_audio_dir.mkdir()
-        
+
         # Patch the config values to ensure saving is enabled
         with patch('voice_mode.config.SAVE_ALL', True), \
              patch('voice_mode.config.SAVE_AUDIO', True), \
              patch('voice_mode.tools.converse.SAVE_AUDIO', True):
-            
+
             # Mock the simple_stt_failover to return test transcription dict
             with patch('voice_mode.simple_failover.simple_stt_failover', new_callable=AsyncMock) as mock_stt:
                 mock_stt.return_value = {"text": "Test transcription", "provider": "whisper", "endpoint": "http://127.0.0.1:2022/v1"}
-                
+
                 # Mock the conversation logger
                 with patch('voice_mode.tools.converse.get_conversation_logger') as mock_logger:
                     mock_conv_logger = MagicMock()
                     mock_conv_logger.conversation_id = "test123"
                     mock_logger.return_value = mock_conv_logger
-                    
-                    # Mock the scipy write function to actually write a test file
-                    with patch('scipy.io.wavfile.write') as mock_write:
-                        def write_side_effect(filename, rate, data):
-                            # Actually create a dummy file so the test can verify it exists
-                            Path(filename).parent.mkdir(parents=True, exist_ok=True)
-                            Path(filename).write_bytes(b"dummy wav content")
-                        
-                        mock_write.side_effect = write_side_effect
-                        
-                        # Call the function with save_audio enabled
-                        result = await speech_to_text(
-                            audio_data=audio_data,
-                            save_audio=True,
-                            audio_dir=test_audio_dir,
-                            transport="local"
-                        )
-                        
-                        # Verify transcription was returned (now returns dict)
-                        assert isinstance(result, dict)
-                        assert result.get("text") == "Test transcription"
-                        
-                        # Check that audio file was saved in year/month structure
-                        now = datetime.now()
-                        expected_dir = test_audio_dir / str(now.year) / f"{now.month:02d}"
-                        assert expected_dir.exists()
-                        
-                        # Find the saved STT file
-                        stt_files = list(expected_dir.glob("*_stt.wav"))
-                        assert len(stt_files) == 1
-                        # Verify it's an STT file with proper naming format
-                        assert stt_files[0].name.endswith("_stt.wav")
-                        
-                        # Verify file exists and has content
-                        assert stt_files[0].stat().st_size > 0
+
+                    # Call the function with save_audio enabled
+                    # Note: We don't mock scipy.io.wavfile.write anymore since
+                    # STT now uses pydub for compression (MP3 by default)
+                    result = await speech_to_text(
+                        audio_data=audio_data,
+                        save_audio=True,
+                        audio_dir=test_audio_dir,
+                        transport="local"
+                    )
+
+                    # Verify transcription was returned (now returns dict)
+                    assert isinstance(result, dict)
+                    assert result.get("text") == "Test transcription"
+
+                    # Check that audio file was saved in year/month structure
+                    now = datetime.now()
+                    expected_dir = test_audio_dir / str(now.year) / f"{now.month:02d}"
+                    assert expected_dir.exists()
+
+                    # Find the saved STT file - now saved as MP3 for compression
+                    stt_files = list(expected_dir.glob("*_stt.mp3"))
+                    assert len(stt_files) == 1, f"Expected 1 STT file, found: {list(expected_dir.glob('*'))}"
+                    # Verify it's an STT file with proper naming format
+                    assert stt_files[0].name.endswith("_stt.mp3")
+
+                    # Verify file exists and has content
+                    assert stt_files[0].stat().st_size > 0
 
 
 @pytest.mark.asyncio
 async def test_stt_audio_not_saved_when_disabled():
     """Test that STT audio files are NOT saved when save_audio is False"""
-    
-    # Create test audio data
-    sample_rate = 16000
+
+    # Create test audio data at 24kHz to match SAMPLE_RATE
+    sample_rate = 24000
     audio_data = np.zeros(sample_rate, dtype=np.int16)
-    
+
     with tempfile.TemporaryDirectory() as temp_dir:
         test_audio_dir = Path(temp_dir) / "audio"
         test_audio_dir.mkdir()
-        
+
         # Mock the simple_stt_failover to return dict format
         with patch('voice_mode.simple_failover.simple_stt_failover', new_callable=AsyncMock) as mock_stt:
             mock_stt.return_value = {"text": "Test transcription", "provider": "whisper", "endpoint": "http://127.0.0.1:2022/v1"}
-            
+
             # Call with save_audio=False
             result = await speech_to_text(
                 audio_data=audio_data,
@@ -100,14 +97,14 @@ async def test_stt_audio_not_saved_when_disabled():
                 audio_dir=test_audio_dir,
                 transport="local"
             )
-            
+
             # Verify transcription was returned (now returns dict)
             assert isinstance(result, dict)
             assert result["text"] == "Test transcription"
-            
-            # Verify no audio files were saved
-            audio_files = list(test_audio_dir.rglob("*.wav"))
-            assert len(audio_files) == 0
+
+            # Verify no audio files were saved (check for both wav and mp3)
+            audio_files = list(test_audio_dir.rglob("*.*"))
+            assert len(audio_files) == 0, f"Expected no audio files, found: {audio_files}"
 
 
 @pytest.mark.asyncio

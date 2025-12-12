@@ -657,7 +657,7 @@ if STT_AUDIO_FORMAT not in SUPPORTED_AUDIO_FORMATS:
 
 # Format-specific quality settings
 OPUS_BITRATE = int(os.getenv("VOICEMODE_OPUS_BITRATE", "32000"))  # Default 32kbps for voice
-MP3_BITRATE = os.getenv("VOICEMODE_MP3_BITRATE", "64k")  # Default 64kbps
+MP3_BITRATE = os.getenv("VOICEMODE_MP3_BITRATE", "32k")  # Default 32kbps (optimal for speech per Whisper research)
 AAC_BITRATE = os.getenv("VOICEMODE_AAC_BITRATE", "64k")  # Default 64kbps
 
 # ==================== STREAMING CONFIGURATION ====================

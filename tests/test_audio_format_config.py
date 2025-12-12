@@ -143,7 +143,7 @@ class TestAudioFormatConfiguration:
         
         # Default values
         assert OPUS_BITRATE == 32000  # 32kbps for voice
-        assert MP3_BITRATE == "64k"
+        assert MP3_BITRATE == "32k"  # 32kbps optimal for speech (per Whisper research)
         assert AAC_BITRATE == "64k"
     
     @patch.dict(os.environ, {
