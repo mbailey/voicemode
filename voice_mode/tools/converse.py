@@ -66,7 +66,10 @@ from voice_mode.config import (
     REPEAT_PHRASES,
     WAIT_PHRASES,
     WAIT_DURATION,
-    METRICS_LEVEL
+    METRICS_LEVEL,
+    STT_AUDIO_FORMAT,
+    STT_SAVE_FORMAT,
+    MP3_BITRATE
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -322,6 +325,68 @@ async def text_to_speech_with_failover(
     )
 
 
+def prepare_audio_for_stt(audio_data: np.ndarray, output_format: str = "mp3") -> bytes:
+    """
+    Prepare audio data for STT upload with optional compression.
+
+    Converts raw audio to the specified format, optionally compressing and
+    downsampling to 16kHz (Whisper's native rate) for optimal bandwidth.
+
+    Args:
+        audio_data: Raw audio data as numpy array (16-bit PCM)
+        output_format: Target format ('mp3', 'wav', 'flac', etc.)
+
+    Returns:
+        Compressed audio data as bytes
+    """
+    import io
+
+    # Create AudioSegment from raw data
+    # Audio is recorded at SAMPLE_RATE (24kHz), 16-bit mono
+    audio = AudioSegment(
+        audio_data.tobytes(),
+        frame_rate=SAMPLE_RATE,
+        sample_width=2,  # 16-bit = 2 bytes
+        channels=CHANNELS
+    )
+
+    # Calculate original size for logging
+    original_size = len(audio_data) * 2  # 16-bit = 2 bytes per sample
+
+    # Downsample to 16kHz (Whisper's native rate) for better compression
+    # This also reduces size by ~33% even before compression
+    whisper_sample_rate = 16000
+    if SAMPLE_RATE != whisper_sample_rate:
+        audio = audio.set_frame_rate(whisper_sample_rate)
+
+    # Export to target format
+    buffer = io.BytesIO()
+
+    if output_format == "mp3":
+        # Use configured bitrate for MP3 (default 32k for speech)
+        audio.export(buffer, format="mp3", bitrate=MP3_BITRATE)
+    elif output_format == "wav":
+        # WAV is uncompressed but we still benefit from downsampling
+        audio.export(buffer, format="wav")
+    elif output_format == "flac":
+        # FLAC is lossless compression
+        audio.export(buffer, format="flac")
+    else:
+        # Default to MP3 for unknown formats
+        logger.warning(f"Unknown STT format '{output_format}', falling back to MP3")
+        audio.export(buffer, format="mp3", bitrate=MP3_BITRATE)
+
+    compressed_data = buffer.getvalue()
+    compressed_size = len(compressed_data)
+
+    # Log compression ratio
+    compression_ratio = original_size / compressed_size if compressed_size > 0 else 0
+    logger.info(f"STT audio prepared: {original_size/1024:.1f}KB -> {compressed_size/1024:.1f}KB "
+                f"({output_format}, {compression_ratio:.1f}x compression)")
+
+    return compressed_data
+
+
 async def speech_to_text(
     audio_data: np.ndarray,
     save_audio: bool = False,
@@ -333,6 +398,10 @@ async def speech_to_text(
 
     Handles audio file preparation (saving permanently or using temp file) and
     delegates to simple_stt_failover for the actual transcription attempts.
+
+    Audio is compressed (default: MP3 at 32kbps) and downsampled to 16kHz
+    to reduce bandwidth usage when uploading to remote STT services.
+    Original full-quality WAV is saved separately when save_audio is enabled.
 
     Args:
         audio_data: Raw audio data as numpy array
@@ -347,13 +416,22 @@ async def speech_to_text(
         - All failed: {"error_type": "connection_failed", "attempted_endpoints": [...]}
     """
     import tempfile
+    import io
     from voice_mode.conversation_logger import get_conversation_logger
     from voice_mode.core import save_debug_file, get_debug_filename
     from voice_mode.simple_failover import simple_stt_failover
 
+    # Prepare compressed audio for upload (reduces bandwidth by ~90%)
+    # Use configured format (default: mp3) for optimal bandwidth
+    stt_format = STT_AUDIO_FORMAT if STT_AUDIO_FORMAT != "pcm" else "mp3"
+    compressed_audio = prepare_audio_for_stt(audio_data, stt_format)
+
+    # Determine file extension based on format
+    file_extension = stt_format if stt_format in ["mp3", "wav", "flac", "m4a", "ogg"] else "mp3"
+
     # Determine if we should save the file permanently or use a temp file
     if save_audio and audio_dir:
-        # Save directly to final location for debugging/analysis
+        # Save files for debugging/analysis
         conversation_logger = get_conversation_logger()
         conversation_id = conversation_logger.conversation_id
 
@@ -363,28 +441,38 @@ async def speech_to_text(
         month_dir = year_dir / f"{now.month:02d}"
         month_dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate filename and path
-        filename = get_debug_filename("stt", "wav", conversation_id)
-        wav_file_path = month_dir / filename
+        # Save recording in configured format (default: wav for full quality)
+        save_filename = get_debug_filename("stt", STT_SAVE_FORMAT, conversation_id)
+        save_file_path = month_dir / save_filename
 
-        # Write audio data directly to final location
-        write(str(wav_file_path), SAMPLE_RATE, audio_data)
-        # Log audio details: format, sample rate, bitrate (16-bit mono WAV)
-        bit_depth = 16
-        bitrate_kbps = (SAMPLE_RATE * bit_depth * CHANNELS) // 1000
-        logger.info(f"STT audio saved to: {wav_file_path} (WAV, {SAMPLE_RATE}Hz, {bitrate_kbps}kbps)")
+        if STT_SAVE_FORMAT == "wav":
+            # Save as uncompressed WAV for full quality archival
+            write(str(save_file_path), SAMPLE_RATE, audio_data)
+        else:
+            # Save in configured compressed format
+            saved_audio = prepare_audio_for_stt(audio_data, STT_SAVE_FORMAT)
+            with open(save_file_path, 'wb') as f:
+                f.write(saved_audio)
 
-        # Use the saved file for STT
-        with open(wav_file_path, 'rb') as audio_file:
-            result = await simple_stt_failover(
-                audio_file=audio_file,
-                model="whisper-1"
-            )
-        # Don't delete - it's our saved audio file
+        logger.info(f"STT audio saved to: {save_file_path} (format: {STT_SAVE_FORMAT})")
+
+        # Use compressed audio for upload (temporary file)
+        with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:
+            tmp_file.write(compressed_audio)
+            tmp_file.flush()
+
+            with open(tmp_file.name, 'rb') as audio_file:
+                result = await simple_stt_failover(
+                    audio_file=audio_file,
+                    model="whisper-1"
+                )
+
+            # Clean up temp file (we keep the WAV)
+            os.unlink(tmp_file.name)
     else:
         # Use temporary file that will be deleted
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
-            write(tmp_file.name, SAMPLE_RATE, audio_data)
+        with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:
+            tmp_file.write(compressed_audio)
             tmp_file.flush()
 
             with open(tmp_file.name, 'rb') as audio_file:
