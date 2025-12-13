@@ -313,11 +313,21 @@ async def stream_pcm_audio(
         # Wait for playback to finish
         stream.stop()
         
-        # Log TTS playback end
-        if event_logger:
-            event_logger.log_event(event_logger.TTS_PLAYBACK_END)
-        
         end_time = time.perf_counter()
+
+        # Log TTS playback end with metrics
+        if event_logger:
+            tts_event_data = {
+                "metrics": {
+                    "ttfa_ms": round((first_chunk_time - start_time) * 1000, 1) if first_chunk_time else 0,
+                    "total_time_ms": round((end_time - start_time) * 1000, 1),
+                    "bytes_received": bytes_received,
+                    "chunks": chunk_count,
+                    "format": "pcm",
+                    "sample_rate_hz": SAMPLE_RATE
+                }
+            }
+            event_logger.log_event(event_logger.TTS_PLAYBACK_END, tts_event_data)
         metrics.generation_time = first_chunk_time - start_time if first_chunk_time else 0
         metrics.playback_time = end_time - start_time
         

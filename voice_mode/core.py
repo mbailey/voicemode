@@ -424,13 +424,25 @@ async def text_to_speech(
                         player.play(samples_with_buffer, audio.frame_rate, blocking=False)
                         player.wait()
                         
-                        # Log TTS playback end event
+                        playback_end = time.perf_counter()
+                        metrics['playback'] = playback_end - playback_start
+
+                        # Log TTS playback end event with metrics
                         if event_logger:
-                            event_logger.log_event(event_logger.TTS_PLAYBACK_END)
-                        
+                            tts_event_data = {
+                                "metrics": {
+                                    "ttfa_ms": round(metrics.get('ttfa', 0) * 1000, 1),
+                                    "generation_ms": round(metrics.get('generation', 0) * 1000, 1),
+                                    "playback_ms": round(metrics['playback'] * 1000, 1),
+                                    "file_size_bytes": len(response_content),
+                                    "format": validated_format,
+                                    "sample_rate_hz": audio.frame_rate
+                                }
+                            }
+                            event_logger.log_event(event_logger.TTS_PLAYBACK_END, tts_event_data)
+
                         logger.info("✓ TTS played successfully")
                         os.unlink(tmp_file.name)
-                        metrics['playback'] = time.perf_counter() - playback_start
                         return True, metrics
                     finally:
                         # Restore stdio if it was changed
