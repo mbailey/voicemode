@@ -647,6 +647,20 @@ STT_AUDIO_FORMAT = os.getenv("VOICEMODE_STT_AUDIO_FORMAT", "mp3" if AUDIO_FORMAT
 # Default: wav (uncompressed, full quality)
 STT_SAVE_FORMAT = os.getenv("VOICEMODE_STT_SAVE_FORMAT", "wav").lower()
 
+# STT compression mode - controls when audio is compressed before upload
+# Options:
+#   auto   - Compress for remote endpoints, skip for local (default)
+#            Saves ~200-800ms transcode time for local endpoints where
+#            bandwidth isn't a bottleneck. Remote uploads benefit from
+#            smaller file sizes (MP3 is ~90% smaller than WAV).
+#   always - Always compress regardless of endpoint type
+#   never  - Never compress, always send WAV (highest quality, larger files)
+STT_COMPRESS = os.getenv("VOICEMODE_STT_COMPRESS", "auto").lower()
+
+# Validate STT_COMPRESS value
+if STT_COMPRESS not in ("auto", "always", "never"):
+    STT_COMPRESS = "auto"
+
 # Supported audio formats
 SUPPORTED_AUDIO_FORMATS = ["pcm", "opus", "mp3", "wav", "flac", "aac"]
 SUPPORTED_SAVE_FORMATS = ["wav", "mp3", "flac"]  # Formats suitable for saving recordings
