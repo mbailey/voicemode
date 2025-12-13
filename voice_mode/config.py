@@ -107,6 +107,12 @@ def load_voicemode_env():
 # Skip TTS for faster text-only responses (true/false)
 # VOICEMODE_SKIP_TTS=false
 
+# Metrics output level in converse results (minimal/summary/verbose)
+# - minimal: Just the response text, no timing (saves tokens)
+# - summary: Response + compact timing string (default)
+# - verbose: Response + detailed metrics breakdown
+# VOICEMODE_METRICS_LEVEL=summary
+
 # Enable audio feedback chimes (true/false)
 # VOICEMODE_AUDIO_FEEDBACK=true
 
@@ -446,6 +452,13 @@ SKIP_TTS = os.getenv("VOICEMODE_SKIP_TTS", "false").lower() in ("true", "1", "ye
 
 # TTS speed configuration (0.25-4.0, default None uses provider default)
 TTS_SPEED = float(os.getenv("VOICEMODE_TTS_SPEED")) if os.getenv("VOICEMODE_TTS_SPEED") else None
+
+# Metrics output level configuration (minimal/summary/verbose)
+# - minimal: Just the response text, no timing
+# - summary: Response + compact timing string (default)
+# - verbose: Response + detailed metrics breakdown
+_metrics_level = os.getenv("VOICEMODE_METRICS_LEVEL", "summary").lower()
+METRICS_LEVEL = _metrics_level if _metrics_level in ("minimal", "summary", "verbose") else "summary"
 
 # Local provider preference configuration
 PREFER_LOCAL = os.getenv("VOICEMODE_PREFER_LOCAL", "true").lower() in ("true", "1", "yes", "on")

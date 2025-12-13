@@ -165,17 +165,41 @@ async def simple_stt_failover(
 
     Returns:
         Dict with transcription result or error information:
-        - Success: {"text": "...", "provider": "...", "endpoint": "..."}
-        - No speech: {"error_type": "no_speech", "provider": "..."}
+        - Success: {"text": "...", "provider": "...", "endpoint": "...", "metrics": {...}}
+        - No speech: {"error_type": "no_speech", "provider": "...", "metrics": {...}}
         - All failed: {"error_type": "connection_failed", "attempted_endpoints": [...]}
+
+        The metrics dict (when present) contains:
+        - file_size_bytes: Size of audio file sent
+        - request_time_ms: Total time for the API request
+        - is_local: Whether the endpoint is local (localhost/LAN)
     """
+    import time
+
     connection_errors = []
     successful_but_empty = False
     successful_provider = None
 
+    # Get file size for metrics
+    file_size_bytes = 0
+    try:
+        # Save current position, seek to end to get size, restore position
+        start_pos = audio_file.tell()
+        audio_file.seek(0, 2)  # Seek to end
+        file_size_bytes = audio_file.tell()
+        audio_file.seek(start_pos)  # Restore position
+        # Ensure we got an integer
+        if not isinstance(file_size_bytes, int):
+            file_size_bytes = 0
+    except Exception as e:
+        logger.debug(f"Could not get file size: {e}")
+        file_size_bytes = 0
+
     # Log STT request details
     logger.info("STT: Starting speech-to-text conversion")
     logger.info(f"  Available endpoints: {STT_BASE_URLS}")
+    if file_size_bytes > 0:
+        logger.info(f"  Audio file size: {file_size_bytes / 1024:.1f}KB")
 
     # Try each STT endpoint in order
     for i, base_url in enumerate(STT_BASE_URLS):
@@ -200,25 +224,38 @@ async def simple_stt_failover(
                 max_retries=max_retries
             )
 
-            # Try STT with this endpoint
+            # Try STT with this endpoint - track timing
+            request_start = time.perf_counter()
             transcription = await client.audio.transcriptions.create(
                 model=model,
                 file=audio_file,
                 response_format="text"
             )
+            request_time_ms = (time.perf_counter() - request_start) * 1000
 
             text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
+
+            # Build metrics dict
+            is_local = is_local_provider(base_url)
+            metrics = {
+                "file_size_bytes": file_size_bytes,
+                "request_time_ms": round(request_time_ms, 1),
+                "is_local": is_local,
+            }
 
             if text:
                 logger.info(f"✓ STT succeeded with {provider_type} at {base_url}")
                 logger.info(f"  Transcribed: {text[:100]}{'...' if len(text) > 100 else ''}")
-                # Return both text and provider info for display
-                return {"text": text, "provider": provider_type, "endpoint": base_url}
+                logger.info(f"  Request time: {request_time_ms:.0f}ms, File size: {file_size_bytes/1024:.1f}KB")
+                # Return both text and provider info for display, plus metrics
+                return {"text": text, "provider": provider_type, "endpoint": base_url, "metrics": metrics}
             else:
                 # Successful connection but no speech detected
                 logger.warning(f"STT returned empty result from {base_url} ({provider_type})")
                 successful_but_empty = True
                 successful_provider = provider_type
+                # Store metrics for potential no_speech return
+                successful_metrics = metrics
 
         except Exception as e:
             error_str = str(e)
@@ -258,7 +295,11 @@ async def simple_stt_failover(
     if successful_but_empty:
         # At least one endpoint connected successfully but returned no speech
         logger.info("STT: No speech detected (successful connection)")
-        return {"error_type": "no_speech", "provider": successful_provider}
+        result = {"error_type": "no_speech", "provider": successful_provider}
+        # Include metrics if we captured them
+        if 'successful_metrics' in locals():
+            result["metrics"] = successful_metrics
+        return result
     elif connection_errors:
         # All endpoints failed with connection/auth errors
         logger.error(f"✗ All STT endpoints failed after {len(STT_BASE_URLS)} attempts")

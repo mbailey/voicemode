@@ -65,7 +65,8 @@ from voice_mode.config import (
     TTS_MODELS,
     REPEAT_PHRASES,
     WAIT_PHRASES,
-    WAIT_DURATION
+    WAIT_DURATION,
+    METRICS_LEVEL
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -368,7 +369,10 @@ async def speech_to_text(
 
         # Write audio data directly to final location
         write(str(wav_file_path), SAMPLE_RATE, audio_data)
-        logger.info(f"STT audio saved to: {wav_file_path}")
+        # Log audio details: format, sample rate, bitrate (16-bit mono WAV)
+        bit_depth = 16
+        bitrate_kbps = (SAMPLE_RATE * bit_depth * CHANNELS) // 1000
+        logger.info(f"STT audio saved to: {wav_file_path} (WAV, {SAMPLE_RATE}Hz, {bitrate_kbps}kbps)")
 
         # Use the saved file for STT
         with open(wav_file_path, 'rb') as audio_file:
@@ -1043,7 +1047,8 @@ async def converse(
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
     chime_leading_silence: Optional[float] = None,
-    chime_trailing_silence: Optional[float] = None
+    chime_trailing_silence: Optional[float] = None,
+    metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -1070,6 +1075,10 @@ KEY PARAMETERS:
 • chime_enabled (bool): Enable/disable audio feedback chimes
 • chime_leading_silence (float): Silence before chime in seconds
 • chime_trailing_silence (float): Silence after chime in seconds
+• metrics_level ("minimal"|"summary"|"verbose"): Output detail level
+  - minimal: Just response text (saves tokens)
+  - summary: Response + compact timing (default)
+  - verbose: Response + detailed metrics breakdown
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
@@ -1122,7 +1131,10 @@ consult the MCP resources listed above.
         if not (0.25 <= speed <= 4.0):
             source = " from VOICEMODE_TTS_SPEED environment variable" if speed_from_config else ""
             return f"❌ Error: speed must be between 0.25 and 4.0 (got {speed}{source})"
-    
+
+    # Determine effective metrics level (parameter overrides config)
+    effective_metrics_level = metrics_level if metrics_level else METRICS_LEVEL
+
     logger.info(f"Converse: '{message[:50]}{'...' if len(message) > 50 else ''}' (wait_for_response: {wait_for_response})")
     
     # Validate vad_aggressiveness parameter
@@ -1379,7 +1391,11 @@ consult the MCP resources listed above.
                             error_message=None if tts_success else "TTS failed"
                         )
 
-                        result = f"✓ Message spoken successfully{timing_info}"
+                        # Format result based on metrics level
+                        if effective_metrics_level == "minimal":
+                            result = "✓ Message spoken successfully"
+                        else:
+                            result = f"✓ Message spoken successfully{timing_info}"
                         logger.info(f"Speak-only result: {result}")
                         return result
 
@@ -1435,12 +1451,15 @@ consult the MCP resources listed above.
                         result = "Error: Could not record audio"
                         return result
                     
+                    # Track STT-specific metrics (defined here to be in scope for event logging later)
+                    stt_metrics = None
+
                     # Check if no speech was detected
                     if not speech_detected:
                         logger.info("No speech detected during recording - skipping STT processing")
                         response_text = None
                         timings['stt'] = 0.0
-                        
+
                         # Still save the audio if configured
                         if SAVE_AUDIO and AUDIO_DIR:
                             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1452,13 +1471,24 @@ consult the MCP resources listed above.
                         # Log STT start
                         if event_logger:
                             event_logger.log_event(event_logger.STT_START)
-                        
+
                         stt_start = time.perf_counter()
                         stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
                         timings['stt'] = time.perf_counter() - stt_start
 
                         # Handle structured STT result
                         if isinstance(stt_result, dict):
+                            # Extract metrics if present
+                            stt_metrics = stt_result.get("metrics")
+                            if stt_metrics:
+                                # Store in timings for later use
+                                timings['stt_request_ms'] = stt_metrics.get('request_time_ms', 0)
+                                timings['stt_file_size_bytes'] = stt_metrics.get('file_size_bytes', 0)
+                                timings['stt_is_local'] = stt_metrics.get('is_local', False)
+                                logger.debug(f"STT metrics: request={stt_metrics.get('request_time_ms')}ms, "
+                                           f"file_size={stt_metrics.get('file_size_bytes')/1024:.1f}KB, "
+                                           f"is_local={stt_metrics.get('is_local')}")
+
                             if "error_type" in stt_result:
                                 # Handle connection failures vs no speech
                                 if stt_result["error_type"] == "connection_failed":
@@ -1654,12 +1684,25 @@ consult the MCP resources listed above.
                                     stt_provider = stt_result.get("provider", "unknown")
                                     logger.info(f"New response after wait: {response_text}")
 
-                    # Log STT complete
+                    # Log STT complete with metrics
                     if event_logger:
+                        stt_event_data = {}
                         if response_text:
-                            event_logger.log_event(event_logger.STT_COMPLETE, {"text": response_text})
+                            stt_event_data["text"] = response_text
+                        # Include metrics in event log (debug level data)
+                        if stt_metrics:
+                            stt_event_data["metrics"] = {
+                                "file_size_bytes": stt_metrics.get('file_size_bytes', 0),
+                                "request_time_ms": stt_metrics.get('request_time_ms', 0),
+                                "is_local": stt_metrics.get('is_local', False),
+                                "format": "wav",
+                                "sample_rate_hz": SAMPLE_RATE,
+                                "bitrate_kbps": (SAMPLE_RATE * 16 * CHANNELS) // 1000
+                            }
+                        if response_text:
+                            event_logger.log_event(event_logger.STT_COMPLETE, stt_event_data)
                         else:
-                            event_logger.log_event(event_logger.STT_NO_SPEECH)
+                            event_logger.log_event(event_logger.STT_NO_SPEECH, stt_event_data)
                     
                     # Log STT immediately after it completes (even if no speech detected)
                     try:
@@ -1717,6 +1760,9 @@ consult the MCP resources listed above.
                     stt_timing_parts.append(f"record {timings['record']:.1f}s")
                 if 'stt' in timings:
                     stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
+                # Add detailed STT metrics if available
+                if 'stt_file_size_bytes' in timings and timings['stt_file_size_bytes'] > 0:
+                    stt_timing_parts.append(f"audio {timings['stt_file_size_bytes']/1024:.0f}KB")
                 
                 tts_timing_str = ", ".join(tts_timing_parts) if tts_timing_parts else None
                 stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
@@ -1761,15 +1807,32 @@ consult the MCP resources listed above.
                             "timestamp": datetime.now().isoformat()
                         }
                         save_transcription(conversation_text, prefix="conversation", metadata=metadata)
-                    
+
                     # Logging already done immediately after TTS and STT complete
-                    
-                    # Include STT provider in result if known
+
+                    # Format result based on metrics level
                     stt_info = f" (STT: {stt_provider})" if 'stt_provider' in locals() and stt_provider != "unknown" else ""
-                    result = f"Voice response: {response_text}{stt_info} | Timing: {timing_str}"
+                    if effective_metrics_level == "minimal":
+                        result = f"Voice response: {response_text}"
+                    elif effective_metrics_level == "verbose":
+                        # Build verbose metrics block
+                        verbose_parts = [f"Voice response: {response_text}{stt_info}"]
+                        verbose_parts.append(f"Timing: {timing_str}")
+                        if 'stt_request_ms' in timings:
+                            verbose_parts.append(f"STT request: {timings['stt_request_ms']:.0f}ms")
+                        if 'stt_file_size_bytes' in timings:
+                            verbose_parts.append(f"STT file: {timings['stt_file_size_bytes']/1024:.0f}KB")
+                        if 'stt_is_local' in timings:
+                            verbose_parts.append(f"STT local: {timings['stt_is_local']}")
+                        result = " | ".join(verbose_parts)
+                    else:  # summary (default)
+                        result = f"Voice response: {response_text}{stt_info} | Timing: {timing_str}"
                     success = True
                 else:
-                    result = f"No speech detected | Timing: {timing_str}"
+                    if effective_metrics_level == "minimal":
+                        result = "No speech detected"
+                    else:
+                        result = f"No speech detected | Timing: {timing_str}"
                     success = True  # Not an error, just no speech
                 return result
                     
