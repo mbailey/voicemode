@@ -399,8 +399,12 @@ async def speech_to_text(
     Handles audio file preparation (saving permanently or using temp file) and
     delegates to simple_stt_failover for the actual transcription attempts.
 
-    Audio is compressed (default: MP3 at 32kbps) and downsampled to 16kHz
-    to reduce bandwidth usage when uploading to remote STT services.
+    For remote endpoints: Audio is compressed (MP3 at 32kbps) and downsampled
+    to 16kHz to reduce bandwidth usage when uploading.
+
+    For local endpoints: Audio is sent as WAV to skip compression overhead,
+    since network bandwidth isn't a bottleneck for localhost/LAN connections.
+
     Original full-quality WAV is saved separately when save_audio is enabled.
 
     Args:
@@ -420,10 +424,34 @@ async def speech_to_text(
     from voice_mode.conversation_logger import get_conversation_logger
     from voice_mode.core import save_debug_file, get_debug_filename
     from voice_mode.simple_failover import simple_stt_failover
+    from voice_mode.config import STT_BASE_URLS, STT_COMPRESS
+    from voice_mode.provider_discovery import is_local_provider
 
-    # Prepare compressed audio for upload (reduces bandwidth by ~90%)
-    # Use configured format (default: mp3) for optimal bandwidth
-    stt_format = STT_AUDIO_FORMAT if STT_AUDIO_FORMAT != "pcm" else "mp3"
+    # Determine compression based on STT_COMPRESS mode
+    # Options: auto (default), always, never
+    primary_endpoint = STT_BASE_URLS[0] if STT_BASE_URLS else 'https://api.openai.com/v1'
+    is_local = is_local_provider(primary_endpoint)
+
+    if STT_COMPRESS == "never":
+        # Never compress - always use WAV
+        stt_format = "wav"
+        logger.info(f"STT: Compression disabled (mode=never), using WAV")
+    elif STT_COMPRESS == "always":
+        # Always compress regardless of endpoint type
+        stt_format = STT_AUDIO_FORMAT if STT_AUDIO_FORMAT != "pcm" else "mp3"
+        logger.info(f"STT: Compression forced (mode=always), using {stt_format}")
+    else:
+        # Auto mode (default): compress for remote, skip for local
+        if is_local:
+            # Local endpoint: use WAV to skip compression overhead (~200-800ms saved)
+            stt_format = "wav"
+            logger.info(f"STT: Local endpoint detected ({primary_endpoint}), skipping compression")
+        else:
+            # Remote endpoint: compress to reduce bandwidth (~90% smaller)
+            stt_format = STT_AUDIO_FORMAT if STT_AUDIO_FORMAT != "pcm" else "mp3"
+            logger.info(f"STT: Remote endpoint ({primary_endpoint}), using {stt_format} compression")
+
+    # Prepare audio for upload (compressed for remote, WAV for local)
     compressed_audio = prepare_audio_for_stt(audio_data, stt_format)
 
     # Determine file extension based on format
