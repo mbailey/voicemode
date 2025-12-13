@@ -5,6 +5,7 @@ on:
     branches: [ master, main, test ]
   pull_request:
     branches: [ master, main ]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -26,12 +27,12 @@ jobs:
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y portaudio19-dev python3-dev
-    
+        sudo apt-get install -y portaudio19-dev python3-dev ffmpeg
+
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        brew install portaudio
+        brew install portaudio ffmpeg
     
     - name: Install uv
       run: |
