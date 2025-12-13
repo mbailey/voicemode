@@ -340,3 +340,24 @@ voicemode:converse("Would you like me to install it now?", wait_for_response=Tru
 - Compatible with Claude Code and other MCP clients
 - Supports concurrent instances with audio playback management
 - Works with tmux and terminal multiplexers
+
+## Batching Voice Announcements with Audio Playback
+
+When playing audio files (e.g., from cue files or samples), you can batch multiple voice announcements and playback commands in a single tool call. The tools execute **sequentially** within the batch, allowing for natural announce-then-play patterns:
+
+```python
+# Batch multiple announce-play sequences in one call
+voicemode:converse("Chapter 1 - Intro", wait_for_response=False)
+Bash(command="mpv --start=00:00 --length=3 song.mp3")
+voicemode:converse("Chapter 2 - Verse", wait_for_response=False)
+Bash(command="mpv --start=00:10 --length=5 song.mp3")
+voicemode:converse("Chapter 3 - Chorus", wait_for_response=False)
+Bash(command="mpv --start=00:30 --length=5 song.mp3")
+```
+
+**Key points:**
+- All tools in the batch execute sequentially (not in parallel)
+- Each announcement plays before its corresponding audio
+- No explicit delays needed - the TTS completes before Bash runs
+- Efficient for playing multiple cue file chapters with narration
+- Small gap between audio end and next tool call (API round-trip)
