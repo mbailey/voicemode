@@ -24,6 +24,11 @@ from voice_mode.telemetry.privacy import (
     SizeBin
 )
 from voice_mode.telemetry.client import TelemetryClient
+from voice_mode.telemetry.sender import (
+    maybe_send_telemetry_background,
+    maybe_send_telemetry_async,
+    should_send_telemetry,
+)
 
 __all__ = [
     'TelemetryCollector',
@@ -33,4 +38,7 @@ __all__ = [
     'anonymize_path',
     'DurationBin',
     'SizeBin',
+    'maybe_send_telemetry_background',
+    'maybe_send_telemetry_async',
+    'should_send_telemetry',
 ]

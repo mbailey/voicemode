@@ -331,7 +331,7 @@ class TelemetryCollector:
 
         Returns:
             Dictionary with environment information:
-            - os_type: Operating system
+            - os: Operating system (matches worker schema)
             - install_method: Installation method (dev/uv/pip)
             - mcp_host: MCP host application (if applicable)
             - exec_source: Execution source (mcp/cli)
@@ -342,7 +342,7 @@ class TelemetryCollector:
         env_info = config.get_environment_info()
 
         return {
-            "os_type": env_info.get("os_type"),
+            "os": env_info.get("os_type"),  # Worker expects "os" not "os_type"
             "install_method": env_info.get("install_method"),
             "mcp_host": env_info.get("mcp_host"),
             "exec_source": env_info.get("exec_source"),
