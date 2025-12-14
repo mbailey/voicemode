@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -44,6 +44,50 @@ def get_last_send_time() -> Optional[datetime]:
     except (ValueError, OSError) as e:
         logger.debug(f"Failed to read last send time: {e}")
         return None
+
+
+def get_last_period_end() -> Optional[datetime]:
+    """Get the period_end from the most recent telemetry log.
+
+    This is used to determine where to start collecting data from,
+    ensuring continuous coverage without gaps or overlaps.
+
+    Returns:
+        datetime of last period_end if found, None otherwise
+    """
+    if not LOGS_DIR.exists():
+        return None
+
+    # Find the most recent telemetry log file
+    log_files = sorted(LOGS_DIR.glob("telemetry_*.json"), reverse=True)
+    if not log_files:
+        return None
+
+    # Try each file starting from most recent
+    for log_file in log_files:
+        try:
+            with open(log_file, 'r') as f:
+                data = json.load(f)
+
+            # Handle both list and single object formats
+            if isinstance(data, list) and data:
+                # Get the last entry in the list
+                last_entry = data[-1]
+            elif isinstance(data, dict):
+                last_entry = data
+            else:
+                continue
+
+            # Extract period_end, falling back to timestamp for older entries
+            period_end_str = last_entry.get("period_end") or last_entry.get("timestamp")
+            if period_end_str:
+                return datetime.fromisoformat(period_end_str)
+
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            logger.debug(f"Failed to read period_end from {log_file}: {e}")
+            continue
+
+    return None
 
 
 def update_last_send_time() -> None:
@@ -155,16 +199,29 @@ def cleanup_old_logs() -> int:
 def send_telemetry_sync() -> bool:
     """Synchronous telemetry send function.
 
-    Collects telemetry data and sends to configured endpoint.
+    Collects telemetry data since the last send and transmits to configured endpoint.
+    Uses period_end from the last telemetry log as the start date for continuous coverage.
     Logs the payload locally for transparency.
 
     Returns:
         True if send was successful, False otherwise
     """
     try:
-        # Collect telemetry event
+        # Determine collection period
+        # Start from last period_end to ensure continuous coverage
+        start_date = get_last_period_end()
+        end_date = datetime.now(timezone.utc)
+
+        if start_date is None:
+            # First send ever - collect last 24 hours
+            start_date = end_date - timedelta(hours=24)
+            logger.info("First telemetry send - collecting last 24 hours")
+        else:
+            logger.info(f"Collecting telemetry from {start_date} to {end_date}")
+
+        # Collect telemetry event for the period
         collector = TelemetryCollector()
-        event = collector.collect_telemetry_event()
+        event = collector.collect_telemetry_event(start_date=start_date, end_date=end_date)
 
         if not event:
             logger.warning("No telemetry data collected")

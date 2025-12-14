@@ -349,22 +349,33 @@ class TelemetryCollector:
             "version": sanitize_version_string(__version__),
         }
 
-    def collect_telemetry_event(self) -> Dict[str, Any]:
+    def collect_telemetry_event(
+        self,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
         """
         Collect a complete telemetry event payload.
 
         Combines session data and environment data into a single event
         suitable for transmission to telemetry backend.
 
+        Args:
+            start_date: Start of collection period (defaults to start of today)
+            end_date: End of collection period (defaults to now)
+
         Returns:
-            Complete telemetry event dictionary
+            Complete telemetry event dictionary with period_start and period_end
         """
         # Get environment data
         env_data = self.collect_environment_data()
 
-        # Get session data (last 24 hours by default)
-        end_date = datetime.now(timezone.utc)
-        start_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Set defaults for date range
+        if end_date is None:
+            end_date = datetime.now(timezone.utc)
+        if start_date is None:
+            start_date = end_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
         session_data = self.collect_session_data(start_date, end_date)
 
         # Get telemetry ID from config
@@ -373,6 +384,8 @@ class TelemetryCollector:
         return {
             "telemetry_id": telemetry_id,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "period_start": start_date.isoformat(),
+            "period_end": end_date.isoformat(),
             "environment": env_data,
             "usage": session_data,
         }
