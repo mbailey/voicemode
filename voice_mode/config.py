@@ -825,8 +825,10 @@ elif VOICEMODE_TELEMETRY in ("0", "no", "off"):
     VOICEMODE_TELEMETRY = "false"
 
 # VOICEMODE_TELEMETRY_ENDPOINT - backend URL for telemetry data
-# Default: None (will be set when backend is deployed)
-VOICEMODE_TELEMETRY_ENDPOINT = os.getenv("VOICEMODE_TELEMETRY_ENDPOINT")
+# Default endpoint (temporary - will change to custom domain before release)
+# Users can override with VOICEMODE_TELEMETRY_ENDPOINT environment variable
+_DEFAULT_TELEMETRY_ENDPOINT = "https://voicemode-telemetry.late-limit-5e4c.workers.dev/telemetry"
+VOICEMODE_TELEMETRY_ENDPOINT = os.getenv("VOICEMODE_TELEMETRY_ENDPOINT", _DEFAULT_TELEMETRY_ENDPOINT)
 
 
 def is_telemetry_enabled() -> bool:
