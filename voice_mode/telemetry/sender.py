@@ -23,34 +23,17 @@ logger = logging.getLogger(__name__)
 
 # Constants
 COOLDOWN_HOURS = 24
-TELEMETRY_DIR = config.BASE_DIR / "telemetry"
 LOGS_DIR = config.BASE_DIR / "logs" / "telemetry"
-LAST_SEND_FILE = TELEMETRY_DIR / "last_send"
 MAX_LOG_AGE_DAYS = 30
 
 
 def get_last_send_time() -> Optional[datetime]:
-    """Get the timestamp of the last telemetry send.
+    """Get the timestamp of the last successful telemetry send.
 
-    Returns:
-        datetime if last_send file exists and is valid, None otherwise
-    """
-    if not LAST_SEND_FILE.exists():
-        return None
-
-    try:
-        timestamp_str = LAST_SEND_FILE.read_text().strip()
-        return datetime.fromisoformat(timestamp_str)
-    except (ValueError, OSError) as e:
-        logger.debug(f"Failed to read last send time: {e}")
-        return None
-
-
-def get_last_period_end() -> Optional[datetime]:
-    """Get the period_end from the most recent telemetry log.
-
-    This is used to determine where to start collecting data from,
-    ensuring continuous coverage without gaps or overlaps.
+    Uses the period_end from the most recent telemetry log file.
+    This is used for both:
+    - Cooldown checking (24 hours between sends)
+    - Determining where to start collecting data from
 
     Returns:
         datetime of last period_end if found, None otherwise
@@ -88,13 +71,6 @@ def get_last_period_end() -> Optional[datetime]:
             continue
 
     return None
-
-
-def update_last_send_time() -> None:
-    """Update the last send timestamp to now."""
-    TELEMETRY_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).isoformat()
-    LAST_SEND_FILE.write_text(timestamp)
 
 
 def should_send_telemetry() -> bool:
@@ -201,7 +177,7 @@ def send_telemetry_sync() -> bool:
 
     Collects telemetry data since the last send and transmits to configured endpoint.
     Uses period_end from the last telemetry log as the start date for continuous coverage.
-    Logs the payload locally for transparency.
+    Logs the payload locally for transparency (which also serves as the cooldown tracker).
 
     Returns:
         True if send was successful, False otherwise
@@ -209,7 +185,7 @@ def send_telemetry_sync() -> bool:
     try:
         # Determine collection period
         # Start from last period_end to ensure continuous coverage
-        start_date = get_last_period_end()
+        start_date = get_last_send_time()
         end_date = datetime.now(timezone.utc)
 
         if start_date is None:
@@ -228,6 +204,7 @@ def send_telemetry_sync() -> bool:
             return False
 
         # Log the payload locally before sending (transparency)
+        # This also serves as the "last send" marker for cooldown checking
         log_telemetry_payload(event)
 
         # Send to endpoint
@@ -235,7 +212,6 @@ def send_telemetry_sync() -> bool:
         success = client.send_event(event)
 
         if success:
-            update_last_send_time()
             logger.info("Telemetry sent successfully")
             # Clean up old logs while we're at it
             cleanup_old_logs()
