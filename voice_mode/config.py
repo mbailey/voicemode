@@ -337,6 +337,22 @@ TTS \\bAPI\\b A P I # API as individual letters
 # VOICEMODE_PROGRESS_STYLE=auto
 
 #############
+# Telemetry (opt-in analytics to improve VoiceMode)
+#############
+
+# Enable telemetry: true, false, or ask (default: ask)
+# - true: Send anonymous usage statistics
+# - false: Disable telemetry completely
+# - ask: Prompt user on first interactive use
+# VOICEMODE_TELEMETRY=ask
+
+# Telemetry endpoint URL (usually not needed, uses project default)
+# VOICEMODE_TELEMETRY_ENDPOINT=
+
+# Note: Setting DO_NOT_TRACK=1 in your environment also disables telemetry
+# Learn more: https://voicemode.dev/docs/privacy
+
+#############
 # API Keys (set these in your environment for security)
 #############
 
