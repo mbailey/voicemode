@@ -9,7 +9,7 @@ import logging
 from typing import Dict, Optional, List, Any, Tuple
 from openai import AsyncOpenAI
 
-from .config import TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, OPENAI_API_KEY, get_voice_preferences
+from .config import TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, OPENAI_API_KEY, get_voice_preferences, TTS_EXTRA_HEADERS, STT_EXTRA_HEADERS
 from .provider_discovery import provider_registry, EndpointInfo, is_local_provider
 
 logger = logging.getLogger("voicemode")
@@ -60,7 +60,8 @@ async def get_tts_client_and_voice(
         client = AsyncOpenAI(
             api_key=OPENAI_API_KEY or "dummy-key-for-local",
             base_url=base_url,
-            max_retries=max_retries
+            max_retries=max_retries,
+            default_headers=TTS_EXTRA_HEADERS or None
         )
 
         logger.info(f"  • Selected endpoint: {base_url}")
@@ -96,14 +97,14 @@ async def get_tts_client_and_voice(
                 api_key = OPENAI_API_KEY if endpoint_info.provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
                 # Disable retries for local endpoints - they either work or don't
                 max_retries = 0 if is_local_provider(url) else 2
-                client = AsyncOpenAI(api_key=api_key, base_url=url, max_retries=max_retries)
+                client = AsyncOpenAI(api_key=api_key, base_url=url, max_retries=max_retries, default_headers=TTS_EXTRA_HEADERS or None)
 
                 logger.info(f"  ✓ Selected endpoint: {url} ({endpoint_info.provider_type})")
                 logger.info(f"  ✓ Selected voice: {selected_voice}")
                 logger.info(f"  ✓ Selected model: {selected_model}")
 
                 return client, selected_voice, selected_model, endpoint_info
-    
+
     # No specific voice requested - iterate through voice preferences
     logger.info("  No specific voice requested, checking voice preferences...")
     for preferred_voice in combined_voice_list:
@@ -123,14 +124,14 @@ async def get_tts_client_and_voice(
                 api_key = OPENAI_API_KEY if endpoint_info.provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
                 # Disable retries for local endpoints - they either work or don't
                 max_retries = 0 if is_local_provider(url) else 2
-                client = AsyncOpenAI(api_key=api_key, base_url=url, max_retries=max_retries)
+                client = AsyncOpenAI(api_key=api_key, base_url=url, max_retries=max_retries, default_headers=TTS_EXTRA_HEADERS or None)
 
                 logger.info(f"  ✓ Selected endpoint: {url} ({endpoint_info.provider_type})")
                 logger.info(f"  ✓ Selected voice: {selected_voice}")
                 logger.info(f"  ✓ Selected model: {selected_model}")
 
                 return client, selected_voice, selected_model, endpoint_info
-    
+
     # No preferred voices found - fall back to any available endpoint
     logger.warning("  No preferred voices available, using any available endpoint...")
     for url in TTS_BASE_URLS:
@@ -145,7 +146,7 @@ async def get_tts_client_and_voice(
             api_key = OPENAI_API_KEY if endpoint_info.provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
             # Disable retries for local endpoints - they either work or don't
             max_retries = 0 if is_local_provider(url) else 2
-            client = AsyncOpenAI(api_key=api_key, base_url=url, max_retries=max_retries)
+            client = AsyncOpenAI(api_key=api_key, base_url=url, max_retries=max_retries, default_headers=TTS_EXTRA_HEADERS or None)
 
             logger.info(f"  ✓ Selected endpoint: {url} ({endpoint_info.provider_type})")
             logger.info(f"  ✓ Selected voice: {selected_voice}")
@@ -190,7 +191,8 @@ async def get_stt_client(
         client = AsyncOpenAI(
             api_key=OPENAI_API_KEY or "dummy-key-for-local",
             base_url=base_url,
-            max_retries=max_retries
+            max_retries=max_retries,
+            default_headers=STT_EXTRA_HEADERS or None
         )
 
         return client, selected_model, endpoint_info
@@ -209,9 +211,10 @@ async def get_stt_client(
     client = AsyncOpenAI(
         api_key=api_key,
         base_url=endpoint_info.base_url,
-        max_retries=max_retries
+        max_retries=max_retries,
+        default_headers=STT_EXTRA_HEADERS or None
     )
-    
+
     return client, selected_model, endpoint_info
 
 
