@@ -99,6 +99,8 @@ nav:
     - Local Development: local-development-uvx.md
     - Migration Guide: migration-guide.md
     - Audio Formats: audio-format-migration.md
+  - Guides:
+    - MacBook Portable Mode: guides/macbook-portable.md
   - Troubleshooting:
     - Overview: troubleshooting/index.md
     - Voice Interaction:
