@@ -228,10 +228,7 @@ voicemode config set VOICEMODE_TTS_VOICE nova
 
 ### Quick Install
 ```bash
-# Install VoiceMode package
-curl -sL https://voicemode.ai/install.sh | bash
-
-# Or with UV
+# Install VoiceMode using the Python installer
 uv tool install voice-mode-install
 voice-mode-install
 
