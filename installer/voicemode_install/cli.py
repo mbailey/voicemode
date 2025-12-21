@@ -1,9 +1,11 @@
 """Main CLI for VoiceMode installer."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 import click
@@ -106,6 +108,139 @@ def get_latest_version() -> str | None:
 def check_existing_installation() -> bool:
     """Check if VoiceMode is already installed."""
     return check_command_exists('voicemode')
+
+
+def configure_telemetry_consent(non_interactive: bool, dry_run: bool) -> None:
+    """Ask user about telemetry opt-in and save their preference.
+
+    Respects:
+    - DO_NOT_TRACK environment variable (universal opt-out standard)
+    - Existing VOICEMODE_TELEMETRY setting
+    - Non-interactive mode (defaults to disabled)
+    """
+    # Skip in dry run mode
+    if dry_run:
+        print_step("[DRY RUN] Would configure telemetry preference")
+        return
+
+    # Respect DO_NOT_TRACK environment variable (universal opt-out standard)
+    if os.environ.get('DO_NOT_TRACK'):
+        print_step("Telemetry disabled (DO_NOT_TRACK is set)")
+        set_telemetry_preference(False)
+        return
+
+    # Check if already configured in environment
+    if os.environ.get('VOICEMODE_TELEMETRY'):
+        current = os.environ.get('VOICEMODE_TELEMETRY')
+        print_step(f"Telemetry preference already set: {current}")
+        return
+
+    # Check if already configured in voicemode.env
+    voicemode_config = Path.home() / ".voicemode" / "voicemode.env"
+    if voicemode_config.exists():
+        try:
+            content = voicemode_config.read_text()
+            for line in content.splitlines():
+                line = line.strip()
+                if line.startswith('VOICEMODE_TELEMETRY=') or line.startswith('export VOICEMODE_TELEMETRY='):
+                    # Already configured
+                    value = line.split('=', 1)[1].strip().strip('"').strip("'")
+                    print_step(f"Telemetry preference already configured: {value}")
+                    return
+        except Exception:
+            pass  # Continue to prompt
+
+    # In non-interactive mode, default to disabled
+    if non_interactive:
+        print_step("Telemetry disabled (non-interactive mode)")
+        set_telemetry_preference(False)
+        return
+
+    # Display telemetry information
+    click.echo()
+    click.echo("━" * 70)
+    click.echo(click.style("Help Improve VoiceMode", fg='blue', bold=True))
+    click.echo("━" * 70)
+    click.echo()
+    click.echo("VoiceMode includes optional telemetry to help improve the project.")
+    click.echo()
+    click.echo("If enabled, we collect:")
+    click.echo("  • Anonymous usage statistics (session counts, provider choices)")
+    click.echo("  • Performance metrics (response times)")
+    click.echo("  • Error rates (no message content)")
+    click.echo()
+    click.echo("Your data is never sold and helps us make VoiceMode better.")
+    click.echo("Learn more: https://voicemode.dev/docs/privacy")
+    click.echo()
+
+    if click.confirm("Would you like to enable telemetry?", default=False):
+        set_telemetry_preference(True)
+        print_success("Telemetry enabled - thank you for helping improve VoiceMode!")
+    else:
+        set_telemetry_preference(False)
+        print_success("Telemetry disabled - no data will be collected")
+
+
+def set_telemetry_preference(enabled: bool) -> None:
+    """Save telemetry preference to ~/.voicemode/voicemode.env."""
+    voicemode_dir = Path.home() / ".voicemode"
+    voicemode_config = voicemode_dir / "voicemode.env"
+
+    # Create directory if needed
+    voicemode_dir.mkdir(parents=True, exist_ok=True)
+
+    value = "true" if enabled else "false"
+
+    # Read existing content if file exists
+    if voicemode_config.exists():
+        try:
+            lines = voicemode_config.read_text().splitlines()
+            new_lines = []
+            found = False
+
+            for line in lines:
+                stripped = line.strip()
+                # Check for existing telemetry setting (with or without export)
+                if stripped.startswith('VOICEMODE_TELEMETRY=') or stripped.startswith('export VOICEMODE_TELEMETRY='):
+                    # Replace existing line
+                    new_lines.append(f'VOICEMODE_TELEMETRY="{value}"')
+                    found = True
+                elif stripped.startswith('# VOICEMODE_TELEMETRY='):
+                    # Found commented template - add our value after it
+                    new_lines.append(line)
+                    new_lines.append(f'VOICEMODE_TELEMETRY="{value}"')
+                    found = True
+                else:
+                    new_lines.append(line)
+
+            if not found:
+                # Add at the end
+                new_lines.append('')
+                new_lines.append('# Telemetry preference (set during installation)')
+                new_lines.append(f'VOICEMODE_TELEMETRY="{value}"')
+
+            voicemode_config.write_text('\n'.join(new_lines) + '\n')
+
+        except Exception as e:
+            print_warning(f"Could not update config file: {e}")
+    else:
+        # Create new config file with just telemetry setting
+        content = f"""# VoiceMode Configuration
+# Generated by installer on {date.today().isoformat()}
+
+# Telemetry preference (set during installation)
+VOICEMODE_TELEMETRY="{value}"
+"""
+        voicemode_config.write_text(content)
+
+    # Set secure permissions
+    try:
+        voicemode_config.chmod(0o600)
+    except Exception:
+        pass  # Best effort
+
+    # Export for current session
+    os.environ['VOICEMODE_TELEMETRY'] = value
 
 
 def ensure_homebrew_on_macos(platform_info, dry_run: bool, non_interactive: bool) -> bool:
@@ -391,6 +526,9 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive):
                 print_success("Shell completion configured")
             else:
                 print_warning("Could not configure shell completion automatically")
+
+        # Telemetry opt-in prompt
+        configure_telemetry_consent(non_interactive, dry_run)
 
         # Hardware recommendations for services
         if not skip_services and not dry_run:
