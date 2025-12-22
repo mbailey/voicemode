@@ -109,7 +109,7 @@ run_benchmark() {
     echo "=== $name ==="
     for i in $(seq 1 "$RUNS"); do
         start=$(python3 -c "import time; print(time.time())")
-        claude -p --tools "Bash" "$TEST_PROMPT" > /dev/null 2>&1
+        echo "$TEST_PROMPT" | claude -p --tools "Bash" > /dev/null 2>&1
         end=$(python3 -c "import time; print(time.time())")
         elapsed=$(python3 -c "print(f'{$end - $start:.2f}')")
         total=$(python3 -c "print($total + $end - $start)")
