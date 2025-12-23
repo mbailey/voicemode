@@ -227,11 +227,8 @@ voicemode config set VOICEMODE_TTS_VOICE nova
 ## Installation and Setup
 
 ### Quick Install
-```bash
-# Install VoiceMode package
-curl -sL https://voicemode.ai/install.sh | bash
 
-# Or with UV
+# Install with UV
 uv tool install voice-mode-install
 voice-mode-install
 
