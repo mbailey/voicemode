@@ -123,3 +123,4 @@ htmlcov/
 .coverage
 .coverage.*
 coverage.xml
+.mcp.json

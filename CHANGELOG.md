@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Fast Hook Receiver with Enhanced Soundfont Support** (VM-258)
+  - New voicemode-hook-receiver script for improved performance
+  - Enhanced soundfont structure support
+  - Optimized hook handling for faster responses
+
+- **Audio Compression Improvements** (VM-240, VM-245)
+  - Compress STT audio uploads to reduce bandwidth usage
+  - Skip audio compression for local STT endpoints (no need for compression on localhost)
+  - Configurable STT save format via `VOICEMODE_STT_SAVE_FORMAT` environment variable
+  - Save full-quality WAV files while using compressed upload for remote endpoints
+
+- **Detailed Timing Metrics** (VM-244)
+  - Added detailed timing metrics for STT/TTS transcode operations
+  - Configurable metrics output levels (minimal, summary, verbose)
+  - Better visibility into performance characteristics
+
+### Fixed
+
+- **Multiline Environment Variable Corruption** (VM-268)
+  - Fixed `voicemode whisper model` command corrupting multiline values in voicemode.env
+  - Preserves VOICEMODE_PRONOUNCE and other multiline quoted variables correctly
+  - Prevents whisper server from falling back to wrong model after config update
+
+- **Benchmark Script** (VM-258)
+  - Use stdin for `claude -p` in benchmark script
+  - Improved benchmark reliability
+
+- **Audio Quality Preservation** (VM-240)
+  - Ensure full-quality WAV files are saved even when using compressed upload
+  - Prevents quality loss in local audio archives
+
+### Changed
+
+- **Documentation** (VM-232)
+  - Improved configuration guide clarity
+  - Added Claude Code permissions section to configuration guide
+  - Removed duplicate command reference (clarified /permissions is alias for /allowed-tools)
+
+- **Code Quality**
+  - Normalized indentation in hook receiver
+  - Fixed log file path in hook receiver
+  - Updated skill for batching announcements and Bash commands
+
+- **CI/CD**
+  - Added ffmpeg to test dependencies for better test coverage
+
 ## [7.0.1] - 2025-12-03
 
 ## [7.0.0] - 2025-11-27
