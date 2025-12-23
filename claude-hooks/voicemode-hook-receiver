@@ -24,7 +24,7 @@ set -o nounset -o pipefail -o errexit
 #   4. ~/.voicemode/soundfonts/current/fallback.{mp3,wav}
 
 usage() {
-    cat << 'EOF'
+  cat <<'EOF'
 Usage: voicemode-hook-receiver [OPTIONS]
 
 Fast standalone hook receiver for Claude Code.
@@ -49,19 +49,19 @@ EOF
 
 # Check for help first
 for arg in "$@"; do
-    case "$arg" in
-        -h|--help)
-            usage
-            exit 0
-            ;;
-    esac
+  case "$arg" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  esac
 done
 
 DEBUG="${VOICEMODE_HOOK_DEBUG:-}"
 SOUNDFONTS_BASE="$HOME/.voicemode/soundfonts/current"
 
 debug() {
-    [[ -n "$DEBUG" ]] && echo "[DEBUG] $*" >&2 || true
+  [[ -n "$DEBUG" ]] && echo "[DEBUG] $*" >&2 || true
 }
 
 # Parse command line arguments
@@ -70,54 +70,54 @@ EVENT=""
 SUBAGENT_TYPE=""
 
 while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --tool-name)
-            TOOL_NAME="$2"
-            shift 2
-            ;;
-        --event)
-            EVENT="$2"
-            shift 2
-            ;;
-        --subagent-type)
-            SUBAGENT_TYPE="$2"
-            shift 2
-            ;;
-        -d|--debug)
-            DEBUG=1
-            shift
-            ;;
-        *)
-            shift
-            ;;
-    esac
+  case "$1" in
+  --tool-name)
+    TOOL_NAME="$2"
+    shift 2
+    ;;
+  --event)
+    EVENT="$2"
+    shift 2
+    ;;
+  --subagent-type)
+    SUBAGENT_TYPE="$2"
+    shift 2
+    ;;
+  -d | --debug)
+    DEBUG=1
+    shift
+    ;;
+  *)
+    shift
+    ;;
+  esac
 done
 
 # Read JSON from stdin if not a tty
 if [[ ! -t 0 ]]; then
-    # Read entire stdin
-    JSON_INPUT=$(cat)
-    debug "Received JSON: $JSON_INPUT"
+  # Read entire stdin
+  JSON_INPUT=$(cat)
+  debug "Received JSON: $JSON_INPUT"
 
-    # Parse JSON using basic shell tools (jq if available, otherwise grep/sed)
-    if command -v jq &>/dev/null; then
-        [[ -z "$TOOL_NAME" ]] && TOOL_NAME=$(echo "$JSON_INPUT" | jq -r '.tool_name // "Task"')
-        [[ -z "$EVENT" ]] && EVENT=$(echo "$JSON_INPUT" | jq -r '.hook_event_name // "PreToolUse"')
-        if [[ -z "$SUBAGENT_TYPE" && "$TOOL_NAME" == "Task" ]]; then
-            SUBAGENT_TYPE=$(echo "$JSON_INPUT" | jq -r '.tool_input.subagent_type // ""')
-        fi
-    else
-        # Fallback: basic pattern matching (less robust but works without jq)
-        if [[ -z "$TOOL_NAME" ]]; then
-            TOOL_NAME=$(echo "$JSON_INPUT" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*:.*"\([^"]*\)"/\1/' || echo "Task")
-        fi
-        if [[ -z "$EVENT" ]]; then
-            EVENT=$(echo "$JSON_INPUT" | grep -o '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*:.*"\([^"]*\)"/\1/' || echo "PreToolUse")
-        fi
-        if [[ -z "$SUBAGENT_TYPE" && "$TOOL_NAME" == "Task" ]]; then
-            SUBAGENT_TYPE=$(echo "$JSON_INPUT" | grep -o '"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*:.*"\([^"]*\)"/\1/' || echo "")
-        fi
+  # Parse JSON using basic shell tools (jq if available, otherwise grep/sed)
+  if command -v jq &>/dev/null; then
+    [[ -z "$TOOL_NAME" ]] && TOOL_NAME=$(echo "$JSON_INPUT" | jq -r '.tool_name // "Task"')
+    [[ -z "$EVENT" ]] && EVENT=$(echo "$JSON_INPUT" | jq -r '.hook_event_name // "PreToolUse"')
+    if [[ -z "$SUBAGENT_TYPE" && "$TOOL_NAME" == "Task" ]]; then
+      SUBAGENT_TYPE=$(echo "$JSON_INPUT" | jq -r '.tool_input.subagent_type // ""')
     fi
+  else
+    # Fallback: basic pattern matching (less robust but works without jq)
+    if [[ -z "$TOOL_NAME" ]]; then
+      TOOL_NAME=$(echo "$JSON_INPUT" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*:.*"\([^"]*\)"/\1/' || echo "Task")
+    fi
+    if [[ -z "$EVENT" ]]; then
+      EVENT=$(echo "$JSON_INPUT" | grep -o '"hook_event_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*:.*"\([^"]*\)"/\1/' || echo "PreToolUse")
+    fi
+    if [[ -z "$SUBAGENT_TYPE" && "$TOOL_NAME" == "Task" ]]; then
+      SUBAGENT_TYPE=$(echo "$JSON_INPUT" | grep -o '"subagent_type"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*:.*"\([^"]*\)"/\1/' || echo "")
+    fi
+  fi
 fi
 
 # Apply defaults
@@ -129,39 +129,39 @@ debug "Processing: event=$EVENT, tool=$TOOL_NAME, subagent=$SUBAGENT_TYPE"
 # Check if soundfonts are enabled
 # First check env var, then check config file
 soundfonts_enabled() {
-    local enabled="${VOICEMODE_SOUNDFONTS_ENABLED:-}"
+  local enabled="${VOICEMODE_SOUNDFONTS_ENABLED:-}"
 
-    # If env var is set, use it
-    if [[ -n "$enabled" ]]; then
-        [[ "$enabled" == "true" || "$enabled" == "1" || "$enabled" == "yes" || "$enabled" == "on" ]]
-        return
-    fi
+  # If env var is set, use it
+  if [[ -n "$enabled" ]]; then
+    [[ "$enabled" == "true" || "$enabled" == "1" || "$enabled" == "yes" || "$enabled" == "on" ]]
+    return
+  fi
 
-    # Check voicemode.env config file
-    local config_file="$HOME/.voicemode/voicemode.env"
-    if [[ -f "$config_file" ]]; then
-        enabled=$(grep -E '^VOICEMODE_SOUNDFONTS_ENABLED=' "$config_file" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'" || echo "")
-        [[ "$enabled" == "true" || "$enabled" == "1" || "$enabled" == "yes" || "$enabled" == "on" ]]
-        return
-    fi
+  # Check voicemode.env config file
+  local config_file="$HOME/.voicemode/voicemode.env"
+  if [[ -f "$config_file" ]]; then
+    enabled=$(grep -E '^VOICEMODE_SOUNDFONTS_ENABLED=' "$config_file" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'" || echo "")
+    [[ "$enabled" == "true" || "$enabled" == "1" || "$enabled" == "yes" || "$enabled" == "on" ]]
+    return
+  fi
 
-    # Default: disabled
-    return 1
+  # Default: disabled
+  return 1
 }
 
 if ! soundfonts_enabled; then
-    debug "Sound fonts are disabled (VOICEMODE_SOUNDFONTS_ENABLED=false)"
-    exit 0
+  debug "Sound fonts are disabled (VOICEMODE_SOUNDFONTS_ENABLED=false)"
+  exit 0
 fi
 
 # Resolve soundfonts symlink
 if [[ -L "$SOUNDFONTS_BASE" ]]; then
-    SOUNDFONTS_BASE=$(readlink -f "$SOUNDFONTS_BASE" 2>/dev/null || readlink "$SOUNDFONTS_BASE")
+  SOUNDFONTS_BASE=$(readlink -f "$SOUNDFONTS_BASE" 2>/dev/null || readlink "$SOUNDFONTS_BASE")
 fi
 
 if [[ ! -d "$SOUNDFONTS_BASE" ]]; then
-    debug "Soundfonts directory not found: $SOUNDFONTS_BASE"
-    exit 0
+  debug "Soundfonts directory not found: $SOUNDFONTS_BASE"
+  exit 0
 fi
 
 # Normalize to lowercase for filesystem
@@ -172,23 +172,23 @@ subagent_lower=$(echo "$SUBAGENT_TYPE" | tr '[:upper:]' '[:lower:]')
 mcp_server=""
 mcp_tool=""
 if [[ "$tool_lower" =~ ^mcp__([^_]+)__(.+)$ ]]; then
-    mcp_server="${BASH_REMATCH[1]}"
-    mcp_tool="${BASH_REMATCH[2]}"
-    debug "Parsed MCP tool: server=$mcp_server, tool=$mcp_tool"
+  mcp_server="${BASH_REMATCH[1]}"
+  mcp_tool="${BASH_REMATCH[2]}"
+  debug "Parsed MCP tool: server=$mcp_server, tool=$mcp_tool"
 fi
 
 # Map event names to directory names
 event_lower=$(echo "$EVENT" | tr '[:upper:]' '[:lower:]')
 case "$event_lower" in
-    pretooluse|start)
-        event_dir="PreToolUse"
-        ;;
-    posttooluse|end)
-        event_dir="PostToolUse"
-        ;;
-    *)
-        event_dir="$EVENT"
-        ;;
+pretooluse | start)
+  event_dir="PreToolUse"
+  ;;
+posttooluse | end)
+  event_dir="PostToolUse"
+  ;;
+*)
+  event_dir="$EVENT"
+  ;;
 esac
 
 # Select a random variant from a directory
@@ -205,43 +205,43 @@ esac
 #
 # Falls back to default.{mp3,wav} only if no numbered variants found.
 select_variant() {
-    local dir="$1"
-    local variants=()
+  local dir="$1"
+  local variants=()
 
-    # Find all numbered variant files (supports any zero-padding length)
-    # Pattern: <digits>_*.{mp3,wav} or <digits>.{mp3,wav}
-    for ext in mp3 wav; do
-        # Use find to locate files matching the pattern
-        # Look for files starting with digits, followed by either _ or .ext
-        while IFS= read -r -d '' file; do
-            local filename=$(basename "$file")
-            # Match files like: 01_name.wav, 001_name.wav, 01.wav, etc.
-            if [[ "$filename" =~ ^[0-9]+(_.*)?\.${ext}$ ]]; then
-                variants+=("$file")
-            fi
-        done < <(find "$dir" -maxdepth 1 -type f -name "*.$ext" -print0 2>/dev/null)
-    done
+  # Find all numbered variant files (supports any zero-padding length)
+  # Pattern: <digits>_*.{mp3,wav} or <digits>.{mp3,wav}
+  for ext in mp3 wav; do
+    # Use find to locate files matching the pattern
+    # Look for files starting with digits, followed by either _ or .ext
+    while IFS= read -r -d '' file; do
+      local filename=$(basename "$file")
+      # Match files like: 01_name.wav, 001_name.wav, 01.wav, etc.
+      if [[ "$filename" =~ ^[0-9]+(_.*)?\.${ext}$ ]]; then
+        variants+=("$file")
+      fi
+    done < <(find "$dir" -maxdepth 1 -type f -name "*.$ext" -print0 2>/dev/null)
+  done
 
-    # If we found numbered variants, select one randomly
-    if [[ ${#variants[@]} -gt 0 ]]; then
-        local count=${#variants[@]}
-        local index=$((RANDOM % count))
-        echo "${variants[$index]}"
-        debug "Found ${count} numbered variants in $dir, selected: ${variants[$index]}"
-        return 0
+  # If we found numbered variants, select one randomly
+  if [[ ${#variants[@]} -gt 0 ]]; then
+    local count=${#variants[@]}
+    local index=$((RANDOM % count))
+    echo "${variants[$index]}"
+    debug "Found ${count} numbered variants in $dir, selected: ${variants[$index]}"
+    return 0
+  fi
+
+  # No numbered variants found, try default files
+  for ext in mp3 wav; do
+    if [[ -f "$dir/default.$ext" ]]; then
+      echo "$dir/default.$ext"
+      debug "No numbered variants in $dir, using default.$ext"
+      return 0
     fi
+  done
 
-    # No numbered variants found, try default files
-    for ext in mp3 wav; do
-        if [[ -f "$dir/default.$ext" ]]; then
-            echo "$dir/default.$ext"
-            debug "No numbered variants in $dir, using default.$ext"
-            return 0
-        fi
-    done
-
-    # Nothing found
-    return 1
+  # Nothing found
+  return 1
 }
 
 # Find sound file (most specific to least specific)
@@ -265,99 +265,99 @@ select_variant() {
 #   PreToolUse/task/subagent/mama-bear.mp3          - Specific agent
 #   PreToolUse/mcp/voicemode/converse/MUTE.txt      - Mute converse PreToolUse sounds
 find_sound_file() {
-    local sound_file
+  local sound_file
 
-    # 1. MCP tool-specific sounds (if this is an MCP tool)
-    if [[ -n "$mcp_server" && -n "$mcp_tool" ]]; then
-        local mcp_tool_dir="$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/$mcp_tool"
-
-        # Check for mute marker
-        if [[ -f "$mcp_tool_dir/MUTE.txt" ]]; then
-            debug "Found MUTE.txt in $mcp_tool_dir - skipping sound playback"
-            return 1
-        fi
-
-        # Try selecting variant from MCP tool directory
-        if sound_file=$(select_variant "$mcp_tool_dir" 2>/dev/null); then
-            echo "$sound_file"
-            return 0
-        fi
-
-        # Try MCP server default
-        if [[ -f "$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/default.mp3" ]]; then
-            echo "$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/default.mp3"
-            return 0
-        fi
-        if [[ -f "$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/default.wav" ]]; then
-            echo "$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/default.wav"
-            return 0
-        fi
-
-        # Try MCP-wide default
-        if [[ -f "$SOUNDFONTS_BASE/$event_dir/mcp/default.mp3" ]]; then
-            echo "$SOUNDFONTS_BASE/$event_dir/mcp/default.mp3"
-            return 0
-        fi
-        if [[ -f "$SOUNDFONTS_BASE/$event_dir/mcp/default.wav" ]]; then
-            echo "$SOUNDFONTS_BASE/$event_dir/mcp/default.wav"
-            return 0
-        fi
-    fi
-
-    # 2. Task subagent sounds (special case)
-    if [[ "$tool_lower" == "task" && -n "$subagent_lower" ]]; then
-        if [[ -f "$SOUNDFONTS_BASE/$event_dir/$tool_lower/subagent/${subagent_lower}.mp3" ]]; then
-            echo "$SOUNDFONTS_BASE/$event_dir/$tool_lower/subagent/${subagent_lower}.mp3"
-            return 0
-        fi
-        if [[ -f "$SOUNDFONTS_BASE/$event_dir/$tool_lower/subagent/${subagent_lower}.wav" ]]; then
-            echo "$SOUNDFONTS_BASE/$event_dir/$tool_lower/subagent/${subagent_lower}.wav"
-            return 0
-        fi
-    fi
-
-    # 3. Regular tool-specific sounds with variants
-    local tool_dir="$SOUNDFONTS_BASE/$event_dir/$tool_lower"
+  # 1. MCP tool-specific sounds (if this is an MCP tool)
+  if [[ -n "$mcp_server" && -n "$mcp_tool" ]]; then
+    local mcp_tool_dir="$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/$mcp_tool"
 
     # Check for mute marker
-    if [[ -f "$tool_dir/MUTE.txt" ]]; then
-        debug "Found MUTE.txt in $tool_dir - skipping sound playback"
-        return 1
+    if [[ -f "$mcp_tool_dir/MUTE.txt" ]]; then
+      debug "Found MUTE.txt in $mcp_tool_dir - skipping sound playback"
+      return 1
     fi
 
-    if sound_file=$(select_variant "$tool_dir" 2>/dev/null); then
-        echo "$sound_file"
-        return 0
+    # Try selecting variant from MCP tool directory
+    if sound_file=$(select_variant "$mcp_tool_dir" 2>/dev/null); then
+      echo "$sound_file"
+      return 0
     fi
 
-    # 4. Event-level default (no variants at this level)
-    if [[ -f "$SOUNDFONTS_BASE/$event_dir/default.mp3" ]]; then
-        echo "$SOUNDFONTS_BASE/$event_dir/default.mp3"
-        return 0
+    # Try MCP server default
+    if [[ -f "$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/default.mp3" ]]; then
+      echo "$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/default.mp3"
+      return 0
     fi
-    if [[ -f "$SOUNDFONTS_BASE/$event_dir/default.wav" ]]; then
-        echo "$SOUNDFONTS_BASE/$event_dir/default.wav"
-        return 0
-    fi
-
-    # 5. Global fallback (no variants)
-    if [[ -f "$SOUNDFONTS_BASE/fallback.mp3" ]]; then
-        echo "$SOUNDFONTS_BASE/fallback.mp3"
-        return 0
-    fi
-    if [[ -f "$SOUNDFONTS_BASE/fallback.wav" ]]; then
-        echo "$SOUNDFONTS_BASE/fallback.wav"
-        return 0
+    if [[ -f "$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/default.wav" ]]; then
+      echo "$SOUNDFONTS_BASE/$event_dir/mcp/$mcp_server/default.wav"
+      return 0
     fi
 
+    # Try MCP-wide default
+    if [[ -f "$SOUNDFONTS_BASE/$event_dir/mcp/default.mp3" ]]; then
+      echo "$SOUNDFONTS_BASE/$event_dir/mcp/default.mp3"
+      return 0
+    fi
+    if [[ -f "$SOUNDFONTS_BASE/$event_dir/mcp/default.wav" ]]; then
+      echo "$SOUNDFONTS_BASE/$event_dir/mcp/default.wav"
+      return 0
+    fi
+  fi
+
+  # 2. Task subagent sounds (special case)
+  if [[ "$tool_lower" == "task" && -n "$subagent_lower" ]]; then
+    if [[ -f "$SOUNDFONTS_BASE/$event_dir/$tool_lower/subagent/${subagent_lower}.mp3" ]]; then
+      echo "$SOUNDFONTS_BASE/$event_dir/$tool_lower/subagent/${subagent_lower}.mp3"
+      return 0
+    fi
+    if [[ -f "$SOUNDFONTS_BASE/$event_dir/$tool_lower/subagent/${subagent_lower}.wav" ]]; then
+      echo "$SOUNDFONTS_BASE/$event_dir/$tool_lower/subagent/${subagent_lower}.wav"
+      return 0
+    fi
+  fi
+
+  # 3. Regular tool-specific sounds with variants
+  local tool_dir="$SOUNDFONTS_BASE/$event_dir/$tool_lower"
+
+  # Check for mute marker
+  if [[ -f "$tool_dir/MUTE.txt" ]]; then
+    debug "Found MUTE.txt in $tool_dir - skipping sound playback"
     return 1
+  fi
+
+  if sound_file=$(select_variant "$tool_dir" 2>/dev/null); then
+    echo "$sound_file"
+    return 0
+  fi
+
+  # 4. Event-level default (no variants at this level)
+  if [[ -f "$SOUNDFONTS_BASE/$event_dir/default.mp3" ]]; then
+    echo "$SOUNDFONTS_BASE/$event_dir/default.mp3"
+    return 0
+  fi
+  if [[ -f "$SOUNDFONTS_BASE/$event_dir/default.wav" ]]; then
+    echo "$SOUNDFONTS_BASE/$event_dir/default.wav"
+    return 0
+  fi
+
+  # 5. Global fallback (no variants)
+  if [[ -f "$SOUNDFONTS_BASE/fallback.mp3" ]]; then
+    echo "$SOUNDFONTS_BASE/fallback.mp3"
+    return 0
+  fi
+  if [[ -f "$SOUNDFONTS_BASE/fallback.wav" ]]; then
+    echo "$SOUNDFONTS_BASE/fallback.wav"
+    return 0
+  fi
+
+  return 1
 }
 
 SOUND_FILE=$(find_sound_file)
 
 if [[ -z "$SOUND_FILE" ]]; then
-    debug "No sound file found for this event"
-    exit 0
+  debug "No sound file found for this event"
+  exit 0
 fi
 
 debug "Found sound file: $SOUND_FILE"
@@ -365,78 +365,78 @@ debug "Found sound file: $SOUND_FILE"
 # Skip filler phrases when wait_for_response=false (no listening after speaking)
 # Filler phrases only make sense when Claude is waiting for user input
 if [[ "$EVENT" == "PostToolUse" && "$tool_lower" == "mcp__voicemode__converse" ]]; then
-    # Check if wait_for_response was false in tool_input
-    if [[ -n "$JSON_INPUT" ]] && command -v jq &>/dev/null; then
-        # Extract wait_for_response - check if field exists first, then convert to string
-        # Default to "true" if field is missing, but preserve explicit false values
-        wait_for_response=$(echo "$JSON_INPUT" | jq -r 'if .tool_input.wait_for_response == null then "true" else (.tool_input.wait_for_response | tostring) end')
-        if [[ "$wait_for_response" == "false" ]]; then
-            debug "Skipping filler phrase: wait_for_response=false (speak-only mode)"
-            exit 0
-        fi
+  # Check if wait_for_response was false in tool_input
+  if [[ -n "$JSON_INPUT" ]] && command -v jq &>/dev/null; then
+    # Extract wait_for_response - check if field exists first, then convert to string
+    # Default to "true" if field is missing, but preserve explicit false values
+    wait_for_response=$(echo "$JSON_INPUT" | jq -r 'if .tool_input.wait_for_response == null then "true" else (.tool_input.wait_for_response | tostring) end')
+    if [[ "$wait_for_response" == "false" ]]; then
+      debug "Skipping filler phrase: wait_for_response=false (speak-only mode)"
+      exit 0
     fi
+  fi
 fi
 
 # Rate limiting for PostToolUse converse events (optional, disabled by default)
 # Set VOICEMODE_CONVERSE_RATE_LIMIT=true to enable
 # This prevents rapid-fire filler phrases when Claude batches tool calls
 if [[ "$EVENT" == "PostToolUse" && "$tool_lower" == "mcp__voicemode__converse" ]]; then
-    RATE_LIMIT_ENABLED="${VOICEMODE_CONVERSE_RATE_LIMIT:-false}"
-    if [[ "$RATE_LIMIT_ENABLED" == "true" || "$RATE_LIMIT_ENABLED" == "1" ]]; then
-        RATE_LIMIT_SECONDS="${VOICEMODE_CONVERSE_RATE_LIMIT_SECONDS:-2}"
-        LOG_FILE="$HOME/.voicemode/soundfonts/hook-receiver.log"
+  RATE_LIMIT_ENABLED="${VOICEMODE_CONVERSE_RATE_LIMIT:-false}"
+  if [[ "$RATE_LIMIT_ENABLED" == "true" || "$RATE_LIMIT_ENABLED" == "1" ]]; then
+    RATE_LIMIT_SECONDS="${VOICEMODE_CONVERSE_RATE_LIMIT_SECONDS:-2}"
+    LOG_FILE="$HOME/.voicemode/logs/hook-receiver.log"
 
-        # Check if we played a converse filler recently
-        if [[ -f "$LOG_FILE" ]]; then
-            # Get the last PostToolUse converse timestamp
-            last_converse=$(grep "PostToolUse mcp__voicemode__converse" "$LOG_FILE" | tail -1 | cut -d' ' -f1-2)
-            if [[ -n "$last_converse" ]]; then
-                # Convert timestamp to epoch (cross-platform: macOS and Linux)
-                if date -j -f "%Y-%m-%d %H:%M:%S" "$last_converse" "+%s" &>/dev/null; then
-                    # macOS (BSD date)
-                    last_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S" "$last_converse" "+%s")
-                else
-                    # Linux (GNU date)
-                    last_epoch=$(date -d "$last_converse" "+%s" 2>/dev/null || echo 0)
-                fi
-                now_epoch=$(date "+%s")
-                elapsed=$((now_epoch - last_epoch))
-
-                if [[ $elapsed -lt $RATE_LIMIT_SECONDS ]]; then
-                    debug "Rate limited: only ${elapsed}s since last converse filler (threshold: ${RATE_LIMIT_SECONDS}s)"
-                    exit 0
-                fi
-            fi
+    # Check if we played a converse filler recently
+    if [[ -f "$LOG_FILE" ]]; then
+      # Get the last PostToolUse converse timestamp
+      last_converse=$(grep "PostToolUse mcp__voicemode__converse" "$LOG_FILE" | tail -1 | cut -d' ' -f1-2)
+      if [[ -n "$last_converse" ]]; then
+        # Convert timestamp to epoch (cross-platform: macOS and Linux)
+        if date -j -f "%Y-%m-%d %H:%M:%S" "$last_converse" "+%s" &>/dev/null; then
+          # macOS (BSD date)
+          last_epoch=$(date -j -f "%Y-%m-%d %H:%M:%S" "$last_converse" "+%s")
+        else
+          # Linux (GNU date)
+          last_epoch=$(date -d "$last_converse" "+%s" 2>/dev/null || echo 0)
         fi
+        now_epoch=$(date "+%s")
+        elapsed=$((now_epoch - last_epoch))
+
+        if [[ $elapsed -lt $RATE_LIMIT_SECONDS ]]; then
+          debug "Rate limited: only ${elapsed}s since last converse filler (threshold: ${RATE_LIMIT_SECONDS}s)"
+          exit 0
+        fi
+      fi
     fi
+  fi
 fi
 
 # Log hook execution (always, for debugging)
-LOG_FILE="$HOME/.voicemode/soundfonts/hook-receiver.log"
+LOG_FILE="$HOME/.voicemode/logs/hook-receiver.log"
 mkdir -p "$(dirname "$LOG_FILE")"
 timestamp=$(date "+%Y-%m-%d %H:%M:%S")
-echo "$timestamp $EVENT $TOOL_NAME -> $SOUND_FILE" >> "$LOG_FILE"
+echo "$timestamp $EVENT $TOOL_NAME -> $SOUND_FILE" >>"$LOG_FILE"
 
 # Play sound asynchronously (fire and forget)
 # Redirect both stdout and stderr to /dev/null to prevent any output
 # Prefer native players (afplay on macOS, paplay on Linux) for better concurrent playback
 if command -v afplay &>/dev/null; then
-    # macOS native - handles concurrent playback through Core Audio
-    afplay "$SOUND_FILE" >/dev/null 2>&1 &
-    disown 2>/dev/null || true
-    debug "Sound playback started (afplay)"
+  # macOS native - handles concurrent playback through Core Audio
+  afplay "$SOUND_FILE" >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+  debug "Sound playback started (afplay)"
 elif command -v paplay &>/dev/null; then
-    # Linux PulseAudio - handles concurrent playback natively
-    paplay "$SOUND_FILE" >/dev/null 2>&1 &
-    disown 2>/dev/null || true
-    debug "Sound playback started (paplay)"
+  # Linux PulseAudio - handles concurrent playback natively
+  paplay "$SOUND_FILE" >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+  debug "Sound playback started (paplay)"
 elif command -v ffplay &>/dev/null; then
-    # ffmpeg fallback - may have issues with concurrent playback
-    ffplay -nodisp -autoexit -loglevel quiet "$SOUND_FILE" >/dev/null 2>&1 &
-    disown 2>/dev/null || true
-    debug "Sound playback started (ffplay)"
+  # ffmpeg fallback - may have issues with concurrent playback
+  ffplay -nodisp -autoexit -loglevel quiet "$SOUND_FILE" >/dev/null 2>&1 &
+  disown 2>/dev/null || true
+  debug "Sound playback started (ffplay)"
 else
-    debug "No audio player found (tried: afplay, paplay, ffplay)"
+  debug "No audio player found (tried: afplay, paplay, ffplay)"
 fi
 
 exit 0
