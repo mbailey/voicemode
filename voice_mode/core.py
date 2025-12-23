@@ -131,6 +131,8 @@ def save_debug_file(data: bytes, prefix: str, extension: str, debug_dir: Path, d
 
 def get_openai_clients(api_key: str, stt_base_url: Optional[str] = None, tts_base_url: Optional[str] = None) -> dict:
     """Initialize OpenAI clients for STT and TTS with connection pooling"""
+    from .config import STT_EXTRA_HEADERS, TTS_EXTRA_HEADERS
+
     # Configure timeouts and connection pooling
     http_client_config = {
         'timeout': httpx.Timeout(30.0, connect=5.0),
@@ -150,13 +152,15 @@ def get_openai_clients(api_key: str, stt_base_url: Optional[str] = None, tts_bas
             api_key=api_key,
             base_url=stt_base_url,
             http_client=stt_http_client,
-            max_retries=stt_max_retries
+            max_retries=stt_max_retries,
+            default_headers=STT_EXTRA_HEADERS or None
         ),
         'tts': AsyncOpenAI(
             api_key=api_key,
             base_url=tts_base_url,
             http_client=tts_http_client,
-            max_retries=tts_max_retries
+            max_retries=tts_max_retries,
+            default_headers=TTS_EXTRA_HEADERS or None
         )
     }
 

@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from .openai_error_parser import OpenAIErrorParser
 from .provider_discovery import is_local_provider
 
-from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
+from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, TTS_EXTRA_HEADERS, STT_EXTRA_HEADERS
 from .provider_discovery import detect_provider_type
 
 logger = logging.getLogger("voicemode")
@@ -79,7 +79,8 @@ async def simple_tts_failover(
             api_key=api_key,
             base_url=base_url,
             timeout=30.0,  # Reasonable timeout
-            max_retries=max_retries
+            max_retries=max_retries,
+            default_headers=TTS_EXTRA_HEADERS or None
         )
 
         # Create clients dict for text_to_speech
@@ -221,7 +222,8 @@ async def simple_stt_failover(
                 api_key=api_key,
                 base_url=base_url,
                 timeout=30.0,
-                max_retries=max_retries
+                max_retries=max_retries,
+                default_headers=STT_EXTRA_HEADERS or None
             )
 
             # Try STT with this endpoint - track timing

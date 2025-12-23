@@ -342,6 +342,11 @@ TTS \\bAPI\\b A P I # API as individual letters
 # OpenAI API key for cloud TTS/STT
 # OPENAI_API_KEY=your-key-here
 
+# Custom HTTP headers for proxy services (comma-separated key=value pairs)
+# Useful for services like Portkey that require custom headers
+# VOICEMODE_TTS_EXTRA_HEADERS=X-Portkey-API-Key=pk_xxx,X-Portkey-Provider=@openai
+# VOICEMODE_STT_EXTRA_HEADERS=X-Portkey-API-Key=pk_xxx,X-Portkey-Provider=@openai
+
 # LiveKit server URL
 # LIVEKIT_URL=ws://127.0.0.1:7880
 
@@ -483,11 +488,58 @@ def parse_comma_list(env_var: str, fallback: str) -> list:
     value = os.getenv(env_var, fallback)
     return [item.strip() for item in value.split(",") if item.strip()]
 
+def parse_extra_headers(env_var: str, fallback: str = "") -> dict:
+    """Parse comma-separated header pairs from environment variable.
+
+    Format: "Key1=value1,Key2=value2"
+    Example: "X-Portkey-API-Key=pk_xxx,X-Portkey-Provider=@openai"
+
+    Args:
+        env_var: Environment variable name
+        fallback: Fallback string if env var not set
+
+    Returns:
+        Dict of headers, empty dict if parsing fails
+    """
+    value = os.getenv(env_var, fallback)
+    if not value or value.strip() == "":
+        return {}
+
+    headers = {}
+    pairs = value.split(",")
+
+    for pair in pairs:
+        pair = pair.strip()
+        if not pair:
+            continue
+
+        if "=" not in pair:
+            logger.warning(f"Invalid header pair in {env_var}: '{pair}' (missing '=')")
+            continue
+
+        # Split on first '=' only, in case value contains '='
+        key, sep, val = pair.partition("=")
+        key = key.strip()
+        val = val.strip()
+
+        if not key:
+            logger.warning(f"Invalid header pair in {env_var}: '{pair}' (empty key)")
+            continue
+
+        headers[key] = val
+
+    return headers
+
 # New provider endpoint lists configuration
 TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
 STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
 TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
+
+# Custom HTTP headers for TTS/STT providers (comma-separated key=value format)
+# Useful for proxy services like Portkey
+TTS_EXTRA_HEADERS = parse_extra_headers("VOICEMODE_TTS_EXTRA_HEADERS", "")
+STT_EXTRA_HEADERS = parse_extra_headers("VOICEMODE_STT_EXTRA_HEADERS", "")
 
 # Voice preferences cache
 _cached_voice_preferences: Optional[list] = None

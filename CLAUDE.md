@@ -43,6 +43,21 @@ voicemode config get VOICEMODE_TTS_VOICE
 voicemode config set VOICEMODE_TTS_VOICE nova
 ```
 
+### Proxy Service Configuration
+
+VoiceMode supports custom HTTP headers for proxy services like Portkey:
+
+```bash
+# Set comma-separated headers for TTS requests
+voicemode config set VOICEMODE_TTS_EXTRA_HEADERS "X-Portkey-API-Key=pk_xxx,X-Portkey-Provider=@openai"
+
+# Set comma-separated headers for STT requests
+voicemode config set VOICEMODE_STT_EXTRA_HEADERS "X-Portkey-API-Key=pk_xxx,X-Portkey-Provider=@openai"
+
+# View current header configuration
+voicemode config get VOICEMODE_TTS_EXTRA_HEADERS
+```
+
 ### Building & Publishing
 ```bash
 # Build Python package
@@ -96,6 +111,7 @@ make docs-check
    - Environment-based configuration with sensible defaults
    - Support for voice preference files (project/user level)
    - Audio format configuration (PCM, MP3, WAV, FLAC, AAC, Opus)
+   - Custom HTTP headers for proxy services via comma-separated format
 
 5. **Resources (`voice_mode/resources/`)**
    - MCP resources exposed for client access

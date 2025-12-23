@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 import httpx
 
-from voice_mode.config import OPENAI_API_KEY
+from voice_mode.config import OPENAI_API_KEY, STT_EXTRA_HEADERS
 from .types import TranscriptionResult
 
 
@@ -39,7 +39,7 @@ async def transcribe_with_openai(
         )
     
     # Initialize async client (automatically respects OPENAI_BASE_URL env var)
-    client = AsyncOpenAI(api_key=api_key)
+    client = AsyncOpenAI(api_key=api_key, default_headers=STT_EXTRA_HEADERS or None)
     
     # Prepare timestamp granularities
     timestamp_granularities = ["segment"]

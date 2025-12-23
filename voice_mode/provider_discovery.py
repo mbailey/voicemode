@@ -19,7 +19,7 @@ import httpx
 from openai import AsyncOpenAI
 
 from . import config
-from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
+from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, TTS_EXTRA_HEADERS, STT_EXTRA_HEADERS
 
 logger = logging.getLogger("voicemode")
 
@@ -141,10 +141,14 @@ class ProviderRegistry:
         
         try:
             # Create OpenAI client for the endpoint
+            # Determine which headers to use based on service_type
+            extra_headers = TTS_EXTRA_HEADERS if service_type == "tts" else STT_EXTRA_HEADERS
+
             client = AsyncOpenAI(
                 api_key=OPENAI_API_KEY or "dummy-key-for-local",
                 base_url=base_url,
-                timeout=10.0
+                timeout=10.0,
+                default_headers=extra_headers or None
             )
             
             # Try to list models
