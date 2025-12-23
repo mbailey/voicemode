@@ -1,0 +1,20 @@
+{
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "command": "voicemode-hook-receiver || true"
+    },
+    {
+      "event": "PostToolUse",
+      "command": "voicemode-hook-receiver || true"
+    },
+    {
+      "event": "Notification",
+      "command": "voicemode-hook-receiver || true"
+    },
+    {
+      "event": "Stop",
+      "command": "voicemode-hook-receiver || true"
+    }
+  ]
+}
