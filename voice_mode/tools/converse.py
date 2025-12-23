@@ -417,7 +417,7 @@ async def speech_to_text(
         Dict with transcription result or error information:
         - Success: {"text": "...", "provider": "...", "endpoint": "..."}
         - No speech: {"error_type": "no_speech", "provider": "..."}
-        - All failed: {"error_type": "connection_failed", "attempted_endpoints": [...]}
+        - All failed: {"error_type": "connection_failed", "attempted_endpoints": [...], "audio_file": "/path/to/recording.wav"}
     """
     import tempfile
     import io
@@ -456,6 +456,8 @@ async def speech_to_text(
 
     # Determine file extension based on format
     file_extension = stt_format if stt_format in ["mp3", "wav", "flac", "m4a", "ogg"] else "mp3"
+
+    wav_file_path = None  # Track the saved audio file path
 
     # Determine if we should save the file permanently or use a temp file
     if save_audio and audio_dir:
@@ -511,6 +513,11 @@ async def speech_to_text(
 
             # Clean up temp file
             os.unlink(tmp_file.name)
+
+    # Add audio file path to error responses for recovery
+    if result and result.get("error_type") == "connection_failed" and wav_file_path:
+        result["audio_file"] = str(wav_file_path)
+        result["recovery_hint"] = f"You can retry transcription with: voicemode audio transcribe --backend whisper-cli {wav_file_path}"
 
     return result
 
@@ -1627,6 +1634,13 @@ consult the MCP resources listed above.
                                         else:
                                             # Show raw error for non-OpenAI or if we already showed OpenAI error
                                             error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
+
+                                    # Add audio file recovery information if available
+                                    if stt_result.get("audio_file"):
+                                        error_lines.append("")
+                                        error_lines.append(f"🎤 Recording saved: {stt_result['audio_file']}")
+                                        if stt_result.get("recovery_hint"):
+                                            error_lines.append(f"💡 {stt_result['recovery_hint']}")
 
                                     error_msg = "\n".join(error_lines)
                                     logger.error(error_msg)

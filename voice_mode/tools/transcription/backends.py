@@ -285,3 +285,200 @@ async def transcribe_with_whisper_cpp(
         # Clean up temp file if created
         if wav_path != audio_path and wav_path.exists():
             wav_path.unlink()
+
+
+async def transcribe_with_whisper_cli(
+    audio_path: Path,
+    word_timestamps: bool = False,
+    language: Optional[str] = None
+) -> TranscriptionResult:
+    """
+    Transcribe using whisper-cli binary directly (no server required).
+
+    This backend invokes the whisper-cli binary that VoiceMode installs,
+    which doesn't require the whisper service to be running.
+    """
+    from voice_mode.config import BASE_DIR
+
+    # Find whisper-cli binary - check VoiceMode's installed location
+    whisper_cli_paths = [
+        BASE_DIR / "services" / "whisper" / "build" / "bin" / "whisper-cli",
+        Path.home() / ".voicemode" / "services" / "whisper" / "build" / "bin" / "whisper-cli",
+    ]
+
+    whisper_cli = None
+    for path in whisper_cli_paths:
+        if path.exists():
+            whisper_cli = path
+            break
+
+    if not whisper_cli:
+        return TranscriptionResult(
+            text="",
+            language="",
+            segments=[],
+            backend="whisper-cli",
+            success=False,
+            error="whisper-cli not found. Install with: voicemode whisper service install"
+        )
+
+    # Find the model file
+    model_paths = [
+        BASE_DIR / "services" / "whisper" / "models" / "ggml-large-v2.bin",
+        BASE_DIR / "services" / "whisper" / "models" / "ggml-base.bin",
+        Path.home() / ".voicemode" / "services" / "whisper" / "models" / "ggml-large-v2.bin",
+        Path.home() / ".voicemode" / "services" / "whisper" / "models" / "ggml-base.bin",
+    ]
+
+    model_path = None
+    for path in model_paths:
+        if path.exists():
+            model_path = path
+            break
+
+    if not model_path:
+        return TranscriptionResult(
+            text="",
+            language="",
+            segments=[],
+            backend="whisper-cli",
+            success=False,
+            error="Whisper model not found. Install with: voicemode whisper model install"
+        )
+
+    # Convert audio to WAV format with 16kHz sample rate if needed
+    if audio_path.suffix.lower() != ".wav":
+        wav_path = Path(tempfile.mktemp(suffix=".wav"))
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-i", str(audio_path),
+                "-ar", "16000", "-ac", "1", "-f", "wav",
+                str(wav_path)
+            ], check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            return TranscriptionResult(
+                text="",
+                language="",
+                segments=[],
+                backend="whisper-cli",
+                success=False,
+                error=f"Failed to convert audio to WAV: {e.stderr.decode() if e.stderr else str(e)}"
+            )
+    else:
+        # Still need to ensure 16kHz for whisper
+        wav_path = Path(tempfile.mktemp(suffix=".wav"))
+        try:
+            subprocess.run([
+                "ffmpeg", "-y", "-i", str(audio_path),
+                "-ar", "16000", "-ac", "1", "-f", "wav",
+                str(wav_path)
+            ], check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            wav_path = audio_path  # Fall back to original if conversion fails
+
+    try:
+        # Build whisper-cli command
+        # Use -oj for JSON output and -of to specify output file location
+        json_output_base = str(wav_path.with_suffix(""))
+        cmd = [
+            str(whisper_cli),
+            "-m", str(model_path),
+            "-oj",  # Output JSON
+            "-of", json_output_base,  # Output file basename (will create .json)
+            str(wav_path),  # Input file goes at the end
+        ]
+
+        if language:
+            cmd.extend(["-l", language])
+
+        # Run whisper-cli
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+
+        if result.returncode != 0:
+            return TranscriptionResult(
+                text="",
+                language="",
+                segments=[],
+                backend="whisper-cli",
+                success=False,
+                error=f"whisper-cli failed: {result.stderr}"
+            )
+
+        # Parse output - whisper-cli creates a .json file
+        json_output_path = Path(f"{json_output_base}.json")
+
+        if json_output_path.exists():
+            with open(json_output_path, "r") as f:
+                output_data = json.load(f)
+            json_output_path.unlink()  # Clean up JSON file
+
+            # whisper.cpp JSON format has a "transcription" array
+            transcription = output_data.get("transcription", [])
+            if transcription:
+                # Collect all text from transcription segments
+                text_parts = []
+                segments = []
+                for item in transcription:
+                    if isinstance(item, dict):
+                        segment_text = item.get("text", "").strip()
+                        if segment_text:
+                            text_parts.append(segment_text)
+                        # Extract timing info if available
+                        if "offsets" in item:
+                            segments.append({
+                                "text": segment_text,
+                                "start": item.get("offsets", {}).get("from", 0) / 1000.0,
+                                "end": item.get("offsets", {}).get("to", 0) / 1000.0
+                            })
+                        elif "timestamps" in item:
+                            for ts in item["timestamps"]:
+                                segments.append({
+                                    "text": ts.get("text", ""),
+                                    "start": ts.get("offsets", {}).get("from", 0) / 1000.0,
+                                    "end": ts.get("offsets", {}).get("to", 0) / 1000.0
+                                })
+                text = " ".join(text_parts)
+            else:
+                text = ""
+                segments = []
+        else:
+            # Fall back to stdout parsing - whisper-cli prints transcription to stdout
+            text = result.stdout.strip()
+            segments = []
+
+        return TranscriptionResult(
+            text=text,
+            language=language or "",
+            segments=segments,
+            backend="whisper-cli",
+            success=True
+        )
+
+    except subprocess.TimeoutExpired:
+        return TranscriptionResult(
+            text="",
+            language="",
+            segments=[],
+            backend="whisper-cli",
+            success=False,
+            error="whisper-cli timed out after 5 minutes"
+        )
+    except Exception as e:
+        return TranscriptionResult(
+            text="",
+            language="",
+            segments=[],
+            backend="whisper-cli",
+            success=False,
+            error=str(e)
+        )
+
+    finally:
+        # Clean up temp file if created
+        if wav_path != audio_path and wav_path.exists():
+            wav_path.unlink()

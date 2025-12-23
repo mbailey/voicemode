@@ -274,6 +274,20 @@ VoiceMode maintains comprehensive logs in `~/.voicemode/`:
 
 To enable debug logging, set `VOICEMODE_DEBUG=true` or use `--debug` flag.
 
+## Recovering Failed Transcriptions
+
+When STT fails (e.g., service down or timeout) and `VOICEMODE_SAVE_AUDIO=true`, the recording is saved and the error includes the file path. To retry transcription:
+
+```bash
+# Use whisper-cli backend (works without the whisper service running)
+voicemode audio transcribe --backend whisper-cli /path/to/saved/recording.wav
+
+# Or use whisper-cpp backend (requires whisper service to be running)
+voicemode audio transcribe --backend whisper-cpp /path/to/saved/recording.wav
+```
+
+Audio recordings are saved to `~/.voicemode/audio/YYYY/MM/` when `VOICEMODE_SAVE_AUDIO=true`.
+
 ## Communication Guidelines
 
 ### Voice Mode Parallel Operations (DEFAULT BEHAVIOR)
