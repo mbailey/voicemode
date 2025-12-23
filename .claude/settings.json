@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "voicemode claude hooks receiver || true"
+            "command": "voicemode-hook-receiver"
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "voicemode claude hooks receiver || true"
+            "command": "voicemode-hook-receiver"
           }
         ]
       }
