@@ -1,20 +1,45 @@
 {
-  "hooks": [
-    {
-      "event": "PreToolUse",
-      "command": "voicemode-hook-receiver || true"
-    },
-    {
-      "event": "PostToolUse",
-      "command": "voicemode-hook-receiver || true"
-    },
-    {
-      "event": "Notification",
-      "command": "voicemode-hook-receiver || true"
-    },
-    {
-      "event": "Stop",
-      "command": "voicemode-hook-receiver || true"
-    }
-  ]
+  "description": "VoiceMode hook receiver for sound effects during Claude Code operations",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ]
+  }
 }
