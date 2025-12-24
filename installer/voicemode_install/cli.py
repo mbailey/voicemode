@@ -181,6 +181,10 @@ Examples:
   # Normal installation
   voice-mode-install
 
+  # Non-interactive installation (auto-accept all prompts)
+  voice-mode-install --yes
+  voice-mode-install -y
+
   # Dry run (see what would be installed)
   voice-mode-install --dry-run
 
@@ -189,6 +193,9 @@ Examples:
 
   # Skip service installation
   voice-mode-install --skip-services
+
+  # Install with specific Whisper model
+  voice-mode-install --yes --model large-v2
 """
 
 
@@ -196,9 +203,11 @@ Examples:
 @click.option('-d', '--dry-run', is_flag=True, help='Show what would be installed without installing')
 @click.option('-v', '--voice-mode-version', default=None, help='Specific VoiceMode version to install')
 @click.option('-s', '--skip-services', is_flag=True, help='Skip local service installation')
-@click.option('-n', '--non-interactive', is_flag=True, help='Run without prompts (assumes yes)')
+@click.option('-y', '--yes', 'non_interactive', is_flag=True, help='Run without prompts (auto-accept all)')
+@click.option('-n', '--non-interactive', is_flag=True, help='Run without prompts (deprecated: use --yes/-y)')
+@click.option('-m', '--model', default='base', help='Whisper model to use (base, small, medium, large-v2)')
 @click.version_option(__version__, '-V', '--version')
-def main(dry_run, voice_mode_version, skip_services, non_interactive):
+def main(dry_run, voice_mode_version, skip_services, non_interactive, model):
     """VoiceMode Installer - Install VoiceMode and its system dependencies.
 
     This installer will:
@@ -217,6 +226,13 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive):
 
       7. Verify the installation
     """
+    # Detect non-interactive environment (no TTY)
+    if not sys.stdin.isatty() and not non_interactive and not dry_run:
+        click.echo("Error: Running in non-interactive environment without --yes flag", err=True)
+        click.echo("Use --yes or -y to enable automatic installation", err=True)
+        click.echo("Example: uvx voice-mode-install --yes", err=True)
+        sys.exit(1)
+
     # Initialize logger
     logger = InstallLogger()
 
@@ -408,14 +424,18 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive):
 
             if hardware.should_recommend_local_services():
                 if non_interactive or click.confirm("Install local voice services now?", default=True):
+                    model_flag = f" --model {model}" if model != 'base' else ''
                     click.echo("\nLocal services can be installed with:")
-                    click.echo("  voicemode whisper install")
+                    click.echo(f"  voicemode whisper install{model_flag}")
                     click.echo("  voicemode kokoro install")
                     click.echo("\nRun these commands after the installer completes.")
+                    if non_interactive:
+                        click.echo(f"\nNote: Whisper model '{model}' will be used (set via --model flag)")
             else:
                 click.echo("Cloud services recommended for your system configuration.")
                 click.echo("Local services can still be installed if desired:")
-                click.echo("  voicemode whisper install")
+                model_flag = f" --model {model}" if model != 'base' else ''
+                click.echo(f"  voicemode whisper install{model_flag}")
                 click.echo("  voicemode kokoro install")
 
         # Completion summary
