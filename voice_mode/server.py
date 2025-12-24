@@ -1,6 +1,19 @@
 #!/usr/bin/env python
 """VoiceMode MCP Server - Modular version using FastMCP patterns."""
 
+import os
+import platform
+
+# Extend PATH to include common tool locations before any imports that might need them
+# MCP servers run in isolated environments that may not inherit shell PATH
+if platform.system() == "Darwin":
+    # macOS: Add Homebrew paths (Intel and Apple Silicon)
+    homebrew_paths = ["/opt/homebrew/bin", "/usr/local/bin"]
+    current_path = os.environ.get("PATH", "")
+    paths_to_add = [p for p in homebrew_paths if p not in current_path]
+    if paths_to_add:
+        os.environ["PATH"] = ":".join(paths_to_add) + ":" + current_path
+
 from fastmcp import FastMCP
 
 # Create FastMCP instance

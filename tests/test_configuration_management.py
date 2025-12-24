@@ -305,3 +305,166 @@ class TestWriteEnvFileCommentedDefaults:
 
         finally:
             os.unlink(temp_path)
+
+class TestMultilineValueHandling:
+    """Test handling of multiline quoted values in config files."""
+
+    def test_parse_multiline_double_quoted_value(self):
+        """parse_env_file should handle multiline double-quoted values."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write('VOICEMODE_PRONOUNCE="\n')
+                f.write('TTS \\bJSON\\b jason\n')
+                f.write('TTS \\bYAML\\b yammel\n')
+                f.write('"\n')
+                f.write('OTHER_KEY=simple_value\n')
+
+            config = parse_env_file(Path(temp_path))
+
+            # Should have both keys
+            assert "VOICEMODE_PRONOUNCE" in config
+            assert "OTHER_KEY" in config
+
+            # Multiline value should be preserved
+            assert "TTS \\bJSON\\b jason" in config["VOICEMODE_PRONOUNCE"]
+            assert "TTS \\bYAML\\b yammel" in config["VOICEMODE_PRONOUNCE"]
+
+            # Simple value should work
+            assert config["OTHER_KEY"] == "simple_value"
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_parse_multiline_single_quoted_value(self):
+        """parse_env_file should handle multiline single-quoted values."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write("VOICEMODE_PRONOUNCE='\n")
+                f.write("TTS pattern1 replacement1\n")
+                f.write("TTS pattern2 replacement2\n")
+                f.write("'\n")
+
+            config = parse_env_file(Path(temp_path))
+
+            assert "VOICEMODE_PRONOUNCE" in config
+            assert "pattern1" in config["VOICEMODE_PRONOUNCE"]
+            assert "pattern2" in config["VOICEMODE_PRONOUNCE"]
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_parse_single_line_quoted_value(self):
+        """parse_env_file should handle single-line quoted values correctly."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write('SIMPLE_QUOTED="hello world"\n')
+                f.write("SINGLE_QUOTED='test value'\n")
+                f.write("UNQUOTED=no_spaces\n")
+
+            config = parse_env_file(Path(temp_path))
+
+            assert config["SIMPLE_QUOTED"] == "hello world"
+            assert config["SINGLE_QUOTED"] == "test value"
+            assert config["UNQUOTED"] == "no_spaces"
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_write_preserves_multiline_value_not_in_config(self):
+        """write_env_file should preserve multiline values that aren't being updated."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            # Write a file with a multiline value
+            with os.fdopen(fd, 'w') as f:
+                f.write('VOICEMODE_PRONOUNCE="\n')
+                f.write('TTS \\bJSON\\b jason\n')
+                f.write('TTS \\bYAML\\b yammel\n')
+                f.write('"\n')
+                f.write('OTHER_KEY=old_value\n')
+
+            temp_file = Path(temp_path)
+
+            # Update only OTHER_KEY, not VOICEMODE_PRONOUNCE
+            write_env_file(temp_file, {"OTHER_KEY": "new_value"})
+
+            content = temp_file.read_text()
+
+            # Multiline value should be preserved
+            assert 'VOICEMODE_PRONOUNCE="' in content
+            assert "TTS \\bJSON\\b jason" in content
+            assert "TTS \\bYAML\\b yammel" in content
+            # Updated value should be there
+            assert "OTHER_KEY=new_value" in content
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_write_updates_multiline_value_in_config(self):
+        """write_env_file should properly update multiline values."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            # Write a file with a multiline value
+            with os.fdopen(fd, 'w') as f:
+                f.write('VOICEMODE_PRONOUNCE="\n')
+                f.write('old content\n')
+                f.write('"\n')
+
+            temp_file = Path(temp_path)
+
+            # Update the multiline value
+            new_value = "new line 1\nnew line 2"
+            write_env_file(temp_file, {"VOICEMODE_PRONOUNCE": new_value})
+
+            content = temp_file.read_text()
+
+            # New multiline value should be properly quoted
+            assert "VOICEMODE_PRONOUNCE=" in content
+            assert "new line 1" in content
+            assert "new line 2" in content
+
+            # Verify it can be parsed back
+            config = parse_env_file(temp_file)
+            assert "new line 1" in config["VOICEMODE_PRONOUNCE"]
+            assert "new line 2" in config["VOICEMODE_PRONOUNCE"]
+
+        finally:
+            os.unlink(temp_path)
+
+    def test_update_config_preserves_multiline_values(self):
+        """update_config should not corrupt multiline values when updating other keys."""
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            # Write a file with a multiline value and another key
+            with os.fdopen(fd, 'w') as f:
+                f.write('VOICEMODE_PRONOUNCE="\n')
+                f.write('TTS \\bJSON\\b jason\n')
+                f.write('"\n')
+                f.write('VOICEMODE_WHISPER_MODEL=base\n')
+
+            temp_file = Path(temp_path)
+
+            # Update only VOICEMODE_WHISPER_MODEL
+            with patch("voice_mode.tools.configuration_management.USER_CONFIG_PATH", temp_file):
+                result = asyncio.run(update_config.fn("VOICEMODE_WHISPER_MODEL", "large-v1"))
+
+            # Should succeed
+            assert "success" in result.lower() or "updated" in result.lower()
+
+            # Verify multiline value is preserved
+            content = temp_file.read_text()
+            assert 'VOICEMODE_PRONOUNCE="' in content
+            assert "TTS \\bJSON\\b jason" in content
+
+            # Verify updated value
+            assert "VOICEMODE_WHISPER_MODEL=large-v1" in content
+
+            # Verify it can still be parsed correctly
+            config = parse_env_file(temp_file)
+            assert "TTS \\bJSON\\b jason" in config.get("VOICEMODE_PRONOUNCE", "")
+            assert config.get("VOICEMODE_WHISPER_MODEL") == "large-v1"
+
+        finally:
+            os.unlink(temp_path)

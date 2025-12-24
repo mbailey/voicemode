@@ -208,70 +208,70 @@ def is_apple_silicon() -> bool:
 
 def set_active_model(model_name: str) -> None:
     """Set the active Whisper model.
-    
+
     Args:
         model_name: Name of the model to set as active
-    
+
     Updates the voicemode.env configuration file for persistence.
+    Preserves multiline values (like VOICEMODE_PRONOUNCE) correctly.
     """
     from pathlib import Path
     import re
-    
+
     # Configuration file path
     config_path = Path.home() / ".voicemode" / "voicemode.env"
-    
+
     # Ensure directory exists
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Read existing configuration
-    config = {}
-    if config_path.exists():
-        with open(config_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                match = re.match(r'^([A-Z_]+)=(.*)$', line)
-                if match:
-                    key, value = match.groups()
-                    value = value.strip('"').strip("'")
-                    config[key] = value
-    
-    # Update the model
-    config['VOICEMODE_WHISPER_MODEL'] = model_name
-    
-    # Write back to file, preserving structure
+
+    # Write back to file, preserving structure and multiline values
     lines = []
-    updated_keys = set()
-    
+    found_model_setting = False
+    in_multiline = False
+    multiline_quote = None
+
     if config_path.exists():
         with open(config_path, 'r') as f:
             for line in f:
                 stripped = line.strip()
-                if stripped and not stripped.startswith('#'):
-                    match = re.match(r'^([A-Z_]+)=', stripped)
-                    if match:
-                        key = match.group(1)
-                        if key == 'VOICEMODE_WHISPER_MODEL':
-                            lines.append(f"VOICEMODE_WHISPER_MODEL={model_name}\n")
-                            updated_keys.add(key)
-                        elif key in config:
-                            lines.append(f"{key}={config[key]}\n")
-                            updated_keys.add(key)
-                        else:
-                            lines.append(line)
-                    else:
-                        lines.append(line)
-                else:
+
+                # Track multiline values (quoted strings spanning multiple lines)
+                if in_multiline:
                     lines.append(line)
-    
+                    # Check if this line ends the multiline value
+                    if stripped.endswith(multiline_quote):
+                        in_multiline = False
+                        multiline_quote = None
+                    continue
+
+                # Check for VOICEMODE_WHISPER_MODEL line to update
+                if stripped and not stripped.startswith('#'):
+                    match = re.match(r'^VOICEMODE_WHISPER_MODEL=', stripped)
+                    if match:
+                        lines.append(f"VOICEMODE_WHISPER_MODEL={model_name}\n")
+                        found_model_setting = True
+                        continue
+
+                    # Check if this line starts a multiline value
+                    # Pattern: KEY="... or KEY='... without closing quote on same line
+                    multiline_match = re.match(r'^[A-Z_]+=(["\'])(.*)$', stripped)
+                    if multiline_match:
+                        quote_char = multiline_match.group(1)
+                        rest = multiline_match.group(2)
+                        # If the rest doesn't end with the same quote, it's multiline
+                        if not rest.endswith(quote_char):
+                            in_multiline = True
+                            multiline_quote = quote_char
+
+                lines.append(line)
+
     # Add VOICEMODE_WHISPER_MODEL if it wasn't in the file
-    if 'VOICEMODE_WHISPER_MODEL' not in updated_keys:
-        if lines and not lines[-1].strip() == '':
+    if not found_model_setting:
+        if lines and lines[-1].strip() != '':
             lines.append('\n')
         lines.append("# Whisper Configuration\n")
         lines.append(f"VOICEMODE_WHISPER_MODEL={model_name}\n")
-    
+
     # Write the updated configuration
     with open(config_path, 'w') as f:
         f.writelines(lines)
