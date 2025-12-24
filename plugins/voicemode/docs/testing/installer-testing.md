@@ -18,7 +18,7 @@ This guide covers testing the VoiceMode installer on fresh macOS VMs using Tart.
 
 ```bash
 # Clone fresh VM from macOS Tahoe (latest)
-tart clone ghcr.io/cirruslabs/macos-tahoe:latest test-vm
+tart clone ghcr.io/cirruslabs/macos-tahoe-base:latest test-vm
 
 # Start VM in headless mode
 tart run test-vm --no-graphics &
@@ -98,21 +98,21 @@ Latest macOS version with best compatibility.
 
 ```bash
 # Pull and clone
-tart clone ghcr.io/cirruslabs/macos-tahoe:latest test-tahoe
+tart clone ghcr.io/cirruslabs/macos-tahoe-base:latest test-tahoe
 tart run test-tahoe --no-graphics &
 ```
 
 ### macOS Sequoia (15.x)
 
 ```bash
-tart clone ghcr.io/cirruslabs/macos-sequoia:latest test-sequoia
+tart clone ghcr.io/cirruslabs/macos-sequoia-base:latest test-sequoia
 tart run test-sequoia --no-graphics &
 ```
 
 ### macOS Sonoma (14.x)
 
 ```bash
-tart clone ghcr.io/cirruslabs/macos-sonoma:latest test-sonoma
+tart clone ghcr.io/cirruslabs/macos-sonoma-base:latest test-sonoma
 tart run test-sonoma --no-graphics &
 ```
 
@@ -484,56 +484,39 @@ ssh admin@$VM_IP "brew cleanup" # If testing multiple times
 
 ## Automated Testing Script
 
-For minions/agents, here's a complete test script:
+For automated testing, use the comprehensive test script at [`scripts/test-installer.sh`](../../../../scripts/test-installer.sh):
 
 ```bash
-#!/bin/bash
-set -e
+# Run all test scenarios on a fresh VM
+./scripts/test-installer.sh
 
-VM_NAME="test-voicemode-$(date +%s)"
-BASE_IMAGE="ghcr.io/cirruslabs/macos-tahoe:latest"
+# Test specific scenarios
+./scripts/test-installer.sh --scenarios "install,dry-run"
 
-echo "=== VoiceMode Installer Test ==="
-echo "Creating VM: $VM_NAME"
+# Test from a branch instead of PyPI
+./scripts/test-installer.sh --branch feat/my-feature
 
-# Create and start VM
-tart clone "$BASE_IMAGE" "$VM_NAME"
-tart run "$VM_NAME" --no-graphics &
+# Keep VM running after tests for debugging
+./scripts/test-installer.sh --keep-vm --verbose
 
-# Wait for boot
-echo "Waiting for VM to boot..."
-sleep 30
-
-# Get IP
-VM_IP=$(tart ip "$VM_NAME")
-echo "VM IP: $VM_IP"
-
-# Run installer
-echo "Installing VoiceMode..."
-ssh admin@$VM_IP "
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH=\"\$HOME/.local/bin:\$PATH\"
-  uvx voice-mode-install --yes
-"
-
-# Verify
-echo "Verifying installation..."
-ssh admin@$VM_IP "export PATH=\"\$HOME/.local/bin:\$PATH\" && voicemode --version"
-ssh admin@$VM_IP "export PATH=\"\$HOME/.local/bin:\$PATH\" && voicemode whisper service status"
-ssh admin@$VM_IP "export PATH=\"\$HOME/.local/bin:\$PATH\" && voicemode kokoro status"
-
-# Clean up
-echo "Cleaning up..."
-tart stop "$VM_NAME"
-tart delete "$VM_NAME"
-
-echo "=== Test Complete ==="
+# See all options
+./scripts/test-installer.sh --help
 ```
+
+**Available Options:**
+- `--branch BRANCH` - Test from git branch instead of PyPI
+- `--keep-vm` - Keep VM running after tests for debugging
+- `--verbose` - Show detailed output from all commands
+- `--scenarios LIST` - Comma-separated scenarios (install, skip-services, model, dry-run)
+- `--base-image IMAGE` - Tart base image (default: ghcr.io/cirruslabs/macos-tahoe-base:latest)
+- `--log-file FILE` - Write detailed output to log file
+
+**Requirements:** `sshpass` must be installed (`brew install hudochenkov/sshpass/sshpass`)
 
 ## References
 
 - [Tart Documentation](https://github.com/cirruslabs/tart)
 - [VoiceMode Installer README](../../installer/README.md)
-- [VoiceMode Testing Script](../../scripts/test_installer.py)
+- [VoiceMode Testing Script](../../../../scripts/test-installer.sh)
 - [Related Task: VM-262](https://github.com/mbailey/taskmaster-tasks/tree/master/projects/voicemode/VM-262_task_test-voicemode-plugin-on-fresh-macos-vm-using-tart)
 - [Related Task: VM-265](https://github.com/mbailey/taskmaster-tasks/tree/master/projects/voicemode/VM-265_feat_add-non-interactive-mode-to-voice-mode-install-for-claude-code-automation)

@@ -49,7 +49,7 @@ BRANCH=""
 KEEP_VM=false
 VERBOSE=false
 SCENARIOS="install,skip-services,model,dry-run"
-BASE_IMAGE="ghcr.io/cirruslabs/macos-tahoe:latest"
+BASE_IMAGE="ghcr.io/cirruslabs/macos-tahoe-base:latest"
 LOG_FILE=""
 VM_NAME="test-voicemode-$(date +%s)"
 VM_IP=""
@@ -269,7 +269,7 @@ create_vm() {
     print_info "Waiting for SSH to be available..."
     count=0
     while [[ $count -lt $retries ]]; do
-        if sshpass -p "$VM_PASSWORD" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no admin@$VM_IP "echo test" &>/dev/null; then
+        if sshpass -p "$VM_PASSWORD" ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o PubkeyAuthentication=no admin@$VM_IP "echo test" &>/dev/null; then
             break
         fi
         count=$((count + 1))
@@ -291,27 +291,27 @@ install_homebrew() {
     print_header "Installing Homebrew"
 
     # Check if Homebrew is already installed
-    if sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no admin@$VM_IP "command -v brew" &>/dev/null; then
+    if sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no admin@$VM_IP "command -v brew" &>/dev/null; then
         print_success "Homebrew is already installed"
         return 0
     fi
 
     # Pre-authenticate sudo (password is same as SSH password)
     print_info "Pre-authenticating sudo..."
-    if ! sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no admin@$VM_IP "echo '$VM_PASSWORD' | sudo -S -v"; then
+    if ! sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no admin@$VM_IP "echo '$VM_PASSWORD' | sudo -S -v"; then
         print_warning "sudo pre-authentication failed, continuing anyway..."
     fi
 
     # Install Homebrew non-interactively
     print_info "Installing Homebrew (this may take a few minutes)..."
-    if ! sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no admin@$VM_IP "NONINTERACTIVE=1 /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""; then
+    if ! sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no admin@$VM_IP "NONINTERACTIVE=1 /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""; then
         print_error "Failed to install Homebrew"
         return 1
     fi
 
     # Add Homebrew to PATH for the current session
     print_info "Configuring Homebrew PATH..."
-    sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no admin@$VM_IP 'echo "eval \"\$(/opt/homebrew/bin/brew shellenv)\"" >> ~/.zprofile'
+    sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no admin@$VM_IP 'echo "eval \"\$(/opt/homebrew/bin/brew shellenv)\"" >> ~/.zprofile'
 
     print_success "Homebrew installed successfully"
     return 0
@@ -321,7 +321,7 @@ install_homebrew() {
 install_uv() {
     print_header "Installing uv Package Manager"
 
-    if ! sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no admin@$VM_IP "curl -LsSf https://astral.sh/uv/install.sh | sh"; then
+    if ! sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no admin@$VM_IP "curl -LsSf https://astral.sh/uv/install.sh | sh"; then
         print_error "Failed to install uv"
         return 1
     fi
@@ -332,7 +332,7 @@ install_uv() {
 # Run SSH command with PATH setup (includes Homebrew and uv paths if available)
 ssh_vm() {
     # Try to set up Homebrew path if it exists, otherwise just use uv path
-    sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no admin@$VM_IP "if [ -x /opt/homebrew/bin/brew ]; then eval \"\$(/opt/homebrew/bin/brew shellenv)\"; fi; export PATH=\"\$HOME/.local/bin:\$PATH\" && $1"
+    sshpass -p "$VM_PASSWORD" ssh -o StrictHostKeyChecking=no -o PubkeyAuthentication=no admin@$VM_IP "if [ -x /opt/homebrew/bin/brew ]; then eval \"\$(/opt/homebrew/bin/brew shellenv)\"; fi; export PATH=\"\$HOME/.local/bin:\$PATH\" && $1"
 }
 
 # Verify basic installation
