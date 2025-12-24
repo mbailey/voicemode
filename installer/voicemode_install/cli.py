@@ -1,6 +1,7 @@
 """Main CLI for VoiceMode installer."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -133,25 +134,26 @@ def ensure_homebrew_on_macos(platform_info, dry_run: bool, non_interactive: bool
         return True
 
     if non_interactive:
-        print_error("Homebrew not found and running in non-interactive mode")
-        click.echo("Please install Homebrew manually:")
-        click.echo('  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"')
-        return False
+        # Auto-install Homebrew in non-interactive mode using NONINTERACTIVE=1
+        print_step("Installing Homebrew (non-interactive)...")
+    else:
+        # Prompt user
+        if not click.confirm("Install Homebrew now?", default=True):
+            print_error("Homebrew installation declined")
+            click.echo("Please install Homebrew manually and run the installer again.")
+            return False
+        print_step("Installing Homebrew...")
+        click.echo("This may take a few minutes and will require your password.")
 
-    # Prompt user
-    if not click.confirm("Install Homebrew now?", default=True):
-        print_error("Homebrew installation declined")
-        click.echo("Please install Homebrew manually and run the installer again.")
-        return False
-
-    # Install Homebrew
-    print_step("Installing Homebrew...")
-    click.echo("This may take a few minutes and will require your password.")
     click.echo()
 
     try:
+        # Use NONINTERACTIVE=1 for unattended installation
+        env = os.environ.copy()
+        if non_interactive:
+            env['NONINTERACTIVE'] = '1'
         install_script = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-        result = subprocess.run(install_script, shell=True, check=True)
+        result = subprocess.run(install_script, shell=True, check=True, env=env)
 
         if result.returncode == 0:
             print_success("Homebrew installed successfully")
