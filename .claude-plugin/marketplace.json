@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "voicemode",
+  "description": "VoiceMode - Voice conversations with Claude Code",
+  "owner": {
+    "name": "Mike Bailey",
+    "email": "mike@failmode.com"
+  },
+  "plugins": [
+    {
+      "name": "voicemode",
+      "description": "Voice conversations with Claude Code using local speech-to-text and text-to-speech. Includes local Whisper STT and Kokoro TTS services for privacy-focused voice interaction.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Mike Bailey",
+        "email": "mike@failmode.com"
+      },
+      "source": "./plugins/voicemode",
+      "category": "productivity",
+      "homepage": "https://getvoicemode.com"
+    }
+  ]
+}

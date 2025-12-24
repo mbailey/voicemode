@@ -1,0 +1,437 @@
+---
+name: voicemode
+description: This skill provides voice interaction capabilities for AI assistants. This skill should be used when users mention "voice mode", "voicemode", "speak to me", "talk to me", "have a voice conversation", "converse", ask to "check voice service status", "start Whisper", "start Kokoro", ask about "voice configuration", mention "STT", "TTS", "speech-to-text", "text-to-speech", or need help with "voice setup", "voice troubleshooting", or "voice preferences".
+---
+
+# VoiceMode
+
+Voice interaction capabilities for Claude Code - enabling natural conversations through speech-to-text (STT) and text-to-speech (TTS) services.
+
+## Quick Start
+
+When a user wants to use voice mode for the first time, guide them through these steps:
+
+### 1. Check Service Status
+
+First, check if voice services are already running:
+
+```python
+# Check STT service (Whisper)
+voicemode:service("whisper", "status")
+
+# Check TTS service (Kokoro)
+voicemode:service("kokoro", "status")
+```
+
+### 2. Install Services if Needed
+
+If services aren't installed, guide the user to install them:
+
+**Prerequisites:**
+- FFmpeg (required for audio processing)
+- Python 3.11+ (for VoiceMode installation)
+
+**Installation:**
+
+```bash
+# Install VoiceMode with UV (recommended)
+uv tool install voice-mode-install
+voice-mode-install
+
+# Or update to latest version
+voicemode update
+```
+
+**Install Voice Services:**
+
+```bash
+# Install Whisper for local STT
+voicemode whisper service install
+
+# Install Kokoro for local TTS
+voicemode kokoro install
+```
+
+Services auto-start after installation.
+
+### 3. Start Your First Conversation
+
+Once services are running, start a voice conversation:
+
+```python
+# Simple greeting
+voicemode:converse("Hello! I'm ready to talk. What would you like to discuss?")
+
+# The tool will:
+# - Speak the message using TTS
+# - Listen for the user's response
+# - Return the transcribed text
+```
+
+That's it! You're now in a voice conversation.
+
+## Core Capabilities
+
+### Voice Conversations
+
+The `converse` tool is your primary interface for voice interactions:
+
+```python
+# Basic usage - speak and listen
+voicemode:converse("How can I help you today?")
+
+# Speak without waiting for response (for narration)
+voicemode:converse("Let me search for that information", wait_for_response=False)
+
+# With specific voice
+voicemode:converse(
+    message="I found the answer",
+    voice="nova",
+    tts_provider="openai"
+)
+```
+
+**Key Parameters:**
+- `message` (required): Text to speak
+- `wait_for_response` (default: true): Whether to listen for user response
+- `voice`: TTS voice name (auto-selected if not specified)
+- `tts_provider`: "openai" or "kokoro" (auto-selected based on availability)
+- `listen_duration_max`: Maximum listening time in seconds (default: 120)
+
+### Service Management
+
+Manage voice services using the `service` tool:
+
+```python
+# Check status
+voicemode:service("whisper", "status")
+voicemode:service("kokoro", "status")
+
+# Start/stop services
+voicemode:service("whisper", "start")
+voicemode:service("kokoro", "stop")
+voicemode:service("whisper", "restart")
+
+# View logs for troubleshooting
+voicemode:service("whisper", "logs", lines=50)
+```
+
+**Available Services:**
+- `whisper`: Local STT using Whisper.cpp
+- `kokoro`: Local TTS with multiple voices
+- `livekit`: Room-based real-time communication (advanced)
+
+**Service Actions:**
+- `status`: Check if running and resource usage
+- `start`: Start the service
+- `stop`: Stop the service
+- `restart`: Restart the service
+- `logs`: View recent logs
+- `enable`: Configure to start at boot/login
+- `disable`: Remove from startup
+
+## Common Workflows
+
+### Having a Voice Conversation
+
+**Pattern 1: Question and Answer**
+
+```python
+# Ask a question
+voicemode:converse("What would you like to work on today?")
+# User responds via voice
+# Response text is returned for you to process
+
+# Continue the conversation
+voicemode:converse("Great! Let me help you with that.")
+```
+
+**Pattern 2: Narrating Actions (Default Behavior)**
+
+When performing actions, speak without waiting to create natural flow:
+
+```python
+# Announce action without waiting
+voicemode:converse("Let me search the codebase for that", wait_for_response=False)
+
+# Perform the action in parallel
+Grep(pattern="function_name", path="/path/to/code")
+
+# Announce results
+voicemode:converse("I found 5 matches. Would you like me to show them?")
+```
+
+**Pattern 3: Step-by-Step Guidance**
+
+When asking questions in voice mode:
+- Ask one question at a time
+- Wait for the answer before proceeding
+- Keep questions clear and concise
+
+```python
+# Good - one question at a time
+voicemode:converse("Would you like to use local or cloud TTS?", wait_for_response=True)
+# Wait for answer...
+voicemode:converse("Should I install Kokoro for you?", wait_for_response=True)
+
+# Avoid - multiple questions bundled together
+# This is overwhelming in voice conversations
+```
+
+### Checking and Troubleshooting Setup
+
+**Check if everything is working:**
+
+```python
+# Check service status
+voicemode:service("whisper", "status")
+voicemode:service("kokoro", "status")
+
+# If services aren't running, start them
+voicemode:service("whisper", "start")
+voicemode:service("kokoro", "start")
+```
+
+**Using CLI for diagnostics:**
+
+```bash
+# Check all dependencies
+voicemode deps
+
+# Diagnostic information
+voicemode diag info
+voicemode diag devices  # List audio devices
+voicemode diag registry # Show provider registry
+
+# View service logs
+voicemode whisper service logs
+voicemode kokoro logs
+```
+
+### Managing Voice Preferences
+
+**Voice Selection:**
+
+Available voices depend on your TTS provider:
+
+**OpenAI Voices:** alloy, echo, fable, onyx, nova, shimmer
+**Kokoro Voices:** Multiple voices (check with `voicemode kokoro voices`)
+
+**Configuration:**
+
+```bash
+# View current configuration
+voicemode config list
+
+# Set default voice
+voicemode config set VOICEMODE_TTS_VOICE nova
+
+# Set default provider
+voicemode config set VOICEMODE_TTS_PROVIDER kokoro
+
+# Edit full configuration
+voicemode config edit
+```
+
+**Project and User Preferences:**
+- Project-level: `.voicemode` file in project root
+- User-level: `~/.voicemode` file in home directory
+- System config: `~/.voicemode/config/config.yaml`
+
+## Advanced Topics
+
+### Provider System
+
+VoiceMode uses OpenAI-compatible endpoints for all services:
+
+**Cloud Providers:**
+- OpenAI API (requires API key)
+
+**Local Providers:**
+- Whisper.cpp for STT
+- Kokoro for TTS
+- LiveKit for WebRTC communication
+
+The system automatically:
+- Discovers available providers
+- Performs health checks
+- Fails over to working providers
+- Negotiates audio formats
+
+### Audio Processing
+
+**Requirements:**
+- FFmpeg for format conversion
+- WebRTC VAD for voice activity detection
+
+**Supported Formats:**
+- PCM, MP3, WAV, FLAC, AAC, Opus
+
+**Configuration Options:**
+- `disable_silence_detection`: Keep listening even during silence
+- `vad_aggressiveness`: 0-3 (default: 2) - how strict voice detection is
+- `listen_duration_min`: Minimum recording time before silence detection (default: 2.0s)
+- `speed`: Speech rate 0.25-4.0 (default: 1.0)
+- `chime_enabled`: Enable/disable audio feedback chimes
+
+### Batching Voice Announcements with Audio
+
+When playing audio files, you can batch multiple announcements and playback commands. Tools execute sequentially within the batch:
+
+```python
+# Batch announce-play sequences
+voicemode:converse("Chapter 1 - Introduction", wait_for_response=False)
+Bash(command="mpv --start=00:00 --length=3 song.mp3")
+voicemode:converse("Chapter 2 - Main Theme", wait_for_response=False)
+Bash(command="mpv --start=00:10 --length=5 song.mp3")
+```
+
+This creates natural narration with audio playback.
+
+### Environment Variables
+
+Configure VoiceMode behavior:
+
+- `VOICEMODE_TTS_VOICE`: Default TTS voice
+- `VOICEMODE_TTS_PROVIDER`: Default TTS provider (openai, kokoro)
+- `VOICEMODE_STT_PROVIDER`: Default STT provider
+- `VOICEMODE_AUDIO_FORMAT`: Audio format preference
+- `VOICEMODE_DEBUG`: Enable debug logging
+
+### Logging and Debugging
+
+VoiceMode maintains logs in `~/.voicemode/`:
+
+**Log Structure:**
+- `logs/conversations/`: Daily conversation transcripts
+- `logs/events/`: Operational events and errors
+- `audio/`: Saved audio recordings
+- `config/`: Configuration files
+
+**Enable Debug Mode:**
+
+```bash
+# Via environment variable
+export VOICEMODE_DEBUG=true
+
+# Via CLI flag
+voicemode converse --debug
+
+# Via MCP parameter
+voicemode:converse(message="Test", debug=True)
+```
+
+## Quick Reference
+
+### Essential MCP Tool Calls
+
+```python
+# Start conversation
+voicemode:converse("Hello!")
+
+# Speak without waiting
+voicemode:converse("Working on it...", wait_for_response=False)
+
+# Check service status
+voicemode:service("whisper", "status")
+voicemode:service("kokoro", "status")
+
+# Start services
+voicemode:service("whisper", "start")
+voicemode:service("kokoro", "start")
+
+# View logs
+voicemode:service("whisper", "logs", lines=50)
+```
+
+### Common CLI Commands
+
+```bash
+# Check status
+voicemode whisper service status
+voicemode kokoro status
+
+# Start services
+voicemode whisper service start
+voicemode kokoro start
+
+# View logs
+voicemode whisper service logs
+voicemode kokoro logs
+
+# Configuration
+voicemode config list
+voicemode config set VOICEMODE_TTS_VOICE nova
+voicemode config edit
+
+# Diagnostics
+voicemode deps
+voicemode diag info
+voicemode diag devices
+```
+
+### Token Efficiency Tip
+
+When using CLI commands directly (not MCP tools), redirect STDERR to save tokens:
+
+```bash
+# Suppresses FFmpeg warnings and debug output
+voicemode converse -m "Hello" 2>/dev/null
+
+# Omit when debugging
+voicemode converse -m "Hello"  # Shows all diagnostic info
+```
+
+This only applies to Bash tool calls - MCP tools handle this automatically.
+
+## Best Practices
+
+1. **Use parallel operations**: Speak without waiting when narrating actions
+2. **One question at a time**: Don't bundle multiple questions in voice mode
+3. **Check status first**: Always verify services are running before starting conversations
+4. **Let VoiceMode auto-select**: Don't hardcode providers unless user has preference
+5. **Use local services**: Whisper and Kokoro provide privacy and speed
+6. **Monitor logs**: Check service logs when troubleshooting issues
+7. **Set user preferences**: Configure default voice and provider in `~/.voicemode`
+
+## Integration Notes
+
+- VoiceMode runs as an MCP server via stdio transport
+- Compatible with Claude Code and other MCP clients
+- Supports concurrent instances with audio playback management
+- Works with tmux and terminal multiplexers
+- Requires microphone access when listening for responses
+
+## Additional Resources
+
+For detailed documentation:
+- VoiceMode README: Installation and overview
+- `docs/reference/`: Complete API and parameter documentation
+- `docs/tutorials/`: Step-by-step guides
+- `docs/services/`: Service-specific documentation
+- `docs/testing/installer-testing.md`: Installer testing guide for Tart VMs
+- VoiceMode CLAUDE.md: Project-specific Claude guidance
+
+## Troubleshooting
+
+**Services won't start:**
+1. Check FFmpeg is installed: `ffmpeg -version`
+2. View service logs: `voicemode:service("whisper", "logs")`
+3. Try restart: `voicemode:service("whisper", "restart")`
+
+**Audio quality issues:**
+1. Check audio devices: `voicemode diag devices`
+2. Adjust VAD aggressiveness: `vad_aggressiveness=1` (more permissive)
+3. Review conversation logs in `~/.voicemode/logs/conversations/`
+
+**Conversations not working:**
+1. Verify services are running: `voicemode:service("whisper", "status")`
+2. Check provider registry: `voicemode diag registry`
+3. Enable debug mode to see detailed logs
+4. Ensure microphone permissions are granted
+
+**Configuration issues:**
+1. List current config: `voicemode config list`
+2. Check for environment variable conflicts
+3. Review config file: `~/.voicemode/config/config.yaml`
+4. Reset to defaults: Remove config file and restart services
