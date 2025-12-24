@@ -1,76 +1,62 @@
 ---
 description: Install VoiceMode and its dependencies
-allowed-tools: Bash(uvx:*)
+allowed-tools: Bash(uvx:*), Bash(voicemode:*)
 ---
 
 # /voicemode:install
 
 Install VoiceMode and its dependencies.
 
-## Usage
-
-```
-/voicemode:install
-```
-
-## Description
-
-Runs the VoiceMode installer to set up local speech-to-text and text-to-speech services. The installer will:
-
-1. Install the VoiceMode package
-2. Install Whisper.cpp for local STT
-3. Install Kokoro for local TTS
-4. Configure services to start automatically
-5. Test the installation
-
 ## Implementation
 
-Run the VoiceMode installer using UV:
+### Step 1: Install VoiceMode Package
+
+Run the installer with `--yes` flag (required for non-interactive environments like Claude Code):
 
 ```bash
-uvx voice-mode-install
+uvx voice-mode-install --yes
 ```
 
-The installer is interactive and will:
-- Detect the operating system (macOS, Linux)
-- Install required dependencies (FFmpeg, Python packages)
-- Download and configure Whisper models
-- Set up Kokoro TTS service
-- Create systemd/launchd service files
+This installs the VoiceMode package and CLI. It does NOT install local speech services.
 
-## Alternative Installation
+### Step 2: Install Local Speech Services (Optional)
 
-If UV is not available:
+After the VoiceMode package is installed, optionally install local STT and TTS services.
 
+**IMPORTANT**: These commands do NOT support a `--yes` flag - they are already non-interactive.
+
+Install Whisper for local speech-to-text:
 ```bash
-curl -sL https://voicemode.ai/install.sh | bash
+voicemode whisper service install
 ```
 
-## Post-Installation
+Install Kokoro for local text-to-speech:
+```bash
+voicemode kokoro install
+```
+
+Both installations can take several minutes as they download models.
+
+### Step 3: Verify Installation
 
 After installation completes:
 
-1. Start the services:
-   ```
-   /voicemode:start
-   ```
-
-2. Check they're running:
-   ```
-   /voicemode:status
+1. Check service status:
+   ```bash
+   voicemode whisper service status
+   voicemode kokoro service status
    ```
 
-3. Test voice conversation:
+2. Start services if needed:
+   ```bash
+   voicemode whisper service start
+   voicemode kokoro service start
    ```
-   /voicemode:converse Hello, can you hear me?
-   ```
 
-## Troubleshooting
+## Notes
 
-If installation fails, check:
-- Python 3.10+ is installed
-- UV is available (`pip install uv` or `pipx install uv`)
-- Sufficient disk space for models (~2GB)
-- Network access for downloads
-
-Load the voicemode skill for detailed troubleshooting guidance.
+- The `voice-mode-install` script requires `--yes` flag in non-interactive mode
+- The `voicemode whisper/kokoro install` commands are already non-interactive
+- Local services require ~2-3GB disk space for models
+- Installation requires network access for downloads
+- Services will be configured to start automatically on login
