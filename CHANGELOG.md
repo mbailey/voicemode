@@ -7,7 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0] - 2025-12-25
+
 ### Added
+
+- **VoiceMode Plugin for Claude Code** (VM-227)
+  - Install via: `/plugin marketplace add mbailey/voicemode` then `/plugin install voicemode`
+  - Includes MCP server integration, slash commands, skill, and hooks
+  - Commands: `/voicemode:install`, `/voicemode:converse`, `/voicemode:status`, `/voicemode:start`, `/voicemode:stop`
+  - Self-contained hook receiver for soundfont support out of the box
+  - No manual configuration needed - hooks work automatically
+
+- **Non-Interactive Installer Mode** (VM-265)
+  - Added `--yes` / `-y` flag for unattended installation
+  - Added `--no-local-services` flag to skip Whisper/Kokoro installation
+  - Added `--model` flag to specify Whisper model
+  - Auto-detects non-interactive environment and warns if --yes not specified
+  - Auto-installs Homebrew in non-interactive mode if needed
+  - Enables Claude Code automation and CI/CD pipeline installation
 
 - **Fast Hook Receiver with Enhanced Soundfont Support** (VM-258)
   - New voicemode-hook-receiver script for improved performance
@@ -39,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Audio Quality Preservation** (VM-240)
   - Ensure full-quality WAV files are saved even when using compressed upload
   - Prevents quality loss in local audio archives
+
+- **Homebrew Tools PATH**
+  - Extended PATH in MCP server startup to include Homebrew bin directories
+  - Fixes FFmpeg not found when running as MCP server
+
+### Removed
+
+- **Benchmark Script** - Removed claude-hooks/benchmark-hooks.sh (development testing only)
 
 ### Changed
 
