@@ -172,6 +172,9 @@ def load_voicemode_env():
 # Whisper server port (default: 2022)
 # VOICEMODE_WHISPER_PORT=2022
 
+# Number of threads for Whisper processing (auto-detected if not set)
+# VOICEMODE_WHISPER_THREADS=
+
 # Language for transcription (auto, en, es, fr, de, it, pt, ru, zh, ja, ko, etc.)
 # VOICEMODE_WHISPER_LANGUAGE=auto
 
