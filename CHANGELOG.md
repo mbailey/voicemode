@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.1] - 2025-12-25
+
+### Fixed
+
+- **Whisper Thread Configuration**
+  - Fixed Whisper decode failures on VMs with fewer than 8 CPU cores
+  - Replace hardcoded 8 threads with dynamic CPU detection (sysctl on macOS, nproc on Linux)
+  - Added `VOICEMODE_WHISPER_THREADS` environment variable for manual override
+  - Added missing `--convert` flag to whisper-server startup for automatic audio format conversion
+
+### Changed
+
+- **Plugin Architecture** (VM-227)
+  - Simplified plugin slash commands structure
+  - Improved hooks.json format
+
+### Documentation
+
+- **Installer Testing Guide** (VM-276)
+  - Added comprehensive guide for testing VoiceMode installer on Tart VMs
+  - Fixed installer test script for local VM testing
+
 ## [7.1.0] - 2025-12-25
 
 ### Added
