@@ -158,9 +158,12 @@ Configure in `~/.voicemode/voicemode.env`:
 ```bash
 VOICEMODE_WHISPER_MODEL=large-v2
 VOICEMODE_WHISPER_PORT=2022
+VOICEMODE_WHISPER_THREADS=          # Auto-detected if not set
 VOICEMODE_WHISPER_LANGUAGE=auto
 VOICEMODE_WHISPER_MODEL_PATH=~/.voicemode/models/whisper
 ```
+
+**Thread Configuration**: By default, VoiceMode auto-detects the number of CPU cores and configures threads accordingly. You can override this by setting `VOICEMODE_WHISPER_THREADS` to a specific number.
 
 ### Running the Server
 
@@ -183,10 +186,12 @@ Key options:
 - `--host`: Server host (default: 127.0.0.1)
 - `--port`: Server port (VoiceMode expects 2022)
 - `--inference-path`: OpenAI-compatible endpoint path
-- `--threads`: Number of threads for processing
+- `--threads`: Number of threads for processing (auto-detected by VoiceMode)
 - `--processors`: Number of parallel processors
-- `--convert`: Convert audio to required format automatically
+- `--convert`: Convert audio to required format automatically (required for VoiceMode)
 - `--print-progress`: Show transcription progress
+
+**Note**: When using VoiceMode's managed service, threads are auto-detected based on your CPU cores. The `--convert` flag is required for VoiceMode to work correctly with various audio formats.
 
 ### Service Management
 

@@ -52,6 +52,19 @@ fi
 # Port configuration (with environment variable support)
 WHISPER_PORT="${VOICEMODE_WHISPER_PORT:-2022}"
 
+# Thread configuration - auto-detect CPU cores if not specified
+# Works on macOS, Linux, and WSL
+if [ -n "${VOICEMODE_WHISPER_THREADS:-}" ]; then
+    WHISPER_THREADS="$VOICEMODE_WHISPER_THREADS"
+elif [ "$(uname -s)" = "Darwin" ]; then
+    # macOS - use sysctl
+    WHISPER_THREADS=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+else
+    # Linux/WSL - use nproc
+    WHISPER_THREADS=$(nproc 2>/dev/null || echo 4)
+fi
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Using $WHISPER_THREADS threads" >> "$STARTUP_LOG"
+
 # Determine server binary location
 # Check new CMake build location first, then legacy location
 if [ -f "$WHISPER_DIR/build/bin/whisper-server" ]; then
@@ -77,4 +90,5 @@ exec "$SERVER_BIN" \
     --port "$WHISPER_PORT" \
     --model "$MODEL_PATH" \
     --inference-path /v1/audio/transcriptions \
-    --threads 8
+    --threads "$WHISPER_THREADS" \
+    --convert
