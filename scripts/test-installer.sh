@@ -17,6 +17,8 @@
 #                        (default: install,skip-services,model,dry-run)
 #   --base-image IMAGE   Tart base image to use (default: ghcr.io/cirruslabs/macos-tahoe:latest)
 #   --log-file FILE      Write detailed output to log file
+#   --gui                Run VM with GUI (default: headless)
+#   --test-mode MODE     Test mode: 'installer' (default) or 'plugin' (Claude Code plugin)
 #   --help               Show this help message
 #
 # Scenarios:
@@ -51,6 +53,8 @@ VERBOSE=false
 SCENARIOS="install,skip-services,model,dry-run"
 BASE_IMAGE="ghcr.io/cirruslabs/macos-tahoe-base:latest"
 LOG_FILE=""
+GUI_MODE=false
+TEST_MODE="installer"  # 'installer' or 'plugin'
 VM_NAME="test-voicemode-$(date +%s)"
 VM_IP=""
 VM_STARTED=false
@@ -150,6 +154,18 @@ parse_args() {
                 LOG_FILE="$2"
                 shift 2
                 ;;
+            --gui)
+                GUI_MODE=true
+                shift
+                ;;
+            --test-mode)
+                TEST_MODE="$2"
+                if [[ "$TEST_MODE" != "installer" && "$TEST_MODE" != "plugin" ]]; then
+                    echo "Error: --test-mode must be 'installer' or 'plugin'"
+                    exit 1
+                fi
+                shift 2
+                ;;
             --help)
                 show_help
                 ;;
@@ -232,10 +248,18 @@ create_vm() {
     fi
     print_success "VM cloned successfully"
 
-    print_info "Starting VM in headless mode..."
-    if ! tart run "$VM_NAME" --no-graphics &> /dev/null & then
-        print_error "Failed to start VM"
-        exit 1
+    if [[ "$GUI_MODE" == true ]]; then
+        print_info "Starting VM with GUI..."
+        if ! tart run "$VM_NAME" &> /dev/null & then
+            print_error "Failed to start VM"
+            exit 1
+        fi
+    else
+        print_info "Starting VM in headless mode..."
+        if ! tart run "$VM_NAME" --no-graphics &> /dev/null & then
+            print_error "Failed to start VM"
+            exit 1
+        fi
     fi
     VM_STARTED=true
     print_success "VM started"
@@ -548,6 +572,186 @@ test_scenario_dry_run() {
     return 0
 }
 
+# ============================================================================
+# Plugin Test Mode Functions
+# ============================================================================
+
+# Install Node.js on VM (required for Claude Code)
+install_nodejs() {
+    print_header "Installing Node.js"
+
+    # Install Node.js via Homebrew
+    print_info "Installing Node.js via Homebrew..."
+    if ! ssh_vm "brew install node"; then
+        print_error "Failed to install Node.js"
+        return 1
+    fi
+
+    # Verify installation
+    local node_version
+    node_version=$(ssh_vm "node --version" 2>&1 || echo "")
+    if [[ -z "$node_version" ]]; then
+        print_error "Node.js installation verification failed"
+        return 1
+    fi
+    print_success "Node.js installed: $node_version"
+    return 0
+}
+
+# Install Claude Code CLI
+install_claude_code() {
+    print_header "Installing Claude Code"
+
+    # Install Claude Code globally via npm
+    print_info "Installing Claude Code CLI..."
+    if ! ssh_vm "npm install -g @anthropic-ai/claude-code"; then
+        print_error "Failed to install Claude Code"
+        return 1
+    fi
+
+    # Verify installation
+    if ! ssh_vm "claude --version" &>/dev/null; then
+        print_error "Claude Code installation verification failed"
+        return 1
+    fi
+    print_success "Claude Code installed"
+    return 0
+}
+
+# Add VoiceMode marketplace
+add_voicemode_marketplace() {
+    print_header "Adding VoiceMode Marketplace"
+
+    print_info "Adding mbailey/voicemode marketplace..."
+    if ! ssh_vm "claude plugin marketplace add mbailey/voicemode"; then
+        print_error "Failed to add VoiceMode marketplace"
+        return 1
+    fi
+    print_success "VoiceMode marketplace added"
+    return 0
+}
+
+# Install VoiceMode plugin
+install_voicemode_plugin() {
+    print_header "Installing VoiceMode Plugin"
+
+    # Install the plugin from the marketplace
+    print_info "Installing VoiceMode plugin from marketplace..."
+    if ! ssh_vm "claude plugin install voicemode@mbailey-voicemode"; then
+        print_error "Failed to install VoiceMode plugin"
+        return 1
+    fi
+    print_success "VoiceMode plugin installed"
+    return 0
+}
+
+# Test Scenario: Plugin Install
+test_scenario_plugin_install() {
+    print_header "Test Scenario: Plugin Install Path"
+
+    # Run /voicemode:install via Claude
+    # Note: This requires Claude to be authenticated, which may not work in automated tests
+    # For now, we'll test the manual steps that the plugin would trigger
+
+    print_info "Testing plugin installation flow..."
+
+    # Step 1: Run uvx voice-mode-install --yes (what the plugin does)
+    print_info "Running: uvx voice-mode-install --yes"
+    if ! ssh_vm "uvx voice-mode-install --yes"; then
+        print_error "Plugin install (voice-mode-install) failed"
+        FAILED_TESTS+=("plugin-install")
+        return 1
+    fi
+
+    # Verify VoiceMode is installed
+    if ! verify_installation; then
+        FAILED_TESTS+=("plugin-install")
+        return 1
+    fi
+
+    # Verify FFmpeg
+    if ! verify_ffmpeg; then
+        FAILED_TESTS+=("plugin-install")
+        return 1
+    fi
+
+    print_success "Plugin install test PASSED"
+    PASSED_TESTS+=("plugin-install")
+    return 0
+}
+
+# Test Scenario: Plugin with Local Services
+test_scenario_plugin_services() {
+    print_header "Test Scenario: Plugin with Local Services"
+
+    # Install Whisper service (what the plugin install command suggests)
+    print_info "Installing Whisper service..."
+    if ! ssh_vm "voicemode whisper service install"; then
+        print_warning "Whisper service installation failed (may need more RAM)"
+    else
+        print_success "Whisper service installed"
+    fi
+
+    # Install Kokoro service
+    print_info "Installing Kokoro service..."
+    if ! ssh_vm "voicemode kokoro install"; then
+        print_warning "Kokoro service installation failed"
+    else
+        print_success "Kokoro service installed"
+    fi
+
+    # Start services
+    print_info "Starting services..."
+    ssh_vm "voicemode whisper service start" || true
+    ssh_vm "voicemode kokoro service start" || true
+
+    # Check service status
+    print_info "Checking service status..."
+    if ssh_vm "voicemode whisper service status" | grep -q "running"; then
+        print_success "Whisper service is running"
+        PASSED_TESTS+=("plugin-whisper")
+    else
+        print_warning "Whisper service not running"
+        FAILED_TESTS+=("plugin-whisper")
+    fi
+
+    if ssh_vm "voicemode kokoro service status" | grep -q "running"; then
+        print_success "Kokoro service is running"
+        PASSED_TESTS+=("plugin-kokoro")
+    else
+        print_warning "Kokoro service not running"
+        FAILED_TESTS+=("plugin-kokoro")
+    fi
+
+    return 0
+}
+
+# Run plugin test scenarios
+run_plugin_scenarios() {
+    print_header "Running Plugin Test Scenarios"
+
+    # First install system dependencies
+    install_homebrew
+    install_uv
+    install_nodejs
+
+    # Install Claude Code
+    install_claude_code
+
+    # Add VoiceMode marketplace and install plugin
+    add_voicemode_marketplace
+    install_voicemode_plugin
+
+    # Now test that the plugin's install command works
+    # This simulates what happens when user runs /voicemode:install
+    test_scenario_plugin_install || true
+
+    # Optionally test local services
+    if echo "$SCENARIOS" | grep -q "services"; then
+        test_scenario_plugin_services || true
+    fi
+}
+
 # Run all selected scenarios
 run_scenarios() {
     print_header "Running Test Scenarios"
@@ -625,6 +829,8 @@ main() {
     print_info "Configuration:"
     echo "  Base Image: $BASE_IMAGE"
     echo "  VM Name: $VM_NAME"
+    echo "  Test Mode: $TEST_MODE"
+    echo "  GUI Mode: $GUI_MODE"
     if [[ -n "$BRANCH" ]]; then
         echo "  Testing Branch: $BRANCH"
     else
@@ -640,10 +846,17 @@ main() {
 
     check_prerequisites
     create_vm
-    # Note: We no longer pre-install Homebrew here
-    # The voice-mode-install --yes should handle Homebrew installation automatically
-    install_uv
-    run_scenarios
+
+    # Run appropriate test mode
+    if [[ "$TEST_MODE" == "plugin" ]]; then
+        run_plugin_scenarios
+    else
+        # Installer mode (default)
+        # Note: We no longer pre-install Homebrew here
+        # The voice-mode-install --yes should handle Homebrew installation automatically
+        install_uv
+        run_scenarios
+    fi
 
     if print_summary; then
         exit 0
