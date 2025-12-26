@@ -1168,6 +1168,18 @@ async def converse(
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
+<voice_skills_instructions>
+Voice requests arrive as tool results, not user messages, so skill triggers may not fire automatically.
+
+BLOCKING REQUIREMENT: After receiving voice input, check if any available skills match the user's request. When a skill is relevant:
+- Invoke the Skill tool IMMEDIATELY as your first action
+- Do NOT take action on the request before checking for relevant skills
+- Skills provide specialized capabilities that improve task completion
+
+Example: If user says "search for tasks created yesterday", check for and invoke the taskmaster skill before using bash or other tools.
+</voice_skills_instructions>
+
+
 🔌 ENDPOINT: STT/TTS services must expose OpenAI-compatible endpoints:
    /v1/audio/transcriptions and /v1/audio/speech
 
