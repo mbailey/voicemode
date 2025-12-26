@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.2] - 2025-12-27
+
+### Added
+
+- **Claude Code Skill Loading in Voice Conversations** (VM-286)
+  - Added voice_skills_instructions to converse tool to ensure skills are checked during voice interactions
+  - Voice requests arrive as tool results rather than user messages, causing skill triggers to be missed
+  - New BLOCKING REQUIREMENT instructs Claude to check for relevant skills before acting on voice requests
+  - Example: Saying "search for tasks" now properly triggers the taskmaster skill
+
 ## [7.1.1] - 2025-12-25
 
 ### Fixed
