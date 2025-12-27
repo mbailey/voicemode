@@ -370,6 +370,68 @@ voicemode diag info
 voicemode diag devices
 ```
 
+### Conversation History Search
+
+VoiceMode logs all exchanges and provides powerful search capabilities to find and replay past conversations.
+
+**Load conversation history into SQLite:**
+
+```bash
+# Load all new exchanges since last sync
+voicemode history load
+
+# Load all exchanges (ignore last sync)
+voicemode history load --all
+
+# Load from specific date
+voicemode history load --since 2025-12-01
+
+# Load last 7 days
+voicemode history load --days 7
+```
+
+**Search conversations:**
+
+```bash
+# Full-text search
+voicemode history search "minion indirectly"
+
+# Search only agent speech (TTS)
+voicemode history search --type tts "hello"
+
+# Search only user speech (STT)
+voicemode history search --type stt "hello"
+
+# Search specific date
+voicemode history search --date 2025-12-27 "keyword"
+
+# Search and play first result automatically
+voicemode history search --play "memorable quote"
+
+# Limit results
+voicemode history search --limit 50 "conversation"
+```
+
+**Play audio clips:**
+
+```bash
+# Play by exchange ID (from search results)
+voicemode history play ex_abc123def456
+```
+
+**Search Features:**
+- Full-text search using SQLite FTS5 (fast, supports complex queries)
+- Filter by type (stt/tts), date, or conversation
+- Audio files automatically resolved from timestamp
+- Incremental loading - won't duplicate already-loaded exchanges
+- All conversations stored in `~/.voicemode/cache/conversations.db`
+
+**Use Cases:**
+- Find memorable moments or important discussions
+- Review what was said in past conversations
+- Create clips of agent responses for testing
+- Debug conversation issues by reviewing exact exchanges
+
 ### Token Efficiency Tip
 
 When using CLI commands directly (not MCP tools), redirect STDERR to save tokens:
