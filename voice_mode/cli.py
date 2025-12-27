@@ -1713,6 +1713,7 @@ from voice_mode.cli_commands import exchanges as exchanges_cmd
 from voice_mode.cli_commands import transcribe as transcribe_cmd
 from voice_mode.cli_commands import claude
 from voice_mode.cli_commands import hook as hook_cmd
+from voice_mode.cli_commands import history as history_cmd
 
 # Add subcommands to legacy CLI
 cli.add_command(exchanges_cmd.exchanges)
@@ -1722,6 +1723,7 @@ cli.add_command(claude.claude_group)
 # Add exchanges to main CLI
 voice_mode_main_cli.add_command(exchanges_cmd.exchanges)
 voice_mode_main_cli.add_command(claude.claude_group)
+voice_mode_main_cli.add_command(history_cmd.history)
 
 # Note: We'll add these commands after the groups are defined
 # audio group will get transcribe and play commands
