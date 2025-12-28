@@ -7,6 +7,62 @@ description: This skill provides voice interaction capabilities for AI assistant
 
 Voice interaction capabilities for Claude Code - enabling natural conversations through speech-to-text (STT) and text-to-speech (TTS) services.
 
+## Naming Clarification
+
+There are two related names to be aware of:
+
+| Name | What it is | Example usage |
+|------|------------|---------------|
+| `voicemode` | CLI command (no hyphen) | `voicemode whisper service status` |
+| `voice-mode` | Python package on PyPI (with hyphen) | `uvx voice-mode-install` |
+
+**Check if CLI is installed:**
+```bash
+which voicemode       # Should show path like ~/.local/bin/voicemode
+voicemode --version   # Should show version number
+```
+
+**If not installed:**
+```bash
+# Option 1: Install permanently
+uv tool install voice-mode
+
+# Option 2: Run without installing (uses uvx)
+uvx voice-mode <command>   # Equivalent to: voicemode <command>
+```
+
+## When to Use MCP Tools vs CLI
+
+| Use Case | Recommended | Why |
+|----------|-------------|-----|
+| Voice conversations | MCP (`voicemode:converse`) | Faster - MCP server already running |
+| Service management | CLI (`voicemode service`) | Works without MCP server |
+| Installation | CLI (`voice-mode-install`) | One-time setup |
+| Model management | CLI (`voicemode whisper model`) | Administrative task |
+| Configuration | CLI (`voicemode config`) | Edit settings directly |
+
+## Claude Code Plugin
+
+VoiceMode is available as a Claude Code plugin from the marketplace:
+
+```bash
+# Install from marketplace
+/plugin marketplace add mbailey/voicemode
+/plugin install voicemode
+```
+
+The plugin provides:
+- **MCP Server** - Full voice capabilities via `voicemode-mcp`
+- **Slash Commands** - `/voicemode:converse`, `/voicemode:status`, etc.
+- **Hooks** - Sound feedback during tool execution
+
+After installing the plugin, install voice services:
+```bash
+/voicemode:install
+```
+
+For detailed plugin documentation, see `docs/guides/claude-code-plugin.md` in the voicemode repo.
+
 ## Quick Start
 
 When a user wants to use voice mode for the first time, guide them through these steps:
@@ -35,24 +91,71 @@ If services aren't installed, guide the user to install them:
 
 ```bash
 # Install VoiceMode with UV (recommended)
-uv tool install voice-mode-install
-voice-mode-install
-
-# Or update to latest version
-voicemode update
+uvx voice-mode-install --yes
 ```
 
-**Install Voice Services:**
+This installs the VoiceMode package and CLI. It does NOT install local speech services.
+
+#### Local Voice Services (Apple Silicon Recommended)
+
+**When to offer local services:**
+- On Apple Silicon Macs, local services are highly recommended - they provide privacy, speed, and work offline
+- Check architecture with: `uname -m` (arm64 = Apple Silicon)
+- If Apple Silicon, ask the user: "Would you like to install local voice services? This provides faster, private, offline voice capabilities."
+
+**Get informed consent before installing:**
+
+Tell the user what will be downloaded:
+
+| Service | Download Size | Disk Space | First Start Time |
+|---------|---------------|------------|------------------|
+| Whisper (tiny) | ~75MB | ~150MB | 30 seconds |
+| Whisper (base) | ~150MB | ~300MB | 1-2 minutes |
+| Whisper (small) | ~460MB | ~1GB | 2-3 minutes |
+| Kokoro TTS | ~350MB | ~700MB | 2-3 minutes |
+
+**Recommended setup for most users:** Whisper base + Kokoro = ~500MB download, ~1GB disk space.
+
+After user consents, install services:
 
 ```bash
-# Install Whisper for local STT
+# Install Whisper for local STT (base model recommended)
 voicemode whisper service install
 
 # Install Kokoro for local TTS
 voicemode kokoro install
 ```
 
-Services auto-start after installation.
+Services auto-start after installation and are configured to start on login.
+
+**First Run - Model Downloads:**
+
+When services start for the first time, they download AI models. The first `converse` call may be slow while models load. Subsequent starts are instant.
+
+**Check Model Download Progress:**
+
+```bash
+# Whisper model location - check if download complete
+ls -lh ~/.voicemode/services/whisper/models/
+
+# Kokoro model location
+ls -lh ~/.voicemode/services/kokoro/models/
+
+# Watch service logs during download
+voicemode whisper service logs -f
+voicemode kokoro logs -f
+```
+
+**Choose a Different Whisper Model:**
+
+```bash
+# Smaller/faster (good for testing)
+voicemode whisper install --model tiny    # ~75MB
+
+# Larger/more accurate
+voicemode whisper install --model small   # ~460MB
+voicemode whisper install --model medium  # ~1.5GB
+```
 
 ### 3. Start Your First Conversation
 
@@ -238,19 +341,50 @@ voicemode config edit
 - User-level: `~/.voicemode` file in home directory
 - System config: `~/.voicemode/config/config.yaml`
 
+## Provider Options
+
+VoiceMode supports both cloud and local voice services. You can use either or both.
+
+### OpenAI API (Cloud)
+
+If `OPENAI_API_KEY` is set, VoiceMode can use OpenAI's cloud services:
+- **STT**: OpenAI Whisper API
+- **TTS**: OpenAI voices (alloy, echo, fable, onyx, nova, shimmer)
+
+This works without installing local services - just set the API key.
+
+### Local Services
+
+For privacy, speed, and offline use, install local services:
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| Whisper | 2022 | Speech-to-text (STT) |
+| Kokoro | 8880 | Text-to-speech (TTS) |
+
+### Provider Priority
+
+VoiceMode automatically selects providers based on availability:
+1. If local services are running, they're used by default (faster, private)
+2. If local services aren't available, falls back to OpenAI API (if key is set)
+3. You can override with `tts_provider` and `stt_provider` parameters
+
+### Checking Provider Status
+
+```bash
+# Check what providers are available
+voicemode diag registry
+
+# Check specific service ports
+nc -z localhost 2022 && echo "Whisper running" || echo "Whisper not running"
+nc -z localhost 8880 && echo "Kokoro running" || echo "Kokoro not running"
+```
+
 ## Advanced Topics
 
-### Provider System
+### Provider System Details
 
-VoiceMode uses OpenAI-compatible endpoints for all services:
-
-**Cloud Providers:**
-- OpenAI API (requires API key)
-
-**Local Providers:**
-- Whisper.cpp for STT
-- Kokoro for TTS
-- LiveKit for WebRTC communication
+VoiceMode uses OpenAI-compatible endpoints for all services, enabling seamless switching between providers.
 
 The system automatically:
 - Discovers available providers
@@ -475,6 +609,19 @@ For detailed documentation:
 - VoiceMode CLAUDE.md: Project-specific Claude guidance
 
 ## Troubleshooting
+
+**First conversation is slow or times out:**
+
+This is normal on first run - the services are downloading AI models:
+1. Check Whisper logs: `voicemode whisper service logs -f`
+2. Check Kokoro logs: `voicemode kokoro logs -f`
+3. Wait for downloads to complete (2-5 minutes total)
+4. Subsequent starts will be instant
+
+**Model not loading:**
+1. Check disk space: Models need ~500MB for base+kokoro
+2. Verify model files exist: `ls -lh ~/.voicemode/services/whisper/models/`
+3. Try reinstalling: `voicemode whisper install --model base`
 
 **Services won't start:**
 1. Check FFmpeg is installed: `ffmpeg -version`
