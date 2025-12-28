@@ -5,19 +5,10 @@ argument-hint: [message]
 
 # /voicemode:converse
 
-Start an ongoing voice conversation with the user using the `mcp__voicemode__converse` tool.
+Start an ongoing voice conversation with the user using the `voicemode:converse` MCP tool.
 
-## Example
+## Implementation
 
-```json
-{
-  "message": "Hello! What would you like to work on?",
-  "wait_for_response": true
-}
-```
+Use the `voicemode:converse` tool with the user's message. All parameters have sensible defaults.
 
-All other parameters have sensible defaults - just set the message.
-
-## Troubleshooting
-
-If voice services aren't working, load the `voicemode` skill for troubleshooting guidance and installation instructions.
+If the tool call fails or you need more information about voice capabilities, load the `voicemode` skill for complete documentation.
