@@ -1,1 +1,1 @@
-voicemode-plugin/skills/voicemode/SKILL.md
+skills/voicemode/SKILL.md
