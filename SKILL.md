@@ -1,1 +1,0 @@
-skills/voicemode/SKILL.md
