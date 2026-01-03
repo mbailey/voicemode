@@ -35,12 +35,12 @@ def discover_all_commands() -> List[List[str]]:
     commands.append(base_cmd + ['-h'])
 
     # Top-level commands
-    top_level_commands = ['audio', 'claude', 'completions', 'config', 'converse',
+    top_level_commands = ['completions', 'config', 'converse',
                           'deps', 'diag', 'exchanges', 'kokoro', 'livekit',
-                          'update', 'version', 'whisper']
+                          'transcribe', 'update', 'version', 'whisper']
 
     # Commands that support -h
-    commands_with_short_help = ['audio', 'config', 'converse', 'deps', 'diag',
+    commands_with_short_help = ['config', 'converse', 'deps', 'diag',
                                 'exchanges', 'kokoro', 'livekit', 'whisper']
 
     for cmd in top_level_commands:
@@ -124,19 +124,6 @@ def discover_all_commands() -> List[List[str]]:
     diag_subcommands = ['dependencies', 'devices', 'info', 'registry']
     for sub in diag_subcommands:
         commands.append(base_cmd + ['diag', sub, '--help'])
-
-    # === AUDIO COMMANDS ===
-    audio_subcommands = ['play', 'transcribe']
-    for sub in audio_subcommands:
-        commands.append(base_cmd + ['audio', sub, '--help'])
-        if sub == 'play':  # Only 'play' supports -h
-            commands.append(base_cmd + ['audio', sub, '-h'])
-
-    # === CLAUDE COMMANDS ===
-    commands.append(base_cmd + ['claude', 'hooks', '--help'])
-    commands.append(base_cmd + ['claude', 'hooks', '-h'])
-    commands.append(base_cmd + ['claude', 'hooks', 'receiver', '--help'])
-    # Note: receiver doesn't support -h, only --help
 
     # === COMPLETIONS (special - takes positional arg) ===
     # Note: completions uses positional args, so we only test main help
