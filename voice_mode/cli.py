@@ -80,14 +80,6 @@ def voice_mode() -> None:
     voice_mode_main_cli()
 
 
-# Audio group for audio-related commands
-@voice_mode_main_cli.group()
-@click.help_option('-h', '--help', help='Show this message and exit')
-def audio():
-    """Audio transcription and playback commands."""
-    pass
-
-
 # Service group commands
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
@@ -1726,10 +1718,10 @@ voice_mode_main_cli.add_command(history_cmd.history)
 
 
 # Now add the subcommands to their respective groups
-# Add transcribe command to audio group
+# Add transcribe as top-level command
 transcribe_audio_cmd = transcribe_cmd.transcribe.commands['audio']
 transcribe_audio_cmd.name = 'transcribe'
-audio.add_command(transcribe_audio_cmd)
+voice_mode_main_cli.add_command(transcribe_audio_cmd)
 
 # Converse command - direct voice conversation from CLI
 @voice_mode_main_cli.command()
@@ -2116,69 +2108,6 @@ def update(force):
                 click.echo("Try running: uv pip install --upgrade voice-mode")
             else:
                 click.echo("Try running: pip install --upgrade voice-mode")
-
-
-# Sound Fonts command
-@audio.command("play")
-@click.help_option('-h', '--help')
-@click.option('-t', '--tool', help='Tool name for direct command-line usage')
-@click.option('-a', '--action', default='start', type=click.Choice(['start', 'end']), help='Action type')
-@click.option('-s', '--subagent', help='Subagent type (for Task tool)')
-def play_sound(tool, action, subagent):
-    """Play sound based on tool events (primarily for Claude Code hooks).
-    
-    This command is designed to be called by Claude Code hooks to play sounds
-    when tools are used. It reads hook data from stdin by default, or can be
-    used directly with command-line options.
-    
-    Examples:
-        echo '{"tool_name":"Task","tool_input":{"subagent_type":"mama-bear"}}' | voicemode play-sound
-        voicemode play-sound --tool Task --action start --subagent mama-bear
-    """
-    import sys
-    from .tools.sound_fonts.player import AudioPlayer
-    from .tools.sound_fonts.hook_handler import (
-        read_hook_data_from_stdin,
-        parse_claude_code_hook
-    )
-    
-    # Try to read hook data from stdin first
-    hook_data = None
-    if not sys.stdin.isatty():
-        hook_data = read_hook_data_from_stdin()
-    
-    if hook_data:
-        # Parse Claude Code hook format
-        parsed_data = parse_claude_code_hook(hook_data)
-        if not parsed_data:
-            sys.exit(1)
-            
-        tool_name = parsed_data["tool_name"]
-        action_type = parsed_data["action"]
-        subagent_type = parsed_data["subagent_type"]
-        metadata = parsed_data["metadata"]
-    else:
-        # Use command-line arguments
-        if not tool:
-            click.echo("Error: --tool is required when not reading from stdin", err=True)
-            sys.exit(1)
-            
-        tool_name = tool
-        action_type = action
-        subagent_type = subagent
-        metadata = {}
-    
-    # Play the sound
-    player = AudioPlayer()
-    success = player.play_sound_for_event(
-        tool_name=tool_name,
-        action=action_type,
-        subagent_type=subagent_type,
-        metadata=metadata
-    )
-    
-    # Silent exit for hooks - don't clutter Claude Code output
-    sys.exit(0 if success else 1)
 
 
 # Completions command
