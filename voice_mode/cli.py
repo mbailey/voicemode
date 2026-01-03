@@ -80,14 +80,6 @@ def voice_mode() -> None:
     voice_mode_main_cli()
 
 
-# Audio group for audio-related commands
-@voice_mode_main_cli.group()
-@click.help_option('-h', '--help', help='Show this message and exit')
-def audio():
-    """Audio transcription and playback commands."""
-    pass
-
-
 # Service group commands
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
