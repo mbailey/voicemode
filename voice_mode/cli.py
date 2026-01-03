@@ -1731,10 +1731,10 @@ voice_mode_main_cli.add_command(history_cmd.history)
 
 
 # Now add the subcommands to their respective groups
-# Add transcribe command to audio group
+# Add transcribe as top-level command
 transcribe_audio_cmd = transcribe_cmd.transcribe.commands['audio']
 transcribe_audio_cmd.name = 'transcribe'
-audio.add_command(transcribe_audio_cmd)
+voice_mode_main_cli.add_command(transcribe_audio_cmd)
 
 # Add hooks command under claude group
 from voice_mode.cli_commands.hook import hooks
