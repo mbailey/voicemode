@@ -83,6 +83,47 @@ def block_dangerous_commands(monkeypatch):
     monkeypatch.setattr("subprocess.Popen", _safe_subprocess_popen(original_popen))
 
 
+@pytest.fixture(autouse=True)
+def isolate_home_directory(tmp_path, monkeypatch):
+    """
+    Redirect Path.home() and os.path.expanduser() to a temporary directory.
+
+    This prevents tests from writing plist files to ~/Library/LaunchAgents/
+    or systemd service files to ~/.config/systemd/user/. The isolation is
+    automatic for all tests.
+
+    Without this fixture, running pytest would install service files to
+    the real home directory, causing:
+    - Apple notifications about services being configured
+    - Services potentially starting automatically
+    - Developer's local service configuration being affected
+    """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+
+    # Create expected subdirectories that tests may write to
+    (fake_home / "Library" / "LaunchAgents").mkdir(parents=True, exist_ok=True)
+    (fake_home / ".config" / "systemd" / "user").mkdir(parents=True, exist_ok=True)
+    (fake_home / ".voicemode" / "logs").mkdir(parents=True, exist_ok=True)
+    (fake_home / ".voicemode" / "services").mkdir(parents=True, exist_ok=True)
+    (fake_home / ".voicemode" / "config").mkdir(parents=True, exist_ok=True)
+
+    # Mock Path.home() to return the fake home directory
+    monkeypatch.setattr("pathlib.Path.home", lambda: fake_home)
+
+    # Mock os.path.expanduser() to handle ~ expansion
+    original_expanduser = os.path.expanduser
+
+    def mock_expanduser(path):
+        if path.startswith("~"):
+            return str(fake_home) + path[1:]
+        return original_expanduser(path)
+
+    monkeypatch.setattr("os.path.expanduser", mock_expanduser)
+
+    yield fake_home
+
+
 @pytest.fixture
 def temp_dir():
     """Create a temporary directory for test files."""
