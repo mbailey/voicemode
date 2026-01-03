@@ -34,19 +34,21 @@ Options:
   --timeout INTEGER     Recording timeout in seconds
 ```
 
-### audio
-Audio transcription and playback commands
+### transcribe
+Transcribe audio with optional word-level timestamps
 
 ```bash
-voicemode audio [OPTIONS] COMMAND [ARGS]...
+voicemode transcribe [OPTIONS]
 
-Commands:
-  play        Play sound based on tool events
-  transcribe  Transcribe audio with optional word-level timestamps
+Options:
+  --timestamps     Include word-level timestamps
+  --output TEXT    Output file path (default: stdout)
+  --format TEXT    Output format: text, json, vtt, srt
 
 Examples:
-echo "Hello" | voicemode audio transcribe
-voicemode audio transcribe < audio.wav
+echo "Hello" | voicemode transcribe
+voicemode transcribe < audio.wav
+voicemode transcribe --timestamps < recording.wav
 ```
 
 ## Diagnostic Commands
@@ -274,7 +276,7 @@ voicemode
 voicemode converse
 
 # Transcribe audio file
-voicemode audio transcribe < recording.wav
+voicemode transcribe < recording.wav
 ```
 
 ### Service Setup
