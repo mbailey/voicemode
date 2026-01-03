@@ -64,21 +64,6 @@ Commands:
   registry      Show voice provider registry with all discovered endpoints
 ```
 
-## Claude Integration
-
-### claude
-Extract messages from Claude Code conversation logs
-
-```bash
-voicemode claude [OPTIONS] COMMAND [ARGS]...
-
-Commands:
-  check     Check if Claude Code context is available
-  hook      Manage Voice Mode hooks and event handlers
-  messages  Extract recent messages from Claude Code logs
-  thinking  Extract only thinking content from Claude Code logs
-```
-
 ## Service Management
 
 ### whisper
