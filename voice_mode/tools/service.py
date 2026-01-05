@@ -16,7 +16,7 @@ from voice_mode.server import mcp
 from voice_mode.config import WHISPER_PORT, KOKORO_PORT, LIVEKIT_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
 from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_whisper_model
-from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support
+from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support, is_kokoro_starting_up
 
 logger = logging.getLogger("voicemode")
 
@@ -211,6 +211,11 @@ async def status_service(service_name: str) -> str:
     status, proc = check_service_status(port)
     
     if status == "not_available":
+        # For Kokoro, check if it's in the process of starting up
+        if service_name == "kokoro":
+            startup_status = is_kokoro_starting_up()
+            if startup_status:
+                return f"⏳ Kokoro is {startup_status}"
         return f"❌ {service_name.capitalize()} is not available"
     elif status == "forwarded":
         return f"""🔄 {service_name.capitalize()} is available via port forwarding

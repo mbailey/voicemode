@@ -47,7 +47,44 @@ def find_kokoro_fastapi() -> Optional[str]:
 
 def has_gpu_support() -> bool:
     """Check if the system has GPU support for Kokoro.
-    
+
     This is a wrapper around the shared GPU detection utility.
     """
     return _has_gpu_support()
+
+
+def is_kokoro_starting_up() -> Optional[str]:
+    """Check if Kokoro is in the process of starting up (downloading models, etc).
+
+    Returns a status message if Kokoro is starting, None otherwise.
+    """
+    import psutil
+
+    try:
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.cmdline()
+                if not cmdline:
+                    continue
+                cmdline_str = ' '.join(cmdline).lower()
+
+                # Check for model download script
+                if 'download_model' in cmdline_str and 'kokoro' in cmdline_str:
+                    return "downloading models (this may take a few minutes)"
+
+                # Check for Kokoro uvicorn startup
+                if 'uvicorn' in cmdline_str and 'kokoro' in cmdline_str:
+                    # Process exists but port not listening - still loading
+                    return "loading models (please wait)"
+
+                # Check for start script running
+                if 'start-gpu_mac.sh' in cmdline_str or 'start-cpu.sh' in cmdline_str or 'start-gpu.sh' in cmdline_str:
+                    if 'kokoro' in cmdline_str:
+                        return "starting up"
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception:
+        pass
+
+    return None
