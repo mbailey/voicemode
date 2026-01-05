@@ -220,7 +220,7 @@ async def simple_stt_failover(
             client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url,
-                timeout=30.0,
+                timeout=60.0,  # Allow time for slower transcriptions
                 max_retries=max_retries
             )
 
