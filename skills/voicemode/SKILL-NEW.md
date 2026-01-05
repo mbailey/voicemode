@@ -9,6 +9,16 @@ Natural voice conversations with Claude Code using speech-to-text (STT) and text
 
 **Note:** The Python package is `voice-mode` (hyphen), but the CLI command is `voicemode` (no hyphen).
 
+## When to Use MCP vs CLI
+
+| Task | Use | Why |
+|------|-----|-----|
+| Voice conversations | MCP `voicemode:converse` | Faster - server already running |
+| Service start/stop | MCP `voicemode:service` | Works within Claude Code |
+| Installation | CLI `voice-mode-install` | One-time setup |
+| Configuration | CLI `voicemode config` | Edit settings directly |
+| Diagnostics | CLI `voicemode diag` | Administrative tasks |
+
 ## Usage
 
 Use the `converse` MCP tool to speak to users and hear their responses:
@@ -30,6 +40,14 @@ For most conversations, just pass your message - defaults handle everything else
 | `voice` | auto | TTS voice |
 
 For all parameters, see [Converse Parameters](../../docs/reference/converse-parameters.md).
+
+## Best Practices
+
+1. **Narrate without waiting** - Use `wait_for_response=False` when announcing actions
+2. **One question at a time** - Don't bundle multiple questions in voice mode
+3. **Check status first** - Verify services are running before starting conversations
+4. **Let VoiceMode auto-select** - Don't hardcode providers unless user has preference
+5. **First run is slow** - Model downloads happen on first start (2-5 min), then instant
 
 ## Check Status
 
@@ -109,6 +127,7 @@ voicemode history play <exchange_id>
 | Converse Parameters | [All Parameters](../../docs/reference/converse-parameters.md) |
 | Installation | [Getting Started](../../docs/tutorials/getting-started.md) |
 | Configuration | [Configuration Guide](../../docs/guides/configuration.md) |
+| Claude Code Plugin | [Plugin Guide](../../docs/guides/claude-code-plugin.md) |
 | Whisper STT | [Whisper Setup](../../docs/guides/whisper-setup.md) |
 | Kokoro TTS | [Kokoro Setup](../../docs/guides/kokoro-setup.md) |
 | Pronunciation | [Pronunciation Guide](../../docs/guides/pronunciation.md) |
