@@ -3,6 +3,18 @@ name: voicemode
 description: Voice interaction for Claude Code. Use when users mention voice mode, speak, talk, converse, voice status, or voice troubleshooting.
 ---
 
+## First-Time Setup
+
+If VoiceMode isn't working or MCP fails to connect, run:
+
+```
+/voicemode:install
+```
+
+After install, reconnect MCP: `/mcp` → select voicemode → "Reconnect" (or restart Claude Code).
+
+---
+
 # VoiceMode
 
 Natural voice conversations with Claude Code using speech-to-text (STT) and text-to-speech (TTS).
