@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.2.0] - 2026-01-06
+
+### Fixed
+
+- **STT Timeout Increased to 60s** (VM-325)
+  - Whisper sometimes takes longer than 30s for complex or longer audio
+  - Increased default STT timeout from 30s to 60s to prevent transcription failures
+  - A future release will make this configurable via `voicemode.env`
+
+- **Test Isolation for LaunchAgents** (VM-310)
+  - Tests no longer write plist files to real `~/Library/LaunchAgents` directory
+  - Prevents test pollution of user's system configuration
+
+### Changed
+
+- **CLI Simplification** (VM-305, VM-306)
+  - Removed deprecated `voicemode claude` command group (use Claude Code hooks instead)
+  - Removed deprecated `voicemode audio` command group
+  - Moved `transcribe` command to top-level: `voicemode transcribe` (was `voicemode audio transcribe`)
+
+- **Plugin Structure**
+  - Moved skill file to `skills/voicemode/SKILL.md` for better organization
+  - Updated plugin packaging and configuration
+
+### Added
+
+- **Conversation History Search** (VM-279)
+  - New SQLite FTS5-based search for conversation history
+  - Enables fast full-text search across past voice conversations
+
+- **Installer Testing Improvements** (VM-279)
+  - Added `--gui` flag to test-installer.sh for GUI mode testing
+  - Added `--test-mode` flag for automated testing scenarios
+
+### Documentation
+
+- **Plugin Skill Improvements** (VM-266)
+  - Enhanced VoiceMode plugin skill with installation guidance
+  - Better onboarding experience for new users
+
 ## [7.1.2] - 2025-12-27
 
 ### Added
