@@ -18,23 +18,11 @@ The VoiceMode plugin includes:
 The plugin is published to the Claude Code plugin marketplace:
 
 ```bash
-# Add from marketplace
-/plugin marketplace add mbailey/voicemode
+# Add the marketplace
+claude plugin marketplace add https://github.com/mbailey/claude-plugins
 
 # Install the plugin
-/plugin install voicemode
-```
-
-### From Local Development
-
-If you're developing or have VoiceMode cloned locally:
-
-```bash
-# Add plugin from local path
-/plugin marketplace add /path/to/voicemode/plugins/voicemode
-
-# Install the plugin
-/plugin install voicemode
+claude plugin install voicemode@mbailey
 ```
 
 ## Prerequisites
@@ -51,13 +39,10 @@ This runs the VoiceMode installer which sets up:
 - **Kokoro** - Local text-to-speech
 - **FFmpeg** - Audio processing (via Homebrew on macOS)
 
-Alternatively, install services manually:
+Or install VoiceMode directly using uv:
 
 ```bash
-# Run the installer directly
-curl -sL https://voicemode.ai/install.sh | bash
-
-# Or install individual services
+uv tool install voice-mode
 voicemode whisper service install
 voicemode kokoro install
 ```
@@ -172,4 +157,16 @@ voicemode config edit
 
 - [VoiceMode Documentation](https://voicemode.ai/docs)
 - [GitHub Repository](https://github.com/mbailey/voicemode)
-- [Plugin Source](https://github.com/mbailey/voicemode/tree/master/plugins/voicemode)
+- [Plugin Source](https://github.com/mbailey/voicemode)
+
+## Development
+
+For local development, add the plugin from your local clone:
+
+```bash
+# Add plugin from local path
+claude plugin marketplace add /path/to/voicemode
+
+# Install the plugin
+claude plugin install voicemode@mbailey
+```
