@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.4.0] - 2026-01-06
+
 ### Changed
 
 - **Soundfonts enabled by default** (VM-329)
-  - Soundfonts are now enabled by default for audio feedback during tool calls
-  - Set `VOICEMODE_SOUNDFONTS_ENABLED=false` to disable
+  - Audio feedback during tool calls now works out of the box
+  - Disable with `VOICEMODE_SOUNDFONTS_ENABLED=false` in `~/.voicemode/voicemode.env`
+
+- **Plugin directory structure** (VM-329)
+  - Hook receiver moved to `scripts/` per Claude Code plugin conventions
+  - `hooks/` now contains only configuration files
+
+- **Release automation**
+  - `make release` now updates plugin version to `{version}p0` automatically
+  - Plugin-only changes can bump to p1, p2, etc. without package release
 
 ## [7.3.0] - 2026-01-06
 
