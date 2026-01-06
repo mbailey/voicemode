@@ -19,8 +19,6 @@ Environment variables are processed in this order (highest to lowest priority):
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
 | `OPENAI_API_KEY` | OpenAI API key for cloud TTS/STT | None | `sk-proj-...` |
-| `LIVEKIT_API_KEY` | LiveKit API key | `devkey` | `your-api-key` |
-| `LIVEKIT_API_SECRET` | LiveKit API secret | `secret` | `your-secret` |
 
 ## Voice Services
 
@@ -59,15 +57,6 @@ Environment variables are processed in this order (highest to lowest priority):
 | `VOICEMODE_KOKORO_MODELS_DIR` | Kokoro models directory | `~/Models/kokoro` | `/models/kokoro` |
 | `VOICEMODE_KOKORO_CACHE_DIR` | Kokoro cache directory | `~/.voicemode/cache/kokoro` | `/cache/kokoro` |
 | `VOICEMODE_KOKORO_DEFAULT_VOICE` | Default Kokoro voice | `af_sky` | `am_adam` |
-
-### LiveKit Configuration
-
-| Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
-| `LIVEKIT_URL` | LiveKit WebSocket URL | `ws://127.0.0.1:7880` | `wss://livekit.example.com` |
-| `LIVEKIT_PORT` | LiveKit server port | `7880` | `7881` |
-| `VOICEMODE_LIVEKIT_ROOM_PREFIX` | Room name prefix | `voice-mode` | `my-app` |
-| `VOICEMODE_LIVEKIT_AUTO_CREATE` | Auto-create rooms | `true` | `false` |
 
 ## Audio Configuration
 
