@@ -36,12 +36,12 @@ def discover_all_commands() -> List[List[str]]:
 
     # Top-level commands
     top_level_commands = ['completions', 'config', 'converse',
-                          'deps', 'diag', 'exchanges', 'kokoro', 'livekit',
+                          'deps', 'diag', 'exchanges', 'kokoro',
                           'transcribe', 'update', 'version', 'whisper']
 
     # Commands that support -h
     commands_with_short_help = ['config', 'converse', 'deps', 'diag',
-                                'exchanges', 'kokoro', 'livekit', 'whisper']
+                                'exchanges', 'kokoro', 'whisper']
 
     for cmd in top_level_commands:
         commands.append(base_cmd + [cmd, '--help'])
@@ -77,30 +77,6 @@ def discover_all_commands() -> List[List[str]]:
         commands.append(base_cmd + ['kokoro', action, '--help'])
         if action in kokoro_with_options:
             commands.append(base_cmd + ['kokoro', action, '-h'])
-
-    # === LIVEKIT COMMANDS ===
-    # Direct LiveKit actions
-    livekit_actions = ['disable', 'enable', 'install', 'logs', 'restart',
-                       'start', 'status', 'stop', 'uninstall', 'update']
-    livekit_with_options = ['install', 'logs', 'uninstall']
-
-    for action in livekit_actions:
-        commands.append(base_cmd + ['livekit', action, '--help'])
-        if action in livekit_with_options:
-            commands.append(base_cmd + ['livekit', action, '-h'])
-
-    # LiveKit frontend subcommands
-    commands.append(base_cmd + ['livekit', 'frontend', '--help'])
-    commands.append(base_cmd + ['livekit', 'frontend', '-h'])
-
-    frontend_cmds = ['build', 'disable', 'enable', 'install', 'logs',
-                     'open', 'start', 'status', 'stop']
-    frontend_with_options = ['build', 'install', 'logs', 'start']
-
-    for cmd in frontend_cmds:
-        commands.append(base_cmd + ['livekit', 'frontend', cmd, '--help'])
-        if cmd in frontend_with_options:
-            commands.append(base_cmd + ['livekit', 'frontend', cmd, '-h'])
 
     # === CONFIG COMMANDS ===
     config_subcommands = ['edit', 'get', 'list', 'set']
@@ -140,7 +116,7 @@ def categorize_command(command: List[str]) -> str:
     # Skip the python -m voice_mode part
     cmd_str = ' '.join(command[3:]) if len(command) > 3 else ' '.join(command)
     
-    if 'service' in cmd_str or 'whisper' in cmd_str or 'kokoro' in cmd_str or 'livekit' in cmd_str:
+    if 'service' in cmd_str or 'whisper' in cmd_str or 'kokoro' in cmd_str:
         return 'service'
     elif 'install' in cmd_str or 'uninstall' in cmd_str:
         return 'install'
@@ -262,7 +238,7 @@ class TestHelpComprehensive:
             f"Deprecation warning in stderr for {' '.join(command)}"
         
         # Service commands should mention their actions
-        if 'service' in ' '.join(command) or any(svc in ' '.join(command) for svc in ['whisper', 'kokoro', 'livekit']):
+        if 'service' in ' '.join(command) or any(svc in ' '.join(command) for svc in ['whisper', 'kokoro']):
             if 'status' not in command and '--help' not in command[:-1]:
                 # Service-level help should mention available actions
                 pass  # Could add more specific checks here
@@ -321,7 +297,6 @@ class TestHelpComprehensive:
     @pytest.mark.parametrize("service,expected_actions", [
         ('whisper', ['service', 'model']),  # Whisper has service and model subgroups
         ('kokoro', ['status', 'start', 'stop', 'restart']),  # Kokoro has direct actions
-        ('livekit', ['status', 'start', 'stop', 'restart', 'frontend'])  # LiveKit has actions + frontend
     ])
     def test_service_help_completeness(self, service: str, expected_actions: List[str]):
         """Test that service help includes all expected subcommands."""

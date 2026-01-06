@@ -97,18 +97,17 @@ async def voice_status() -> str:
         
         # Configuration
         from voice_mode.config import (
-            TTS_VOICES, TTS_MODELS, 
+            TTS_VOICES, TTS_MODELS,
             PREFER_LOCAL, AUTO_START_KOKORO,
-            AUDIO_FEEDBACK_ENABLED, LIVEKIT_URL
+            AUDIO_FEEDBACK_ENABLED
         )
-        
+
         status_lines.append("\nConfiguration:")
         status_lines.append(f"  Preferred Voices: {', '.join(TTS_VOICES[:3])}{'...' if len(TTS_VOICES) > 3 else ''}")
         status_lines.append(f"  Preferred Models: {', '.join(TTS_MODELS)}")
         status_lines.append(f"  Prefer Local: {PREFER_LOCAL}")
         status_lines.append(f"  Auto-start Kokoro: {AUTO_START_KOKORO}")
         status_lines.append(f"  Audio Feedback: {'Enabled' if AUDIO_FEEDBACK_ENABLED else 'Disabled'}")
-        status_lines.append(f"  LiveKit URL: {LIVEKIT_URL}")
         
         # Audio devices
         try:
