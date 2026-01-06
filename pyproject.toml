@@ -113,6 +113,13 @@ include = [
   "voice_mode/**/*.plist",
   "voice_mode/**/*.service",
   "voice_mode/templates/**/*",
+  "voice_mode/data/**/*.yaml",
+  "voice_mode/data/**/*.json",
+]
+# artifacts overrides .gitignore for VCS-ignored files that should be packaged
+artifacts = [
+  "voice_mode/data/**/*.mp3",
+  "voice_mode/data/**/*.wav",
 ]
 exclude = [
   "**/__pycache__",
