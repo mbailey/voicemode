@@ -36,7 +36,7 @@ graph TD
 
 ## Most Common Issues
 
-### 1. [No Speech Detected](voice-interaction/no-speech-detected.md)
+### 1. No Speech Detected
 **Symptoms:** Recording completes but no speech is recognized
 **Quick Fix:** `converse("message", min_listen_duration=5.0)`
 

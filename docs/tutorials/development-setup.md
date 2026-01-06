@@ -287,6 +287,6 @@ pkill -f whisper
 ## Additional Resources
 
 - [VoiceMode Architecture](../concepts/architecture.md)
-- [API Reference](../reference/api.md)
-- [Service Development](../concepts/service-model.md)
-- [Testing Guide](../guides/testing.md)
+- [CLI Reference](../reference/cli.md)
+- [Tool Loading Architecture](../reference/tool-loading-architecture.md)
+- [Environment Variables](../reference/environment.md)
