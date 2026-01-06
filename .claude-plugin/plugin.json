@@ -5,5 +5,9 @@
   "author": {
     "name": "Mike Bailey",
     "email": "mike@failmode.com"
-  }
+  },
+  "commands": "./.claude/commands/",
+  "agents": "./.claude/agents/",
+  "skills": "./.claude/skills/",
+  "hooks": "./.claude/hooks/hooks.json"
 }
