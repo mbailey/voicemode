@@ -14,7 +14,7 @@ set -o nounset -o pipefail -o errexit
 #   VOICEMODE_HOOK_DEBUG=1 voicemode-hook-receiver --tool-name Task --event PreToolUse --subagent-type mama-bear
 #
 # Configuration:
-#   VOICEMODE_SOUNDFONTS_ENABLED - Set to 'true' to enable sound playback
+#   VOICEMODE_SOUNDFONTS_ENABLED - Sound fonts enabled by default, set to 'false' to disable
 #   VOICEMODE_HOOK_DEBUG - Set to '1' for debug output
 #
 # Sound file lookup order:
@@ -40,7 +40,7 @@ Options:
     -h, --help             Show this help message and exit
 
 Environment:
-    VOICEMODE_SOUNDFONTS_ENABLED   Set to 'true' to enable sound playback
+    VOICEMODE_SOUNDFONTS_ENABLED   Sound fonts enabled by default, set to 'false' to disable
     VOICEMODE_HOOK_DEBUG           Set to '1' for debug output
 
 When called by Claude Code, JSON is read from stdin.
@@ -145,8 +145,8 @@ soundfonts_enabled() {
     return
   fi
 
-  # Default: disabled
-  return 1
+  # Default: enabled
+  return 0
 }
 
 if ! soundfonts_enabled; then
