@@ -116,8 +116,8 @@ def load_voicemode_env():
 # Enable audio feedback chimes (true/false)
 # VOICEMODE_AUDIO_FEEDBACK=true
 
-# Enable sound fonts for tool use hooks (true/false)
-# VOICEMODE_SOUNDFONTS_ENABLED=false
+# Enable sound fonts for tool use hooks (true/false, default: true)
+# VOICEMODE_SOUNDFONTS_ENABLED=true
 
 #############
 # Tool Loading Configuration
@@ -596,8 +596,9 @@ SERVICE_AUTO_ENABLE = env_bool("VOICEMODE_SERVICE_AUTO_ENABLE", True)
 
 # ==================== SOUND FONTS CONFIGURATION ====================
 
-# Sound fonts are disabled by default to avoid annoying users with unexpected sounds
-SOUNDFONTS_ENABLED = env_bool("VOICEMODE_SOUNDFONTS_ENABLED", False)
+# Sound fonts are enabled by default for audio feedback during tool calls
+# Set VOICEMODE_SOUNDFONTS_ENABLED=false to disable
+SOUNDFONTS_ENABLED = env_bool("VOICEMODE_SOUNDFONTS_ENABLED", True)
 
 # ==================== AUDIO CONFIGURATION ====================
 

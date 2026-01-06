@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Soundfonts enabled by default** (VM-329)
+  - Soundfonts are now enabled by default for audio feedback during tool calls
+  - Set `VOICEMODE_SOUNDFONTS_ENABLED=false` to disable
+
 ## [7.3.0] - 2026-01-06
 
 ### Added
