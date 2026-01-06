@@ -133,9 +133,6 @@ exclude = [
   "**/.git",
 ]
 
-[tool.hatch.build.hooks.custom]
-path = "build_hooks.py"
-
 [tool.hatch.build.targets.sdist]
 include = [
   "/voice_mode",
@@ -143,7 +140,6 @@ include = [
   "/LICENSE",
   "/pyproject.toml",
   "/CHANGELOG.md",
-  "/build_hooks.py",
 ]
 exclude = [
   "**/__pycache__",

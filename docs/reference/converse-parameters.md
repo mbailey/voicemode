@@ -33,7 +33,7 @@ Minimum recording time before silence detection can stop.
 - Quick responses: 0.5-1 second
 
 ### timeout (DEPRECATED)
-Use `listen_duration_max` instead. Only applies to LiveKit transport.
+Use `listen_duration_max` instead.
 
 ## Voice & TTS Parameters
 
@@ -176,24 +176,6 @@ Skip text-to-speech, show text only.
 - Rapid development iterations
 - When voice isn't needed
 - Text-only mode
-
-## Transport Parameters
-
-### transport
-**Type:** "auto" | "local" | "livekit" (default: "auto")
-Transport method selection.
-
-**Options:**
-- `auto` - Try LiveKit first, fallback to local
-- `local` - Direct microphone access
-- `livekit` - Room-based communication
-
-### room_name
-**Type:** string (optional)
-LiveKit room name.
-
-**Only for:** livekit transport
-**Default:** Auto-discovered if empty
 
 ## Endpoint Requirements
 

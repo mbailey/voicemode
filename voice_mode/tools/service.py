@@ -13,7 +13,7 @@ from typing import Literal, Optional, Dict, Any, Union
 import psutil
 
 from voice_mode.server import mcp
-from voice_mode.config import WHISPER_PORT, KOKORO_PORT, LIVEKIT_PORT, SERVICE_AUTO_ENABLE
+from voice_mode.config import WHISPER_PORT, KOKORO_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
 from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_whisper_model
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support, is_kokoro_starting_up
@@ -96,24 +96,8 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "START_SCRIPT": str(start_script) if start_script and start_script.exists() else "",
             "KOKORO_DIR": kokoro_dir,
         }
-    elif service_name == "livekit":
-        livekit_bin = "/opt/homebrew/bin/livekit-server" if platform.system() == "Darwin" else "/usr/local/bin/livekit-server"
-
-        return {
-            "HOME": home,
-            "LIVEKIT_BIN": livekit_bin,
-        }
-    else:  # frontend
-        from voice_mode.tools.livekit.frontend import find_frontend_dir
-
-        frontend_dir = find_frontend_dir()
-        if not frontend_dir:
-            raise RuntimeError("Frontend directory not found")
-
-        return {
-            "HOME": home,
-            "FRONTEND_DIR": str(frontend_dir),
-        }
+    else:
+        raise ValueError(f"Unknown service: {service_name}")
 
 
 def get_installed_service_version(service_name: str) -> Optional[str]:
@@ -167,7 +151,7 @@ def create_service_file(service_name: str) -> tuple[Path, str]:
     Templates are simplified - start scripts handle config via voicemode.env.
 
     Args:
-        service_name: Name of the service (whisper, kokoro, livekit, frontend)
+        service_name: Name of the service (whisper, kokoro)
 
     Returns:
         Tuple of (destination_path, file_content)
@@ -203,9 +187,7 @@ async def status_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
-    elif service_name == "livekit":
-        port = LIVEKIT_PORT
-    else:  # frontend
+    else:
         port = 3000
     
     status, proc = check_service_status(port)
@@ -338,9 +320,7 @@ async def start_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
-    elif service_name == "livekit":
-        port = LIVEKIT_PORT
-    else:  # frontend
+    else:
         port = 3000
     if find_process_by_port(port):
         return f"{service_name.capitalize()} is already running on port {port}"
@@ -445,20 +425,10 @@ async def start_service(service_name: str) -> str:
             return f"❌ Start script not found: {start_script}"
         
         cmd = [str(start_script)]
-    
-    else:  # livekit
-        # Find LiveKit binary
-        livekit_bin = "/opt/homebrew/bin/livekit-server" if platform.system() == "Darwin" else "/usr/local/bin/livekit-server"
-        if not Path(livekit_bin).exists():
-            return "❌ LiveKit server not found. Please run 'voice-mode livekit install' first."
-        
-        # Create config directory if it doesn't exist
-        config_dir = Path.home() / ".voicemode" / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Run in dev mode
-        cmd = [livekit_bin, "--dev"]
-    
+
+    else:
+        return f"❌ Unknown service: {service_name}"
+
     try:
         # Start the process
         process = subprocess.Popen(
@@ -493,9 +463,7 @@ async def stop_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
-    elif service_name == "livekit":
-        port = LIVEKIT_PORT
-    else:  # frontend
+    else:
         port = 3000
     system = platform.system()
     
@@ -592,16 +560,6 @@ async def enable_service(service_name: str) -> str:
             start_script = config_vars.get("START_SCRIPT", "")
             if not start_script or not Path(start_script).exists():
                 return "❌ Kokoro start script not found. Please run kokoro_install first."
-
-        elif service_name == "livekit":
-            livekit_bin = config_vars.get("LIVEKIT_BIN", "")
-            if not Path(livekit_bin).exists():
-                return "❌ LiveKit server not found. Please run 'voice-mode livekit install' first."
-
-        elif service_name == "frontend":
-            frontend_dir = config_vars.get("FRONTEND_DIR", "")
-            if not frontend_dir or not Path(frontend_dir).exists():
-                return "❌ Frontend directory not found"
 
         # Create parent directories
         service_path.parent.mkdir(parents=True, exist_ok=True)
@@ -866,7 +824,7 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 
 @mcp.tool()
 async def service(
-    service_name: Literal["whisper", "kokoro", "livekit", "frontend"],
+    service_name: Literal["whisper", "kokoro"],
     action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs", "update-service-files"] = "status",
     lines: Optional[Union[int, str]] = None
 ) -> str:
@@ -875,7 +833,7 @@ async def service(
     Manage Whisper (STT) and Kokoro (TTS) services with a single tool.
     
     Args:
-        service_name: The service to manage ("whisper", "kokoro", or "livekit")
+        service_name: The service to manage ("whisper" or "kokoro")
         action: The action to perform (default: "status")
             - status: Show if service is running and resource usage
             - start: Start the service

@@ -95,35 +95,6 @@ def whisper():
     pass
 
 
-# Check if LiveKit is available
-try:
-    import livekit
-    LIVEKIT_CLI_AVAILABLE = True
-except ImportError:
-    LIVEKIT_CLI_AVAILABLE = False
-
-
-@voice_mode_main_cli.group()
-@click.help_option('-h', '--help', help='Show this message and exit')
-@click.pass_context
-def livekit(ctx):
-    """Manage LiveKit RTC service (requires: uv tool install voice-mode[livekit])."""
-    # Allow --help to work even without LiveKit installed
-    if ctx.invoked_subcommand is None:
-        return
-
-    # Check if this is a help request
-    import sys
-    if '--help' in sys.argv or '-h' in sys.argv:
-        return
-
-    if not LIVEKIT_CLI_AVAILABLE:
-        click.echo("❌ LiveKit is not installed.")
-        click.echo("   Install with: uv tool install voice-mode[livekit]")
-        click.echo("   Note: LiveKit requires Python 3.10-3.13 (not yet available for Python 3.14)")
-        raise click.Abort()
-
-
 # Service functions are imported lazily in their respective command handlers to improve startup time
 
 
@@ -1043,378 +1014,6 @@ def whisper_model_benchmark_cmd(models, sample, runs):
 ''' # End of old model subcommands
 
 
-# LiveKit service commands
-@livekit.command()
-def status():
-    """Show LiveKit service status."""
-    from voice_mode.tools.service import status_service
-    result = asyncio.run(status_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def start():
-    """Start LiveKit service."""
-    from voice_mode.tools.service import start_service
-    result = asyncio.run(start_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def stop():
-    """Stop LiveKit service."""
-    from voice_mode.tools.service import stop_service
-    result = asyncio.run(stop_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def restart():
-    """Restart LiveKit service."""
-    from voice_mode.tools.service import restart_service
-    result = asyncio.run(restart_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def enable():
-    """Enable LiveKit service to start at boot/login."""
-    from voice_mode.tools.service import enable_service
-    result = asyncio.run(enable_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def disable():
-    """Disable LiveKit service from starting at boot/login."""
-    from voice_mode.tools.service import disable_service
-    result = asyncio.run(disable_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-@click.help_option('-h', '--help')
-@click.option('--lines', '-n', default=50, help='Number of log lines to show')
-def logs(lines):
-    """View LiveKit service logs."""
-    from voice_mode.tools.service import view_logs
-    result = asyncio.run(view_logs("livekit", lines))
-    click.echo(result)
-
-
-@livekit.command()
-def update():
-    """Update LiveKit service files to the latest version."""
-    from voice_mode.tools.service import update_service_files
-    result = asyncio.run(update_service_files("livekit"))
-    
-    if result.get("success"):
-        click.echo("✅ LiveKit service files updated successfully")
-        if result.get("message"):
-            click.echo(f"   {result['message']}")
-    else:
-        click.echo(f"❌ {result.get('message', 'Update failed')}")
-
-
-@livekit.command()
-@click.help_option('-h', '--help')
-@click.option('--install-dir', help='Directory to install LiveKit')
-@click.option('--port', default=7880, help='Port for LiveKit server (default: 7880)')
-@click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
-@click.option('--version', default='latest', help='Version to install (default: latest)')
-@click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
-def install(install_dir, port, force, version, auto_enable):
-    """Install LiveKit server with development configuration."""
-    from voice_mode.tools.livekit.install import livekit_install
-    result = asyncio.run(livekit_install.fn(
-        install_dir=install_dir,
-        port=port,
-        force_reinstall=force,
-        version=version,
-        auto_enable=auto_enable
-    ))
-    
-    if result.get('success'):
-        if result.get('already_installed'):
-            click.echo(f"✅ LiveKit already installed at {result['install_path']}")
-            click.echo(f"   Version: {result.get('version', 'unknown')}")
-        else:
-            click.echo("✅ LiveKit installed successfully!")
-            click.echo(f"   Version: {result.get('version', 'unknown')}")
-            click.echo(f"   Install path: {result['install_path']}")
-            click.echo(f"   Config: {result['config_path']}")
-            click.echo(f"   Port: {result['port']}")
-            click.echo(f"   URL: {result['url']}")
-            click.echo(f"   Dev credentials: {result['dev_key']} / {result['dev_secret']}")
-            
-            if result.get('service_installed'):
-                click.echo("   Service installed")
-                if result.get('service_enabled'):
-                    click.echo("   Service enabled (will start at boot/login)")
-    else:
-        click.echo(f"❌ Installation failed: {result.get('error', 'Unknown error')}")
-        if result.get('details'):
-            click.echo(f"   Details: {result['details']}")
-
-
-@livekit.command()
-@click.help_option('-h', '--help')
-@click.option('--remove-config', is_flag=True, help='Also remove LiveKit configuration files')
-@click.option('--remove-all-data', is_flag=True, help='Remove all LiveKit data including logs')
-@click.confirmation_option(prompt='Are you sure you want to uninstall LiveKit?')
-def uninstall(remove_config, remove_all_data):
-    """Uninstall LiveKit server and optionally remove configuration and data."""
-    from voice_mode.tools.livekit.uninstall import livekit_uninstall
-    result = asyncio.run(livekit_uninstall.fn(
-        remove_config=remove_config,
-        remove_all_data=remove_all_data
-    ))
-    
-    if result.get('success'):
-        click.echo("✅ LiveKit uninstalled successfully!")
-        
-        if result.get('removed_items'):
-            click.echo("\n📦 Removed:")
-            for item in result['removed_items']:
-                click.echo(f"   ✓ {item}")
-                
-        if result.get('warnings'):
-            click.echo("\n⚠️  Warnings:")
-            for warning in result['warnings']:
-                click.echo(f"   - {warning}")
-    else:
-        click.echo(f"❌ Uninstall failed: {result.get('error', 'Unknown error')}")
-
-
-# LiveKit frontend subcommands
-@livekit.group()
-@click.help_option('-h', '--help', help='Show this message and exit')
-def frontend():
-    """Manage LiveKit Voice Assistant Frontend."""
-    pass
-
-
-@frontend.command("install")
-@click.help_option('-h', '--help')
-@click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service after installation (default: from config)')
-def frontend_install(auto_enable):
-    """Install and setup LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.livekit.frontend import livekit_frontend_install
-    result = asyncio.run(livekit_frontend_install.fn(auto_enable=auto_enable))
-    
-    if result.get('success'):
-        click.echo("✅ LiveKit Frontend setup completed!")
-        click.echo(f"   Frontend directory: {result['frontend_dir']}")
-        click.echo(f"   Log directory: {result['log_dir']}")
-        click.echo(f"   Node.js available: {result['node_available']}")
-        if result.get('node_path'):
-            click.echo(f"   Node.js path: {result['node_path']}")
-        click.echo(f"   Service installed: {result['service_installed']}")
-        click.echo(f"   Service enabled: {result['service_enabled']}")
-        click.echo(f"   URL: {result['url']}")
-        click.echo(f"   Password: {result['password']}")
-        
-        if result.get('service_enabled'):
-            click.echo("\n💡 Frontend service is enabled and will start automatically at boot/login")
-        else:
-            click.echo("\n💡 Run 'voicemode livekit frontend enable' to start automatically at boot/login")
-    else:
-        click.echo(f"❌ Frontend installation failed: {result.get('error', 'Unknown error')}")
-
-
-@frontend.command("start")
-@click.help_option('-h', '--help')
-@click.option('--port', default=3000, help='Port to run frontend on (default: 3000)')
-@click.option('--host', default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
-def frontend_start(port, host):
-    """Start the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.livekit.frontend import livekit_frontend_start
-    result = asyncio.run(livekit_frontend_start.fn(port=port, host=host))
-    
-    if result.get('success'):
-        click.echo("✅ LiveKit Frontend started successfully!")
-        click.echo(f"   URL: {result['url']}")
-        click.echo(f"   Password: {result['password']}")
-        click.echo(f"   PID: {result['pid']}")
-        click.echo(f"   Directory: {result['directory']}")
-    else:
-        error_msg = result.get('error', 'Unknown error')
-        click.echo(f"❌ Failed to start frontend: {error_msg}")
-        if "Cannot find module" in error_msg or "dependencies" in error_msg.lower():
-            click.echo("")
-            click.echo("💡 Try fixing dependencies with:")
-            click.echo("   ./bin/fix-frontend-deps.sh")
-            click.echo("   or manually: cd vendor/livekit-voice-assistant/voice-assistant-frontend && pnpm install")
-
-
-@frontend.command("stop")
-def frontend_stop():
-    """Stop the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.livekit.frontend import livekit_frontend_stop
-    result = asyncio.run(livekit_frontend_stop.fn())
-    
-    if result.get('success'):
-        click.echo(f"✅ {result['message']}")
-    else:
-        click.echo(f"❌ Failed to stop frontend: {result.get('error', 'Unknown error')}")
-
-
-@frontend.command("status")
-def frontend_status():
-    """Check status of the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.livekit.frontend import livekit_frontend_status
-    result = asyncio.run(livekit_frontend_status.fn())
-    
-    if 'error' in result:
-        click.echo(f"❌ Error: {result['error']}")
-        return
-    
-    if result.get('running'):
-        click.echo("✅ Frontend is running")
-        click.echo(f"   PID: {result['pid']}")
-        click.echo(f"   URL: {result['url']}")
-    else:
-        click.echo("❌ Frontend is not running")
-    
-    click.echo(f"   Directory: {result.get('directory', 'Not found')}")
-    
-    if result.get('configuration'):
-        click.echo("   Configuration:")
-        for key, value in result['configuration'].items():
-            click.echo(f"     {key}: {value}")
-
-
-@frontend.command("open")
-def frontend_open():
-    """Open the LiveKit Voice Assistant Frontend in your browser.
-    
-    Starts the frontend if not already running, then opens it in the default browser.
-    """
-    from voice_mode.tools.livekit.frontend import livekit_frontend_open
-    result = asyncio.run(livekit_frontend_open.fn())
-    
-    if result.get('success'):
-        click.echo("✅ Frontend opened in browser!")
-        click.echo(f"   URL: {result['url']}")
-        click.echo(f"   Password: {result['password']}")
-        if result.get('hint'):
-            click.echo(f"   💡 {result['hint']}")
-    else:
-        click.echo(f"❌ Failed to open frontend: {result.get('error', 'Unknown error')}")
-
-
-@frontend.command("logs")
-@click.help_option('-h', '--help')
-@click.option("--lines", "-n", default=50, help="Number of lines to show (default: 50)")
-@click.option("--follow", "-f", is_flag=True, help="Follow log output (tail -f)")
-def frontend_logs(lines, follow):
-    """View LiveKit Voice Assistant Frontend logs.
-    
-    Shows the last N lines of frontend logs. Use --follow to tail the logs.
-    """
-    if follow:
-        # For following, run tail -f directly
-        from voice_mode.tools.livekit.frontend import livekit_frontend_logs
-        result = asyncio.run(livekit_frontend_logs.fn(follow=True))
-        if result.get('success'):
-            click.echo(f"📂 Log file: {result['log_file']}")
-            click.echo("🔄 Following logs (press Ctrl+C to stop)...")
-            try:
-                import subprocess
-                subprocess.run(["tail", "-f", result['log_file']])
-            except KeyboardInterrupt:
-                click.echo("\n✅ Stopped following logs")
-        else:
-            click.echo(f"❌ Error: {result.get('error', 'Unknown error')}")
-    else:
-        # Show last N lines
-        from voice_mode.tools.livekit.frontend import livekit_frontend_logs
-        result = asyncio.run(livekit_frontend_logs.fn(lines=lines, follow=False))
-        if result.get('success'):
-            click.echo(f"📂 Log file: {result['log_file']}")
-            click.echo(f"📄 Showing last {result['lines_shown']} lines:")
-            click.echo("─" * 60)
-            click.echo(result['logs'])
-        else:
-            click.echo(f"❌ Error: {result.get('error', 'Unknown error')}")
-
-
-@frontend.command("enable")
-def frontend_enable():
-    """Enable frontend service to start automatically at boot/login."""
-    from voice_mode.tools.service import enable_service
-    result = asyncio.run(enable_service("frontend"))
-    # enable_service returns a string, not a dict
-    click.echo(result)
-
-
-@frontend.command("disable")
-def frontend_disable():
-    """Disable frontend service from starting automatically."""
-    from voice_mode.tools.service import disable_service
-    result = asyncio.run(disable_service("frontend"))
-    # disable_service returns a string, not a dict
-    click.echo(result)
-
-
-@frontend.command("build")
-@click.help_option('-h', '--help')
-@click.option('--force', '-f', is_flag=True, help='Force rebuild even if build exists')
-def frontend_build(force):
-    """Build frontend for production (requires Node.js)."""
-    import subprocess
-    from pathlib import Path
-    
-    frontend_dir = Path(__file__).parent / "frontend"
-    if not frontend_dir.exists():
-        click.echo("❌ Frontend directory not found")
-        return
-    
-    build_dir = frontend_dir / ".next"
-    if build_dir.exists() and not force:
-        click.echo("✅ Frontend already built. Use --force to rebuild.")
-        click.echo(f"   Build directory: {build_dir}")
-        return
-    
-    click.echo("🔨 Building frontend for production...")
-    
-    # Check Node.js availability
-    try:
-        subprocess.run(["node", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        click.echo("❌ Node.js not found. Please install Node.js to build the frontend.")
-        return
-    
-    # Change to frontend directory and build
-    import os
-    original_cwd = os.getcwd()
-    try:
-        os.chdir(frontend_dir)
-        
-        # Install dependencies if needed
-        if not (frontend_dir / "node_modules").exists():
-            click.echo("📦 Installing dependencies...")
-            subprocess.run(["npm", "install"], check=True)
-        
-        # Build with production settings
-        click.echo("🏗️  Building standalone production version...")
-        env = os.environ.copy()
-        env["BUILD_STANDALONE"] = "true"
-        subprocess.run(["npm", "run", "build:standalone"], check=True, env=env)
-        
-        click.echo("✅ Frontend built successfully!")
-        click.echo(f"   Build directory: {build_dir}")
-        click.echo("   Frontend will now start in production mode.")
-        
-    except subprocess.CalledProcessError as e:
-        click.echo(f"❌ Build failed: {e}")
-    except Exception as e:
-        click.echo(f"❌ Unexpected error: {e}")
-    finally:
-        os.chdir(original_cwd)
-
-
-# Configuration management group
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def config():
@@ -1734,8 +1333,6 @@ voice_mode_main_cli.add_command(transcribe_audio_cmd)
 @click.option('--wait/--no-wait', default=True, help='Wait for response after speaking')
 @click.option('--duration', '-d', type=float, default=DEFAULT_LISTEN_DURATION, help='Listen duration in seconds')
 @click.option('--min-duration', type=float, default=MIN_RECORDING_DURATION, help='Minimum listen duration before silence detection')
-@click.option('--transport', type=click.Choice(['auto', 'local', 'livekit']), default='auto', help='Transport method')
-@click.option('--room-name', default='', help='LiveKit room name (for livekit transport)')
 @click.option('--voice', help='TTS voice to use (e.g., nova, shimmer, af_sky)')
 @click.option('--tts-provider', type=click.Choice(['openai', 'kokoro']), help='TTS provider')
 @click.option('--tts-model', help='TTS model (e.g., tts-1, tts-1-hd)')
@@ -1747,7 +1344,7 @@ voice_mode_main_cli.add_command(transcribe_audio_cmd)
 @click.option('--vad-aggressiveness', type=int, help='VAD aggressiveness (0-3)')
 @click.option('--skip-tts/--no-skip-tts', default=None, help='Skip TTS and only show text')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
-def converse(message, wait, duration, min_duration, transport, room_name, voice, tts_provider,
+def converse(message, wait, duration, min_duration, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
             speed, vad_aggressiveness, skip_tts, continuous):
     """Have a voice conversation directly from the command line.
@@ -1802,8 +1399,6 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                     wait_for_response=True,
                     listen_duration_max=duration,
                     listen_duration_min=min_duration,
-                    transport=transport,
-                    room_name=room_name,
                     voice=voice,
                     tts_provider=tts_provider,
                     tts_model=tts_model,
@@ -1827,8 +1422,6 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                         wait_for_response=True,
                         listen_duration_max=duration,
                         listen_duration_min=min_duration,
-                        transport=transport,
-                        room_name=room_name,
                         voice=voice,
                         tts_provider=tts_provider,
                         tts_model=tts_model,
@@ -1865,8 +1458,6 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                     wait_for_response=wait,
                     listen_duration_max=duration,
                     listen_duration_min=min_duration,
-                    transport=transport,
-                    room_name=room_name,
                     voice=voice,
                     tts_provider=tts_provider,
                     tts_model=tts_model,

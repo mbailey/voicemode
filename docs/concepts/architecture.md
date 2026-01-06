@@ -20,10 +20,10 @@ VoiceMode is built as a Model Context Protocol (MCP) server that provides voice 
 │  └──────────┘  └──────────┘  └──────────┘  │
 ├──────────────────────────────────────────────┤
 │            Voice Services                    │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│  │ Whisper  │  │  Kokoro  │  │ LiveKit  │  │
-│  │  (STT)   │  │  (TTS)   │  │  (RTC)   │  │
-│  └──────────┘  └──────────┘  └──────────┘  │
+│  ┌──────────────────┐  ┌──────────────────┐  │
+│  │     Whisper      │  │      Kokoro      │  │
+│  │      (STT)       │  │       (TTS)      │  │
+│  └──────────────────┘  └──────────────────┘  │
 └──────────────────────────────────────────────┘
 ```
 
@@ -45,10 +45,10 @@ Tools are the primary interface for voice interactions:
 - Handles audio recording and playback
 - Manages TTS/STT service selection
 - Implements silence detection and VAD
-- Supports multiple transport methods (local, LiveKit)
+- Uses local microphone for audio capture
 
 **Service tools**: Installation and management
-- `whisper_install`, `kokoro_install`, `livekit_install`
+- `whisper_install`, `kokoro_install`
 - Service start/stop/status operations
 - Model and configuration management
 
@@ -93,14 +93,6 @@ Local TTS service with natural voices:
 - Multiple languages and voices
 - Efficient caching system
 
-### LiveKit (Real-Time Communication)
-
-WebRTC-based room communication:
-- Server on port 7880
-- Frontend on port 3000
-- Room-based architecture
-- Low-latency audio transport
-
 ## Audio Pipeline
 
 ### Recording Flow
@@ -109,7 +101,7 @@ WebRTC-based room communication:
 Microphone → Audio Capture → VAD → Silence Detection → STT Service → Text
 ```
 
-1. **Audio Capture**: PyAudio or LiveKit SDK
+1. **Audio Capture**: PyAudio for microphone input
 2. **VAD**: WebRTC VAD filters non-speech
 3. **Silence Detection**: Determines recording end
 4. **STT Processing**: Converts audio to text
@@ -123,7 +115,7 @@ Text → TTS Service → Audio Stream → Format Conversion → Speaker
 1. **TTS Generation**: Creates audio from text
 2. **Streaming**: Chunks for real-time playback
 3. **Format Conversion**: FFmpeg handles formats
-4. **Playback**: PyAudio or LiveKit output
+4. **Playback**: PyAudio for speaker output
 
 ## Service Architecture
 
@@ -143,41 +135,15 @@ All services expose OpenAI-compatible APIs:
 - Consistent error handling
 - Format negotiation
 
-## Transport Methods
+## Audio Transport
 
-### Local Transport
+### Local Microphone
 
-Direct microphone/speaker access:
-- PyAudio for audio I/O
-- Low latency
+Direct microphone/speaker access using PyAudio:
+- Low latency audio I/O
 - No network overhead
-- Privacy-focused
-
-### LiveKit Transport
-
-Room-based WebRTC communication:
-- Multi-participant support
-- Network resilient
-- Browser compatible
-- Scalable architecture
-
-## Frontend Architecture
-
-### Next.js Application
-
-The web frontend (`frontend/`) provides:
-- Voice conversation UI
-- Room management
-- Real-time status
-- WebRTC integration
-
-### Build System
-
-Frontend is bundled with Python package:
-1. Built during package creation
-2. Served by MCP server
-3. Auto-installed dependencies
-4. Hot reload in development
+- Privacy-focused (all processing local)
+- WebRTC VAD for voice activity detection
 
 ## Security Model
 
@@ -192,7 +158,6 @@ Frontend is bundled with Python package:
 
 - Local processing option
 - No cloud storage
-- Encrypted transport (LiveKit)
 - User-controlled recording
 
 ## Performance Optimization

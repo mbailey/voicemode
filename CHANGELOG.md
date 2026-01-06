@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **LiveKit Support** (VM-353)
+  - Removed LiveKit room-based real-time communication feature
+  - Removed web frontend (Next.js app for LiveKit UI)
+  - Removed `livekit` CLI command group and all subcommands
+  - Removed `transport` and `room_name` parameters from converse tool
+  - Removed service templates for LiveKit and frontend services
+  - Local microphone transport remains the default and only transport option
+  - **Impact**: Users who set up LiveKit integration will need to use local microphone instead
+
 ## [7.4.0] - 2026-01-06
 
 ### Changed

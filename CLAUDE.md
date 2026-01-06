@@ -66,10 +66,10 @@ make docs-check
 
 2. **Tool System (`voice_mode/tools/`)**
    - **converse.py**: Primary voice conversation tool with TTS/STT integration
-   - **service.py**: Unified service management for Whisper/Kokoro/LiveKit
+   - **service.py**: Unified service management for Whisper/Kokoro
    - **providers.py**: Provider discovery and registry management
    - **devices.py**: Audio device detection and management
-   - Services subdirectory contains install/uninstall tools for Whisper, Kokoro, and LiveKit
+   - Services subdirectory contains install/uninstall tools for Whisper and Kokoro
    - See [Tool Loading Architecture](docs/reference/tool-loading-architecture.md) for internal details
 
 3. **Provider System (`voice_mode/providers.py`)**
@@ -87,18 +87,12 @@ make docs-check
    - Statistics, configuration, changelog, and version information
    - Whisper model management
 
-6. **Frontend (`voice_mode/frontend/`)**
-   - Next.js-based web interface for LiveKit integration
-   - Real-time voice conversation UI
-   - Built and bundled with the Python package
-
 ### Service Architecture
 
 The project supports multiple voice service backends:
 - **OpenAI API**: Cloud-based TTS/STT (requires API key)
 - **Whisper.cpp**: Local speech-to-text service
 - **Kokoro**: Local text-to-speech with multiple voices
-- **LiveKit**: Room-based real-time communication
 
 Services can be installed and managed through MCP tools, with automatic service discovery and health checking.
 
@@ -107,7 +101,7 @@ Services can be installed and managed through MCP tools, with automatic service 
 1. **OpenAI API Compatibility**: All voice services expose OpenAI-compatible endpoints, enabling transparent switching between providers
 2. **Dynamic Tool Discovery**: Tools are auto-imported from the tools directory structure
 3. **Failover Support**: Automatic fallback between services based on availability
-4. **Transport Flexibility**: Supports both local microphone and LiveKit room-based communication
+4. **Local Microphone Transport**: Direct audio capture via PyAudio for voice interactions
 5. **Audio Format Negotiation**: Automatic format validation against provider capabilities
 
 ## Development Notes

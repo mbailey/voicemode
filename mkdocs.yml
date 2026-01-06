@@ -87,7 +87,6 @@ nav:
   - Local Services:
     - Whisper STT: guides/whisper-setup.md
     - Kokoro TTS: guides/kokoro-setup.md
-    - LiveKit: guides/livekit-setup.md
   - Reference:
     - CLI Commands: reference/cli.md
     - Service Commands: reference/cli/service-commands.md

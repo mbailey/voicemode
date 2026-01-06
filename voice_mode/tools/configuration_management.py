@@ -327,9 +327,6 @@ async def list_config_keys() -> str:
         ]),
         ("API Keys", [
             ("OPENAI_API_KEY", "OpenAI API key for cloud TTS/STT"),
-            ("LIVEKIT_URL", "LiveKit server URL (default: ws://127.0.0.1:7880)"),
-            ("LIVEKIT_API_KEY", "LiveKit API key"),
-            ("LIVEKIT_API_SECRET", "LiveKit API secret"),
         ]),
     ]
     

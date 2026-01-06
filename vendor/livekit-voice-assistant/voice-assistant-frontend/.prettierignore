@@ -1,8 +1,0 @@
-.github/
-dist/
-docs/
-node_modules/
-.next/
-yarn.lock
-pnpm-lock.yaml
-
