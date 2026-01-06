@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "mbailey", email = "mbailey@example.com"},
+    {name = "Mike Bailey", email = "mike@failmode.com"},
 ]
 keywords = ["mcp", "voice", "livekit", "speech", "tts", "stt", "ai", "llm"]
 classifiers = [
@@ -18,8 +18,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -64,14 +62,14 @@ coreml = [
 dev = [
     "build>=1.0.0",
     "twine>=4.0.0",
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "pytest-cov>=4.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
     "pytest-mock>=3.10.0",
 ]
 test = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.10.0",
     "pytest-xdist>=3.5.0",  # For parallel testing
@@ -215,10 +213,3 @@ directory = "htmlcov"
 [tool.coverage.xml]
 output = "coverage.xml"
 
-[dependency-groups]
-dev = [
-    "pytest>=8.4.2",
-    "pytest-asyncio>=1.2.0",
-    "pytest-cov>=7.0.0",
-    "pytest-mock>=3.15.0",
-]
