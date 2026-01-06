@@ -95,7 +95,7 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mbailey/voicemode"
+Homepage = "https://getvoicemode.com/"
 Repository = "https://github.com/mbailey/voicemode"
 Issues = "https://github.com/mbailey/voicemode/issues"
 
