@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.3.0] - 2026-01-06
+
+### Added
+
+- **Unified Status Command** (VM-304)
+  - New `voicemode status` command shows status of all VoiceMode services at once
+  - Displays Whisper, Kokoro, and LiveKit service states in a single view
+
+- **Kokoro Model Download Progress**
+  - Show startup status when Kokoro is downloading models
+  - Better visibility during first-time service initialization
+
+### Changed
+
+- **Streamlined SKILL.md** (VM-303)
+  - Reduced skill file from 646 lines to under 150 lines
+  - Added First-Time Setup section for new users
+  - Added MCP vs CLI guidance and best practices
+  - More focused and actionable content
+
+- **Plugin Distribution**
+  - Removed marketplace - now use `mbailey/claude-plugins` repository
+  - Updated claude-plugin version
+  - Added script to prepare for reinstall
+
+### Removed
+
+- **Deprecated Install Script** (VM-329)
+  - Removed deprecated curl bash install script
+  - Use `uvx voicemode install` instead
+
+### Documentation
+
+- **MacBook Portable Mode Guide**
+  - Added guide for running VoiceMode with MacBook lid closed
+  - Covers clamshell mode configuration and external display setup
+
+- **Improved Troubleshooting**
+  - Better slash command failure recovery guidance
+
 ## [7.2.0] - 2026-01-06
 
 ### Fixed
