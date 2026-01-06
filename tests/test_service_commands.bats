@@ -54,24 +54,6 @@ setup() {
     return 0
 }
 
-@test "livekit status command runs without error" {
-    run $VOICE_MODE livekit status
-    
-    if [[ "$output" == *"Traceback"* ]]; then
-        echo "Command crashed with Python error:"
-        echo "$output"
-        return 1
-    fi
-    
-    if [[ "$output" == *"NameError"* ]]; then
-        echo "Command has NameError (missing import?):"
-        echo "$output"
-        return 1
-    fi
-    
-    return 0
-}
-
 @test "config set command runs without error" {
     # Test with a dummy config setting
     run $VOICE_MODE config set TEST_KEY test_value
@@ -152,7 +134,7 @@ setup() {
 
 @test "all services have consistent command structure" {
     # Check that all services have the same basic commands
-    services=("whisper" "kokoro" "livekit")
+    services=("whisper" "kokoro")
     commands=("status" "start" "stop" "restart" "enable" "disable")
     
     for service in "${services[@]}"; do
@@ -169,20 +151,6 @@ setup() {
             fi
         done
     done
-    
-    return 0
-}
-
-@test "livekit frontend commands don't crash with import errors" {
-    # Test that frontend commands at least have proper imports
-    run $VOICE_MODE livekit frontend --help
-    
-    # Should show help, not crash with import errors
-    if [[ "$output" == *"NameError"* ]] || [[ "$output" == *"ImportError"* ]]; then
-        echo "Frontend commands have import errors:"
-        echo "$output"
-        return 1
-    fi
     
     return 0
 }
