@@ -118,9 +118,4 @@ models/
 *.mlmodel
 *.mlmodelc/
 
-# Coverage reports
-htmlcov/
-.coverage
-.coverage.*
-coverage.xml
-.mcp.json
+# Coverage reports (duplicates removed - already in Python section)

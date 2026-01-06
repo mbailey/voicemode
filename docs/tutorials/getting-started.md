@@ -102,7 +102,7 @@ For complete privacy, you can run voice services locally instead of using OpenAI
 ### Quick Setup
 
 ```bash
-# Install local services
+# Install local services (use --yes for non-interactive environments like Claude Code)
 voicemode whisper install   # Speech-to-text
 voicemode kokoro install    # Text-to-speech
 
@@ -112,6 +112,31 @@ voicemode kokoro start
 ```
 
 VoiceMode will automatically detect and use these local services when available.
+
+### Download Sizes and Requirements
+
+| Service | Download Size | Disk Space | First Start Time |
+|---------|---------------|------------|------------------|
+| Whisper (tiny) | ~75MB | ~150MB | 30 seconds |
+| Whisper (base) | ~150MB | ~300MB | 1-2 minutes |
+| Whisper (small) | ~460MB | ~1GB | 2-3 minutes |
+| Kokoro TTS | ~350MB | ~700MB | 2-3 minutes |
+
+**Recommended**: Whisper base + Kokoro = ~500MB download, ~1GB disk space.
+
+### Waiting for Services
+
+After installation, services download models on first start. Wait for them to be ready:
+
+```bash
+# Wait for Whisper (port 2022)
+while ! nc -z localhost 2022 2>/dev/null; do sleep 2; done
+echo "Whisper ready"
+
+# Wait for Kokoro (port 8880)
+while ! nc -z localhost 8880 2>/dev/null; do sleep 2; done
+echo "Kokoro ready"
+```
 
 Learn more: [Whisper Setup Guide](../guides/whisper-setup.md) | [Kokoro Setup Guide](../guides/kokoro-setup.md)
 
