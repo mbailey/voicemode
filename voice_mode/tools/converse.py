@@ -475,32 +475,46 @@ async def speech_to_text(
         logger.info(f"STT audio saved to: {save_file_path} (format: {STT_SAVE_FORMAT})")
 
         # Use compressed audio for upload (temporary file)
-        with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:
+        # Windows fix: close temp file before reopening (Issue #135)
+        tmp_file = tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False)
+        tmp_path = tmp_file.name
+        try:
             tmp_file.write(compressed_audio)
             tmp_file.flush()
+            tmp_file.close()  # Close before reopening on Windows
 
-            with open(tmp_file.name, 'rb') as audio_file:
+            with open(tmp_path, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
                     model="whisper-1"
                 )
-
+        finally:
             # Clean up temp file (we keep the WAV)
-            os.unlink(tmp_file.name)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     else:
         # Use temporary file that will be deleted
-        with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:
+        # Windows fix: close temp file before reopening (Issue #135)
+        tmp_file = tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False)
+        tmp_path = tmp_file.name
+        try:
             tmp_file.write(compressed_audio)
             tmp_file.flush()
+            tmp_file.close()  # Close before reopening on Windows
 
-            with open(tmp_file.name, 'rb') as audio_file:
+            with open(tmp_path, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
                     model="whisper-1"
                 )
-
+        finally:
             # Clean up temp file
-            os.unlink(tmp_file.name)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     return result
 
