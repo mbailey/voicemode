@@ -40,6 +40,16 @@
           }
         ]
       }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
     ]
   }
 }

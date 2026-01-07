@@ -186,6 +186,9 @@ pretooluse | start)
 posttooluse | end)
   event_dir="PostToolUse"
   ;;
+precompact)
+  event_dir="PreCompact"
+  ;;
 *)
   event_dir="$EVENT"
   ;;
