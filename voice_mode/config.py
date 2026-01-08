@@ -332,6 +332,18 @@ TTS \\bAPI\\b A P I # API as individual letters
 # VOICEMODE_SERVICE_AUTO_ENABLE=true
 
 #############
+# Telemetry (opt-in analytics to improve VoiceMode)
+#############
+
+# Enable telemetry: true, false (default: false - opt-in only)
+# - true: Send anonymous usage statistics
+# - false: Disable telemetry completely
+# VOICEMODE_TELEMETRY=false
+
+# Note: Setting DO_NOT_TRACK=1 in your environment also disables telemetry
+# Learn more: https://voicemode.dev/docs/privacy
+
+#############
 # Advanced Configuration
 #############
 
