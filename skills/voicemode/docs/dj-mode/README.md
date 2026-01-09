@@ -30,6 +30,8 @@ mpv-dj stop      # Stop playback
 | `mpv-dj next` / `prev` | Navigate chapters |
 | `mpv-dj volume <0-100>` | Set volume |
 | `mpv-dj stop` | Stop playback |
+| `mpv-dj history [limit]` | Show play history |
+| `mpv-dj favorite [add\|list\|remove]` | Manage favorites |
 | `mpv-dj raw '<json>'` | Send raw IPC command |
 
 ## Documentation
@@ -48,10 +50,37 @@ mpv-dj stop      # Stop playback
 - Music For Programming episode playback
 - Volume, pause, skip, status commands
 - IPC socket for programmatic control
+- Play history tracking (last 100 sessions)
+- Favorites system (save/list/remove tracks)
 
 ### Planned
 
-- **Play History** - Track what's been played, suggest new episodes
-- **Favorites** - Mark and recall favorite episodes/tracks
 - **Smart Selection** - "Play something new" / "Play a favorite"
 - **All MFP Episodes** - Chapter files for the full catalog
+- **Local Caching** - Download episodes for offline playback
+
+## History & Favorites
+
+### Play History
+
+Every MFP episode played is recorded:
+
+```bash
+mpv-dj history       # Show last 10
+mpv-dj history 20    # Show last 20
+```
+
+History stored in `~/.voicemode/dj/history.json` (last 100 entries).
+
+### Favorites
+
+Save tracks you like while playing:
+
+```bash
+mpv-dj favorite add         # Save current track
+mpv-dj favorite list        # Show all favorites
+mpv-dj favorite remove 1    # Remove by index
+```
+
+Favorites include track title, source, and timestamp position.
+Data stored in `~/.voicemode/dj/favorites.json`.
