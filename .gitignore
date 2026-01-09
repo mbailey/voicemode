@@ -119,3 +119,5 @@ models/
 *.mlmodelc/
 
 # Coverage reports (duplicates removed - already in Python section)
+coverage.xml
+coverage.xml
