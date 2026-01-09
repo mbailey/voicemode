@@ -114,6 +114,75 @@ Config file: `~/.voicemode/voicemode.env`
 
 See [Configuration Guide](../../docs/guides/configuration.md) for all options.
 
+## DJ Mode
+
+Control background music during VoiceMode sessions using mpv with IPC.
+
+### Quick Start
+
+```bash
+# Start DJ with local file and CUE chapters
+mpv-dj play ~/Music/podcast.mp3 --chapters podcast.cue
+
+# Start DJ with HTTP stream and chapters
+mpv-dj play "https://example.com/audio.mp3" --chapters chapters.txt
+
+# Check what's playing
+mpv-dj status
+
+# Control playback
+mpv-dj pause
+mpv-dj resume
+mpv-dj next      # Next chapter/track
+mpv-dj prev      # Previous chapter/track
+mpv-dj volume 50 # Set volume (0-100)
+mpv-dj stop
+```
+
+### Chapter Files
+
+mpv supports chapters via `--chapters-file` using FFmpeg metadata format:
+
+```
+;FFMETADATA1
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=1744000
+END=3311000
+title=Track Name - Artist
+```
+
+Convert CUE to FFmpeg chapters:
+
+```bash
+cue-to-chapters input.cue > chapters.txt
+cue-to-chapters input.cue 8042343 > chapters.txt  # With duration in ms
+```
+
+### Music For Programming Integration
+
+Play Music For Programming episodes with chapter metadata:
+
+```bash
+# Stream with chapters (if available)
+mpv-dj mfp 76  # Play episode 76
+
+# The skill will:
+# 1. Stream from https://datashat.net/music_for_programming_{episode}.mp3
+# 2. Fetch chapters from configured URL or local cache
+```
+
+### IPC Socket
+
+DJ mode uses `/tmp/voicemode-mpv.sock` for IPC communication.
+
+Query current track via raw IPC:
+
+```bash
+echo '{"command": ["get_property", "chapter-metadata"]}' | socat - /tmp/voicemode-mpv.sock
+```
+
 ## CLI Cheat Sheet
 
 ```bash
@@ -130,6 +199,12 @@ voicemode diag devices              # Audio devices
 # History search
 voicemode history search "keyword"
 voicemode history play <exchange_id>
+
+# DJ Mode
+mpv-dj play <file|url>              # Start playback
+mpv-dj status                       # What's playing
+mpv-dj next/prev                    # Navigate chapters
+mpv-dj stop                         # Stop playback
 ```
 
 ## Documentation Index
