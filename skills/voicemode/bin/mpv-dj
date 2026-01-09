@@ -12,12 +12,24 @@
 #   mpv-dj volume <0-100>                        Set volume
 #   mpv-dj stop                                  Stop playback
 #   mpv-dj raw <json-command>                    Send raw IPC command
+#   mpv-dj history                               Show play history
+#   mpv-dj favorite [add|list|remove]            Manage favorites
 
 set -e
 
 SOCKET="/tmp/voicemode-mpv.sock"
 MFP_BASE_URL="https://datashat.net"
 CHAPTERS_DIR="${HOME}/.voicemode/chapters"
+DATA_DIR="${HOME}/.voicemode/dj"
+HISTORY_FILE="${DATA_DIR}/history.json"
+FAVORITES_FILE="${DATA_DIR}/favorites.json"
+
+# Ensure data directory exists
+init_data_dir() {
+    mkdir -p "$DATA_DIR"
+    [[ -f "$HISTORY_FILE" ]] || echo '[]' > "$HISTORY_FILE"
+    [[ -f "$FAVORITES_FILE" ]] || echo '[]' > "$FAVORITES_FILE"
+}
 
 # Check if mpv is installed
 check_mpv() {
@@ -121,6 +133,9 @@ cmd_mfp() {
 
     mkdir -p "$CHAPTERS_DIR"
 
+    # Record in history
+    record_history "mfp" "$episode" "$stream_url"
+
     if [[ -f "$chapters_file" ]]; then
         cmd_play "$stream_url" --chapters "$chapters_file"
     else
@@ -128,6 +143,197 @@ cmd_mfp() {
         echo "Playing without chapter metadata..."
         cmd_play "$stream_url"
     fi
+}
+
+# Record play event in history
+record_history() {
+    init_data_dir
+    local type="$1"
+    local identifier="$2"
+    local source="$3"
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Use Python for JSON manipulation (more reliable than jq dependency)
+    python3 << PYTHON
+import json
+from pathlib import Path
+
+history_file = Path("$HISTORY_FILE")
+history = json.loads(history_file.read_text())
+
+# Add new entry
+entry = {
+    "type": "$type",
+    "identifier": "$identifier",
+    "source": "$source",
+    "timestamp": "$timestamp"
+}
+history.append(entry)
+
+# Keep last 100 entries
+history = history[-100:]
+
+history_file.write_text(json.dumps(history, indent=2))
+PYTHON
+}
+
+# Show play history
+cmd_history() {
+    init_data_dir
+    local limit="${1:-10}"
+
+    if [[ ! -s "$HISTORY_FILE" ]] || [[ $(cat "$HISTORY_FILE") == "[]" ]]; then
+        echo "No play history yet"
+        exit 0
+    fi
+
+    echo "Play History (last $limit):"
+    echo "=========================="
+
+    python3 << PYTHON
+import json
+from pathlib import Path
+from datetime import datetime
+
+history_file = Path("$HISTORY_FILE")
+history = json.loads(history_file.read_text())
+
+# Show most recent first
+for entry in reversed(history[-$limit:]):
+    ts = entry.get("timestamp", "")
+    if ts:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        ts_str = dt.strftime("%Y-%m-%d %H:%M")
+    else:
+        ts_str = "unknown"
+
+    entry_type = entry.get("type", "unknown")
+    identifier = entry.get("identifier", "")
+
+    if entry_type == "mfp":
+        print(f"  {ts_str}  MFP Episode {identifier}")
+    else:
+        print(f"  {ts_str}  {entry.get('source', 'unknown')}")
+PYTHON
+}
+
+# Manage favorites
+cmd_favorite() {
+    init_data_dir
+    local action="${1:-list}"
+
+    case "$action" in
+        add)
+            add_favorite
+            ;;
+        list)
+            list_favorites
+            ;;
+        remove)
+            remove_favorite "$2"
+            ;;
+        *)
+            echo "Usage: mpv-dj favorite [add|list|remove <index>]"
+            exit 1
+            ;;
+    esac
+}
+
+# Add current track to favorites
+add_favorite() {
+    if ! is_running; then
+        echo "Error: DJ is not running. Play something first."
+        exit 1
+    fi
+
+    # Get current track info
+    local chapter_meta=$(send_cmd '{"command": ["get_property", "chapter-metadata"]}')
+    local time_pos=$(send_cmd '{"command": ["get_property", "time-pos"]}')
+    local path=$(send_cmd '{"command": ["get_property", "path"]}')
+
+    local title=$(echo "$chapter_meta" | grep -o '"TITLE":"[^"]*"' | cut -d'"' -f4)
+    local pos=$(echo "$time_pos" | grep -o '"data":[0-9.]*' | cut -d':' -f2)
+    local source=$(echo "$path" | grep -o '"data":"[^"]*"' | cut -d'"' -f4)
+
+    if [[ -z "$title" ]]; then
+        title="Unknown track"
+    fi
+
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    python3 << PYTHON
+import json
+from pathlib import Path
+
+favorites_file = Path("$FAVORITES_FILE")
+favorites = json.loads(favorites_file.read_text())
+
+# Add new favorite
+entry = {
+    "title": "$title",
+    "source": "$source",
+    "position": $pos,
+    "added": "$timestamp"
+}
+favorites.append(entry)
+
+favorites_file.write_text(json.dumps(favorites, indent=2))
+print(f"Added to favorites: $title")
+PYTHON
+}
+
+# List favorites
+list_favorites() {
+    if [[ ! -s "$FAVORITES_FILE" ]] || [[ $(cat "$FAVORITES_FILE") == "[]" ]]; then
+        echo "No favorites yet. Use 'mpv-dj favorite add' while playing a track."
+        exit 0
+    fi
+
+    echo "Favorites:"
+    echo "=========="
+
+    python3 << PYTHON
+import json
+from pathlib import Path
+
+favorites_file = Path("$FAVORITES_FILE")
+favorites = json.loads(favorites_file.read_text())
+
+for i, fav in enumerate(favorites, 1):
+    title = fav.get("title", "Unknown")
+    pos = fav.get("position", 0)
+    pos_min = int(pos) // 60
+    pos_sec = int(pos) % 60
+    print(f"  [{i}] {title} (at {pos_min}:{pos_sec:02d})")
+PYTHON
+}
+
+# Remove favorite by index
+remove_favorite() {
+    local index="$1"
+    if [[ -z "$index" ]]; then
+        echo "Usage: mpv-dj favorite remove <index>"
+        exit 1
+    fi
+
+    python3 << PYTHON
+import json
+from pathlib import Path
+
+favorites_file = Path("$FAVORITES_FILE")
+favorites = json.loads(favorites_file.read_text())
+
+try:
+    idx = int("$index") - 1
+    if 0 <= idx < len(favorites):
+        removed = favorites.pop(idx)
+        favorites_file.write_text(json.dumps(favorites, indent=2))
+        print(f"Removed: {removed.get('title', 'Unknown')}")
+    else:
+        print(f"Invalid index: $index")
+except ValueError:
+    print(f"Invalid index: $index")
+PYTHON
 }
 
 # Get current status
@@ -273,6 +479,13 @@ case "${1:-}" in
     raw)
         cmd_raw "$2"
         ;;
+    history)
+        cmd_history "$2"
+        ;;
+    favorite)
+        shift
+        cmd_favorite "$@"
+        ;;
     *)
         echo "mpv-dj - Background music for VoiceMode sessions"
         echo ""
@@ -286,6 +499,8 @@ case "${1:-}" in
         echo "  mpv-dj prev                                  Previous chapter"
         echo "  mpv-dj volume <0-100>                        Set volume"
         echo "  mpv-dj stop                                  Stop playback"
+        echo "  mpv-dj history [limit]                       Show play history"
+        echo "  mpv-dj favorite [add|list|remove <idx>]      Manage favorites"
         echo "  mpv-dj raw '<json>'                          Send raw IPC command"
         ;;
 esac
