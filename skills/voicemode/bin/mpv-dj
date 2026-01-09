@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+# mpv-dj - Control background music during VoiceMode sessions
+#
+# Usage:
+#   mpv-dj play <file|url> [--chapters <file>]  Start playback
+#   mpv-dj mfp <episode>                         Play Music For Programming episode
+#   mpv-dj status                                Show current track info
+#   mpv-dj pause                                 Pause playback
+#   mpv-dj resume                                Resume playback
+#   mpv-dj next                                  Skip to next chapter
+#   mpv-dj prev                                  Go to previous chapter
+#   mpv-dj volume <0-100>                        Set volume
+#   mpv-dj stop                                  Stop playback
+#   mpv-dj raw <json-command>                    Send raw IPC command
+
+set -e
+
+SOCKET="/tmp/voicemode-mpv.sock"
+MFP_BASE_URL="https://datashat.net"
+CHAPTERS_DIR="${HOME}/.voicemode/chapters"
+
+# Check if mpv is installed
+check_mpv() {
+    if ! command -v mpv &> /dev/null; then
+        echo "Error: mpv is not installed. Install with: brew install mpv"
+        exit 1
+    fi
+}
+
+# Check if socat is installed (for IPC)
+check_socat() {
+    if ! command -v socat &> /dev/null; then
+        echo "Error: socat is not installed. Install with: brew install socat"
+        exit 1
+    fi
+}
+
+# Check if mpv is running with our socket
+is_running() {
+    [ -S "$SOCKET" ] && echo '{"command": ["get_property", "pid"]}' | socat - "$SOCKET" 2>/dev/null | grep -q '"error":"success"'
+}
+
+# Send IPC command and get response
+send_cmd() {
+    if ! is_running; then
+        echo "Error: DJ is not running. Start with: mpv-dj play <file>"
+        exit 1
+    fi
+    echo "$1" | socat - "$SOCKET"
+}
+
+# Start mpv with IPC socket
+cmd_play() {
+    check_mpv
+
+    local source=""
+    local chapters_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --chapters)
+                chapters_file="$2"
+                shift 2
+                ;;
+            *)
+                source="$1"
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$source" ]]; then
+        echo "Usage: mpv-dj play <file|url> [--chapters <file>]"
+        exit 1
+    fi
+
+    # Stop existing playback
+    if is_running; then
+        send_cmd '{"command": ["quit"]}' > /dev/null 2>&1 || true
+        sleep 0.5
+    fi
+
+    # Build mpv command
+    local mpv_args=(
+        --no-video
+        --input-ipc-server="$SOCKET"
+    )
+
+    if [[ -n "$chapters_file" && -f "$chapters_file" ]]; then
+        mpv_args+=(--chapters-file="$chapters_file")
+    fi
+
+    # Start mpv in background
+    mpv "${mpv_args[@]}" "$source" &> /dev/null &
+
+    echo "Started playback: $source"
+    if [[ -n "$chapters_file" ]]; then
+        echo "Chapters loaded from: $chapters_file"
+    fi
+}
+
+# Play Music For Programming episode
+cmd_mfp() {
+    local episode="$1"
+
+    if [[ -z "$episode" ]]; then
+        echo "Usage: mpv-dj mfp <episode-number>"
+        exit 1
+    fi
+
+    # Format episode number with zero padding if needed
+    local url="${MFP_BASE_URL}/music_for_programming_${episode}-*.mp3"
+
+    # Try to find the actual filename (they have curator names)
+    # For now, we'll construct based on known patterns
+    # Episode 76 = material_object
+    local stream_url="${MFP_BASE_URL}/music_for_programming_${episode}-material_object.mp3"
+
+    # Check for local chapters file
+    local chapters_file="${CHAPTERS_DIR}/mfp_${episode}.txt"
+
+    mkdir -p "$CHAPTERS_DIR"
+
+    if [[ -f "$chapters_file" ]]; then
+        cmd_play "$stream_url" --chapters "$chapters_file"
+    else
+        echo "Note: No chapters file found at $chapters_file"
+        echo "Playing without chapter metadata..."
+        cmd_play "$stream_url"
+    fi
+}
+
+# Get current status
+cmd_status() {
+    check_socat
+
+    if ! is_running; then
+        echo "DJ is not running"
+        exit 0
+    fi
+
+    local chapter_meta=$(send_cmd '{"command": ["get_property", "chapter-metadata"]}')
+    local time_pos=$(send_cmd '{"command": ["get_property", "time-pos"]}')
+    local duration=$(send_cmd '{"command": ["get_property", "duration"]}')
+    local volume=$(send_cmd '{"command": ["get_property", "volume"]}')
+    local paused=$(send_cmd '{"command": ["get_property", "pause"]}')
+
+    # Parse JSON responses
+    local title=$(echo "$chapter_meta" | grep -o '"TITLE":"[^"]*"' | cut -d'"' -f4)
+    local pos=$(echo "$time_pos" | grep -o '"data":[0-9.]*' | cut -d':' -f2)
+    local dur=$(echo "$duration" | grep -o '"data":[0-9.]*' | cut -d':' -f2)
+    local vol=$(echo "$volume" | grep -o '"data":[0-9.]*' | cut -d':' -f2)
+    local is_paused=$(echo "$paused" | grep -o '"data":true')
+
+    echo "DJ Status"
+    echo "========="
+    if [[ -n "$title" ]]; then
+        echo "Track: $title"
+    else
+        echo "Track: (no chapter metadata)"
+    fi
+
+    if [[ -n "$pos" && -n "$dur" ]]; then
+        # Convert to integers for time formatting
+        local pos_int=${pos%.*}
+        local dur_int=${dur%.*}
+        local pos_min=$((pos_int / 60))
+        local pos_sec=$((pos_int % 60))
+        local dur_min=$((dur_int / 60))
+        local dur_sec=$((dur_int % 60))
+        printf "Position: %d:%02d / %d:%02d\n" "$pos_min" "$pos_sec" "$dur_min" "$dur_sec"
+    fi
+
+    if [[ -n "$vol" ]]; then
+        echo "Volume: ${vol%.*}%"
+    fi
+
+    if [[ -n "$is_paused" ]]; then
+        echo "State: Paused"
+    else
+        echo "State: Playing"
+    fi
+}
+
+# Pause playback
+cmd_pause() {
+    send_cmd '{"command": ["set_property", "pause", true]}' > /dev/null
+    echo "Paused"
+}
+
+# Resume playback
+cmd_resume() {
+    send_cmd '{"command": ["set_property", "pause", false]}' > /dev/null
+    echo "Resumed"
+}
+
+# Next chapter
+cmd_next() {
+    send_cmd '{"command": ["add", "chapter", 1]}' > /dev/null
+    sleep 0.3
+    cmd_status
+}
+
+# Previous chapter
+cmd_prev() {
+    send_cmd '{"command": ["add", "chapter", -1]}' > /dev/null
+    sleep 0.3
+    cmd_status
+}
+
+# Set volume
+cmd_volume() {
+    local vol="$1"
+    if [[ -z "$vol" ]] || [[ ! "$vol" =~ ^[0-9]+$ ]] || [[ "$vol" -lt 0 ]] || [[ "$vol" -gt 100 ]]; then
+        echo "Usage: mpv-dj volume <0-100>"
+        exit 1
+    fi
+    send_cmd "{\"command\": [\"set_property\", \"volume\", $vol]}" > /dev/null
+    echo "Volume set to ${vol}%"
+}
+
+# Stop playback
+cmd_stop() {
+    if is_running; then
+        send_cmd '{"command": ["quit"]}' > /dev/null 2>&1 || true
+        echo "Stopped"
+    else
+        echo "DJ is not running"
+    fi
+}
+
+# Raw IPC command
+cmd_raw() {
+    check_socat
+    local cmd="$1"
+    if [[ -z "$cmd" ]]; then
+        echo "Usage: mpv-dj raw '<json-command>'"
+        exit 1
+    fi
+    send_cmd "$cmd"
+}
+
+# Main command dispatch
+case "${1:-}" in
+    play)
+        shift
+        cmd_play "$@"
+        ;;
+    mfp)
+        cmd_mfp "$2"
+        ;;
+    status)
+        cmd_status
+        ;;
+    pause)
+        cmd_pause
+        ;;
+    resume)
+        cmd_resume
+        ;;
+    next)
+        cmd_next
+        ;;
+    prev)
+        cmd_prev
+        ;;
+    volume)
+        cmd_volume "$2"
+        ;;
+    stop)
+        cmd_stop
+        ;;
+    raw)
+        cmd_raw "$2"
+        ;;
+    *)
+        echo "mpv-dj - Background music for VoiceMode sessions"
+        echo ""
+        echo "Usage:"
+        echo "  mpv-dj play <file|url> [--chapters <file>]  Start playback"
+        echo "  mpv-dj mfp <episode>                         Play Music For Programming"
+        echo "  mpv-dj status                                Show current track"
+        echo "  mpv-dj pause                                 Pause playback"
+        echo "  mpv-dj resume                                Resume playback"
+        echo "  mpv-dj next                                  Next chapter"
+        echo "  mpv-dj prev                                  Previous chapter"
+        echo "  mpv-dj volume <0-100>                        Set volume"
+        echo "  mpv-dj stop                                  Stop playback"
+        echo "  mpv-dj raw '<json>'                          Send raw IPC command"
+        ;;
+esac
