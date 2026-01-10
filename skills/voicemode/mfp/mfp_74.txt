@@ -1,0 +1,97 @@
+;FFMETADATA1
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=429586
+END=429586
+title=NCW - Everything
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=429586
+END=433493
+title=Oneohtrix Point Never - Physical Memory
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=433493
+END=438853
+title=M. Geddes Gengras - The Pump at the Way Station
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=438853
+END=531986
+title=Liverpool Express - My Love (skrewed)
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=531986
+END=1453093
+title=Michael O'Shea - No Journeys End
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=1453093
+END=2753093
+title=Dorothy Carter - Visiting Song
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=2753093
+END=4838640
+title=Infinity Window - Internal Compass
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=4838640
+END=5551053
+title=Carl Stone - Banteay Srey
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=5551053
+END=6862746
+title=Coil - Red Birds Will Fly Out Of The East And Destroy Paris In A Night
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=6862746
+END=7305013
+title=Arthur Russell - Reach One
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=7305013
+END=7307453
+title=Kevin Drumm - Cloudy
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=7307453
+END=7682920
+title=Colin Stetson - Orthrus (reduction)
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=7682920
+END=7960373
+title=Kamran Sadeghi - Loss Less (original)
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=7960373
+END=7961840
+title=Mike Ratledge - Sequence 01
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=7961840
+END=11076266
+title=Leila Bordreuil - The Life of Others
+
+[CHAPTER]
+TIMEBASE=1/1000
+START=11076266
+END=86400000
+title=Coil - Queens of the Circulating Library
