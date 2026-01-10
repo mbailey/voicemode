@@ -17,6 +17,10 @@
 
 set -e
 
+# Load config file if it exists
+CONFIG_FILE="${HOME}/.voicemode/voicemode.env"
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+
 SOCKET="/tmp/voicemode-mpv.sock"
 MFP_BASE_URL="https://datashat.net"
 CHAPTERS_DIR="${HOME}/.voicemode/chapters"
