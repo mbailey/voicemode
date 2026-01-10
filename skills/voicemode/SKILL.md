@@ -114,6 +114,19 @@ Config file: `~/.voicemode/voicemode.env`
 
 See [Configuration Guide](../../docs/guides/configuration.md) for all options.
 
+## DJ Mode
+
+Background music during VoiceMode sessions with track-level control.
+
+```bash
+mpv-dj mfp 76           # Play Music For Programming episode
+mpv-dj status           # What's playing
+mpv-dj next             # Skip to next track
+mpv-dj stop             # Stop playback
+```
+
+See [DJ Mode docs](docs/dj-mode/README.md) for full documentation.
+
 ## CLI Cheat Sheet
 
 ```bash
@@ -130,6 +143,12 @@ voicemode diag devices              # Audio devices
 # History search
 voicemode history search "keyword"
 voicemode history play <exchange_id>
+
+# DJ Mode
+mpv-dj play <file|url>              # Start playback
+mpv-dj status                       # What's playing
+mpv-dj next/prev                    # Navigate chapters
+mpv-dj stop                         # Stop playback
 ```
 
 ## Documentation Index
@@ -145,3 +164,4 @@ voicemode history play <exchange_id>
 | Pronunciation | [Pronunciation Guide](../../docs/guides/pronunciation.md) |
 | Troubleshooting | [Troubleshooting](../../docs/troubleshooting/index.md) |
 | CLI Reference | [CLI Docs](../../docs/reference/cli.md) |
+| DJ Mode | [Background Music](docs/dj-mode/README.md) |

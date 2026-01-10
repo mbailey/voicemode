@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Convert CUE sheet to FFmpeg chapters format for use with mpv --chapters-file.
+
+Usage:
+    cue-to-chapters input.cue > chapters.txt
+    cue-to-chapters input.cue 8042343 > chapters.txt  # With duration in ms
+
+The output format is FFmpeg metadata chapters, which mpv accepts via --chapters-file.
+This enables chapter navigation for HTTP streams where CUE files don't work directly.
+
+Example output:
+    ;FFMETADATA1
+
+    [CHAPTER]
+    TIMEBASE=1/1000
+    START=1744000
+    END=3311000
+    title=Track Name - Artist
+"""
+import re
+import sys
+
+def parse_cue_time(time_str: str) -> int:
+    """Convert CUE time format (MM:SS:FF) to milliseconds.
+
+    CUE format: MM:SS:FF where FF is frames (75 frames per second)
+    """
+    parts = time_str.split(':')
+    if len(parts) == 3:
+        minutes, seconds, frames = int(parts[0]), int(parts[1]), int(parts[2])
+        total_ms = (minutes * 60 + seconds) * 1000 + int(frames * 1000 / 75)
+        return total_ms
+    return 0
+
+def convert_cue_to_ffchapters(cue_content: str, duration_ms: int | None = None) -> str:
+    """Convert CUE content to FFmpeg metadata chapter format.
+
+    Args:
+        cue_content: Raw CUE file content
+        duration_ms: Optional duration in milliseconds for the last chapter's end time
+
+    Returns:
+        FFmpeg metadata format string
+    """
+    chapters = []
+    current_track: dict = {}
+    in_track = False
+
+    for line in cue_content.split('\n'):
+        line = line.strip()
+
+        # Track start - create new track and mark we're in a track context
+        if line.startswith('TRACK'):
+            in_track = True
+            if current_track and current_track.get('start_ms', 0) > 0:
+                chapters.append(current_track)
+            current_track = {}
+
+        # Title - only capture if we're inside a TRACK block
+        elif line.startswith('TITLE') and in_track:
+            match = re.match(r'TITLE\s+"(.+)"', line)
+            if match:
+                current_track['title'] = match.group(1)
+
+        # Performer - only capture if we're inside a TRACK block
+        elif line.startswith('PERFORMER') and in_track:
+            match = re.match(r'PERFORMER\s+"(.+)"', line)
+            if match:
+                current_track['performer'] = match.group(1)
+
+        # Index (timestamp)
+        elif line.startswith('INDEX 01') and in_track:
+            match = re.match(r'INDEX 01\s+(\d+:\d+:\d+)', line)
+            if match:
+                current_track['start_ms'] = parse_cue_time(match.group(1))
+
+    # Don't forget the last track (if it has a valid timestamp)
+    if current_track and current_track.get('start_ms', 0) > 0:
+        chapters.append(current_track)
+
+    # Sort chapters by start time
+    chapters.sort(key=lambda x: x.get('start_ms', 0))
+
+    # Generate FFmpeg chapters format
+    output = [";FFMETADATA1"]
+
+    for i, chapter in enumerate(chapters):
+        start_ms = chapter.get('start_ms', 0)
+
+        # End time is start of next chapter, or duration if last chapter
+        if i + 1 < len(chapters):
+            end_ms = chapters[i + 1].get('start_ms', start_ms + 1000)
+        else:
+            # Use provided duration or add 1 hour for last chapter
+            end_ms = duration_ms if duration_ms else start_ms + 3600000
+
+        title = chapter.get('title', f'Track {i+1}')
+        performer = chapter.get('performer', '')
+
+        if performer:
+            title = f"{title} - {performer}"
+
+        output.append("")
+        output.append("[CHAPTER]")
+        output.append("TIMEBASE=1/1000")
+        output.append(f"START={start_ms}")
+        output.append(f"END={end_ms}")
+        output.append(f"title={title}")
+
+    return '\n'.join(output)
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__, file=sys.stderr)
+        sys.exit(1)
+
+    cue_path = sys.argv[1]
+
+    try:
+        with open(cue_path, 'r') as f:
+            cue_content = f.read()
+    except FileNotFoundError:
+        print(f"Error: File not found: {cue_path}", file=sys.stderr)
+        sys.exit(1)
+    except IOError as e:
+        print(f"Error reading file: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    duration_ms = int(sys.argv[2]) if len(sys.argv) > 2 else None
+
+    print(convert_cue_to_ffchapters(cue_content, duration_ms))
+
+if __name__ == '__main__':
+    main()
