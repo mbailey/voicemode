@@ -23,6 +23,8 @@ CHAPTERS_DIR="${HOME}/.voicemode/chapters"
 DATA_DIR="${HOME}/.voicemode/dj"
 HISTORY_FILE="${DATA_DIR}/history.json"
 FAVORITES_FILE="${DATA_DIR}/favorites.json"
+MFP_AUDIO_DIR="${HOME}/.voicemode/audio/podcasts/music-for-programming"
+MFP_EPISODES_JSON="${HOME}/Audio/podcasts/music-for-programming/episodes.json"
 
 # Ensure data directory exists
 init_data_dir() {
@@ -111,6 +113,90 @@ cmd_play() {
     fi
 }
 
+# Start mpv with stream recording (for caching)
+cmd_play_and_cache() {
+    check_mpv
+
+    local source=""
+    local cache_file=""
+    local chapters_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --chapters)
+                chapters_file="$2"
+                shift 2
+                ;;
+            *)
+                if [[ -z "$source" ]]; then
+                    source="$1"
+                else
+                    cache_file="$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$source" || -z "$cache_file" ]]; then
+        echo "Error: cmd_play_and_cache requires source and cache_file"
+        exit 1
+    fi
+
+    # Stop existing playback
+    if is_running; then
+        send_cmd '{"command": ["quit"]}' > /dev/null 2>&1 || true
+        sleep 0.5
+    fi
+
+    # Build mpv command
+    local mpv_args=(
+        --no-video
+        --input-ipc-server="$SOCKET"
+        --stream-record="$cache_file"
+    )
+
+    if [[ -n "$chapters_file" && -f "$chapters_file" ]]; then
+        mpv_args+=(--chapters-file="$chapters_file")
+    fi
+
+    # Start mpv in background
+    echo "Caching to: $cache_file"
+    mpv "${mpv_args[@]}" "$source" &> /dev/null &
+
+    echo "Started playback: $source"
+    if [[ -n "$chapters_file" ]]; then
+        echo "Chapters loaded from: $chapters_file"
+    fi
+}
+
+# Get MFP episode info from episodes.json
+get_mfp_episode_info() {
+    local episode="$1"
+
+    if [[ ! -f "$MFP_EPISODES_JSON" ]]; then
+        echo ""
+        return
+    fi
+
+    python3 << PYTHON
+import json
+from pathlib import Path
+
+try:
+    data = json.loads(Path("$MFP_EPISODES_JSON").read_text())
+    episodes = data.get("episodes", [])
+    for ep in episodes:
+        if ep.get("number") == $episode:
+            url = ep.get("enclosure", {}).get("url", "")
+            title = ep.get("title", "")
+            print(f"{url}|{title}")
+            break
+except Exception:
+    pass
+PYTHON
+}
+
 # Play Music For Programming episode
 cmd_mfp() {
     local episode="$1"
@@ -120,28 +206,66 @@ cmd_mfp() {
         exit 1
     fi
 
-    # Format episode number with zero padding if needed
-    local url="${MFP_BASE_URL}/music_for_programming_${episode}-*.mp3"
-
-    # Try to find the actual filename (they have curator names)
-    # For now, we'll construct based on known patterns
-    # Episode 76 = material_object
-    local stream_url="${MFP_BASE_URL}/music_for_programming_${episode}-material_object.mp3"
+    # Ensure audio directory exists
+    mkdir -p "$MFP_AUDIO_DIR"
+    mkdir -p "$CHAPTERS_DIR"
 
     # Check for local chapters file
     local chapters_file="${CHAPTERS_DIR}/mfp_${episode}.txt"
 
-    mkdir -p "$CHAPTERS_DIR"
+    # Check for local audio file (multiple possible locations)
+    local padded_ep=$(printf "%03d" "$episode")
+    local local_file=""
 
-    # Record in history
-    record_history "mfp" "$episode" "$stream_url"
+    # Check ~/.voicemode/audio location
+    local voicemode_file=$(find "$MFP_AUDIO_DIR" -maxdepth 1 -name "${padded_ep}_*.mp3" 2>/dev/null | head -1)
 
-    if [[ -f "$chapters_file" ]]; then
-        cmd_play "$stream_url" --chapters "$chapters_file"
+    # Check ~/Audio/podcasts location
+    local audio_file=$(find "${HOME}/Audio/podcasts/music-for-programming" -maxdepth 1 -name "${padded_ep}_*.mp3" 2>/dev/null | head -1)
+
+    if [[ -n "$voicemode_file" && -f "$voicemode_file" ]]; then
+        local_file="$voicemode_file"
+        echo "Playing local file: $(basename "$local_file")"
+    elif [[ -n "$audio_file" && -f "$audio_file" ]]; then
+        local_file="$audio_file"
+        echo "Playing local file: $(basename "$local_file")"
+    fi
+
+    if [[ -n "$local_file" ]]; then
+        # Play local file
+        record_history "mfp" "$episode" "$local_file"
+
+        if [[ -f "$chapters_file" ]]; then
+            cmd_play "$local_file" --chapters "$chapters_file"
+        else
+            echo "Note: No chapters file. Generate with: audio mfp chapters $episode"
+            cmd_play "$local_file"
+        fi
     else
-        echo "Note: No chapters file found at $chapters_file"
-        echo "Playing without chapter metadata..."
-        cmd_play "$stream_url"
+        # Stream from web (with caching)
+        local ep_info=$(get_mfp_episode_info "$episode")
+
+        if [[ -n "$ep_info" ]]; then
+            local stream_url=$(echo "$ep_info" | cut -d'|' -f1)
+            local title=$(echo "$ep_info" | cut -d'|' -f2)
+            echo "Streaming: $title"
+        else
+            # Fallback URL pattern
+            local stream_url="${MFP_BASE_URL}/music_for_programming_${episode}-unknown.mp3"
+            echo "Note: Episode info not found, trying generic URL"
+        fi
+
+        record_history "mfp" "$episode" "$stream_url"
+
+        # Cache the stream for future playback
+        local cache_file="${MFP_AUDIO_DIR}/${padded_ep}_Episode_${episode}.mp3"
+
+        if [[ -f "$chapters_file" ]]; then
+            cmd_play_and_cache "$stream_url" "$cache_file" --chapters "$chapters_file"
+        else
+            echo "Note: No chapters file. Generate with: audio mfp chapters $episode"
+            cmd_play_and_cache "$stream_url" "$cache_file"
+        fi
     fi
 }
 
