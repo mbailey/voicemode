@@ -486,6 +486,11 @@ case "${1:-}" in
         shift
         cmd_favorite "$@"
         ;;
+    library)
+        # Delegate to mpv-dj-library script
+        shift
+        exec "$(dirname "$0")/mpv-dj-library" "$@"
+        ;;
     *)
         echo "mpv-dj - Background music for VoiceMode sessions"
         echo ""
@@ -501,6 +506,7 @@ case "${1:-}" in
         echo "  mpv-dj stop                                  Stop playback"
         echo "  mpv-dj history [limit]                       Show play history"
         echo "  mpv-dj favorite [add|list|remove <idx>]      Manage favorites"
+        echo "  mpv-dj library <command>                     Music library (scan, search, play)"
         echo "  mpv-dj raw '<json>'                          Send raw IPC command"
         ;;
 esac
