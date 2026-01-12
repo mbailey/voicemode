@@ -2,6 +2,16 @@
 
 Background music control during VoiceMode sessions, powered by mpv with IPC.
 
+## Scripts
+
+DJ Mode scripts are located in `skills/voicemode/bin/`:
+
+| Script | Description |
+|--------|-------------|
+| `mpv-dj` | Main DJ control interface |
+| `mfp-rss-helper` | RSS feed helper for Music For Programming |
+| `cue-to-ffmeta` | Convert CUE files to FFmpeg chapter format |
+
 ## Quick Start
 
 ```bash
