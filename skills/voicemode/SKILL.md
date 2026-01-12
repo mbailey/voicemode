@@ -125,6 +125,8 @@ mpv-dj next             # Skip to next track
 mpv-dj stop             # Stop playback
 ```
 
+**Configuration:** Set `VOICEMODE_DJ_VOLUME` in `~/.voicemode/voicemode.env` to customize startup volume (default: 50%).
+
 See [DJ Mode docs](docs/dj-mode/README.md) for full documentation.
 
 ## CLI Cheat Sheet
