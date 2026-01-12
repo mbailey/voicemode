@@ -30,6 +30,10 @@ DATA_DIR="${HOME}/.voicemode/dj"
 HISTORY_FILE="${DATA_DIR}/history.json"
 FAVORITES_FILE="${DATA_DIR}/favorites.json"
 
+# Socket wait configuration
+SOCKET_TIMEOUT="${MPV_SOCKET_TIMEOUT:-10}"      # Max wait time in seconds
+SOCKET_RETRY_DELAY="${MPV_SOCKET_DELAY:-0.1}"   # Delay between retries (seconds)
+
 # Ensure data directory exists
 init_data_dir() {
     mkdir -p "$DATA_DIR"
@@ -83,6 +87,24 @@ send_cmd() {
     echo "$1" | socat - "$SOCKET"
 }
 
+# Wait for mpv socket to become ready
+# Returns: 0 on success, 1 on timeout
+wait_for_socket() {
+    local max_attempts=$((SOCKET_TIMEOUT * 10))  # 10 attempts per second
+    local attempt=0
+
+    while [[ $attempt -lt $max_attempts ]]; do
+        if is_running; then
+            return 0
+        fi
+        sleep "$SOCKET_RETRY_DELAY"
+        ((attempt++))
+    done
+
+    echo "Error: mpv socket not ready after ${SOCKET_TIMEOUT}s" >&2
+    return 1
+}
+
 # Start mpv with IPC socket
 cmd_play() {
     check_mpv
@@ -127,6 +149,12 @@ cmd_play() {
 
     # Start mpv in background
     mpv "${mpv_args[@]}" "$source" &> /dev/null &
+
+    # Wait for socket to be ready
+    if ! wait_for_socket; then
+        echo "Failed to start mpv - socket not ready"
+        exit 1
+    fi
 
     echo "Started playback: $source"
     if [[ -n "$chapters_file" ]]; then

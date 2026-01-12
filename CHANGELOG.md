@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Reliable mpv-dj Startup** (VM-372)
+  - Added socket wait/retry pattern to handle race condition between mpv start and socket availability
+  - Commands now wait for the IPC socket to be ready before reporting success
+  - Configurable timeout via `MPV_SOCKET_TIMEOUT` (default: 10 seconds)
+  - Configurable retry delay via `MPV_SOCKET_DELAY` (default: 0.1 seconds)
+  - Clear error message if socket doesn't become available: "Error: mpv socket not ready after Xs"
+
 ### Removed
 
 - **LiveKit Support** (VM-353)
