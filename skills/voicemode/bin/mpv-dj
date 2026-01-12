@@ -24,7 +24,7 @@ CONFIG_FILE="${HOME}/.voicemode/voicemode.env"
 
 SOCKET="/tmp/voicemode-mpv.sock"
 MFP_BASE_URL="https://datashat.net"
-CHAPTERS_DIR="${HOME}/.voicemode/chapters"
+MFP_DIR="${HOME}/.voicemode/music-for-programming"
 DATA_DIR="${HOME}/.voicemode/dj"
 HISTORY_FILE="${DATA_DIR}/history.json"
 FAVORITES_FILE="${DATA_DIR}/favorites.json"
@@ -129,6 +129,7 @@ cmd_mfp() {
     # Get the correct URL from RSS feed via helper script
     local helper_script="$(dirname "$0")/mfp-rss-helper"
     local stream_url
+    local filename_base
 
     if [[ ! -x "$helper_script" ]]; then
         echo "Error: mfp-rss-helper not found at $helper_script"
@@ -142,10 +143,18 @@ cmd_mfp() {
         exit 1
     fi
 
-    # Check for local chapters file
-    local chapters_file="${CHAPTERS_DIR}/mfp_${episode}.txt"
+    # Get the RSS-based filename for chapter file lookup
+    filename_base=$("$helper_script" filename "$episode")
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to get filename for episode $episode"
+        echo "$filename_base"
+        exit 1
+    fi
 
-    mkdir -p "$CHAPTERS_DIR"
+    # Check for local chapters file using RSS-based naming
+    local chapters_file="${MFP_DIR}/${filename_base}.ffmeta"
+
+    mkdir -p "$MFP_DIR"
 
     # Record in history
     record_history "mfp" "$episode" "$stream_url"

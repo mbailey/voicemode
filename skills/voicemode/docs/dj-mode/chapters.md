@@ -66,14 +66,18 @@ The converter handles this automatically.
 
 ## Chapter Storage
 
-Chapters are stored in `~/.voicemode/chapters/`:
+Music For Programming chapters are stored in `~/.voicemode/music-for-programming/`:
 
 ```
-~/.voicemode/chapters/
-├── mfp_76.txt      # Music For Programming episode 76
-├── mfp_75.txt      # Episode 75
-└── custom.txt      # User's custom chapters
+~/.voicemode/music-for-programming/
+├── music_for_programming_76-material_object.ffmeta   # Episode 76
+├── music_for_programming_49-julien_mier.ffmeta       # Episode 49
+└── ...
 ```
+
+**Naming Convention:** Chapter files are named to match the RSS MP3 filename exactly (with `.ffmeta` extension instead of `.mp3`). This ensures automatic pairing with audio files.
+
+Use `mfp-rss-helper filename <episode>` to get the correct filename base for any episode.
 
 ## Creating Chapters from Scratch
 
