@@ -125,13 +125,21 @@ cmd_mfp() {
         exit 1
     fi
 
-    # Format episode number with zero padding if needed
-    local url="${MFP_BASE_URL}/music_for_programming_${episode}-*.mp3"
+    # Get the correct URL from RSS feed via helper script
+    local helper_script="$(dirname "$0")/mfp-rss-helper"
+    local stream_url
 
-    # Try to find the actual filename (they have curator names)
-    # For now, we'll construct based on known patterns
-    # Episode 76 = material_object
-    local stream_url="${MFP_BASE_URL}/music_for_programming_${episode}-material_object.mp3"
+    if [[ ! -x "$helper_script" ]]; then
+        echo "Error: mfp-rss-helper not found at $helper_script"
+        exit 1
+    fi
+
+    stream_url=$("$helper_script" "$episode")
+    if [[ $? -ne 0 ]]; then
+        echo "Error: Failed to get URL for episode $episode"
+        echo "$stream_url"
+        exit 1
+    fi
 
     # Check for local chapters file
     local chapters_file="${CHAPTERS_DIR}/mfp_${episode}.txt"

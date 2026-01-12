@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.10"
+# ///
+"""
+mfp-rss-helper - Music For Programming RSS helper
+
+Fetches and caches the MFP RSS feed, providing episode URLs by number.
+Uses smart caching: tries to fetch fresh data, falls back to cache if offline.
+
+Usage:
+    mfp-rss-helper <episode-number>    Get URL for episode
+    mfp-rss-helper --list              List all episodes
+    mfp-rss-helper --refresh           Force refresh cache
+"""
+
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from urllib.request import urlopen
+from urllib.error import URLError
+import re
+
+RSS_URL = "https://musicforprogramming.net/rss.xml"
+CACHE_DIR = Path.home() / ".voicemode" / "music-for-programming"
+CACHE_FILE = CACHE_DIR / "rss.xml"
+
+
+def fetch_rss(force_refresh: bool = False) -> str:
+    """Fetch RSS feed with smart caching.
+
+    Strategy:
+    1. Try to fetch fresh RSS from the network
+    2. If successful, update the cache
+    3. If network fails and cache exists, use cache
+    4. If network fails and no cache, raise error
+    """
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not force_refresh:
+        # Try network fetch first
+        try:
+            with urlopen(RSS_URL, timeout=10) as response:
+                content = response.read().decode("utf-8")
+                # Update cache on successful fetch
+                CACHE_FILE.write_text(content)
+                return content
+        except (URLError, TimeoutError):
+            # Network failed, try cache
+            if CACHE_FILE.exists():
+                return CACHE_FILE.read_text()
+            raise RuntimeError(
+                f"Cannot fetch RSS feed and no cache exists at {CACHE_FILE}"
+            )
+    else:
+        # Force refresh - must succeed
+        try:
+            with urlopen(RSS_URL, timeout=10) as response:
+                content = response.read().decode("utf-8")
+                CACHE_FILE.write_text(content)
+                return content
+        except (URLError, TimeoutError) as e:
+            raise RuntimeError(f"Cannot fetch RSS feed: {e}")
+
+
+def parse_episodes(rss_content: str) -> dict[int, dict]:
+    """Parse RSS content and return dict of episode_num -> episode info."""
+    episodes = {}
+
+    root = ET.fromstring(rss_content)
+
+    for item in root.findall(".//item"):
+        enclosure = item.find("enclosure")
+        if enclosure is None:
+            continue
+
+        url = enclosure.get("url", "")
+        title = item.findtext("title", "")
+
+        # Extract episode number from URL
+        # Pattern: music_for_programming_76-material_object.mp3
+        match = re.search(r"music_for_programming_(\d+)-", url)
+        if match:
+            episode_num = int(match.group(1))
+            episodes[episode_num] = {
+                "url": url,
+                "title": title,
+                "length": enclosure.get("length", ""),
+            }
+
+    return episodes
+
+
+def get_episode_url(episode_num: int) -> str:
+    """Get URL for a specific episode number."""
+    rss_content = fetch_rss()
+    episodes = parse_episodes(rss_content)
+
+    if episode_num not in episodes:
+        available = sorted(episodes.keys())
+        raise ValueError(
+            f"Episode {episode_num} not found. "
+            f"Available: {available[0]}-{available[-1]}"
+        )
+
+    return episodes[episode_num]["url"]
+
+
+def list_episodes() -> None:
+    """List all available episodes."""
+    rss_content = fetch_rss()
+    episodes = parse_episodes(rss_content)
+
+    print(f"Music For Programming - {len(episodes)} episodes available\n")
+
+    for num in sorted(episodes.keys()):
+        ep = episodes[num]
+        # Extract curator name from URL
+        match = re.search(r"music_for_programming_\d+-(.+)\.mp3", ep["url"])
+        curator = match.group(1).replace("_", " ") if match else "unknown"
+        print(f"  {num:3d}  {curator}")
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print(__doc__.strip())
+        return 1
+
+    arg = sys.argv[1]
+
+    if arg == "--list":
+        list_episodes()
+        return 0
+
+    if arg == "--refresh":
+        try:
+            fetch_rss(force_refresh=True)
+            print(f"Cache refreshed: {CACHE_FILE}")
+            return 0
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    if arg in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+
+    # Assume it's an episode number
+    try:
+        episode_num = int(arg)
+    except ValueError:
+        print(f"Error: Invalid episode number: {arg}", file=sys.stderr)
+        return 1
+
+    try:
+        url = get_episode_url(episode_num)
+        print(url)
+        return 0
+    except (RuntimeError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

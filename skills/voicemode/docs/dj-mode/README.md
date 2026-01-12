@@ -58,6 +58,7 @@ The DJ starts at 50% volume by default, which works well during voice conversati
 - HTTP streaming with chapter navigation
 - CUE to FFmpeg chapters conversion
 - Music For Programming episode playback
+- RSS-based episode URL lookup with offline caching
 - Volume, pause, skip, status commands
 - Configurable default volume (VOICEMODE_DJ_VOLUME)
 - IPC socket for programmatic control
