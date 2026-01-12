@@ -10,8 +10,15 @@ Uses smart caching: tries to fetch fresh data, falls back to cache if offline.
 
 Usage:
     mfp-rss-helper <episode-number>    Get URL for episode
-    mfp-rss-helper --list              List all episodes
+    mfp-rss-helper --list              List all episodes (deprecated, use 'list')
     mfp-rss-helper --refresh           Force refresh cache
+    mfp-rss-helper list [options]      List episodes with chapter/local status
+
+List options:
+    --format=human|tsv    Output format (default: human)
+    --urls                Include download URLs
+    --all                 Show all episodes (default: only those with chapters)
+    --verbose             Show CUE/FFmeta breakdown separately
 """
 
 import sys
@@ -20,6 +27,7 @@ from pathlib import Path
 from urllib.request import urlopen
 from urllib.error import URLError
 import re
+import argparse
 
 RSS_URL = "https://musicforprogramming.net/rss.xml"
 CACHE_DIR = Path.home() / ".voicemode" / "music-for-programming"
@@ -107,7 +115,7 @@ def get_episode_url(episode_num: int) -> str:
 
 
 def list_episodes() -> None:
-    """List all available episodes."""
+    """List all available episodes (deprecated)."""
     rss_content = fetch_rss()
     episodes = parse_episodes(rss_content)
 
@@ -121,6 +129,207 @@ def list_episodes() -> None:
         print(f"  {num:3d}  {curator}")
 
 
+def get_episode_file_prefix(episode_num: int, curator: str) -> str:
+    """Get the file prefix for chapter/audio files.
+
+    Format: {episode_num:03d}_Episode_{episode_num}_{Curator}
+    Example: 049_Episode_49_Julien_Mier
+    """
+    # Convert curator to title case and replace spaces with underscores
+    curator_formatted = curator.replace(" ", "_").title()
+    # Handle special characters (e.g., [in]anace -> Inanace)
+    curator_formatted = re.sub(r'[\[\]]', '', curator_formatted)
+    return f"{episode_num:03d}_Episode_{episode_num}_{curator_formatted}"
+
+
+def check_chapter_files(episode_num: int, curator: str) -> dict:
+    """Check for local CUE and FFmeta chapter files.
+
+    Returns dict with keys: has_cue, has_ffmeta, has_chapters (both exist)
+    """
+    prefix = get_episode_file_prefix(episode_num, curator)
+    cue_file = CACHE_DIR / f"{prefix}.cue"
+    ffmeta_file = CACHE_DIR / f"{prefix}.ffmeta"
+
+    has_cue = cue_file.exists()
+    has_ffmeta = ffmeta_file.exists()
+
+    return {
+        "has_cue": has_cue,
+        "has_ffmeta": has_ffmeta,
+        "has_chapters": has_cue and has_ffmeta,
+    }
+
+
+def check_local_mp3(episode_num: int, curator: str) -> bool:
+    """Check if local MP3 file exists."""
+    prefix = get_episode_file_prefix(episode_num, curator)
+    mp3_file = CACHE_DIR / f"{prefix}.mp3"
+    return mp3_file.exists()
+
+
+def list_episodes_detailed(
+    format_type: str = "human",
+    include_urls: bool = False,
+    show_all: bool = False,
+    verbose: bool = False,
+) -> None:
+    """List episodes with chapter and local status.
+
+    Args:
+        format_type: "human" for columnized output, "tsv" for machine-readable
+        include_urls: Include download URLs in output
+        show_all: Show all episodes (default: only those with chapters)
+        verbose: Show CUE/FFmeta breakdown separately
+    """
+    rss_content = fetch_rss()
+    episodes = parse_episodes(rss_content)
+
+    # Build episode list with status
+    episode_list = []
+    for num in sorted(episodes.keys(), reverse=True):
+        ep = episodes[num]
+
+        # Extract curator name from URL
+        match = re.search(r"music_for_programming_\d+-(.+)\.mp3", ep["url"])
+        curator = match.group(1).replace("_", " ") if match else "unknown"
+
+        # Check local status
+        chapter_info = check_chapter_files(num, curator)
+        has_mp3 = check_local_mp3(num, curator)
+
+        episode_list.append({
+            "number": num,
+            "curator": curator,
+            "url": ep["url"],
+            "has_chapters": chapter_info["has_chapters"],
+            "has_cue": chapter_info["has_cue"],
+            "has_ffmeta": chapter_info["has_ffmeta"],
+            "has_mp3": has_mp3,
+        })
+
+    # Filter if not showing all
+    if not show_all:
+        episode_list = [ep for ep in episode_list if ep["has_chapters"]]
+
+    if format_type == "tsv":
+        _output_tsv(episode_list, include_urls, verbose)
+    else:
+        _output_human(episode_list, include_urls, verbose, show_all)
+
+
+def _output_human(
+    episodes: list,
+    include_urls: bool,
+    verbose: bool,
+    show_all: bool,
+) -> None:
+    """Output episodes in human-readable columnized format."""
+    if not episodes:
+        if show_all:
+            print("No episodes found in RSS feed.")
+        else:
+            print("No episodes with complete chapter files.")
+            print("Use --all to see all episodes from RSS feed.")
+        return
+
+    title = "All Episodes" if show_all else "Available Episodes"
+    print(f"Music For Programming - {title}")
+    print("=" * (25 + len(title)))
+
+    # Header
+    if verbose:
+        header = f"{'#':>3}  {'Curator':<20}  {'CUE':>3}  {'FFm':>3}  {'MP3':>3}"
+    else:
+        header = f"{'#':>3}  {'Curator':<20}  {'Ch':>3}  {'MP3':>3}"
+
+    if include_urls:
+        header += "  URL"
+
+    print(header)
+    print("-" * len(header) + ("-" * 50 if include_urls else ""))
+
+    for ep in episodes:
+        num = ep["number"]
+        curator = ep["curator"][:20]  # Truncate long names
+
+        if verbose:
+            cue = "yes" if ep["has_cue"] else " - "
+            ffm = "yes" if ep["has_ffmeta"] else " - "
+            row = f"{num:3d}  {curator:<20}  {cue:>3}  {ffm:>3}"
+        else:
+            chapters = "yes" if ep["has_chapters"] else " - "
+            row = f"{num:3d}  {curator:<20}  {chapters:>3}"
+
+        mp3 = "yes" if ep["has_mp3"] else " - "
+        row += f"  {mp3:>3}"
+
+        if include_urls:
+            row += f"  {ep['url']}"
+
+        print(row)
+
+
+def _output_tsv(episodes: list, include_urls: bool, verbose: bool) -> None:
+    """Output episodes in TSV format for machine parsing."""
+    for ep in episodes:
+        fields = [
+            str(ep["number"]),
+            ep["curator"],
+        ]
+
+        if verbose:
+            fields.append("cue" if ep["has_cue"] else "-")
+            fields.append("ffmeta" if ep["has_ffmeta"] else "-")
+        else:
+            fields.append("chapters" if ep["has_chapters"] else "-")
+
+        fields.append("local" if ep["has_mp3"] else "-")
+
+        if include_urls:
+            fields.append(ep["url"])
+
+        print("\t".join(fields))
+
+
+def parse_list_args(args: list[str]) -> dict:
+    """Parse arguments for the list action."""
+    parser = argparse.ArgumentParser(
+        prog="mfp-rss-helper list",
+        description="List Music For Programming episodes with status",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["human", "tsv"],
+        default="human",
+        help="Output format (default: human)",
+    )
+    parser.add_argument(
+        "--urls",
+        action="store_true",
+        help="Include download URLs in output",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="show_all",
+        help="Show all episodes (default: only those with chapters)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show CUE/FFmeta breakdown separately",
+    )
+
+    parsed = parser.parse_args(args)
+    return {
+        "format_type": parsed.format,
+        "include_urls": parsed.urls,
+        "show_all": parsed.show_all,
+        "verbose": parsed.verbose,
+    }
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         print(__doc__.strip())
@@ -128,6 +337,17 @@ def main() -> int:
 
     arg = sys.argv[1]
 
+    # New 'list' action with detailed output
+    if arg == "list":
+        try:
+            opts = parse_list_args(sys.argv[2:])
+            list_episodes_detailed(**opts)
+            return 0
+        except SystemExit as e:
+            # argparse called sys.exit() - propagate the exit code
+            return e.code if isinstance(e.code, int) else 1
+
+    # Deprecated --list for backwards compatibility
     if arg == "--list":
         list_episodes()
         return 0
