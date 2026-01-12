@@ -93,6 +93,104 @@ logger = logging.getLogger("voicemode")
 logger.info(f"Module loaded with DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}")
 
 
+# DJ Ducking Configuration
+DJ_SOCKET_PATH = "/tmp/voicemode-mpv.sock"
+DJ_VOLUME_DUCK_AMOUNT = int(os.environ.get("VOICEMODE_DJ_DUCK_AMOUNT", "20"))  # Volume reduction during TTS
+
+
+def _dj_command(cmd: str) -> Optional[str]:
+    """Send a command to mpv-dj via IPC socket.
+
+    Args:
+        cmd: JSON command to send (e.g., '{ "command": ["get_property", "volume"] }')
+
+    Returns:
+        Response string from mpv, or None if DJ not running
+    """
+    import subprocess
+    import json
+
+    if not os.path.exists(DJ_SOCKET_PATH):
+        return None
+
+    try:
+        result = subprocess.run(
+            ["socat", "-", DJ_SOCKET_PATH],
+            input=cmd + "\n",
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def get_dj_volume() -> Optional[float]:
+    """Get current DJ volume level.
+
+    Returns:
+        Current volume (0-100) or None if DJ not running
+    """
+    import json
+    response = _dj_command('{ "command": ["get_property", "volume"] }')
+    if response:
+        try:
+            data = json.loads(response)
+            if "data" in data:
+                return float(data["data"])
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+    return None
+
+
+def set_dj_volume(volume: float) -> bool:
+    """Set DJ volume level.
+
+    Args:
+        volume: Volume level (0-100)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    import json
+    volume = max(0, min(100, volume))  # Clamp to valid range
+    response = _dj_command(f'{{ "command": ["set_property", "volume", {volume}] }}')
+    if response:
+        try:
+            data = json.loads(response)
+            return data.get("error") == "success"
+        except json.JSONDecodeError:
+            pass
+    return False
+
+
+class DJDucker:
+    """Context manager for ducking DJ volume during TTS playback."""
+
+    def __init__(self, duck_amount: int = None):
+        self.duck_amount = duck_amount if duck_amount is not None else DJ_VOLUME_DUCK_AMOUNT
+        self.original_volume: Optional[float] = None
+        self.ducked = False
+
+    def __enter__(self):
+        self.original_volume = get_dj_volume()
+        if self.original_volume is not None:
+            ducked_volume = max(0, self.original_volume - self.duck_amount)
+            if set_dj_volume(ducked_volume):
+                self.ducked = True
+                logger.debug(f"DJ ducked: {self.original_volume:.0f}% -> {ducked_volume:.0f}%")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.ducked and self.original_volume is not None:
+            if set_dj_volume(self.original_volume):
+                logger.debug(f"DJ restored: {self.original_volume:.0f}%")
+        return False  # Don't suppress exceptions
+
+
 def should_repeat(text: str) -> bool:
     """
     Check if the transcribed text ends with a repeat phrase.
@@ -1166,15 +1264,17 @@ consult the MCP resources listed above.
                     }
                     tts_config = {'provider': 'no-op', 'voice': 'none'}
                 else:
-                    tts_success, tts_metrics, tts_config = await text_to_speech_with_failover(
-                        message=message,
-                        voice=voice,
-                        model=tts_model,
-                        instructions=tts_instructions,
-                        audio_format=audio_format,
-                        initial_provider=tts_provider,
-                        speed=speed
-                    )
+                    # Duck DJ volume during TTS playback
+                    with DJDucker():
+                        tts_success, tts_metrics, tts_config = await text_to_speech_with_failover(
+                            message=message,
+                            voice=voice,
+                            model=tts_model,
+                            instructions=tts_instructions,
+                            audio_format=audio_format,
+                            initial_provider=tts_provider,
+                            speed=speed
+                        )
                 
                 # Add TTS sub-metrics
                 if tts_metrics:
@@ -1454,6 +1554,22 @@ consult the MCP resources listed above.
                             except Exception as e:
                                 logger.warning(f"Failed to replay cached audio: {e}. Regenerating...")
                                 # Fall back to regenerating TTS
+                                with DJDucker():
+                                    tts_success, new_tts_metrics, _ = await text_to_speech_with_failover(
+                                        message=message,
+                                        voice=voice,
+                                        model=tts_model,
+                                        instructions=tts_instructions,
+                                        audio_format=audio_format,
+                                        initial_provider=tts_provider,
+                                        speed=speed
+                                    )
+                                if not tts_success:
+                                    logger.error("Failed to replay audio via TTS regeneration")
+                        else:
+                            # No cached audio, regenerate TTS
+                            logger.info("No cached audio available, regenerating...")
+                            with DJDucker():
                                 tts_success, new_tts_metrics, _ = await text_to_speech_with_failover(
                                     message=message,
                                     voice=voice,
@@ -1463,20 +1579,6 @@ consult the MCP resources listed above.
                                     initial_provider=tts_provider,
                                     speed=speed
                                 )
-                                if not tts_success:
-                                    logger.error("Failed to replay audio via TTS regeneration")
-                        else:
-                            # No cached audio, regenerate TTS
-                            logger.info("No cached audio available, regenerating...")
-                            tts_success, new_tts_metrics, _ = await text_to_speech_with_failover(
-                                message=message,
-                                voice=voice,
-                                model=tts_model,
-                                instructions=tts_instructions,
-                                audio_format=audio_format,
-                                initial_provider=tts_provider,
-                                speed=speed
-                            )
                             if not tts_success:
                                 logger.error("Failed to replay audio via TTS regeneration")
 
