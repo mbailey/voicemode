@@ -22,15 +22,17 @@ All MFP files live in `~/.voicemode/music-for-programming/`:
 
 ```
 ~/.voicemode/music-for-programming/
-├── rss.xml                              # Cached RSS feed (auto-updated)
-├── 049_Episode_49_Julien_Mier.mp3      # Audio (downloaded or cached)
-├── 049_Episode_49_Julien_Mier.cue      # CUE sheet (for local playback)
-├── 049_Episode_49_Julien_Mier.ffmeta   # FFMETADATA chapters (for streaming)
-├── 076_Episode_76_Material_Object.mp3
-├── 076_Episode_76_Material_Object.cue
-├── 076_Episode_76_Material_Object.ffmeta
+├── rss.xml                                     # Cached RSS feed (auto-updated)
+├── music_for_programming_49-julien_mier.mp3    # Audio (downloaded or cached)
+├── music_for_programming_49-julien_mier.cue    # CUE sheet (for local playback)
+├── music_for_programming_49-julien_mier.ffmeta # FFMETADATA chapters (for streaming)
+├── music_for_programming_76-material_object.mp3
+├── music_for_programming_76-material_object.cue
+├── music_for_programming_76-material_object.ffmeta
 └── ...
 ```
+
+**Naming Convention:** Files are named to match the RSS MP3 filename exactly (minus extension), ensuring automatic pairing of audio with chapter metadata.
 
 **File Types:**
 - `rss.xml` - Cached RSS feed for episode URL lookups (see [RSS Caching](#rss-caching))
@@ -73,13 +75,16 @@ If you're offline but have a cached RSS feed, `mpv-dj mfp` will still work:
 
 ```bash
 # Get URL for an episode
-mfp-rss-helper 76                  # Returns full URL for episode 76
+mfp-rss-helper url 76              # Returns full URL for episode 76
+
+# Get RSS-based filename (without extension)
+mfp-rss-helper filename 76         # Returns: music_for_programming_76-material_object
 
 # List all available episodes
-mfp-rss-helper --list              # Shows episode numbers and curators
+mfp-rss-helper list                # Shows episode numbers and curators
 
 # Force refresh the cache
-mfp-rss-helper --refresh           # Updates rss.xml from network
+mfp-rss-helper refresh             # Updates rss.xml from network
 ```
 
 ### Cache Location
