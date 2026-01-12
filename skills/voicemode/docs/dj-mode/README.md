@@ -41,6 +41,16 @@ mpv-dj stop      # Stop playback
 - [Installation](installation.md) - Setup mpv and dependencies
 - [IPC Reference](ipc.md) - Raw socket commands
 
+## Configuration
+
+Set default startup volume in `~/.voicemode/voicemode.env`:
+
+```bash
+VOICEMODE_DJ_VOLUME=50   # Default: 50%
+```
+
+The DJ starts at 50% volume by default, which works well during voice conversations.
+
 ## Features
 
 ### Available Now
@@ -49,6 +59,7 @@ mpv-dj stop      # Stop playback
 - CUE to FFmpeg chapters conversion
 - Music For Programming episode playback
 - Volume, pause, skip, status commands
+- Configurable default volume (VOICEMODE_DJ_VOLUME)
 - IPC socket for programmatic control
 - Play history tracking (last 100 sessions)
 - Favorites system (save/list/remove tracks)
