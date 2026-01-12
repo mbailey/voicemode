@@ -6,14 +6,14 @@
 
 ```bash
 # Play by episode number
-mpv-dj mfp 76    # Episode 76 (Material Object)
 mpv-dj mfp 49    # Episode 49 (Julien Mier)
+mpv-dj mfp 51    # Episode 51 (Mücha)
 ```
 
 The command:
 1. Checks for local cached audio in `~/.voicemode/music-for-programming/`
 2. If not cached, looks up the episode URL from the RSS feed via `mfp-rss-helper`
-3. Streams from the URL (e.g., `https://datashat.net/music_for_programming_76-material_object.mp3`)
+3. Streams from the URL (e.g., `https://datashat.net/music_for_programming_49-julien_mier.mp3`)
 4. Loads chapter metadata for track-level navigation
 
 ## File Structure
@@ -26,9 +26,9 @@ All MFP files live in `~/.voicemode/music-for-programming/`:
 ├── music_for_programming_49-julien_mier.mp3    # Audio (downloaded or cached)
 ├── music_for_programming_49-julien_mier.cue    # CUE sheet (for local playback)
 ├── music_for_programming_49-julien_mier.ffmeta # FFMETADATA chapters (for streaming)
-├── music_for_programming_76-material_object.mp3
-├── music_for_programming_76-material_object.cue
-├── music_for_programming_76-material_object.ffmeta
+├── music_for_programming_51-mücha.mp3
+├── music_for_programming_51-mücha.cue
+├── music_for_programming_51-mücha.ffmeta
 └── ...
 ```
 
@@ -46,7 +46,7 @@ All MFP files live in `~/.voicemode/music-for-programming/`:
 
 Music For Programming hosts audio at URLs that include the curator name:
 ```
-https://datashat.net/music_for_programming_76-material_object.mp3
+https://datashat.net/music_for_programming_49-julien_mier.mp3
 ```
 
 The episode number and curator name form the filename. Episodes are freely downloadable from the website.
@@ -75,10 +75,10 @@ If you're offline but have a cached RSS feed, `mpv-dj mfp` will still work:
 
 ```bash
 # Get URL for an episode
-mfp-rss-helper url 76              # Returns full URL for episode 76
+mfp-rss-helper url 49              # Returns full URL for episode 49
 
 # Get RSS-based filename (without extension)
-mfp-rss-helper filename 76         # Returns: music_for_programming_76-material_object
+mfp-rss-helper filename 49         # Returns: music_for_programming_49-julien_mier
 
 # List all available episodes
 mfp-rss-helper list                # Shows episode numbers and curators
@@ -141,7 +141,7 @@ See [chapters.md](chapters.md) for the chapter file format details.
 VoiceMode includes chapter files for select episodes in the package. These are automatically copied to your local directory when you first play an episode.
 
 **Available chapters:**
-- Episode 49, 51, 52, 70, 71, 74, 76
+- Episode 49, 51, 52, 70, 71, 74
 
 **How it works:**
 1. When you run `mpv-dj mfp 49` for the first time, the chapter file is copied from the package
@@ -223,13 +223,13 @@ The list command automatically detects terminal vs pipe:
 # Human format (in terminal)
 mpv-dj mfp list
 #  #  Curator               Ch  MP3
-# 76  material object      yes   -
 # 49  julien mier          yes  yes
+# 51  mücha                yes   -
 
 # TSV format (piped)
 mpv-dj mfp list | head -3
-# 76	material object	chapters	-
 # 49	julien mier	chapters	local
+# 51	mücha	chapters	-
 ```
 
 ### TSV Output Format for LLMs
@@ -238,7 +238,7 @@ When piped, output is tab-separated for easy parsing by AI assistants:
 
 | Column | Description | Values |
 |--------|-------------|--------|
-| 1 | Episode number | Integer (e.g., `76`) |
+| 1 | Episode number | Integer (e.g., `49`) |
 | 2 | Curator name | String (e.g., `julien mier`) |
 | 3 | Chapter status | `chapters` or `-` |
 | 4 | Local MP3 | `local` or `-` |
