@@ -48,6 +48,7 @@ mpv-dj stop      # Stop playback
 - HTTP streaming with chapter navigation
 - CUE to FFmpeg chapters conversion
 - Music For Programming episode playback
+- RSS-based episode URL lookup with offline caching
 - Volume, pause, skip, status commands
 - IPC socket for programmatic control
 - Play history tracking (last 100 sessions)

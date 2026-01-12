@@ -12,8 +12,9 @@ mpv-dj mfp 49    # Episode 49 (Julien Mier)
 
 The command:
 1. Checks for local cached audio in `~/.voicemode/music-for-programming/`
-2. If not cached, streams from `https://datashat.net/music_for_programming_{episode}-*.mp3`
-3. Loads chapter metadata for track-level navigation
+2. If not cached, looks up the episode URL from the RSS feed via `mfp-rss-helper`
+3. Streams from the URL (e.g., `https://datashat.net/music_for_programming_76-material_object.mp3`)
+4. Loads chapter metadata for track-level navigation
 
 ## File Structure
 
@@ -21,6 +22,7 @@ All MFP files live in `~/.voicemode/music-for-programming/`:
 
 ```
 ~/.voicemode/music-for-programming/
+├── rss.xml                              # Cached RSS feed (auto-updated)
 ├── 049_Episode_49_Julien_Mier.mp3      # Audio (downloaded or cached)
 ├── 049_Episode_49_Julien_Mier.cue      # CUE sheet (for local playback)
 ├── 049_Episode_49_Julien_Mier.ffmeta   # FFMETADATA chapters (for streaming)
@@ -31,6 +33,7 @@ All MFP files live in `~/.voicemode/music-for-programming/`:
 ```
 
 **File Types:**
+- `rss.xml` - Cached RSS feed for episode URL lookups (see [RSS Caching](#rss-caching))
 - `.mp3` - Audio file (downloaded by user or cached during streaming)
 - `.cue` - CUE sheet with track timestamps (for local mpv playback)
 - `.ffmeta` - FFMETADATA chapters (for HTTP streaming where CUE doesn't work)
@@ -39,12 +42,53 @@ All MFP files live in `~/.voicemode/music-for-programming/`:
 
 ## Episode URLs
 
-Music For Programming hosts audio at predictable URLs:
+Music For Programming hosts audio at URLs that include the curator name:
 ```
 https://datashat.net/music_for_programming_76-material_object.mp3
 ```
 
 The episode number and curator name form the filename. Episodes are freely downloadable from the website.
+
+Episode URLs are obtained dynamically from the MFP RSS feed using the `mfp-rss-helper` tool, which handles the lookup and caching automatically.
+
+## RSS Caching
+
+The `mfp-rss-helper` script fetches episode URLs from the official MFP RSS feed with smart caching for offline support.
+
+### How It Works
+
+1. **First run**: Fetches RSS feed from `musicforprogramming.net/rss.xml`
+2. **Caches to**: `~/.voicemode/music-for-programming/rss.xml`
+3. **Subsequent runs**: Tries fresh fetch, falls back to cache if offline
+4. **Episode lookup**: Parses RSS to find correct URL for any episode number
+
+### Offline Support
+
+If you're offline but have a cached RSS feed, `mpv-dj mfp` will still work:
+- Episode URL lookups use the cached `rss.xml`
+- Already-downloaded audio files play normally
+- Only fails if both network and cache are unavailable
+
+### Helper Commands
+
+```bash
+# Get URL for an episode
+mfp-rss-helper 76                  # Returns full URL for episode 76
+
+# List all available episodes
+mfp-rss-helper --list              # Shows episode numbers and curators
+
+# Force refresh the cache
+mfp-rss-helper --refresh           # Updates rss.xml from network
+```
+
+### Cache Location
+
+```
+~/.voicemode/music-for-programming/rss.xml
+```
+
+The cache is automatically created and updated. Delete it to force a fresh fetch on next use.
 
 ## Streaming vs Local
 
