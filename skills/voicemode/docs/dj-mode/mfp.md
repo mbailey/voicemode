@@ -140,18 +140,99 @@ Available chapters (Mike's favorites):
 
 More episodes can be added via community PRs.
 
+## Listing Episodes
+
+The `mfp list` command shows available episodes with their chapter and local file status.
+
+### Basic Usage
+
+```bash
+# Show episodes with complete chapter files (CUE + FFmeta)
+mpv-dj mfp list
+
+# Show all episodes from RSS feed
+mpv-dj mfp list --all
+
+# Show episode URLs for downloading
+mpv-dj mfp list --urls
+
+# Show CUE/FFmeta file status separately
+mpv-dj mfp list --verbose
+```
+
+### Output Formats
+
+The list command automatically detects terminal vs pipe:
+- **Terminal**: Human-readable columnized format
+- **Pipe/redirect**: TSV (tab-separated values) for scripting
+
+```bash
+# Human format (in terminal)
+mpv-dj mfp list
+#  #  Curator               Ch  MP3
+# 76  material object      yes   -
+# 49  julien mier          yes  yes
+
+# TSV format (piped)
+mpv-dj mfp list | head -3
+# 76	material object	chapters	-
+# 49	julien mier	chapters	local
+```
+
+### TSV Output Format for LLMs
+
+When piped, output is tab-separated for easy parsing by AI assistants:
+
+| Column | Description | Values |
+|--------|-------------|--------|
+| 1 | Episode number | Integer (e.g., `76`) |
+| 2 | Curator name | String (e.g., `julien mier`) |
+| 3 | Chapter status | `chapters` or `-` |
+| 4 | Local MP3 | `local` or `-` |
+| 5 | URL (with --urls) | Full download URL |
+
+**With `--verbose` flag**, column 3 splits into:
+| Column | Description | Values |
+|--------|-------------|--------|
+| 3 | CUE file | `cue` or `-` |
+| 4 | FFmeta file | `ffmeta` or `-` |
+| 5 | Local MP3 | `local` or `-` |
+
+**LLM Examples:**
+```bash
+# Find episodes with chapters ready to play
+mpv-dj mfp list | awk -F'\t' '$3=="chapters" {print $1, $2}'
+
+# Get download URL for episode 49
+mpv-dj mfp list --all --urls | awk -F'\t' '$1==49 {print $5}'
+
+# Count episodes with local MP3s
+mpv-dj mfp list --all | awk -F'\t' '$4=="local"' | wc -l
+```
+
+### Column Indicators
+
+| Indicator | Human Format | TSV Format | Meaning |
+|-----------|--------------|------------|---------|
+| Ch/chapters | `yes` / ` - ` | `chapters` / `-` | Both CUE and FFmeta files exist |
+| CUE | `yes` / ` - ` | `cue` / `-` | CUE file exists (--verbose) |
+| FFm | `yes` / ` - ` | `ffmeta` / `-` | FFmeta file exists (--verbose) |
+| MP3 | `yes` / ` - ` | `local` / `-` | Local audio file downloaded |
+
+**Note:** "Chapters" requires both CUE (for local playback) and FFmeta (for streaming) files. Use `--verbose` to see which files are missing.
+
 ## Episode Discovery
 
 ### Current
 - Request episodes by number: `mpv-dj mfp 49`
-- List available chapters: `ls ~/.voicemode/music-for-programming/*.cue`
+- List episodes with chapters: `mpv-dj mfp list`
+- List all episodes: `mpv-dj mfp list --all`
 - Search tracks: `grep "Boards of Canada" ~/.voicemode/music-for-programming/*.cue`
 
 ### Planned
 - **History tracking**: What episodes have been played
 - **Favorites**: Mark episodes you enjoyed
 - **Suggestions**: "Play something new" selects unplayed episodes
-- **Episode index**: Full catalog with curator names
 
 ## Collaboration Opportunity
 
