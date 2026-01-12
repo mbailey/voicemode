@@ -1,280 +1,210 @@
-# VM-369 Technical Specification: Local MFP Chapter Distribution
+# VM-372 Technical Specification: Socket Wait/Retry Pattern
 
 ## Overview
 
-This specification defines the implementation approach for distributing Music For Programming (MFP) chapter files via the VoiceMode package.
+This specification defines the implementation of a socket wait/retry pattern in `mpv-dj` to handle the race condition between starting mpv and the IPC socket becoming available.
 
-## Problem Statement
+## Design Decision
 
-Currently, when users run `mpv-dj mfp 49`:
-1. mpv-dj looks for chapters at `~/.voicemode/music-for-programming/music_for_programming_49-julien_mier.ffmeta`
-2. The file doesn't exist (no copy mechanism)
-3. User sees "Note: No chapters file found"
-4. Episode plays without chapter navigation
+**Strategy: Post-startup socket wait with configurable timeout**
 
-## Solution: On-Demand Copy with Sync Command
+Rationale:
+- Proven pattern from mpvc (battle-tested in production)
+- No new dependencies - reuses existing `is_running()` and `socat`
+- Non-blocking for normal operation (socket usually ready in <100ms)
+- Graceful degradation with clear error message on timeout
+- Environment variable configuration for edge cases
 
-### Chosen Approach
+## Components
 
-Implement **on-demand copy** in mpv-dj plus a dedicated `sync-chapters` subcommand:
+### 1. Configuration Variables
 
-1. **On-demand**: When mpv-dj plays an episode, check if local chapter file exists. If not, copy from plugin directory.
-2. **Sync command**: `mpv-dj mfp sync-chapters` to copy/update all chapter files with conflict handling.
-
-### Why This Approach
-
-| Option | Pros | Cons |
-|--------|------|------|
-| **Install hook** | Automatic | No hook mechanism in Claude Code plugins |
-| **On-demand copy** ✓ | Works with existing system, no extra step | First play slightly slower |
-| **CLI subcommand** | Explicit, user control | Extra step |
-
-The hybrid approach gives us:
-- Automatic copy on first play (seamless UX)
-- Manual sync for updates and conflict resolution
-- No new dependencies or mechanisms needed
-
-## Component Design
-
-### 1. Directory Structure
-
-```
-skills/voicemode/mfp/           # Package source (checked into git)
-├── chapters.sha256             # Checksums for package-provided files
-├── music_for_programming_49-julien_mier.ffmeta
-├── music_for_programming_51-mücha.ffmeta
-├── music_for_programming_52-inchindown.ffmeta
-├── music_for_programming_70-things_disappear.ffmeta
-├── music_for_programming_71-neon_genesis.ffmeta
-├── music_for_programming_74-ncw.ffmeta
-└── music_for_programming_76-material_object.ffmeta
-
-~/.voicemode/music-for-programming/  # User directory (runtime)
-├── .chapters.sha256                 # Cached checksums from last sync
-├── music_for_programming_49-julien_mier.ffmeta
-├── music_for_programming_49-julien_mier.ffmeta.user  # Backup if user modified
-└── ...
-```
-
-### 2. Checksum File Format
-
-`chapters.sha256` uses standard sha256sum format:
-```
-a1b2c3d4...  music_for_programming_49-julien_mier.ffmeta
-e5f6g7h8...  music_for_programming_51-mücha.ffmeta
-...
-```
-
-### 3. Chapter File Discovery
-
-New function to find plugin directory:
+**Location**: `skills/voicemode/bin/mpv-dj` (lines 26-31, after existing config)
 
 ```bash
-# Find the plugin's mfp directory containing chapter files
-find_plugin_mfp_dir() {
-    local script_dir="$(dirname "$0")"
+# Socket wait configuration
+SOCKET_TIMEOUT="${MPV_SOCKET_TIMEOUT:-10}"      # Max wait time in seconds
+SOCKET_RETRY_DELAY="${MPV_SOCKET_DELAY:-0.1}"   # Delay between retries (seconds)
+```
 
-    # Relative path from bin/ to mfp/
-    local mfp_dir="${script_dir}/../mfp"
+**Design notes**:
+- 10 second default timeout covers slow systems/large playlists
+- 0.1s retry delay balances responsiveness vs CPU usage
+- Environment variables allow user override without code changes
+- Variable names prefixed with `MPV_` for namespace clarity
 
-    if [[ -d "$mfp_dir" ]]; then
-        echo "$(cd "$mfp_dir" && pwd)"
-        return 0
-    fi
+### 2. wait_for_socket() Function
 
+**Location**: `skills/voicemode/bin/mpv-dj` (after `send_cmd()` function, ~line 85)
+
+```bash
+# Wait for mpv socket to become ready
+# Returns: 0 on success, 1 on timeout
+wait_for_socket() {
+    local max_attempts=$((SOCKET_TIMEOUT * 10))  # 10 attempts per second
+    local attempt=0
+
+    while [[ $attempt -lt $max_attempts ]]; do
+        if is_running; then
+            return 0
+        fi
+        sleep "$SOCKET_RETRY_DELAY"
+        ((attempt++))
+    done
+
+    echo "Error: mpv socket not ready after ${SOCKET_TIMEOUT}s" >&2
     return 1
 }
 ```
 
-### 4. On-Demand Copy Logic (cmd_mfp)
+**Design notes**:
+- Uses existing `is_running()` which checks both socket file AND IPC responsiveness
+- `if is_running; then` pattern avoids `set -e` exit on false return
+- Error message goes to stderr for proper stream separation
+- Hardcoded 10 attempts/second avoids floating-point arithmetic issues in bash
+- Loop counter with `((attempt++))` is POSIX-compliant and readable
 
-Update `cmd_mfp()` in mpv-dj:
+### 3. cmd_play() Modification
 
+**Location**: `skills/voicemode/bin/mpv-dj` line 129-131 (after mpv start)
+
+**Before**:
 ```bash
-cmd_mfp() {
-    local episode="$1"
-    # ... existing URL/filename lookup ...
+    # Start mpv in background
+    mpv "${mpv_args[@]}" "$source" &> /dev/null &
 
-    local chapters_file="${MFP_DIR}/${filename_base}.ffmeta"
-    mkdir -p "$MFP_DIR"
-
-    # On-demand copy if missing
-    if [[ ! -f "$chapters_file" ]]; then
-        local plugin_mfp_dir
-        if plugin_mfp_dir=$(find_plugin_mfp_dir); then
-            local source_file="${plugin_mfp_dir}/${filename_base}.ffmeta"
-            if [[ -f "$source_file" ]]; then
-                cp "$source_file" "$chapters_file"
-                echo "Copied chapter file from package"
-            fi
-        fi
-    fi
-
-    # ... existing playback logic ...
-}
+    echo "Started playback: $source"
 ```
 
-### 5. Sync Command (cmd_mfp_sync_chapters)
-
-New command: `mpv-dj mfp sync-chapters [--force]`
-
+**After**:
 ```bash
-cmd_mfp_sync_chapters() {
-    local force=false
-    [[ "$1" == "--force" ]] && force=true
+    # Start mpv in background
+    mpv "${mpv_args[@]}" "$source" &> /dev/null &
 
-    local plugin_mfp_dir
-    if ! plugin_mfp_dir=$(find_plugin_mfp_dir); then
-        echo "Error: Could not find plugin mfp directory"
+    # Wait for socket to be ready
+    if ! wait_for_socket; then
+        echo "Failed to start mpv - socket not ready"
         exit 1
     fi
 
-    mkdir -p "$MFP_DIR"
-
-    local checksums_file="${plugin_mfp_dir}/chapters.sha256"
-    local local_checksums="${MFP_DIR}/.chapters.sha256"
-
-    # Process each ffmeta file in plugin directory
-    for source_file in "$plugin_mfp_dir"/*.ffmeta; do
-        [[ -f "$source_file" ]] || continue
-
-        local filename=$(basename "$source_file")
-        local dest_file="${MFP_DIR}/${filename}"
-
-        sync_chapter_file "$source_file" "$dest_file" "$checksums_file" "$local_checksums" "$force"
-    done
-
-    # Update local checksums cache
-    if [[ -f "$checksums_file" ]]; then
-        cp "$checksums_file" "$local_checksums"
-    fi
-
-    echo "Chapter sync complete"
-}
+    echo "Started playback: $source"
 ```
 
-### 6. Conflict Resolution Logic
+**Design notes**:
+- Wait happens AFTER `mpv &` but BEFORE success message
+- User only sees "Started playback" after socket is confirmed ready
+- Failure case has distinct error message from timeout message
+- Exit 1 ensures calling scripts can detect failure
+
+### 4. Optional: `mpv-dj wait` Command
+
+**Location**: Command dispatch section (~line 650+)
 
 ```bash
-sync_chapter_file() {
-    local source="$1"
-    local dest="$2"
-    local pkg_checksums="$3"
-    local local_checksums="$4"
-    local force="$5"
-
-    local filename=$(basename "$source")
-
-    # If destination doesn't exist, simple copy
-    if [[ ! -f "$dest" ]]; then
-        cp "$source" "$dest"
-        echo "  Added: $filename"
-        return
+wait)
+    check_socat
+    if ! wait_for_socket; then
+        exit 1
     fi
-
-    # Calculate current checksums
-    local source_sha=$(shasum -a 256 "$source" | cut -d' ' -f1)
-    local dest_sha=$(shasum -a 256 "$dest" | cut -d' ' -f1)
-
-    # If identical, skip
-    if [[ "$source_sha" == "$dest_sha" ]]; then
-        echo "  Unchanged: $filename"
-        return
-    fi
-
-    # Get last known package checksum (from previous sync)
-    local last_pkg_sha=""
-    if [[ -f "$local_checksums" ]]; then
-        last_pkg_sha=$(grep "$filename" "$local_checksums" 2>/dev/null | cut -d' ' -f1)
-    fi
-
-    # Determine if user modified the file
-    local user_modified=false
-    if [[ -n "$last_pkg_sha" && "$dest_sha" != "$last_pkg_sha" ]]; then
-        user_modified=true
-    fi
-
-    if [[ "$user_modified" == true && "$force" != true ]]; then
-        # User modified - backup and update
-        cp "$dest" "${dest}.user"
-        cp "$source" "$dest"
-        echo "  Updated: $filename (user version saved as .user)"
-    else
-        # Not modified or force - overwrite
-        cp "$source" "$dest"
-        echo "  Updated: $filename"
-    fi
-}
+    echo "Socket ready"
+    ;;
 ```
+
+**Purpose**: Manual command for scripts that start mpv independently
+
+**Scope decision**: This is optional and can be deferred to a follow-up task if time is constrained.
+
+## File Changes Summary
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `skills/voicemode/bin/mpv-dj` | Modify | Add config vars, wait_for_socket(), update cmd_play() |
+
+## Files NOT Changed
+
+| File | Reason |
+|------|--------|
+| `skills/voicemode/bin/mpv-dj-library` | Uses `mpv-dj play`, inherits the fix automatically |
+| `skills/voicemode/bin/mfp-rss-helper` | RSS parsing only, no socket interaction |
+| `tests/test_mpv_dj_chapter_sync.sh` | Existing tests unaffected; may add new tests |
 
 ## Implementation Steps
 
-### Phase 1: Add Checksum File
-1. Generate `chapters.sha256` from existing ffmeta files
-2. Commit to `skills/voicemode/mfp/`
+1. **Add configuration variables** (2 lines)
+   - Add `SOCKET_TIMEOUT` and `SOCKET_RETRY_DELAY` after existing globals
 
-### Phase 2: Update mpv-dj
-1. Add `find_plugin_mfp_dir()` function
-2. Add on-demand copy logic to `cmd_mfp()`
-3. Add `sync_chapter_file()` function
-4. Add `cmd_mfp_sync_chapters()` command
-5. Update command dispatch to handle `mfp sync-chapters`
-6. Update help text
+2. **Add `wait_for_socket()` function** (15 lines)
+   - Place after `send_cmd()` function
+   - Include inline comment explaining purpose
 
-### Phase 3: Testing
-1. Test fresh install scenario (no local files)
-2. Test on-demand copy during play
-3. Test sync-chapters command
-4. Test conflict resolution (modified local file)
-5. Test --force flag
+3. **Update `cmd_play()` to call wait** (5 lines)
+   - Add wait call after `mpv ... &`
+   - Add failure handling with exit
 
-## File Locations
+4. **Test manually**
+   - Run `mpv-dj mfp 49` - should work reliably
+   - Run `mpv-dj status` immediately after - should show info
+   - Test timeout: `MPV_SOCKET_TIMEOUT=0.1 mpv-dj play ...`
 
-| File | Purpose |
-|------|---------|
-| `skills/voicemode/bin/mpv-dj` | Main script to modify |
-| `skills/voicemode/mfp/chapters.sha256` | New checksum file |
-| `skills/voicemode/mfp/*.ffmeta` | Existing chapter files |
+5. **Commit changes**
+   - Single commit: `feat(VM-372): add socket wait/retry pattern to mpv-dj`
 
-## Edge Cases
+## Testing Approach
 
-### 1. Plugin Directory Not Found
-If `find_plugin_mfp_dir()` fails:
-- On-demand copy: silently skip (play without chapters)
-- Sync command: error with clear message
+### Manual Tests (Primary)
 
-### 2. Special Characters in Filenames
-Episode 51 has "mücha" with umlaut. Handle with:
-- Use `LC_ALL=C` for checksum operations
-- Quote all filenames in shell commands
+```bash
+# Test 1: Normal startup
+mpv-dj stop  # Ensure clean state
+mpv-dj mfp 49
+mpv-dj status  # Should show track info immediately
 
-### 3. Permissions Issues
-If copy fails due to permissions:
-- Print error message
-- Continue playback without chapters (graceful degradation)
+# Test 2: Rapid succession
+mpv-dj stop && mpv-dj mfp 49 && mpv-dj status
 
-### 4. Missing Checksums File
-If `chapters.sha256` doesn't exist:
-- On-demand copy: still works (simple copy)
-- Sync: treat all files as unmodified (simple overwrite)
+# Test 3: Timeout behavior
+MPV_SOCKET_TIMEOUT=0 mpv-dj mfp 49  # Should timeout immediately
 
-## Success Criteria Mapping
+# Test 4: No regression
+mpv-dj volume 50
+mpv-dj next
+mpv-dj prev
+mpv-dj pause
+mpv-dj resume
+mpv-dj stop
+```
 
-| Acceptance Criteria | How Addressed |
-|---------------------|---------------|
-| mpv-dj mfp 49 works after fresh install | On-demand copy in cmd_mfp() |
-| Chapter navigation for included episodes | All 7 ffmeta files in package |
-| User modifications preserved on update | Conflict resolution with .user backup |
-| PR process documented | Separate doc task (doc-001) |
+### Automated Tests (Optional/Future)
 
-## Notes
+The existing `tests/test_mpv_dj_chapter_sync.sh` tests chapter sync functionality and should continue to pass. New automated tests for socket timing would require mocking mpv startup, which is complex for a bash script. Manual testing is sufficient for this feature.
 
-### Not In Scope for This Task
-- CUE files (only FFMETA for streaming use case)
-- Episodes 44 and 66 (no chapter files exist yet)
-- Installer integration (using on-demand approach instead)
+## Rollback Plan
 
-### Future Enhancements
-- Add CUE file support if local playback demand emerges
-- Generate missing episode chapters via audio-tools pipeline
-- Consider periodic background sync
+If issues arise:
+1. Remove the `wait_for_socket` call from `cmd_play()`
+2. Behavior returns to original (race condition present but rare)
+3. No data migration or cleanup needed
+
+## Success Criteria
+
+| Criterion | Verification |
+|-----------|--------------|
+| Commands wait for socket | `mpv-dj status` works immediately after `mpv-dj mfp` |
+| Configurable timeout | `MPV_SOCKET_TIMEOUT=1 mpv-dj ...` uses 1s timeout |
+| Configurable retry delay | `MPV_SOCKET_DELAY=0.5 mpv-dj ...` uses 0.5s delay |
+| Clear timeout error | Timeout shows "Error: mpv socket not ready after Xs" |
+| No regression | All existing commands work as before |
+
+## Edge Cases Handled
+
+1. **Socket exists but mpv crashed**: `is_running()` checks IPC response, not just socket file
+2. **Rapid restarts**: `cmd_play()` already quits existing mpv and waits 0.5s
+3. **User interrupt**: Ctrl+C during wait exits cleanly
+4. **Slow systems**: 10s default timeout covers most scenarios
+5. **set -e interaction**: `if is_running` pattern doesn't trigger exit on false
+
+## References
+
+- [RESEARCH.md](./RESEARCH.md) - Detailed codebase analysis
+- [VM-370 mpvc research](../VM-370_research_review-mpvc-lwillettsmpvc-for-mpv-dj-feature-comparison/README.md) - Source of wait pattern
+- [mpv IPC documentation](https://mpv.io/manual/stable/#json-ipc) - JSON IPC protocol
