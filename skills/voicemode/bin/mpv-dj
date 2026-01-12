@@ -4,6 +4,7 @@
 # Usage:
 #   mpv-dj play <file|url> [--chapters <file>]  Start playback
 #   mpv-dj mfp <episode>                         Play Music For Programming episode
+#   mpv-dj mfp list [--all] [--urls] [--verbose] List available episodes
 #   mpv-dj status                                Show current track info
 #   mpv-dj pause                                 Pause playback
 #   mpv-dj resume                                Resume playback
@@ -156,6 +157,36 @@ cmd_mfp() {
         echo "Playing without chapter metadata..."
         cmd_play "$stream_url"
     fi
+}
+
+# List available MFP episodes
+cmd_mfp_list() {
+    local helper_script="$(dirname "$0")/mfp-rss-helper"
+
+    if [[ ! -x "$helper_script" ]]; then
+        echo "Error: mfp-rss-helper not found at $helper_script"
+        exit 1
+    fi
+
+    local args=("list")
+
+    # Detect if stdout is terminal - use human format for terminal, tsv for pipes
+    if [[ -t 1 ]]; then
+        args+=("--format=human")
+    else
+        args+=("--format=tsv")
+    fi
+
+    # Pass through supported flags
+    for arg in "$@"; do
+        case "$arg" in
+            --urls|--all|--verbose)
+                args+=("$arg")
+                ;;
+        esac
+    done
+
+    "$helper_script" "${args[@]}"
 }
 
 # Record play event in history
@@ -466,7 +497,12 @@ case "${1:-}" in
         cmd_play "$@"
         ;;
     mfp)
-        cmd_mfp "$2"
+        if [[ "$2" == "list" ]]; then
+            shift 2  # Remove 'mfp' and 'list'
+            cmd_mfp_list "$@"
+        else
+            cmd_mfp "$2"
+        fi
         ;;
     status)
         cmd_status
@@ -510,6 +546,7 @@ case "${1:-}" in
         echo "Usage:"
         echo "  mpv-dj play <file|url> [--chapters <file>]  Start playback"
         echo "  mpv-dj mfp <episode>                         Play Music For Programming"
+        echo "  mpv-dj mfp list [--all] [--urls] [--verbose] List available episodes"
         echo "  mpv-dj status                                Show current track"
         echo "  mpv-dj pause                                 Pause playback"
         echo "  mpv-dj resume                                Resume playback"
