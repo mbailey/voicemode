@@ -16,7 +16,7 @@ DJ Mode scripts are located in `skills/voicemode/bin/`:
 
 ```bash
 # Play Music For Programming (default content)
-mpv-dj mfp 76                              # Episode 76
+mpv-dj mfp 49                              # Episode 49
 
 # Play any audio with chapters
 mpv-dj play file.mp3 --chapters file.txt   # Local file

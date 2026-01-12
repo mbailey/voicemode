@@ -119,7 +119,7 @@ See [Configuration Guide](../../docs/guides/configuration.md) for all options.
 Background music during VoiceMode sessions with track-level control.
 
 ```bash
-mpv-dj mfp 76           # Play Music For Programming episode
+mpv-dj mfp 49           # Play Music For Programming episode
 mpv-dj status           # What's playing
 mpv-dj next             # Skip to next track
 mpv-dj stop             # Stop playback

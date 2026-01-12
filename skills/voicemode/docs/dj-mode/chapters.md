@@ -70,8 +70,8 @@ Music For Programming chapters are stored in `~/.voicemode/music-for-programming
 
 ```
 ~/.voicemode/music-for-programming/
-├── music_for_programming_76-material_object.ffmeta   # Episode 76
 ├── music_for_programming_49-julien_mier.ffmeta       # Episode 49
+├── music_for_programming_51-mücha.ffmeta             # Episode 51
 └── ...
 ```
 
