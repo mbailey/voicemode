@@ -138,12 +138,60 @@ See [chapters.md](chapters.md) for the chapter file format details.
 
 ### Chapter Distribution
 
-VoiceMode includes chapter files for select episodes. These are copied to `~/.voicemode/music-for-programming/` on install.
+VoiceMode includes chapter files for select episodes in the package. These are automatically copied to your local directory when you first play an episode.
 
-Available chapters (Mike's favorites):
-- Episode 44, 49, 51, 52, 66, 70, 71, 74, 76
+**Available chapters:**
+- Episode 49, 51, 52, 70, 71, 74, 76
 
-More episodes can be added via community PRs.
+**How it works:**
+1. When you run `mpv-dj mfp 49` for the first time, the chapter file is copied from the package
+2. The chapter file enables track-level navigation immediately
+3. User modifications to chapter files are preserved during updates
+
+### Syncing Chapter Files
+
+Use the `sync-chapters` command to manage chapter files:
+
+```bash
+# Sync all chapter files from package
+mpv-dj mfp sync-chapters
+
+# Force overwrite (ignores user modifications)
+mpv-dj mfp sync-chapters --force
+```
+
+**Sync behavior:**
+- **New files**: Copied from package to local directory
+- **Unchanged files**: Skipped (already up to date)
+- **Updated files**: If you modified a chapter file, your version is backed up to `.user` before updating
+
+Example output:
+```
+  Added: music_for_programming_49-julien_mier.ffmeta
+  Unchanged: music_for_programming_51-mücha.ffmeta
+  Updated: music_for_programming_74-ncw.ffmeta (user version saved as .user)
+Chapter sync complete
+```
+
+### Contributing Chapter Files
+
+Community contributions to improve chapter accuracy are welcome! To contribute:
+
+1. **Fork the VoiceMode repository** on GitHub
+2. **Create or improve chapter files** in `skills/voicemode/mfp/`
+3. **Update the checksums** by regenerating `chapters.sha256`:
+   ```bash
+   cd skills/voicemode/mfp
+   shasum -a 256 *.ffmeta > chapters.sha256
+   ```
+4. **Submit a Pull Request** with your changes
+
+**Chapter file format:** See [chapters.md](chapters.md) for FFMETADATA format details.
+
+**Quality guidelines:**
+- Timestamps should be accurate to within a few seconds
+- Track titles should match the official MFP tracklist
+- Test playback with `mpv-dj mfp <episode>` and verify navigation works
 
 ## Listing Episodes
 
