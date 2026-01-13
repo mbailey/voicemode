@@ -70,7 +70,14 @@ class EventLogger:
     # Tool Events
     TOOL_REQUEST_START = "TOOL_REQUEST_START"
     TOOL_REQUEST_END = "TOOL_REQUEST_END"
-    
+
+    # Conch Events (multi-agent coordination)
+    CONCH_BLOCKED = "CONCH_BLOCKED"        # Failed to acquire (another agent has it)
+    CONCH_WAIT_START = "CONCH_WAIT_START"  # Starting to wait for conch
+    CONCH_WAIT_END = "CONCH_WAIT_END"      # Done waiting (acquired or timeout)
+    CONCH_ACQUIRE = "CONCH_ACQUIRE"        # Successfully acquired conch
+    CONCH_RELEASE = "CONCH_RELEASE"        # Released conch
+
     def __init__(self, log_dir: Optional[Path] = None, enabled: bool = True):
         """
         Initialize the event logger.
