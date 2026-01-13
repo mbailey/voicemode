@@ -25,6 +25,7 @@ except ImportError as e:
     VAD_AVAILABLE = False
 
 from voice_mode.server import mcp
+from voice_mode.conch import Conch
 from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
     audio_operation_lock,
@@ -1244,8 +1245,13 @@ consult the MCP resources listed above.
     
     result = None
     success = False
-    
+    conch = Conch()
+
     try:
+        # Acquire conch to signal voice conversation is active
+        # This allows sound effect hooks to check and mute themselves
+        conch.acquire()
+
         # Local microphone approach with timing
         transport = "local"
         timings = {}
@@ -1863,6 +1869,9 @@ consult the MCP resources listed above.
         return result
         
     finally:
+        # Release the conch to signal voice conversation has ended
+        conch.release()
+
         # Log tool request end
         if event_logger:
             log_tool_request_end("converse", success=success)
