@@ -1268,31 +1268,60 @@ consult the MCP resources listed above.
     
     result = None
     success = False
-    conch = Conch()
+    conch = Conch(agent_name="converse")  # Named for event logging
 
     try:
-        # Check if conch is currently held by another agent
-        if CONCH_ENABLED and Conch.is_active():
-            holder = Conch.get_holder()
-            holder_agent = holder.get('agent', 'unknown') if holder else 'unknown'
+        # Try to acquire conch atomically (no race condition)
+        if CONCH_ENABLED:
+            acquired = conch.try_acquire()
 
-            if not wait_for_conch:
-                # Default: return immediately with status info
-                return (f"User is currently speaking with {holder_agent}. "
-                        "Use wait_for_conch=true to queue, or try again later.")
-            else:
-                # Polling wait mode
+            if not acquired:
+                # Another agent has the conch
+                holder = Conch.get_holder()
+                holder_agent = holder.get('agent', 'unknown') if holder else 'unknown'
+
+                if event_logger:
+                    event_logger.log_event("CONCH_BLOCKED", {
+                        "pid": os.getpid(),
+                        "holder_pid": holder.get('pid') if holder else None,
+                        "holder_agent": holder_agent,
+                        "wait_for_conch": wait_for_conch
+                    })
+
+                if not wait_for_conch:
+                    # Default: return immediately with status info
+                    return (f"User is currently speaking with {holder_agent}. "
+                            "Use wait_for_conch=true to queue, or try again later.")
+
+                # Wait mode - poll with atomic retry
+                if event_logger:
+                    event_logger.log_event("CONCH_WAIT_START", {
+                        "pid": os.getpid(),
+                        "holder_agent": holder_agent,
+                        "timeout": CONCH_TIMEOUT
+                    })
+
                 waited = 0.0
-                while Conch.is_active() and waited < CONCH_TIMEOUT:
+                while not conch.try_acquire() and waited < CONCH_TIMEOUT:
                     await asyncio.sleep(CONCH_CHECK_INTERVAL)
                     waited += CONCH_CHECK_INTERVAL
 
-                if Conch.is_active():  # Still busy after timeout
+                if event_logger:
+                    event_logger.log_event("CONCH_WAIT_END", {
+                        "pid": os.getpid(),
+                        "waited_seconds": waited,
+                        "result": "acquired" if conch._acquired else "timeout"
+                    })
+
+                if not conch._acquired:
                     return f"Timed out waiting for conch ({CONCH_TIMEOUT}s). {holder_agent} is still speaking."
 
-        # Acquire conch to signal voice conversation is active
-        # This allows sound effect hooks to check and mute themselves
-        conch.acquire()
+            # Successfully acquired
+            if event_logger:
+                event_logger.log_event("CONCH_ACQUIRE", {
+                    "pid": os.getpid(),
+                    "agent": "converse"
+                })
 
         # Local microphone approach with timing
         transport = "local"
@@ -1912,7 +1941,15 @@ consult the MCP resources listed above.
         
     finally:
         # Release the conch to signal voice conversation has ended
-        conch.release()
+        if CONCH_ENABLED and conch._acquired:
+            held_seconds = conch.release()
+            if event_logger:
+                event_logger.log_event("CONCH_RELEASE", {
+                    "pid": os.getpid(),
+                    "held_seconds": held_seconds
+                })
+        else:
+            conch.release()  # Safe to call even if not acquired
 
         # Log tool request end
         if event_logger:
