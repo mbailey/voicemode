@@ -60,7 +60,10 @@ from voice_mode.config import (
     METRICS_LEVEL,
     STT_AUDIO_FORMAT,
     STT_SAVE_FORMAT,
-    MP3_BITRATE
+    MP3_BITRATE,
+    CONCH_ENABLED,
+    CONCH_TIMEOUT,
+    CONCH_CHECK_INTERVAL
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -1070,7 +1073,8 @@ async def converse(
     skip_tts: Optional[Union[bool, str]] = None,
     chime_leading_silence: Optional[float] = None,
     chime_trailing_silence: Optional[float] = None,
-    metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None
+    metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
+    wait_for_conch: Union[bool, str] = False
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -1113,6 +1117,9 @@ KEY PARAMETERS:
   - minimal: Just response text (saves tokens)
   - summary: Response + compact timing (default)
   - verbose: Response + detailed metrics breakdown
+• wait_for_conch (bool, default: false): Multi-agent coordination
+  - false: If another agent is speaking, return status immediately
+  - true: Wait until the other agent finishes, then speak
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
@@ -1129,7 +1136,9 @@ consult the MCP resources listed above.
         chime_enabled = chime_enabled.lower() in ('true', '1', 'yes', 'on')
     if skip_tts is not None and isinstance(skip_tts, str):
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
-    
+    if isinstance(wait_for_conch, str):
+        wait_for_conch = wait_for_conch.lower() in ('true', '1', 'yes', 'on')
+
     # Convert vad_aggressiveness to integer if provided as string
     if vad_aggressiveness is not None and isinstance(vad_aggressiveness, str):
         try:
@@ -1248,6 +1257,25 @@ consult the MCP resources listed above.
     conch = Conch()
 
     try:
+        # Check if conch is currently held by another agent
+        if CONCH_ENABLED and Conch.is_active():
+            holder = Conch.get_holder()
+            holder_agent = holder.get('agent', 'unknown') if holder else 'unknown'
+
+            if not wait_for_conch:
+                # Default: return immediately with status info
+                return (f"User is currently speaking with {holder_agent}. "
+                        "Use wait_for_conch=true to queue, or try again later.")
+            else:
+                # Polling wait mode
+                waited = 0.0
+                while Conch.is_active() and waited < CONCH_TIMEOUT:
+                    await asyncio.sleep(CONCH_CHECK_INTERVAL)
+                    waited += CONCH_CHECK_INTERVAL
+
+                if Conch.is_active():  # Still busy after timeout
+                    return f"Timed out waiting for conch ({CONCH_TIMEOUT}s). {holder_agent} is still speaking."
+
         # Acquire conch to signal voice conversation is active
         # This allows sound effect hooks to check and mute themselves
         conch.acquire()

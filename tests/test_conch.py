@@ -131,3 +131,59 @@ class TestConch:
         Conch.LOCK_FILE.write_text("not valid json {{{")
 
         assert Conch.is_active() is False
+
+
+class TestConchConfig:
+    """Tests for conch configuration options."""
+
+    def test_conch_enabled_default(self):
+        """CONCH_ENABLED defaults to True."""
+        from voice_mode.config import CONCH_ENABLED
+        # Default should be True (unless env var overrides)
+        assert isinstance(CONCH_ENABLED, bool)
+
+    def test_conch_timeout_default(self):
+        """CONCH_TIMEOUT defaults to 60 seconds."""
+        from voice_mode.config import CONCH_TIMEOUT
+        assert isinstance(CONCH_TIMEOUT, float)
+        assert CONCH_TIMEOUT == 60.0
+
+    def test_conch_check_interval_default(self):
+        """CONCH_CHECK_INTERVAL defaults to 0.5 seconds."""
+        from voice_mode.config import CONCH_CHECK_INTERVAL
+        assert isinstance(CONCH_CHECK_INTERVAL, float)
+        assert CONCH_CHECK_INTERVAL == 0.5
+
+    def test_conch_enabled_env_var(self):
+        """CONCH_ENABLED can be set via environment variable."""
+        import os
+        import importlib
+        import voice_mode.config
+
+        # Test with false
+        os.environ["VOICEMODE_CONCH_ENABLED"] = "false"
+        importlib.reload(voice_mode.config)
+        assert voice_mode.config.CONCH_ENABLED is False
+
+        # Test with true
+        os.environ["VOICEMODE_CONCH_ENABLED"] = "true"
+        importlib.reload(voice_mode.config)
+        assert voice_mode.config.CONCH_ENABLED is True
+
+        # Clean up
+        del os.environ["VOICEMODE_CONCH_ENABLED"]
+        importlib.reload(voice_mode.config)
+
+    def test_conch_timeout_env_var(self):
+        """CONCH_TIMEOUT can be set via environment variable."""
+        import os
+        import importlib
+        import voice_mode.config
+
+        os.environ["VOICEMODE_CONCH_TIMEOUT"] = "120"
+        importlib.reload(voice_mode.config)
+        assert voice_mode.config.CONCH_TIMEOUT == 120.0
+
+        # Clean up
+        del os.environ["VOICEMODE_CONCH_TIMEOUT"]
+        importlib.reload(voice_mode.config)
