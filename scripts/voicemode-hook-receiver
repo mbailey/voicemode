@@ -154,6 +154,35 @@ if ! soundfonts_enabled; then
   exit 0
 fi
 
+# Check if a voice conversation is active (conch lock file)
+# If active, skip sound playback to avoid disrupting voice recording
+converse_active() {
+  local conch_file="$HOME/.voicemode/conch"
+
+  # No lock file = no active conversation
+  [[ ! -f "$conch_file" ]] && return 1
+
+  # Check if the process holding the lock is still alive
+  local pid
+  if command -v jq &>/dev/null; then
+    pid=$(jq -r '.pid // ""' "$conch_file" 2>/dev/null)
+  else
+    # Fallback: basic grep for pid field
+    pid=$(grep -o '"pid"[[:space:]]*:[[:space:]]*[0-9]*' "$conch_file" | grep -o '[0-9]*' || echo "")
+  fi
+
+  # If no valid PID, lock is stale
+  [[ -z "$pid" ]] && return 1
+
+  # Check if process is alive (signal 0 doesn't send a signal, just checks)
+  kill -0 "$pid" 2>/dev/null
+}
+
+if converse_active; then
+  debug "Voice conversation active (conch lock) - skipping sound playback"
+  exit 0
+fi
+
 # Resolve soundfonts symlink
 if [[ -L "$SOUNDFONTS_BASE" ]]; then
   SOUNDFONTS_BASE=$(readlink -f "$SOUNDFONTS_BASE" 2>/dev/null || readlink "$SOUNDFONTS_BASE")
