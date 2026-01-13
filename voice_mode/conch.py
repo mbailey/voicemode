@@ -24,6 +24,7 @@ Usage:
         print("Someone is in a voice conversation")
 """
 
+import fcntl
 import json
 import os
 from datetime import datetime
@@ -52,6 +53,8 @@ class Conch:
         """
         self.agent_name = agent_name
         self._acquired = False
+        self._fd = None  # File descriptor for flock
+        self._acquire_time = None  # Track when acquired
 
     def acquire(self, agent_name: Optional[str] = None) -> bool:
         """Create the lock file.
@@ -78,15 +81,87 @@ class Conch:
         self._acquired = True
         return True
 
-    def release(self) -> None:
-        """Remove the lock file."""
+    def try_acquire(self, agent_name: Optional[str] = None) -> bool:
+        """Atomically try to acquire the conch.
+
+        Uses fcntl.flock() for true atomic locking across processes.
+
+        Args:
+            agent_name: Name of the agent acquiring the lock
+
+        Returns:
+            True if lock acquired, False if already held by another process
+        """
+        if self._acquired:
+            return True  # Already holding it
+
+        agent = agent_name or self.agent_name or "unknown"
+        self.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Open file for read/write, create if doesn't exist
+            self._fd = os.open(str(self.LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
+
+            # Try to get exclusive lock (non-blocking)
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            # Got lock - write our info
+            self._acquire_time = datetime.now()
+            data = {
+                "pid": os.getpid(),
+                "agent": agent,
+                "acquired": self._acquire_time.isoformat(),
+                "expires": None
+            }
+
+            os.ftruncate(self._fd, 0)
+            os.lseek(self._fd, 0, os.SEEK_SET)
+            os.write(self._fd, json.dumps(data, indent=2).encode())
+            os.fsync(self._fd)  # Ensure data is written
+
+            self._acquired = True
+            return True
+
+        except (BlockingIOError, OSError) as e:
+            # Lock held by another process, or other OS error
+            if self._fd is not None:
+                try:
+                    os.close(self._fd)
+                except OSError:
+                    pass
+                self._fd = None
+            return False
+
+    def release(self) -> float:
+        """Release the lock and return seconds held.
+
+        Returns:
+            Seconds the lock was held, or 0.0 if not acquired
+        """
+        held_seconds = 0.0
+
+        if self._acquire_time:
+            held_seconds = (datetime.now() - self._acquire_time).total_seconds()
+
+        if self._fd is not None:
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+
+        # Remove the lock file
         if self.LOCK_FILE.exists():
             try:
                 self.LOCK_FILE.unlink()
             except OSError:
-                # File may have been removed by another process
                 pass
+
         self._acquired = False
+        self._acquire_time = None
+
+        return held_seconds
 
     @classmethod
     def is_active(cls) -> bool:
