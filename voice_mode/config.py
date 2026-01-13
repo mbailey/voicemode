@@ -475,6 +475,19 @@ ALWAYS_TRY_LOCAL = os.getenv("VOICEMODE_ALWAYS_TRY_LOCAL", "true").lower() in ("
 # Auto-start configuration
 AUTO_START_KOKORO = os.getenv("VOICEMODE_AUTO_START_KOKORO", "").lower() in ("true", "1", "yes", "on")
 
+# ==================== CONCH CONFIGURATION ====================
+# The conch is a coordination mechanism for multi-agent voice conversations
+# Only the agent holding the conch may speak
+
+# Enable/disable the conch system entirely
+CONCH_ENABLED = os.getenv("VOICEMODE_CONCH_ENABLED", "true").lower() in ("true", "1", "yes", "on")
+
+# Maximum time (seconds) to wait for conch when wait_for_conch=true
+CONCH_TIMEOUT = float(os.getenv("VOICEMODE_CONCH_TIMEOUT", "60"))
+
+# How often (seconds) to check if conch is free when waiting
+CONCH_CHECK_INTERVAL = float(os.getenv("VOICEMODE_CONCH_CHECK_INTERVAL", "0.5"))
+
 # ==================== SERVICE CONFIGURATION ====================
 
 # OpenAI configuration
