@@ -303,7 +303,14 @@ async def kokoro_install(
                     "success": False,
                     "error": f"Failed to checkout version {version}"
                 }
-        
+
+        # Create virtual environment if it doesn't exist (GH-145)
+        # The kokoro-fastapi start scripts use `uv pip install` which requires a venv
+        venv_path = os.path.join(install_dir, ".venv")
+        if not os.path.exists(venv_path):
+            logger.info("Creating virtual environment for kokoro...")
+            subprocess.run(["uv", "venv"], cwd=install_dir, check=True)
+
         # Determine system and select appropriate start script
         system = platform.system()
         if system == "Darwin":
