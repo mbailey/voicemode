@@ -639,13 +639,16 @@ async def whisper_install(
                 logger.warning(f"Failed to download model: {download_result.get('error', 'Unknown error')}")
                 logger.info("You can download models later using 'voicemode whisper model install'")
                 model_path = None
+                model_error = download_result.get('error', 'Unknown error')
             else:
                 model_path = download_result["path"]
+                model_error = None
                 if download_result.get("core_ml_status", {}).get("success"):
                     logger.info(f"✅ Core ML model downloaded for 2-3x faster performance!")
         else:
             logger.info("Skipping model download (--no-model specified)")
             model_path = None
+            model_error = None
         
         # Test whisper with sample if available (only if we have a model)
         # With CMake build, binaries are in build/bin/
@@ -693,6 +696,7 @@ async def whisper_install(
                 "success": True,
                 "install_path": install_dir,
                 "model_path": model_path,
+                "model_error": model_error,
                 "gpu_enabled": use_gpu,
                 "gpu_type": gpu_type,
                 "version": current_version,
@@ -718,6 +722,7 @@ async def whisper_install(
                 "success": True,
                 "install_path": install_dir,
                 "model_path": model_path,
+                "model_error": model_error,
                 "gpu_enabled": use_gpu,
                 "gpu_type": gpu_type,
                 "version": current_version,
@@ -741,6 +746,7 @@ async def whisper_install(
                 "success": True,
                 "install_path": install_dir,
                 "model_path": model_path,
+                "model_error": model_error,
                 "gpu_enabled": use_gpu,
                 "gpu_type": gpu_type,
                 "version": current_version,

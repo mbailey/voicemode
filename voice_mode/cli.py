@@ -415,6 +415,14 @@ def whisper_service_install(install_dir, model, use_gpu, force, version, auto_en
             click.echo("\nNext steps:")
             for step in result['next_steps']:
                 click.echo(f"   - {step}")
+
+        # Show warning if model download failed (GH-174)
+        if result.get('model_error'):
+            click.echo()
+            click.secho("⚠️  Model download failed:", fg='yellow', bold=True)
+            click.secho(f"   {result['model_error']}", fg='yellow')
+            click.echo("   Whisper won't work without a model.")
+            click.echo("   Try: voicemode whisper model install")
     else:
         click.echo(f"❌ Installation failed: {result.get('error', 'Unknown error')}")
         if result.get('details'):
