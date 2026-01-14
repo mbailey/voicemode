@@ -296,8 +296,8 @@ SQL
             printf "\rIndexed: %d files..." "$count"
         fi
 
-    done < <(find "$music_path" -type f -regextype posix-extended -regex ".*\.($SUPPORTED_EXTENSIONS)" -print0 2>/dev/null || \
-             find "$music_path" -type f \( -name "*.mp3" -o -name "*.flac" -o -name "*.m4a" -o -name "*.wav" -o -name "*.ogg" -o -name "*.opus" \) -print0)
+    done < <(find -L "$music_path" -type f -regextype posix-extended -regex ".*\.($SUPPORTED_EXTENSIONS)" -print0 2>/dev/null || \
+             find -L "$music_path" -type f \( -name "*.mp3" -o -name "*.flac" -o -name "*.m4a" -o -name "*.wav" -o -name "*.ogg" -o -name "*.opus" \) -print0)
 
     printf "\r                              \r"
     echo "Indexed $count files ($sidecar_count sidecars)"
