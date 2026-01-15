@@ -1506,6 +1506,78 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
     asyncio.run(run_conversation())
 
 
+# Serve command - HTTP/SSE server for remote access
+@voice_mode_main_cli.command()
+@click.help_option('-h', '--help')
+@click.option('--host', default='127.0.0.1', help='Host to bind to (use 0.0.0.0 for all interfaces)')
+@click.option('--port', '-p', default=8765, type=int, help='Port to bind to')
+@click.option('--log-level', default='info', type=click.Choice(['debug', 'info', 'warning', 'error']),
+              help='Logging level')
+def serve(host, port, log_level):
+    """Start VoiceMode as an HTTP/SSE server for remote access.
+
+    This enables Claude Desktop, Claude Cowork, or other MCP clients to connect
+    to VoiceMode over HTTP instead of stdio. Useful for:
+
+    - Claude Cowork (runs in a sandboxed VM without audio access)
+    - Claude Desktop with mcp-remote
+    - Any MCP client that supports HTTP/SSE transport
+
+    The server exposes all VoiceMode MCP tools via the SSE transport.
+    Audio capture and playback happens on the host machine.
+
+    Examples:
+
+        # Start server on localhost (default)
+        voicemode serve
+
+        # Allow connections from VMs (bind to all interfaces)
+        voicemode serve --host 0.0.0.0
+
+        # Custom port
+        voicemode serve --port 9000
+
+    Connect from Claude Desktop using mcp-remote:
+
+        {
+          "mcpServers": {
+            "voicemode": {
+              "command": "npx",
+              "args": ["mcp-remote", "http://localhost:8765/sse"]
+            }
+          }
+        }
+    """
+    import logging
+    from .server import mcp
+    from .config import setup_logging
+
+    # Set up logging based on level
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+    logger = setup_logging()
+    logger.setLevel(numeric_level)
+
+    # Log startup info
+    click.echo(f"Starting VoiceMode HTTP/SSE server on {host}:{port}")
+    click.echo(f"SSE endpoint: http://{host}:{port}/sse")
+    click.echo(f"Log level: {log_level}")
+    click.echo()
+    click.echo("Connect with mcp-remote:")
+    click.echo(f"  npx mcp-remote http://{host}:{port}/sse")
+    click.echo()
+    click.echo("Press Ctrl+C to stop the server")
+    click.echo()
+
+    try:
+        # Run the MCP server with SSE transport
+        mcp.run(transport="sse", host=host, port=port)
+    except KeyboardInterrupt:
+        click.echo("\nServer stopped")
+    except Exception as e:
+        click.echo(f"Error starting server: {e}", err=True)
+        raise click.Abort()
+
+
 # Version command
 @voice_mode_main_cli.command()
 def version():
