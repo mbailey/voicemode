@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.4.2] - 2026-01-17
+
+### Fixed
+
+- **Kokoro Install for Existing Installations** (GH-188)
+  - Fixed venv not being created when Kokoro was already installed
+  - Running `voicemode kokoro install` now creates venv even for existing installations
+  - No need to use `--force` flag which would re-download models
+
 ## [7.4.1] - 2026-01-17
 
 ### Fixed

@@ -219,6 +219,13 @@ async def kokoro_install(
                         os.chmod(custom_script_path, 0o755)
                         start_script_path = custom_script_path
                     
+                    # Create virtual environment if it doesn't exist (GH-145, GH-188)
+                    # Also needed for already-installed case where user didn't have venv
+                    venv_path = os.path.join(install_dir, ".venv")
+                    if not os.path.exists(venv_path):
+                        logger.info("Creating virtual environment for kokoro...")
+                        subprocess.run(["uv", "venv"], cwd=install_dir, check=True)
+
                     # Always update service files even if kokoro is already installed
                     logger.info("Kokoro is already installed, updating service files...")
                     service_update_result = await update_kokoro_service_files(
