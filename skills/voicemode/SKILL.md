@@ -27,7 +27,7 @@ Natural voice conversations with Claude Code using speech-to-text (STT) and text
 |------|-----|-----|
 | Voice conversations | MCP `voicemode:converse` | Faster - server already running |
 | Service start/stop | MCP `voicemode:service` | Works within Claude Code |
-| Installation | CLI `voice-mode-install` | One-time setup |
+| Installation | Skill `/voicemode:install` | One-time setup |
 | Configuration | CLI `voicemode config` | Edit settings directly |
 | Diagnostics | CLI `voicemode diag` | Administrative tasks |
 
@@ -72,9 +72,11 @@ Shows service status including running state, ports, and health.
 
 ## Installation
 
+Run `/voicemode:install` for guided installation, or manually:
+
 ```bash
-# Install VoiceMode CLI and configure services
-uvx voice-mode-install --yes
+# Check and install system dependencies
+${SKILL_DIR}/bin/install-deps --install
 
 # Install local services (Apple Silicon recommended)
 voicemode service install whisper

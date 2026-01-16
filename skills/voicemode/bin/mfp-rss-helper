@@ -181,7 +181,7 @@ def check_local_mp3(url: str) -> bool:
 def list_episodes_detailed(
     format_type: str = "human",
     include_urls: bool = False,
-    show_all: bool = False,
+    show_all: bool = True,
     verbose: bool = False,
 ) -> None:
     """List episodes with chapter and local status.
@@ -189,7 +189,7 @@ def list_episodes_detailed(
     Args:
         format_type: "human" for columnized output, "tsv" for machine-readable
         include_urls: Include download URLs in output
-        show_all: Show all episodes (default: only those with chapters)
+        show_all: Show all episodes (default: True, since chapters are rare)
         verbose: Show CUE/FFmeta breakdown separately
     """
     rss_content = fetch_rss()
@@ -320,10 +320,10 @@ def parse_list_args(args: list[str]) -> dict:
         help="Include download URLs in output",
     )
     parser.add_argument(
-        "--all",
+        "--chapters-only",
         action="store_true",
-        dest="show_all",
-        help="Show all episodes (default: only those with chapters)",
+        dest="chapters_only",
+        help="Only show episodes with chapters (default: show all)",
     )
     parser.add_argument(
         "--verbose",
@@ -335,7 +335,7 @@ def parse_list_args(args: list[str]) -> dict:
     return {
         "format_type": parsed.format,
         "include_urls": parsed.urls,
-        "show_all": parsed.show_all,
+        "show_all": not parsed.chapters_only,  # Default to showing all
         "verbose": parsed.verbose,
     }
 

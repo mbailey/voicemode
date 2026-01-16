@@ -1,0 +1,324 @@
+#!/bin/bash
+# VoiceMode dependency installer
+# Idempotent script for installing VoiceMode dependencies
+#
+# Modes:
+#   Non-interactive (default when not a tty): Check and report
+#   Interactive (tty): Check, confirm, and install
+#
+# Usage:
+#   install-deps           # Check and report (non-interactive)
+#   install-deps --install # Actually install missing dependencies
+#   install-deps --yes     # Install without confirmation (interactive)
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Detect if we're running interactively
+is_interactive() {
+    [[ -t 1 ]]
+}
+
+# Print with color
+info() { echo -e "${BLUE}ℹ${NC} $1"; }
+success() { echo -e "${GREEN}✓${NC} $1"; }
+warning() { echo -e "${YELLOW}!${NC} $1"; }
+error() { echo -e "${RED}✗${NC} $1"; }
+
+# Detect OS using /etc/os-release (FreeDesktop.org standard)
+detect_os() {
+    case "$(uname -s)" in
+        Darwin) echo "darwin" ;;
+        Linux)
+            if [[ -f /etc/os-release ]]; then
+                # Source the file to get ID and ID_LIKE
+                . /etc/os-release
+                case "$ID" in
+                    debian|ubuntu|linuxmint|pop) echo "debian" ;;
+                    fedora|rhel|centos|rocky|alma) echo "fedora" ;;
+                    *)
+                        # Fallback to ID_LIKE for derivatives
+                        case "$ID_LIKE" in
+                            *debian*) echo "debian" ;;
+                            *fedora*|*rhel*) echo "fedora" ;;
+                            *) echo "linux" ;;
+                        esac
+                        ;;
+                esac
+            else
+                # Fallback for very old systems without /etc/os-release
+                if [[ -f /etc/debian_version ]]; then
+                    echo "debian"
+                elif [[ -f /etc/fedora-release ]]; then
+                    echo "fedora"
+                else
+                    echo "linux"
+                fi
+            fi
+            ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+# Check if command exists
+has_command() {
+    command -v "$1" &> /dev/null
+}
+
+# Check dependencies and return missing list
+check_dependencies() {
+    local os="$1"
+    local missing=()
+
+    # Check UV
+    if ! has_command uv; then
+        missing+=("uv")
+    fi
+
+    case "$os" in
+        darwin)
+            # Check Homebrew
+            if ! has_command brew; then
+                missing+=("homebrew")
+            fi
+
+            # Check brew packages
+            if has_command brew; then
+                if ! brew list portaudio &>/dev/null; then
+                    missing+=("portaudio")
+                fi
+                if ! brew list ffmpeg &>/dev/null; then
+                    missing+=("ffmpeg")
+                fi
+            else
+                # If no brew, assume packages missing
+                missing+=("portaudio" "ffmpeg")
+            fi
+            ;;
+        debian)
+            # Debian/Ubuntu packages
+            for pkg in libportaudio2 ffmpeg python3-dev gcc; do
+                if ! dpkg -l "$pkg" &>/dev/null; then
+                    missing+=("$pkg")
+                fi
+            done
+            ;;
+        fedora)
+            # Fedora packages
+            for pkg in portaudio ffmpeg python3-devel gcc; do
+                if ! rpm -q "$pkg" &>/dev/null; then
+                    missing+=("$pkg")
+                fi
+            done
+            ;;
+    esac
+
+    # Check voice-mode
+    if ! has_command voicemode; then
+        missing+=("voice-mode")
+    fi
+
+    # Output missing deps (handle empty array)
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "${missing[@]}"
+    fi
+}
+
+# Install missing dependencies
+install_dependencies() {
+    local os="$1"
+    shift
+    local deps=("$@")
+
+    # First install UV (cross-platform)
+    for dep in "${deps[@]}"; do
+        case "$dep" in
+            uv)
+                info "Installing UV..."
+                curl -LsSf https://astral.sh/uv/install.sh | sh
+                source "$HOME/.local/bin/env" 2>/dev/null || true
+                success "UV installed"
+                ;;
+        esac
+    done
+
+    # Then install OS-specific packages
+    case "$os" in
+        darwin)
+            # Install Homebrew if missing (macOS only)
+            for dep in "${deps[@]}"; do
+                case "$dep" in
+                    homebrew)
+                        info "Installing Homebrew..."
+                        NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+                        eval "$(/opt/homebrew/bin/brew shellenv)"
+                        success "Homebrew installed"
+                        ;;
+                esac
+            done
+
+            # Collect brew packages to install
+            local brew_pkgs=()
+            for dep in "${deps[@]}"; do
+                case "$dep" in
+                    portaudio|ffmpeg) brew_pkgs+=("$dep") ;;
+                esac
+            done
+            if [[ ${#brew_pkgs[@]} -gt 0 ]]; then
+                info "Installing ${brew_pkgs[*]} via Homebrew..."
+                brew install "${brew_pkgs[@]}"
+                success "Homebrew packages installed"
+            fi
+            ;;
+        debian)
+            # Collect apt packages to install
+            local apt_pkgs=()
+            for dep in "${deps[@]}"; do
+                case "$dep" in
+                    libportaudio2|ffmpeg|python3-dev|gcc) apt_pkgs+=("$dep") ;;
+                esac
+            done
+            if [[ ${#apt_pkgs[@]} -gt 0 ]]; then
+                info "Installing ${apt_pkgs[*]} via apt..."
+                sudo apt-get update
+                sudo apt-get install -y "${apt_pkgs[@]}"
+                success "apt packages installed"
+            fi
+            ;;
+        fedora)
+            # Collect dnf packages to install
+            local dnf_pkgs=()
+            for dep in "${deps[@]}"; do
+                case "$dep" in
+                    portaudio|ffmpeg|python3-devel|gcc) dnf_pkgs+=("$dep") ;;
+                esac
+            done
+            if [[ ${#dnf_pkgs[@]} -gt 0 ]]; then
+                info "Installing ${dnf_pkgs[*]} via dnf..."
+                sudo dnf install -y "${dnf_pkgs[@]}"
+                success "dnf packages installed"
+            fi
+            ;;
+    esac
+
+    # Finally install voice-mode
+    for dep in "${deps[@]}"; do
+        case "$dep" in
+            voice-mode)
+                info "Installing VoiceMode..."
+                uv tool install voice-mode
+                success "VoiceMode installed"
+                ;;
+        esac
+    done
+}
+
+# Main
+main() {
+    local do_install=false
+    local auto_yes=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --install) do_install=true ;;
+            --yes|-y) auto_yes=true; do_install=true ;;
+            --help|-h)
+                echo "Usage: install-deps [--install] [--yes]"
+                echo ""
+                echo "Options:"
+                echo "  --install  Actually install missing dependencies"
+                echo "  --yes, -y  Install without confirmation"
+                exit 0
+                ;;
+            *)
+                error "Unknown option: $1"
+                exit 1
+                ;;
+        esac
+        shift
+    done
+
+    # Detect OS
+    local os
+    os=$(detect_os)
+
+    if [[ "$os" == "unknown" ]]; then
+        error "Unsupported operating system"
+        exit 1
+    fi
+
+    echo "VoiceMode Dependency Checker"
+    echo "============================"
+    echo ""
+    info "Detected OS: $os"
+    echo ""
+
+    # Check dependencies
+    local missing_str
+    missing_str=$(check_dependencies "$os")
+    local missing=()
+    if [[ -n "$missing_str" ]]; then
+        read -ra missing <<< "$missing_str"
+    fi
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        success "All dependencies are installed!"
+        echo ""
+        echo "Next steps:"
+        echo "  1. Start a voice conversation: /voicemode:converse"
+        echo "  2. Install local services: voicemode service install whisper"
+        exit 0
+    fi
+
+    # Report missing dependencies
+    echo "Missing dependencies:"
+    for dep in "${missing[@]}"; do
+        warning "  $dep"
+    done
+    echo ""
+
+    # If not installing, just report
+    if [[ "$do_install" == "false" ]]; then
+        if is_interactive; then
+            echo "Run with --install to install missing dependencies."
+        else
+            echo "INSTALL_NEEDED=true"
+            echo "MISSING_DEPS=\"${missing[*]}\""
+            echo ""
+            echo "To install, run: install-deps --install"
+        fi
+        exit 1
+    fi
+
+    # Confirm if interactive and not auto_yes
+    if is_interactive && [[ "$auto_yes" == "false" ]]; then
+        echo -n "Install missing dependencies? [y/N] "
+        read -r response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            echo "Installation cancelled."
+            exit 1
+        fi
+    fi
+
+    # Install dependencies
+    echo ""
+    info "Installing missing dependencies..."
+    echo ""
+    install_dependencies "$os" "${missing[@]}"
+
+    echo ""
+    success "All dependencies installed!"
+    echo ""
+    echo "Next steps:"
+    echo "  1. Start a voice conversation: /voicemode:converse"
+    echo "  2. Install local services: voicemode service install whisper"
+}
+
+main "$@"
