@@ -95,6 +95,13 @@ def whisper():
     pass
 
 
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def parakeet():
+    """Manage Parakeet ASR service (alternative to Whisper)."""
+    pass
+
+
 # Service functions are imported lazily in their respective command handlers to improve startup time
 
 
@@ -1020,6 +1027,217 @@ def whisper_model_benchmark_cmd(models, sample, runs):
     click.echo("\nNote: Speed values show real-time factor (higher is better)")
     click.echo("      1.0x = real-time, 10x = 10 times faster than real-time")
 ''' # End of old model subcommands
+
+
+# Parakeet service commands
+@parakeet.command()
+def status():
+    """Show Parakeet service status."""
+    from voice_mode.tools.parakeet.models import is_parakeet_installed, get_parakeet_install_dir, PARAKEET_PORT
+    import subprocess
+
+    if not is_parakeet_installed():
+        click.echo("Parakeet is not installed.")
+        click.echo("Install with: voicemode parakeet install")
+        return
+
+    click.echo(f"Parakeet installation: {get_parakeet_install_dir()}")
+
+    # Check if service is running
+    try:
+        result = subprocess.run(
+            ["curl", "-s", f"http://127.0.0.1:{PARAKEET_PORT}/health"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            click.echo(f"Service status: Running on port {PARAKEET_PORT}")
+        else:
+            click.echo("Service status: Not running")
+    except subprocess.TimeoutExpired:
+        click.echo("Service status: Not responding")
+    except Exception:
+        click.echo("Service status: Unknown")
+
+
+@parakeet.command()
+def start():
+    """Start Parakeet service."""
+    import subprocess
+    from voice_mode.tools.parakeet.models import is_parakeet_installed
+
+    if not is_parakeet_installed():
+        click.echo("Parakeet is not installed. Install with: voicemode parakeet install")
+        return
+
+    plist_path = os.path.expanduser("~/Library/LaunchAgents/com.voicemode.parakeet.plist")
+    if os.path.exists(plist_path):
+        result = subprocess.run(
+            ["launchctl", "load", plist_path],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            click.echo("Parakeet service started")
+        else:
+            click.echo(f"Failed to start service: {result.stderr}")
+    else:
+        click.echo("Parakeet service file not found. Reinstall with: voicemode parakeet install")
+
+
+@parakeet.command()
+def stop():
+    """Stop Parakeet service."""
+    import subprocess
+
+    plist_path = os.path.expanduser("~/Library/LaunchAgents/com.voicemode.parakeet.plist")
+    if os.path.exists(plist_path):
+        result = subprocess.run(
+            ["launchctl", "unload", plist_path],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            click.echo("Parakeet service stopped")
+        else:
+            click.echo(f"Failed to stop service: {result.stderr}")
+    else:
+        # Try to kill any running process
+        subprocess.run(["pkill", "-f", "parakeet.*server.py"], capture_output=True)
+        click.echo("Parakeet service stopped")
+
+
+@parakeet.command()
+def restart():
+    """Restart Parakeet service."""
+    import subprocess
+
+    plist_path = os.path.expanduser("~/Library/LaunchAgents/com.voicemode.parakeet.plist")
+    if os.path.exists(plist_path):
+        subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+        result = subprocess.run(
+            ["launchctl", "load", plist_path],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            click.echo("Parakeet service restarted")
+        else:
+            click.echo(f"Failed to restart service: {result.stderr}")
+    else:
+        click.echo("Parakeet service file not found. Reinstall with: voicemode parakeet install")
+
+
+@parakeet.command()
+def health():
+    """Check Parakeet health endpoint."""
+    import subprocess
+    from voice_mode.tools.parakeet.models import PARAKEET_PORT
+    import json
+
+    try:
+        result = subprocess.run(
+            ["curl", "-s", f"http://127.0.0.1:{PARAKEET_PORT}/health"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            try:
+                health_data = json.loads(result.stdout)
+                click.echo("Parakeet is responding")
+                click.echo(f"   Status: {health_data.get('status', 'unknown')}")
+            except json.JSONDecodeError:
+                click.echo("Parakeet is responding (non-JSON response)")
+        else:
+            click.echo(f"Parakeet not responding on port {PARAKEET_PORT}")
+    except subprocess.TimeoutExpired:
+        click.echo("Parakeet health check timed out")
+    except Exception as e:
+        click.echo(f"Health check failed: {e}")
+
+
+@parakeet.command()
+@click.help_option('-h', '--help')
+@click.option('--install-dir', help='Directory to install Parakeet')
+@click.option('--port', default=2023, help='Port to configure for the service')
+@click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
+@click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
+def install(install_dir, port, force, auto_enable):
+    """Install Parakeet ASR service.
+
+    Parakeet is an NVIDIA ASR model optimized for Apple Silicon via MLX.
+    It's faster than Whisper with better accuracy for many use cases.
+    """
+    from voice_mode.tools.parakeet.install import parakeet_install
+
+    result = asyncio.run(parakeet_install(
+        install_dir=install_dir,
+        port=port,
+        force_reinstall=force,
+        auto_enable=auto_enable
+    ))
+
+    if result.get('success'):
+        if result.get('already_installed'):
+            click.echo(f"Parakeet already installed at {result['install_path']}")
+        else:
+            click.echo("Parakeet installed successfully!")
+            click.echo(f"   Install path: {result['install_path']}")
+
+        if result.get('enabled'):
+            click.echo("   Auto-start: Enabled")
+    else:
+        click.echo(f"Installation failed: {result.get('error', 'Unknown error')}")
+
+
+@parakeet.command()
+@click.help_option('-h', '--help')
+@click.option('--remove-all-data', is_flag=True, help='Remove all Parakeet data including logs')
+@click.confirmation_option(prompt='Are you sure you want to uninstall Parakeet?')
+def uninstall(remove_all_data):
+    """Uninstall Parakeet service and optionally remove data."""
+    from voice_mode.tools.parakeet.install import parakeet_uninstall
+
+    result = asyncio.run(parakeet_uninstall(
+        remove_all_data=remove_all_data
+    ))
+
+    if result.get('success'):
+        click.echo("Parakeet uninstalled successfully!")
+
+        if result.get('service_stopped'):
+            click.echo("   Service stopped")
+        if result.get('service_disabled'):
+            click.echo("   Service disabled")
+        if result.get('install_removed'):
+            click.echo(f"   Installation removed: {result['install_path']}")
+        if result.get('data_removed'):
+            click.echo("   All data removed")
+    else:
+        click.echo(f"Uninstall failed: {result.get('error', 'Unknown error')}")
+
+
+@parakeet.command()
+@click.help_option('-h', '--help')
+def logs():
+    """View Parakeet service logs."""
+    from pathlib import Path
+
+    log_dir = Path.home() / ".voicemode" / "logs" / "parakeet"
+    stdout_log = log_dir / "stdout.log"
+    stderr_log = log_dir / "stderr.log"
+
+    if stderr_log.exists():
+        click.echo("=== Parakeet stderr (last 50 lines) ===")
+        with open(stderr_log) as f:
+            lines = f.readlines()
+            for line in lines[-50:]:
+                click.echo(line.rstrip())
+
+    if stdout_log.exists():
+        click.echo("\n=== Parakeet stdout (last 50 lines) ===")
+        with open(stdout_log) as f:
+            lines = f.readlines()
+            for line in lines[-50:]:
+                click.echo(line.rstrip())
+
+    if not stdout_log.exists() and not stderr_log.exists():
+        click.echo("No Parakeet logs found")
 
 
 @voice_mode_main_cli.group()
