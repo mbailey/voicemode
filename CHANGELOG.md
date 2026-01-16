@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Local microphone transport remains the default and only transport option
   - **Impact**: Users who set up LiveKit integration will need to use local microphone instead
 
+## [7.4.1] - 2026-01-17
+
+### Fixed
+
+- **Kokoro Install on Fresh Systems** (VM-411, GH-145, GH-188)
+  - Fixed installation failing on fresh systems (Linux and macOS) due to missing venv
+  - Installer now creates virtual environment automatically before running uv install
+  - Resolves "No virtual environment found" error on PopOS/Ubuntu 24, Arch Linux, and macOS
+
 ## [7.4.0] - 2026-01-06
 
 ### Changed
