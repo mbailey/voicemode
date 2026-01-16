@@ -9,12 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Conch Lock File** (VM-399)
+  - New lock file mechanism at `~/.voicemode/conch` signals when voice conversation is active
+  - Sound effect hooks automatically mute during voice exchanges
+  - Prevents notification sounds from disrupting voice recordings
+  - PID-based stale lock detection for crash recovery
+
+- **DJ Audio Ducking** (VM-377)
+  - Automatically lowers DJ music volume during TTS playback
+  - Restores original volume after speech completes
+  - Configurable duck amount via `VOICEMODE_DJ_DUCK_AMOUNT` (default: 20%)
+
+- **MFP Chapter File Distribution** (VM-369)
+  - Local chapter/cue files for Music For Programming episodes
+  - `mpv-dj sync-chapters` command to sync from source repository
+  - Chapter-aware playback for seamless track navigation
+
+- **MFP Episode Management** (VM-386, VM-400)
+  - `mfp-rss-helper` script for dynamic episode URL lookup from RSS feed
+  - RSS feed caching for offline episode discovery
+  - `mpv-dj mfp list` command shows available episodes with local chapter status
+  - RSS-based naming convention for chapter files
+
 - **Reliable mpv-dj Startup** (VM-372)
   - Added socket wait/retry pattern to handle race condition between mpv start and socket availability
   - Commands now wait for the IPC socket to be ready before reporting success
   - Configurable timeout via `MPV_SOCKET_TIMEOUT` (default: 10 seconds)
   - Configurable retry delay via `MPV_SOCKET_DELAY` (default: 0.1 seconds)
   - Clear error message if socket doesn't become available: "Error: mpv socket not ready after Xs"
+
+### Fixed
+
+- **MFP Episode References** (VM-376)
+  - Removed invalid episode 76 reference from documentation
+  - Updated all docs to use episode 49 as the default example
 
 ### Removed
 
