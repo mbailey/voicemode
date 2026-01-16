@@ -488,6 +488,12 @@ CONCH_TIMEOUT = float(os.getenv("VOICEMODE_CONCH_TIMEOUT", "60"))
 # How often (seconds) to check if conch is free when waiting
 CONCH_CHECK_INTERVAL = float(os.getenv("VOICEMODE_CONCH_CHECK_INTERVAL", "0.5"))
 
+# Maximum age (seconds) before a lock is considered stale and can be forcibly released
+# This prevents stuck locks from blocking all voice interactions indefinitely
+# Should be longer than your typical conversation turn (listen + TTS + buffer)
+# Default 300s (5 min) covers 2 min listen + long TTS. Set to 0 to disable.
+CONCH_LOCK_EXPIRY = float(os.getenv("VOICEMODE_CONCH_LOCK_EXPIRY", "300"))
+
 # ==================== SERVICE CONFIGURATION ====================
 
 # OpenAI configuration

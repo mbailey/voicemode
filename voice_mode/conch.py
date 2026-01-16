@@ -31,6 +31,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+# Import config for lock expiry - deferred to avoid circular import
+def _get_lock_expiry() -> float:
+    """Get lock expiry from config, with fallback."""
+    try:
+        from voice_mode.config import CONCH_LOCK_EXPIRY
+        return CONCH_LOCK_EXPIRY
+    except ImportError:
+        return 120.0  # Default 2 minutes
+
 
 class Conch:
     """Simple lock file for voice conversation coordination.
@@ -85,6 +94,8 @@ class Conch:
         """Atomically try to acquire the conch.
 
         Uses fcntl.flock() for true atomic locking across processes.
+        Also handles stale locks: if a lock is older than CONCH_LOCK_EXPIRY
+        seconds, it will be forcibly released and re-acquired.
 
         Args:
             agent_name: Name of the agent acquiring the lock
@@ -97,6 +108,9 @@ class Conch:
 
         agent = agent_name or self.agent_name or "unknown"
         self.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        # First check: is there a stale lock we can forcibly clear?
+        self._check_and_clear_stale_lock()
 
         try:
             # Open file for read/write, create if doesn't exist
@@ -131,6 +145,46 @@ class Conch:
                     pass
                 self._fd = None
             return False
+
+    def _check_and_clear_stale_lock(self) -> None:
+        """Check for and clear stale locks based on timestamp.
+
+        If a lock file exists and its timestamp exceeds CONCH_LOCK_EXPIRY,
+        forcibly remove it to allow new acquisitions. This handles the case
+        where a process is alive but stuck and won't release the lock.
+
+        Note: This deletes the file, creating a new inode. The stuck process
+        still holds its flock on the old inode, but we can now create a fresh
+        lock file.
+        """
+        lock_expiry = _get_lock_expiry()
+        if lock_expiry <= 0:
+            return  # Stale lock detection disabled
+
+        if not self.LOCK_FILE.exists():
+            return
+
+        try:
+            data = json.loads(self.LOCK_FILE.read_text())
+            acquired_str = data.get("acquired")
+            if not acquired_str:
+                return
+
+            acquired_time = datetime.fromisoformat(acquired_str)
+            age_seconds = (datetime.now() - acquired_time).total_seconds()
+
+            if age_seconds > lock_expiry:
+                # Lock is stale - forcibly remove it
+                stale_agent = data.get("agent", "unknown")
+                stale_pid = data.get("pid", "unknown")
+                try:
+                    self.LOCK_FILE.unlink()
+                    # Log would be nice here, but avoid import complexity
+                except OSError:
+                    pass
+        except (json.JSONDecodeError, ValueError, OSError):
+            # Can't read or parse - ignore
+            pass
 
     def release(self) -> float:
         """Release the lock and return seconds held.
@@ -167,8 +221,10 @@ class Conch:
     def is_active(cls) -> bool:
         """Check if a voice conversation is currently active.
 
-        A conversation is considered active if the lock file exists AND
-        the PID in the file corresponds to a running process.
+        A conversation is considered active if:
+        1. The lock file exists
+        2. The PID in the file corresponds to a running process
+        3. The lock is not stale (acquired within CONCH_LOCK_EXPIRY seconds)
 
         Returns:
             True if converse is active, False otherwise
@@ -185,9 +241,21 @@ class Conch:
 
             # Check if process is alive (signal 0 doesn't actually send a signal)
             os.kill(pid, 0)
+
+            # Check if lock is stale based on timestamp
+            lock_expiry = _get_lock_expiry()
+            if lock_expiry > 0:
+                acquired_str = data.get("acquired")
+                if acquired_str:
+                    acquired_time = datetime.fromisoformat(acquired_str)
+                    age_seconds = (datetime.now() - acquired_time).total_seconds()
+                    if age_seconds > lock_expiry:
+                        # Lock is stale - consider it inactive
+                        return False
+
             return True
-        except (json.JSONDecodeError, ProcessLookupError, PermissionError, OSError):
-            # JSON invalid, process dead, or no permission to signal
+        except (json.JSONDecodeError, ProcessLookupError, PermissionError, OSError, ValueError):
+            # JSON invalid, process dead, no permission to signal, or invalid timestamp
             return False
 
     @classmethod
