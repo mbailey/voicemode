@@ -1,6 +1,5 @@
 # Development Setup
 
-
 *Note: These docs need review.*
 
 This guide covers setting up VoiceMode for development, including building from source, configuring your IDE, and contributing to the project.
@@ -24,15 +23,36 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 pip install uv
 ```
 
-## Cloning the Repository
+## Quick Start (Recommended)
+
+The Makefile provides convenient targets for all common development tasks:
 
 ```bash
 # Clone the repository
 git clone https://github.com/mbailey/voicemode
 cd voicemode
 
-# Install in development mode
-uv tool install -e .
+# Install with development dependencies (creates venv automatically)
+make dev-install
+
+# Run tests to verify setup
+make test
+```
+
+That's it! The Makefile handles virtual environment creation, dependency installation, and test setup automatically.
+
+## Manual Setup (Alternative Method)
+
+If you prefer to set things up manually or need more control:
+
+```bash
+# Clone the repository
+git clone https://github.com/mbailey/voicemode
+cd voicemode
+
+# Create and activate virtual environment
+uv tool install -e .[dev,test]
+
 ```
 
 ## Development Workflow
@@ -55,8 +75,31 @@ uvx --from dist/voice_mode-*.whl voice-mode
 
 ### Running Tests
 
+#### Using Makefile (Recommended)
+
+The Makefile provides comprehensive test targets (see `make help`):
+
 ```bash
-# Run all tests
+# Run unit tests with pytest
+make test
+
+# Run tests with coverage report
+make coverage
+
+# Run all tests (including slow/manual)
+make test-all
+```
+
+#### Manual Testing (Alternative)
+
+If you prefer running tests directly:
+
+```bash
+# Using uv run (no activation needed)
+uv run pytest
+
+# using python
+source .venv/bin/activate
 pytest
 
 # Run with coverage
@@ -85,7 +128,7 @@ voicemode kokoro start
 
 ## Project Structure
 
-```
+```ini
 voicemode/
 ├── voice_mode/           # Main package
 │   ├── __init__.py
@@ -182,7 +225,7 @@ pytest tests/integration/test_whisper.py
 ### Manual Testing
 
 ```bash
-# Test voice conversation
+# Test voice conversation with debug output
 voice-mode converse --debug
 
 # Test specific tool
@@ -192,78 +235,107 @@ voice-mode test-tool converse
 VOICEMODE_TTS_BASE_URLS=http://localhost:8880/v1 voice-mode converse
 ```
 
+### Testing Service Installations
+
+Update your local '.voicemode.env' file to overide the default path `~/.voicemode`
+
+```bash
+echo "VOICEMODE_BASE_DIR=/tmp/.voicemode" >> .voicemode.env
+```
+
+Use temporary directories when testing installers to prevent affecting your production setup in `~/.voicemode/services/`:
+
+```bash
+
+# Test Whisper installation
+voicemode whisper install --force --install-dir /tmp/.voicemode/services/whisper/ --model large-v3-turbo
+
+# Test Kokoro installation
+voicemode kokoro install --force --install-dir /tmp/.voicemode/services/kokoro/ 
+
+# Test LiveKit installation
+voicemode livekit install --force --install-dir /tmp/.voicemode/services/livekit/ --port 7881
+```
+
 ## Contributing
 
-### Code Style
+For guidelines on contributing to the project, including code style, commit conventions, and the pull request process, please see the [Contributing Guide](/CONTRIBUTING.md).
 
-We use Black for formatting and Ruff for linting:
+## Makefile Commands Reference
+
+The Makefile is the primary tool for development tasks. Run `make help` for a comprehensive list of available targets.  Here is a sample of commonly used targets:
+
+### Essential Development Commands
 
 ```bash
-# Format code
-black voice_mode tests
-
-# Run linter
-ruff check voice_mode tests
-
-# Fix linting issues
-ruff check --fix voice_mode tests
+make help          # Show all available targets
+make dev-install   # Install package with development dependencies
+make test          # Run unit tests
+make clean         # Remove build artifacts and caches
 ```
 
-### Pre-commit Hooks
+### Testing & Coverage
 
 ```bash
-# Install pre-commit
-pip install pre-commit
-
-# Install hooks
-pre-commit install
-
-# Run manually
-pre-commit run --all-files
+make test          # Run unit tests with pytest
+make coverage      # Run tests with coverage report
+make coverage-html # Generate and open HTML coverage report
+make test-unit     # Run unit tests only
+make test-integration # Run integration tests
+make test-all      # Run all tests (including slow/manual)
+make test-parallel # Run tests in parallel
 ```
 
-### Commit Messages
-
-Follow conventional commits:
-- `feat:` New feature
-- `fix:` Bug fix
-- `docs:` Documentation
-- `test:` Tests
-- `refactor:` Code refactoring
-- `chore:` Maintenance
-
-### Pull Request Process
-
-1. Fork the repository
-2. Create feature branch
-3. Make changes with tests
-4. Run test suite
-5. Submit pull request
-
-## Makefile Commands
+### Building & Publishing
 
 ```bash
-# Development
-make dev           # Install in dev mode
-make test         # Run tests
-make lint         # Run linters
-make format       # Format code
+make build-package # Build Python package for PyPI
+make build-dev     # Build development package with auto-versioning
+make test-package  # Test package installation
+```
 
-# Building
-make build        # Build package
-make clean        # Clean build artifacts
+### Documentation
 
-# Services
-make install-services  # Install local services
-make start-services   # Start local services
-make stop-services    # Stop local services
-
-# Documentation
-make docs         # Build documentation
-make docs-serve   # Serve docs locally
+```bash
+make docs    # Build documentation
+make docs-serve    # Serve documentation locally (http://localhost:8000)
+make docs-build    # Build documentation site
+make docs-check    # Check documentation for errors (strict mode)
 ```
 
 ## Troubleshooting Development Issues
+
+### Common Issues
+
+#### "pytest: command not found"
+
+This happens when the virtual environment isn't activated. Solutions:
+
+- Use `make test` which handles everything automatically
+- Use `uv run pytest` instead (no activation needed)
+- Activate the venv: `source .venv/bin/activate`
+
+#### pyenv/VIRTUAL_ENV conflicts
+
+If you see warnings about VIRTUAL_ENV not matching the project environment:
+
+- This is usually harmless - uv will use the project's `.venv`
+- To avoid the warning, deactivate any other Python environments first
+
+#### Verifying Installation
+
+To check if everything is installed correctly:
+
+```bash
+# Check if pytest is installed
+uv run pytest --version
+
+# Check if voice_mode is installed in editable mode
+uv pip list | grep voice-mode
+
+# Run a simple test
+uv run pytest tests/test_server_syntax.py -v
+```
 
 ### Import Errors
 
