@@ -47,8 +47,10 @@ if not os.environ.get('VOICEMODE_DEBUG', '').lower() in ('true', '1', 'yes'):
 @click.option('--debug', is_flag=True, help='Enable debug mode and show all warnings')
 @click.option('--tools-enabled', help='Comma-separated list of tools to enable (whitelist)')
 @click.option('--tools-disabled', help='Comma-separated list of tools to disable (blacklist)')
+@click.option('--transport', type=click.Choice(['stdio', 'sse', 'streamable-http']), default='stdio', help='MCP transport type (default: stdio)')
+@click.option('--port', type=int, default=8000, help='Port for HTTP transports (default: 8000)')
 @click.pass_context
-def voice_mode_main_cli(ctx, debug, tools_enabled, tools_disabled):
+def voice_mode_main_cli(ctx, debug, tools_enabled, tools_disabled, transport, port):
     """Voice Mode - MCP server and service management.
 
     Without arguments, starts the MCP server.
@@ -72,7 +74,7 @@ def voice_mode_main_cli(ctx, debug, tools_enabled, tools_disabled):
         # No subcommand - run MCP server
         # Note: warnings are already suppressed at module level unless debug is enabled
         from .server import main as voice_mode_main
-        voice_mode_main()
+        voice_mode_main(transport=transport, port=port)
 
 
 def voice_mode() -> None:
