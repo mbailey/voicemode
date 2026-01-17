@@ -163,14 +163,6 @@ def logs(lines):
     click.echo(result)
 
 
-@kokoro.command("update-service-files")
-def kokoro_update_service_files():
-    """Update Kokoro service files to latest version."""
-    from voice_mode.tools.service import update_service_files
-    result = asyncio.run(update_service_files("kokoro"))
-    click.echo(result)
-
-
 @kokoro.command()
 def health():
     """Check Kokoro health endpoint."""
@@ -338,14 +330,6 @@ def whisper_service_logs(lines):
     """View Whisper service logs."""
     from voice_mode.tools.service import view_logs
     result = asyncio.run(view_logs("whisper", lines))
-    click.echo(result)
-
-
-@whisper_service.command("update-files")
-def whisper_update_service_files():
-    """Update Whisper service files to latest version."""
-    from voice_mode.tools.service import update_service_files
-    result = asyncio.run(update_service_files("whisper"))
     click.echo(result)
 
 
