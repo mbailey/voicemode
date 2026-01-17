@@ -1,7 +1,6 @@
 """Unified service management tool for voice mode services."""
 
 import asyncio
-import json
 import logging
 import os
 import platform
@@ -19,27 +18,6 @@ from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support, is_kokoro_starting_up
 
 logger = logging.getLogger("voicemode")
-
-
-def load_service_file_version(service_name: str, file_type: str) -> Optional[str]:
-    """Load version information for a service file."""
-    versions_file = Path(__file__).parent.parent / "data" / "versions.json"
-    if not versions_file.exists():
-        return None
-    
-    try:
-        with open(versions_file) as f:
-            versions = json.load(f)
-        
-        if file_type == "plist":
-            filename = f"com.voicemode.{service_name}.plist"
-        else:  # systemd
-            filename = f"voicemode-{service_name}.service"
-        
-        return versions.get("service_files", {}).get(filename)
-    except Exception as e:
-        logger.error(f"Error loading versions: {e}")
-        return None
 
 
 def get_service_config_vars(service_name: str) -> Dict[str, Any]:
@@ -98,34 +76,6 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
         }
     else:
         raise ValueError(f"Unknown service: {service_name}")
-
-
-def get_installed_service_version(service_name: str) -> Optional[str]:
-    """Get the version of an installed service file."""
-    system = platform.system()
-    
-    if system == "Darwin":
-        file_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
-    else:
-        file_path = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
-    
-    if not file_path.exists():
-        return None
-    
-    try:
-        content = file_path.read_text()
-        # Extract version from comment
-        for line in content.split('\n'):
-            if 'v' in line and ('<!--' in line or '#' in line):
-                # Extract version number
-                import re
-                match = re.search(r'v(\d+\.\d+\.\d+)', line)
-                if match:
-                    return match.group(1)
-    except Exception as e:
-        logger.debug(f"Could not read version from {file_path}: {e}")
-    
-    return None
 
 
 def load_service_template(service_name: str) -> str:

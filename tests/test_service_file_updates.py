@@ -8,22 +8,9 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from voice_mode.tools.service import (
-    load_service_file_version,
-    get_installed_service_version,
     get_service_config_vars,
 )
 from voice_mode.utils.gpu_detection import has_gpu_support
-
-
-def test_load_service_file_version():
-    """Test loading service file versions from versions.json."""
-    # Test for kokoro on macOS
-    version = load_service_file_version("kokoro", "plist")
-    assert version == "1.3.0"  # Updated in v1.3.0 for simplified templates
-
-    # Test for whisper on Linux
-    version = load_service_file_version("whisper", "service")
-    assert version == "1.2.0"  # Updated in v1.2.0 for simplified templates
 
 
 def test_get_service_config_vars():
@@ -41,20 +28,6 @@ def test_get_service_config_vars():
     kokoro_vars = get_service_config_vars("kokoro")
     assert "HOME" in kokoro_vars
     assert "START_SCRIPT" in kokoro_vars
-
-
-def test_service_status_shows_version_info():
-    """Test that status shows service file version information."""
-    # This is tested via integration tests since it requires a running service
-    # But we can test the version extraction logic
-    with patch('voice_mode.tools.service.get_installed_service_version') as mock_installed:
-        with patch('voice_mode.tools.service.load_service_file_version') as mock_template:
-            mock_installed.return_value = "1.0.0"
-            mock_template.return_value = "1.1.0"
-            
-            # The actual status function would include this info
-            # We're just testing the version comparison logic here
-            assert mock_installed.return_value != mock_template.return_value
 
 
 def test_get_service_config_vars_handles_missing_start_script():
