@@ -652,97 +652,6 @@ async def disable_service(service_name: str) -> str:
         return f"❌ Error disabling {service_name} service: {str(e)}"
 
 
-async def update_service_files(service_name: str) -> str:
-    """Update service files to the latest version from templates."""
-    system = platform.system()
-    
-    # Get template versions
-    template_versions = load_service_file_version(service_name, "plist" if system == "Darwin" else "service")
-    if not template_versions:
-        return "❌ Could not load template version information"
-    
-    # Get installed versions
-    installed_version = get_installed_service_version(service_name)
-    
-    if installed_version == template_versions:
-        return f"✅ Service files are already up to date (version {installed_version})"
-    
-    try:
-        # Load template
-        template_content = load_service_template(service_name)
-        
-        if system == "Darwin":
-            # Update launchd plist
-            plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
-            
-            # Check if service is running
-            was_running = find_process_by_port(WHISPER_PORT if service_name == "whisper" else KOKORO_PORT) is not None
-            
-            if was_running:
-                # Unload the service first
-                subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True)
-                await asyncio.sleep(1)
-            
-            # Backup existing file
-            if plist_path.exists():
-                backup_path = plist_path.with_suffix(f".backup.{installed_version or 'unknown'}")
-                plist_path.rename(backup_path)
-            
-            # Write new plist with current configuration
-            config_vars = get_service_config_vars(service_name)
-            final_content = template_content
-            for key, value in config_vars.items():
-                final_content = final_content.replace(f"{{{key}}}", str(value))
-            
-            plist_path.write_text(final_content)
-            
-            # Also update wrapper script if it exists
-            wrapper_name = f"start-{service_name}-with-health-check.sh"
-            wrapper_template = Path(__file__).parent.parent / "templates" / "launchd" / wrapper_name
-            if wrapper_template.exists():
-                wrapper_dest = Path(config_vars.get('KOKORO_DIR', config_vars.get('WORKING_DIR', ''))) / wrapper_name
-                if wrapper_dest.parent.exists():
-                    wrapper_content = wrapper_template.read_text()
-                    for key, value in config_vars.items():
-                        wrapper_content = wrapper_content.replace(f"{{{key}}}", str(value))
-                    wrapper_dest.write_text(wrapper_content)
-                    wrapper_dest.chmod(0o755)
-            
-            if was_running:
-                # Reload the service
-                subprocess.run(["launchctl", "load", str(plist_path)], capture_output=True)
-                await asyncio.sleep(2)
-            
-            return f"✅ Updated {service_name} service files from version {installed_version or 'unknown'} to {template_versions}"
-            
-        else:  # Linux
-            # Update systemd service
-            service_path = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
-            
-            # Backup existing file
-            if service_path.exists():
-                backup_path = service_path.with_suffix(f".backup.{installed_version or 'unknown'}")
-                service_path.rename(backup_path)
-            
-            # Write new service file with current configuration
-            config_vars = get_service_config_vars(service_name)
-            final_content = template_content
-            for key, value in config_vars.items():
-                final_content = final_content.replace(f"{{{key}}}", str(value))
-            
-            service_path.parent.mkdir(parents=True, exist_ok=True)
-            service_path.write_text(final_content)
-            
-            # Reload systemd daemon
-            subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
-            
-            return f"✅ Updated {service_name} service files from version {installed_version or 'unknown'} to {template_versions}"
-            
-    except Exception as e:
-        logger.error(f"Error updating service files: {e}")
-        return f"❌ Failed to update service files: {str(e)}"
-
-
 async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
     """View service logs."""
     system = platform.system()
@@ -814,7 +723,7 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 @mcp.tool()
 async def service(
     service_name: Literal["whisper", "kokoro"],
-    action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs", "update-service-files"] = "status",
+    action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs"] = "status",
     lines: Optional[Union[int, str]] = None
 ) -> str:
     """Unified service management tool for voice mode services.
@@ -831,7 +740,6 @@ async def service(
             - enable: Configure service to start at boot/login
             - disable: Remove service from boot/login
             - logs: View recent service logs
-            - update-service-files: Update systemd/launchd service files to latest version
         lines: Number of log lines to show (only for logs action, default: 50)
     
     Returns:
@@ -865,8 +773,6 @@ async def service(
         return await disable_service(service_name)
     elif action == "logs":
         return await view_logs(service_name, lines)
-    elif action == "update-service-files":
-        return await update_service_files(service_name)
     else:
         return f"❌ Unknown action: {action}"
 

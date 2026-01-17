@@ -11,7 +11,6 @@ from voice_mode.tools.service import (
     load_service_file_version,
     get_installed_service_version,
     get_service_config_vars,
-    update_service_files
 )
 from voice_mode.utils.gpu_detection import has_gpu_support
 
@@ -42,64 +41,6 @@ def test_get_service_config_vars():
     kokoro_vars = get_service_config_vars("kokoro")
     assert "HOME" in kokoro_vars
     assert "START_SCRIPT" in kokoro_vars
-
-
-@pytest.mark.asyncio
-async def test_update_service_files_already_up_to_date():
-    """Test updating service files when already at latest version."""
-    with patch('voice_mode.tools.service.get_installed_service_version') as mock_installed:
-        with patch('voice_mode.tools.service.load_service_file_version') as mock_template:
-            mock_installed.return_value = "1.1.0"
-            mock_template.return_value = "1.1.0"
-            
-            result = await update_service_files("kokoro")
-            assert "already up to date" in result
-            assert "version 1.1.0" in result
-
-
-@pytest.mark.asyncio
-async def test_update_service_files_needs_update():
-    """Test updating service files when update is needed."""
-    with patch('voice_mode.tools.service.get_installed_service_version') as mock_installed:
-        with patch('voice_mode.tools.service.load_service_file_version') as mock_template:
-            with patch('voice_mode.tools.service.load_service_template') as mock_load:
-                with patch('pathlib.Path.exists') as mock_exists:
-                    with patch('pathlib.Path.write_text') as mock_write:
-                        with patch('pathlib.Path.rename') as mock_rename:
-                            with patch('subprocess.run') as mock_run:
-                                with patch('voice_mode.tools.service.find_process_by_port') as mock_find:
-                                    with patch('voice_mode.tools.service.get_service_config_vars') as mock_config:
-                                        mock_installed.return_value = "1.0.0"
-                                        mock_template.return_value = "1.1.0"
-                                        mock_load.return_value = "template content with {KOKORO_PORT}"
-                                        mock_exists.return_value = False  # Wrapper script doesn't exist
-                                        mock_run.return_value = MagicMock(returncode=0)
-                                        mock_find.return_value = None  # Not running
-                                        mock_config.return_value = {"KOKORO_PORT": 8880, "KOKORO_DIR": "/tmp/kokoro"}
-                                        
-                                        result = await update_service_files("kokoro")
-                                        assert "Updated kokoro service files" in result
-                                        assert "from version 1.0.0 to 1.1.0" in result
-                                    
-                                    # Check that daemon-reload was called for Linux
-                                    import platform
-                                    if platform.system() == "Linux":
-                                        mock_run.assert_called_with(
-                                            ["systemctl", "--user", "daemon-reload"],
-                                            capture_output=True
-                                        )
-
-
-@pytest.mark.asyncio
-async def test_service_update_service_files_action():
-    """Test the update-service-files functionality."""
-    # Just test the update_service_files function directly
-    result = await update_service_files("kokoro")
-    
-    # It should report already up to date or success
-    assert "✅" in result or "❌" in result
-    # Result should mention kokoro or service files
-    assert "kokoro" in result.lower() or "service files" in result.lower()
 
 
 def test_service_status_shows_version_info():
