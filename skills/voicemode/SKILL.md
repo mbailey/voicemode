@@ -118,6 +118,8 @@ See [Configuration Guide](../../docs/guides/configuration.md) for all options.
 
 Background music during VoiceMode sessions with track-level control.
 
+**Location:** The `mpv-dj` script lives in `bin/mpv-dj` within this skill directory.
+
 ```bash
 mpv-dj mfp 49           # Play Music For Programming episode
 mpv-dj status           # What's playing
