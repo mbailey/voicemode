@@ -1,13 +1,4 @@
 {
-  "service_files": {
-    "com.voicemode.whisper.plist": "1.2.0",
-    "com.voicemode.kokoro.plist": "1.3.0",
-    "voicemode-whisper.service": "1.2.0",
-    "voicemode-kokoro.service": "1.2.0",
-    "start-whisper-with-health-check.sh": "1.0.0",
-    "start-kokoro-with-health-check.sh": "1.0.0"
-  },
-  "last_updated": "2025-12-01",
   "min_tool_version": "2.15.0",
   "changelog": {
     "1.0.0": {
