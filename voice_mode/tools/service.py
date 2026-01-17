@@ -286,17 +286,6 @@ async def status_service(service_name: str) -> str:
             except:
                 pass
         
-        # Check service file version
-        installed_version = get_installed_service_version(service_name)
-        template_version = load_service_file_version(service_name, "plist" if platform.system() == "Darwin" else "service")
-        
-        if installed_version and template_version:
-            if installed_version != template_version:
-                extra_info_parts.append(f"Service files: v{installed_version} (v{template_version} available)")
-                extra_info_parts.append("💡 Run 'service {0} update-service-files' to update".format(service_name))
-            else:
-                extra_info_parts.append(f"Service files: v{installed_version} (latest)")
-        
         extra_info = ""
         if extra_info_parts:
             extra_info = "\n   " + "\n   ".join(extra_info_parts)
