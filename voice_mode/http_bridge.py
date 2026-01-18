@@ -826,6 +826,77 @@ async def handle_audio_fetch(request: web.Request) -> web.Response:
     )
 
 
+# Track which audio IDs have been fetched by the watch
+_fetched_audio_ids: set[str] = set()
+
+
+async def handle_audio_pending(request: web.Request) -> web.Response:
+    """
+    Check for pending audio that hasn't been fetched yet.
+
+    GET /audio/pending
+
+    Returns: JSON with pending audio info, or empty if none
+    """
+    # Find audio that hasn't been fetched yet
+    pending = []
+    for audio_id, (audio_data, created, text) in _audio_storage.items():
+        if audio_id not in _fetched_audio_ids:
+            pending.append({
+                "audio_id": audio_id,
+                "text": text,
+                "size": len(audio_data),
+                "created_at": created.isoformat()
+            })
+
+    if not pending:
+        return web.json_response({"pending": []})
+
+    # Sort by creation time, newest first
+    pending.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return web.json_response({"pending": pending})
+
+
+async def handle_audio_fetch_latest(request: web.Request) -> web.Response:
+    """
+    Fetch the latest unfetched audio and mark it as fetched.
+
+    GET /audio/latest
+
+    Returns: Audio data if available, or 204 No Content if none
+    """
+    # Find latest unfetched audio
+    latest_id = None
+    latest_created = None
+
+    for audio_id, (audio_data, created, text) in _audio_storage.items():
+        if audio_id not in _fetched_audio_ids:
+            if latest_created is None or created > latest_created:
+                latest_id = audio_id
+                latest_created = created
+
+    if latest_id is None:
+        return web.Response(status=204)  # No Content
+
+    # Mark as fetched
+    _fetched_audio_ids.add(latest_id)
+
+    audio_data, created, text = _audio_storage[latest_id]
+
+    logger.info(f"Serving latest audio {latest_id}: {len(audio_data)} bytes")
+
+    return web.Response(
+        body=audio_data,
+        content_type="audio/mpeg",
+        headers={
+            "X-Audio-Id": latest_id,
+            "X-Text": text[:100],
+            "Content-Length": str(len(audio_data))
+        }
+    )
+
+
 def create_app() -> web.Application:
     """Create and configure the aiohttp application."""
     app = web.Application()
@@ -848,6 +919,11 @@ def create_app() -> web.Application:
 
     # Push notifications (CLI to watch)
     app.router.add_post("/push", handle_push)
+
+    # Polling fallback (for when FCM doesn't work)
+    # NOTE: Specific routes before wildcard to avoid matching issues
+    app.router.add_get("/audio/pending", handle_audio_pending)
+    app.router.add_get("/audio/latest", handle_audio_fetch_latest)
     app.router.add_get("/audio/{audio_id}", handle_audio_fetch)
 
     return app
