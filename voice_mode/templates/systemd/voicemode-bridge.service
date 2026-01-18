@@ -1,0 +1,28 @@
+# voicemode-bridge.service v1.0.0
+# Last updated: 2025-01-18
+# HTTP Bridge for remote voice interactions (Pixel Watch)
+
+[Unit]
+Description=VoiceMode HTTP Bridge
+After=network.target voicemode-whisper.service voicemode-kokoro.service
+Wants=voicemode-whisper.service voicemode-kokoro.service
+
+[Service]
+Type=simple
+User={USER}
+WorkingDirectory={VOICEMODE_DIR}
+ExecStart={UV_PATH} run python -m voice_mode.http_bridge --port 8890
+Restart=always
+RestartSec=5
+
+# Environment
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="HOME={HOME}"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-bridge
+
+[Install]
+WantedBy=default.target
