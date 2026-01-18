@@ -462,8 +462,8 @@ async def handle_synthesize(request: web.Request) -> web.Response:
             content_type="audio/mpeg",
             headers={
                 "X-Processing-Time-Ms": str(round(processing_time, 1)),
-                "X-Voice": config.get("voice", voice) if config else voice,
-                "X-Provider": config.get("provider", "unknown") if config else "unknown",
+                "X-Voice": used_voice,
+                "X-Provider": used_provider or "unknown",
             }
         )
 
@@ -643,6 +643,189 @@ async def handle_converse(request: web.Request) -> web.Response:
         )
 
 
+# Audio storage for push notifications
+# Maps audio_id -> (audio_bytes, created_at, text)
+_audio_storage: dict[str, tuple[bytes, datetime, str]] = {}
+_audio_cleanup_interval = 300  # 5 minutes
+_audio_max_age = 600  # 10 minutes
+
+
+def cleanup_old_audio():
+    """Remove audio files older than max age."""
+    now = datetime.now()
+    expired = [
+        aid for aid, (_, created, _) in _audio_storage.items()
+        if (now - created).total_seconds() > _audio_max_age
+    ]
+    for aid in expired:
+        del _audio_storage[aid]
+    if expired:
+        logger.info(f"Cleaned up {len(expired)} expired audio files")
+
+
+async def handle_push(request: web.Request) -> web.Response:
+    """
+    Generate TTS and push notification to watch.
+
+    Accepts: JSON with:
+      - text: Text to speak
+      - voice: Optional voice name
+
+    Returns: JSON with status
+    """
+    import aiohttp
+    import ssl
+
+    try:
+        body = await request.json()
+        text = body.get("text")
+        voice = body.get("voice", TTS_VOICES[0] if TTS_VOICES else "af_sky")
+
+        if not text:
+            return web.json_response({"error": "No text provided"}, status=400)
+
+        logger.info(f"Push request: text='{text[:50]}...'")
+
+        # Generate TTS
+        from openai import AsyncOpenAI
+        from .provider_discovery import detect_provider_type, is_local_provider
+
+        audio_data = None
+        used_provider = None
+        used_voice = voice
+
+        for base_url in TTS_BASE_URLS:
+            provider_type = detect_provider_type(base_url)
+            api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
+
+            if provider_type == "openai":
+                openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+                if voice not in openai_voices:
+                    voice_mapping = {
+                        "af_sky": "nova", "af_sarah": "nova", "af_alloy": "alloy",
+                        "am_adam": "onyx", "am_echo": "echo", "am_onyx": "onyx"
+                    }
+                    used_voice = voice_mapping.get(voice, "alloy")
+                else:
+                    used_voice = voice
+            else:
+                used_voice = voice
+
+            max_retries = 0 if is_local_provider(base_url) else 2
+            client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=30.0,
+                max_retries=max_retries
+            )
+
+            try:
+                response = await client.audio.speech.create(
+                    model="tts-1",
+                    input=text,
+                    voice=used_voice,
+                    response_format="mp3"
+                )
+                audio_data = response.content
+                used_provider = provider_type
+                logger.info(f"TTS succeeded with {base_url}")
+                break
+            except Exception as e:
+                logger.warning(f"TTS failed for {base_url}: {e}")
+                continue
+
+        if not audio_data:
+            return web.json_response({"error": "TTS failed"}, status=503)
+
+        # Store audio with unique ID
+        audio_id = str(uuid.uuid4())[:8]
+        _audio_storage[audio_id] = (audio_data, datetime.now(), text)
+        logger.info(f"Stored audio {audio_id}: {len(audio_data)} bytes")
+
+        # Clean up old audio
+        cleanup_old_audio()
+
+        # Build audio URL (watch will fetch from bridge)
+        # Use the bridge's own URL
+        audio_url = f"https://192.168.10.10:8890/audio/{audio_id}"
+
+        # Send notification via Argus
+        argus_url = "https://beelink.local:8080/api/notifications"
+        notification_payload = {
+            "title": "Grotto",
+            "body": text[:100],
+            "to_athena": True,
+            "data": {
+                "type": "grotto_audio",
+                "audio_url": audio_url,
+                "audio_id": audio_id,
+                "text": text
+            }
+        }
+
+        # Load mTLS certs for Argus call
+        cert_dir = Path.home() / ".config" / "argus"
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.load_cert_chain(
+            cert_dir / "client.crt",
+            cert_dir / "client.key"
+        )
+        ssl_ctx.load_verify_locations(cert_dir / "ca.crt")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                argus_url,
+                json=notification_payload,
+                ssl=ssl_ctx
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    sent = result.get("sent", 0)
+                    logger.info(f"Notification sent to {sent} device(s)")
+                    return web.json_response({
+                        "status": "ok",
+                        "audio_id": audio_id,
+                        "audio_url": audio_url,
+                        "audio_size": len(audio_data),
+                        "devices_notified": sent
+                    })
+                else:
+                    error_text = await resp.text()
+                    logger.error(f"Argus notification failed: {error_text}")
+                    return web.json_response({
+                        "error": "Notification failed",
+                        "details": error_text
+                    }, status=502)
+
+    except Exception as e:
+        logger.error(f"Push error: {e}", exc_info=True)
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_audio_fetch(request: web.Request) -> web.Response:
+    """
+    Serve stored audio by ID.
+
+    GET /audio/{audio_id}
+    """
+    audio_id = request.match_info["audio_id"]
+
+    if audio_id not in _audio_storage:
+        return web.json_response({"error": "Audio not found"}, status=404)
+
+    audio_data, created, text = _audio_storage[audio_id]
+
+    return web.Response(
+        body=audio_data,
+        content_type="audio/mpeg",
+        headers={
+            "X-Audio-Id": audio_id,
+            "X-Text": text[:100],
+            "Content-Length": str(len(audio_data))
+        }
+    )
+
+
 def create_app() -> web.Application:
     """Create and configure the aiohttp application."""
     app = web.Application()
@@ -663,21 +846,42 @@ def create_app() -> web.Application:
     # Full conversation
     app.router.add_post("/converse", handle_converse)
 
+    # Push notifications (CLI to watch)
+    app.router.add_post("/push", handle_push)
+    app.router.add_get("/audio/{audio_id}", handle_audio_fetch)
+
     return app
 
 
-async def run_server(host: str, port: int):
+async def run_server(host: str, port: int, ssl_cert: str = None, ssl_key: str = None, ssl_ca: str = None):
     """Run the HTTP server."""
+    import ssl
+
     app = create_app()
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host, port)
+
+    # Configure SSL if certs provided
+    ssl_context = None
+    protocol = "http"
+    if ssl_cert and ssl_key:
+        ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_context.load_cert_chain(ssl_cert, ssl_key)
+        # Require client certificate (mTLS)
+        if ssl_ca:
+            ssl_context.load_verify_locations(ssl_ca)
+            ssl_context.verify_mode = ssl.CERT_REQUIRED
+        protocol = "https"
+
+    site = web.TCPSite(runner, host, port, ssl_context=ssl_context)
 
     logger.info(f"Starting VoiceMode HTTP Bridge v{VERSION}")
-    logger.info(f"  Listening on: http://{host}:{port}")
+    logger.info(f"  Listening on: {protocol}://{host}:{port}")
     logger.info(f"  Mock mode: {MOCK_MODE}")
     logger.info(f"  TTS endpoints: {TTS_BASE_URLS}")
     logger.info(f"  STT endpoints: {STT_BASE_URLS}")
+    if ssl_context:
+        logger.info(f"  mTLS: enabled (ca={ssl_ca})")
 
     await site.start()
 
@@ -697,6 +901,9 @@ def main():
     parser.add_argument("--port", type=int, default=8890, help="Port to listen on")
     parser.add_argument("--mock", action="store_true", help="Enable mock mode")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    parser.add_argument("--ssl-cert", help="Path to SSL certificate")
+    parser.add_argument("--ssl-key", help="Path to SSL private key")
+    parser.add_argument("--ssl-ca", help="Path to CA certificate for client verification (mTLS)")
     args = parser.parse_args()
 
     # Set up logging
@@ -711,7 +918,7 @@ def main():
         MOCK_MODE = True
 
     # Run server
-    asyncio.run(run_server(args.host, args.port))
+    asyncio.run(run_server(args.host, args.port, args.ssl_cert, args.ssl_key, args.ssl_ca))
 
 
 if __name__ == "__main__":
