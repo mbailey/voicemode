@@ -22,7 +22,7 @@ voicemode
 ```
 
 ### serve
-Start the MCP server with HTTP/SSE transport for remote access
+Start the MCP server with HTTP transport for remote access
 
 ```bash
 voicemode serve [OPTIONS]
@@ -30,6 +30,8 @@ voicemode serve [OPTIONS]
 Options:
   --host TEXT                  Host to bind to (default: 127.0.0.1)
   --port INTEGER               Port to bind to (default: 8765)
+  --transport, -t [streamable-http|sse]
+                               Transport protocol to use (default: streamable-http)
   --allow-anthropic            Allow Anthropic IP ranges (160.79.104.0/21)
   --allow-ip CIDR              Add custom CIDR to allowlist (repeatable)
   --allow-local / --no-allow-local
@@ -38,8 +40,14 @@ Options:
   --token TOKEN                Require Bearer token authentication
 
 Examples:
-# Local development (default - localhost only)
+# Local development with streamable-http (default - localhost only)
 voicemode serve
+
+# Explicitly specify streamable-http transport
+voicemode serve --transport streamable-http
+
+# Use SSE transport (deprecated - for legacy compatibility)
+voicemode serve --transport sse
 
 # Allow Anthropic's Claude.ai and Claude Cowork to connect
 voicemode serve --allow-anthropic
@@ -58,7 +66,60 @@ voicemode serve --token my-secret-token
 
 # Defense in depth: combine IP allowlist + token
 voicemode serve --allow-anthropic --token my-secret-token
+
+# SSE with secret path segment (deprecated)
+voicemode serve --transport sse --secret my-secret-uuid
 ```
+
+#### Transport Options
+
+The `--transport` option selects the HTTP transport protocol for the MCP server.
+
+**Streamable HTTP (Recommended)**
+
+The `streamable-http` transport is the modern, recommended transport for MCP servers:
+- Uses `/mcp` as the base endpoint path
+- Better performance and reliability
+- Supports bidirectional streaming
+- Recommended for all new deployments
+
+Example: `voicemode serve --transport streamable-http` creates endpoint at `http://127.0.0.1:8765/mcp`
+
+**SSE (Deprecated)**
+
+The `sse` (Server-Sent Events) transport is maintained for backward compatibility:
+- Uses `/sse` as the base endpoint path
+- One-way server-to-client streaming only
+- Will show a deprecation warning when used
+- Consider migrating to streamable-http
+
+Example: `voicemode serve --transport sse` creates endpoint at `http://127.0.0.1:8765/sse`
+
+**Environment Variable**
+
+You can also set the default transport via environment variable:
+```bash
+export VOICEMODE_SERVE_TRANSPORT=streamable-http  # or 'sse'
+voicemode serve
+```
+
+The CLI option takes precedence over the environment variable.
+
+#### Migrating from SSE to Streamable HTTP
+
+If you are currently using SSE transport and want to migrate to streamable-http:
+
+1. **Update your serve command**: Change `--transport sse` to `--transport streamable-http` (or remove it entirely since streamable-http is the default)
+
+2. **Update your client endpoint**: Change the URL path from `/sse` to `/mcp`:
+   - Before: `http://your-host:8765/sse`
+   - After: `http://your-host:8765/mcp`
+
+3. **If using secret paths**, the structure remains the same:
+   - Before: `http://your-host:8765/sse/{secret}`
+   - After: `http://your-host:8765/mcp/{secret}`
+
+4. **Test your connection** before deploying to production
 
 #### Security Options
 
@@ -71,12 +132,14 @@ By default, localhost connections are allowed (`--allow-local`). Use `--no-allow
 **URL Secret Authentication**
 
 The `--secret` option adds a secret path segment to the endpoint URL:
-- Endpoint becomes `/sse/{secret}` instead of `/sse`
+- Endpoint becomes `/{base_path}/{secret}` instead of `/{base_path}`
 - Acts as a pre-shared key embedded in the URL
 - Returns 404 (not 403) for incorrect paths to avoid revealing endpoint existence
 - Ideal for Claude.ai which accepts any URL but doesn't support OAuth
 
-Example: `voicemode serve --secret abc123` creates endpoint at `/sse/abc123`
+Examples:
+- Streamable HTTP: `voicemode serve --secret abc123` creates endpoint at `/mcp/abc123`
+- SSE: `voicemode serve --transport sse --secret abc123` creates endpoint at `/sse/abc123`
 
 **Bearer Token Authentication**
 
