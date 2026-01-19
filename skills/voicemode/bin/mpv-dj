@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# DEPRECATED: This script is deprecated in favor of `voicemode dj` commands.
+# Use: voicemode dj play, voicemode dj mfp play, voicemode dj status, etc.
+# See: voicemode dj --help for full command reference.
+#
 # mpv-dj - Control background music during VoiceMode sessions
 #
 # Usage:
@@ -18,6 +22,18 @@
 #   mpv-dj favorite [add|list|remove]            Manage favorites
 
 set -e
+
+# Deprecation warning - show once per day
+DEPRECATION_MARKER="${HOME}/.voicemode/.mpv-dj-deprecation-shown"
+if [[ ! -f "$DEPRECATION_MARKER" ]] || [[ $(find "$DEPRECATION_MARKER" -mtime +0 2>/dev/null) ]]; then
+    echo "DEPRECATED: mpv-dj is deprecated. Use 'voicemode dj' instead." >&2
+    echo "  mpv-dj play ...    -> voicemode dj play ..." >&2
+    echo "  mpv-dj mfp 49      -> voicemode dj mfp play 49" >&2
+    echo "  mpv-dj status      -> voicemode dj status" >&2
+    echo "Run 'voicemode dj --help' for all commands." >&2
+    echo "" >&2
+    mkdir -p "$(dirname "$DEPRECATION_MARKER")" && touch "$DEPRECATION_MARKER"
+fi
 
 # Load config file if it exists
 CONFIG_FILE="${HOME}/.voicemode/voicemode.env"

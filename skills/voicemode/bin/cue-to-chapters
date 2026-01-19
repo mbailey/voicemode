@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Convert CUE sheet to FFmpeg chapters format for use with mpv --chapters-file.
 
+DEPRECATED: This script is deprecated. Use `voicemode dj mfp sync` instead, which
+converts CUE files to FFmetadata format automatically.
+
+For programmatic use, import from voice_mode.dj:
+    from voice_mode.dj import convert_cue_to_ffmetadata, convert_cue_file
+
 Usage:
     cue-to-chapters input.cue > chapters.txt
     cue-to-chapters input.cue 8042343 > chapters.txt  # With duration in ms
@@ -19,6 +25,13 @@ Example output:
 """
 import re
 import sys
+import warnings
+
+warnings.warn(
+    "cue-to-chapters is deprecated. Use 'voicemode dj mfp sync' or import from voice_mode.dj",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 def parse_cue_time(time_str: str) -> int:
     """Convert CUE time format (MM:SS:FF) to milliseconds.

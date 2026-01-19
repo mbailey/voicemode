@@ -5,6 +5,14 @@
 """
 mfp-rss-helper - Music For Programming RSS helper
 
+DEPRECATED: This script is deprecated. Use `voicemode dj mfp` commands instead:
+    voicemode dj mfp list         List episodes
+    voicemode dj mfp play <num>   Play episode
+    voicemode dj mfp sync         Sync chapter files
+
+For programmatic use, import from voice_mode.dj:
+    from voice_mode.dj import MfpService
+
 Fetches and caches the MFP RSS feed, providing episode URLs by number.
 Uses smart caching: tries to fetch fresh data, falls back to cache if offline.
 
@@ -28,6 +36,13 @@ from pathlib import Path
 from urllib.request import urlopen
 from urllib.error import URLError
 import re
+import warnings
+
+warnings.warn(
+    "mfp-rss-helper is deprecated. Use 'voicemode dj mfp' commands or import from voice_mode.dj",
+    DeprecationWarning,
+    stacklevel=2,
+)
 import argparse
 
 RSS_URL = "https://musicforprogramming.net/rss.xml"

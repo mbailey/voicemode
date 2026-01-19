@@ -59,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Configurable retry delay via `MPV_SOCKET_DELAY` (default: 0.1 seconds)
   - Clear error message if socket doesn't become available: "Error: mpv socket not ready after Xs"
 
+- **DJ Subcommand Integration** (VM-457)
+  - New `voicemode dj` CLI command group replacing standalone `mpv-dj` bash scripts
+  - Full Python implementation with type-safe models and testable architecture
+  - **Core playback:** `voicemode dj play/stop/pause/resume/status`
+  - **Navigation:** `voicemode dj next/prev/volume`
+  - **Music For Programming:** `voicemode dj mfp list/play/sync` with RSS feed integration
+  - **Music library:** `voicemode dj find`, `voicemode dj library scan/stats`
+  - **History & favorites:** `voicemode dj history`, `voicemode dj favorite`
+  - DJ module exported from main package: `from voice_mode import DJController`
+  - 168 unit tests with mock backend for mpv IPC
+  - Standalone bash scripts (`mpv-dj`, `mpv-dj-library`, `cue-to-chapters`, `mfp-rss-helper`) deprecated
+
 ### Fixed
 
 - **MFP Episode References** (VM-376)

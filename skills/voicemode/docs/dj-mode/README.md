@@ -2,47 +2,53 @@
 
 Background music control during VoiceMode sessions, powered by mpv with IPC.
 
-## Scripts
-
-DJ Mode scripts are located in `skills/voicemode/bin/`:
-
-| Script | Description |
-|--------|-------------|
-| `mpv-dj` | Main DJ control interface |
-| `mfp-rss-helper` | RSS feed helper for Music For Programming |
-| `cue-to-ffmeta` | Convert CUE files to FFmpeg chapter format |
-
 ## Quick Start
 
 ```bash
 # Play Music For Programming (default content)
-mpv-dj mfp 49                              # Episode 49
+voicemode dj mfp play 49                   # Episode 49
 
 # Play any audio with chapters
-mpv-dj play file.mp3 --chapters file.txt   # Local file
-mpv-dj play "https://..." --chapters f.txt # HTTP stream
+voicemode dj play file.mp3 --chapters file.txt   # Local file
+voicemode dj play "https://..." --chapters f.txt # HTTP stream
 
 # Control playback
-mpv-dj status    # What's playing
-mpv-dj next      # Skip to next track
-mpv-dj volume 50 # Set volume (0-100)
-mpv-dj stop      # Stop playback
+voicemode dj status    # What's playing
+voicemode dj next      # Skip to next track
+voicemode dj volume 50 # Set volume (0-100)
+voicemode dj stop      # Stop playback
 ```
 
 ## Commands
 
+### Core Playback
+
 | Command | Description |
 |---------|-------------|
-| `mpv-dj play <source> [--chapters <file>]` | Start playback |
-| `mpv-dj mfp <episode>` | Play Music For Programming episode |
-| `mpv-dj status` | Show current track, position, volume |
-| `mpv-dj pause` / `resume` | Pause or resume playback |
-| `mpv-dj next` / `prev` | Navigate chapters |
-| `mpv-dj volume <0-100>` | Set volume |
-| `mpv-dj stop` | Stop playback |
-| `mpv-dj history [limit]` | Show play history |
-| `mpv-dj favorite [add\|list\|remove]` | Manage favorites |
-| `mpv-dj raw '<json>'` | Send raw IPC command |
+| `voicemode dj play <source> [--chapters <file>]` | Start playback |
+| `voicemode dj status` | Show current track, position, volume |
+| `voicemode dj pause` / `resume` | Pause or resume playback |
+| `voicemode dj next` / `prev` | Navigate chapters |
+| `voicemode dj volume [0-100]` | Get or set volume |
+| `voicemode dj stop` | Stop playback |
+
+### Music For Programming
+
+| Command | Description |
+|---------|-------------|
+| `voicemode dj mfp list [--all]` | List episodes with chapters |
+| `voicemode dj mfp play <episode>` | Play episode by number |
+| `voicemode dj mfp sync [--force]` | Convert CUE files to FFmetadata |
+
+### Music Library
+
+| Command | Description |
+|---------|-------------|
+| `voicemode dj find <query>` | Search library by artist/album/title |
+| `voicemode dj library scan [--path]` | Index music folder |
+| `voicemode dj library stats` | Show library statistics |
+| `voicemode dj history [--limit]` | Show play history |
+| `voicemode dj favorite` | Toggle favorite on current track |
 
 ## Documentation
 
@@ -85,24 +91,23 @@ The DJ starts at 50% volume by default, which works well during voice conversati
 
 ### Play History
 
-Every MFP episode played is recorded:
+Tracks played from the indexed music library are recorded:
 
 ```bash
-mpv-dj history       # Show last 10
-mpv-dj history 20    # Show last 20
+voicemode dj history            # Show last 20 plays
+voicemode dj history --limit 50 # Show last 50 plays
 ```
 
-History stored in `~/.voicemode/dj/history.json` (last 100 entries).
+History is stored in the music library database (`~/.voicemode/dj/library.db`).
 
 ### Favorites
 
-Save tracks you like while playing:
+Toggle favorite status on the currently playing track:
 
 ```bash
-mpv-dj favorite add         # Save current track
-mpv-dj favorite list        # Show all favorites
-mpv-dj favorite remove 1    # Remove by index
+voicemode dj favorite    # Toggle favorite on current track
+voicemode dj find "*"    # Favorites marked with *
 ```
 
-Favorites include track title, source, and timestamp position.
-Data stored in `~/.voicemode/dj/favorites.json`.
+Note: History and favorites require tracks to be indexed in the music library.
+Run `voicemode dj library scan` to index your music folder first.

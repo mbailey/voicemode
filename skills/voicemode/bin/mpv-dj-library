@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# DEPRECATED: This script is deprecated in favor of `voicemode dj library` commands.
+# Use: voicemode dj library scan, voicemode dj library stats, voicemode dj find, etc.
+# See: voicemode dj library --help for full command reference.
+#
 # mpv-dj-library - Music library indexing for DJ mode
 #
 # Usage:
@@ -11,6 +15,18 @@
 #   mpv-dj-library stats                   Show library statistics
 
 set -e
+
+# Deprecation warning - show once per day
+DEPRECATION_MARKER="${HOME}/.voicemode/.mpv-dj-library-deprecation-shown"
+if [[ ! -f "$DEPRECATION_MARKER" ]] || [[ $(find "$DEPRECATION_MARKER" -mtime +0 2>/dev/null) ]]; then
+    echo "DEPRECATED: mpv-dj-library is deprecated. Use 'voicemode dj library' instead." >&2
+    echo "  mpv-dj-library scan      -> voicemode dj library scan" >&2
+    echo "  mpv-dj-library search    -> voicemode dj find" >&2
+    echo "  mpv-dj-library stats     -> voicemode dj library stats" >&2
+    echo "Run 'voicemode dj library --help' for all commands." >&2
+    echo "" >&2
+    mkdir -p "$(dirname "$DEPRECATION_MARKER")" && touch "$DEPRECATION_MARKER"
+fi
 
 # Configuration
 LIBRARY_DB="${HOME}/.voicemode/music-library.db"
