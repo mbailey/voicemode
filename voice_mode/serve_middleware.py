@@ -33,11 +33,15 @@ Usage:
 """
 
 import ipaddress
+import logging
+import time
 from typing import Callable, List, Optional, Union
 
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
+
+logger = logging.getLogger("voicemode")
 
 
 # Anthropic's outbound IP ranges for Claude Code connections
@@ -124,6 +128,70 @@ def ip_in_cidrs(
             continue
 
     return False
+
+
+class AccessLogMiddleware:
+    """Pure ASGI middleware to log requests with X-Forwarded-For header.
+
+    Logs each request showing both the direct client IP and the
+    X-Forwarded-For header (if present) for debugging proxy setups.
+
+    Attributes:
+        app: The wrapped ASGI application.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Initialize the access log middleware.
+
+        Args:
+            app: The ASGI application to wrap.
+        """
+        self.app = app
+
+    async def __call__(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        """Process ASGI requests and log access info.
+
+        Args:
+            scope: The ASGI connection scope.
+            receive: The receive callable.
+            send: The send callable.
+        """
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Extract request info
+        request = Request(scope, receive, send)
+        method = request.method
+        path = request.url.path
+        query = request.url.query
+        full_path = f"{path}?{query}" if query else path
+
+        # Get IPs
+        direct_ip = request.client.host if request.client else "unknown"
+        forwarded_for = request.headers.get("X-Forwarded-For", "-")
+        real_ip = get_client_ip(request)
+
+        # Capture response status
+        status_code = 0
+        start_time = time.time()
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            duration_ms = (time.time() - start_time) * 1000
+            # Log with X-Forwarded-For info
+            logger.info(
+                f'{direct_ip} [fwd: {forwarded_for}] -> {real_ip} - "{method} {full_path}" {status_code} ({duration_ms:.0f}ms)'
+            )
 
 
 class IPAllowlistMiddleware:

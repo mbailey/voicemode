@@ -1586,6 +1586,7 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
     from .server import mcp
     from .config import setup_logging
     from .serve_middleware import (
+        AccessLogMiddleware,
         IPAllowlistMiddleware,
         TokenAuthMiddleware,
         ANTHROPIC_CIDRS,
@@ -1695,10 +1696,22 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
     if allowed_cidrs:
         app.add_middleware(IPAllowlistMiddleware, allowed_cidrs=allowed_cidrs)
 
+    # Add access logging middleware (runs first, logs all requests)
+    app.add_middleware(AccessLogMiddleware)
+
     try:
         # Run the app with uvicorn directly to use our middleware
         import uvicorn
-        uvicorn.run(app, host=host, port=port, log_level=log_level.lower())
+
+        # Disable uvicorn's access logging - we use our own AccessLogMiddleware
+        # which shows X-Forwarded-For headers
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level=log_level.lower(),
+            access_log=False,  # Disable uvicorn access log, use our middleware instead
+        )
     except KeyboardInterrupt:
         click.echo("\nServer stopped")
     except Exception as e:
