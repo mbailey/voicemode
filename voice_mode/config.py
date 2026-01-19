@@ -1227,8 +1227,8 @@ SERVE_SECRET = os.getenv("VOICEMODE_SERVE_SECRET", "")
 # Bearer token for authentication (default: empty/disabled)
 SERVE_TOKEN = os.getenv("VOICEMODE_SERVE_TOKEN", "")
 
-# Transport protocol for serve command (streamable-http or sse, default: sse for backwards compat)
-SERVE_TRANSPORT = os.getenv("VOICEMODE_SERVE_TRANSPORT", "sse")
+# Transport protocol (streamable-http or sse)
+SERVE_TRANSPORT = os.getenv("VOICEMODE_SERVE_TRANSPORT", "streamable-http")
 
 # ==================== THINK OUT LOUD CONFIGURATION ====================
 

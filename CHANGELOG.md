@@ -9,21 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Support for All Claude Products** (VM-434, VM-458)
+- **Support for All Claude Products** (VM-434, VM-458, VM-462)
   - VoiceMode now works with Claude.ai, Claude Desktop, Claude Cowork, and Claude Mobile
-  - New `voicemode serve` command exposes VoiceMode as HTTP/SSE MCP server
+  - New `voicemode serve` command exposes VoiceMode as HTTP MCP server
+  - **Transport options:**
+    - `--transport` / `-t` to select protocol: `streamable-http` (default) or `sse`
+    - `streamable-http` uses `/mcp` endpoint (recommended)
+    - `sse` uses `/sse` endpoint (deprecated, shows warning)
   - **Security options:**
     - `--allow-anthropic` to allow Anthropic's outbound IP ranges (160.79.104.0/21)
     - `--allow-tailscale` to allow Tailscale network ranges (100.64.0.0/10)
     - `--allow-ip` to add custom CIDR ranges to allowlist (repeatable)
     - `--allow-local/--no-allow-local` to control localhost access (default: true)
-    - `--secret` for URL path authentication (endpoint becomes `/sse/{secret}`)
+    - `--secret` for URL path authentication (endpoint becomes `/{base}/{secret}`)
     - `--token` for Bearer token authentication
     - Defense in depth: IP allowlist and token auth can be combined
   - **Operational features:**
     - Access logging with X-Forwarded-For header support for proxy deployments
     - Environment variable configuration via `voicemode.env`
-    - `VOICEMODE_ALLOW_TAILSCALE` and `VOICEMODE_TRANSPORT` env vars
+    - `VOICEMODE_SERVE_TRANSPORT`, `VOICEMODE_ALLOW_TAILSCALE` env vars
 
 - **Multi-Agent Voice Coordination** (VM-399, VM-404, VM-405)
   - Conch lock file at `~/.voicemode/conch` signals when voice conversation is active

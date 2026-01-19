@@ -26,6 +26,7 @@ from voice_mode.config import (
     SERVE_ALLOWED_IPS,
     SERVE_SECRET,
     SERVE_TOKEN,
+    SERVE_TRANSPORT,
 )
 
 
@@ -1501,6 +1502,9 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
 @click.help_option('-h', '--help')
 @click.option('--host', default='127.0.0.1', help='Host to bind to (use 0.0.0.0 for all interfaces)')
 @click.option('--port', '-p', default=8765, type=int, help='Port to bind to')
+@click.option('--transport', '-t', default=SERVE_TRANSPORT,
+              type=click.Choice(['streamable-http', 'sse']),
+              help='MCP transport protocol (streamable-http is recommended, sse is deprecated)')
 @click.option('--log-level', default='info', type=click.Choice(['debug', 'info', 'warning', 'error']),
               help='Logging level')
 @click.option('--allow-anthropic/--no-allow-anthropic', default=None,
@@ -1515,7 +1519,7 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
               help='Require a secret path segment for access (e.g., --secret=my-uuid)')
 @click.option('--token', default=None,
               help='Require Bearer token authentication via Authorization header')
-def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
+def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic: bool | None,
           allow_tailscale: bool | None, allow_ip: tuple, allow_local: bool | None,
           secret: str | None, token: str | None):
     """Start VoiceMode as an HTTP/SSE server for remote access.
@@ -1579,6 +1583,14 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
         LOCAL_CIDRS,
     )
 
+    # Warn if SSE transport is used (deprecated in favor of streamable-http)
+    if transport == "sse":
+        click.echo(
+            click.style("Warning: ", fg="yellow", bold=True) +
+            "SSE transport is deprecated. Use --transport streamable-http for the modern protocol.",
+            err=True
+        )
+
     # Set up logging based on level
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     logger = setup_logging()
@@ -1617,9 +1629,15 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
     has_token = bool(token)  # token is set and non-empty
     has_security = has_ip_allowlist or has_secret or has_token
 
-    # Build the SSE endpoint URL
-    sse_path = f"/sse/{secret}" if secret else "/sse"
-    sse_url = f"http://{host}:{port}{sse_path}"
+    # Determine base path based on transport
+    if transport == "streamable-http":
+        base_path = "/mcp"
+    else:  # sse
+        base_path = "/sse"
+
+    # Build the endpoint path with optional secret segment
+    endpoint_path = f"{base_path}/{secret}" if has_secret else base_path
+    endpoint_url = f"http://{host}:{port}{endpoint_path}"
 
     # Helper to mask secrets
     def mask_secret(s: str, show_chars: int = 4) -> str:
@@ -1628,7 +1646,8 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
         return s[:show_chars] + "..."
 
     # Log startup info
-    click.echo(f"Starting VoiceMode HTTP/SSE server on {host}:{port}")
+    click.echo(f"Starting VoiceMode MCP server on {host}:{port}")
+    click.echo(f"Transport: {transport}")
     click.echo()
 
     # Print security configuration if any is enabled
@@ -1660,19 +1679,17 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
 
         click.echo()
 
-    click.echo(f"SSE endpoint: {sse_url}")
+    click.echo(f"Endpoint: {endpoint_url}")
     click.echo(f"Log level: {log_level}")
     click.echo()
     click.echo("Connect with mcp-remote:")
-    click.echo(f"  npx mcp-remote {sse_url}")
+    click.echo(f"  npx mcp-remote {endpoint_url}")
     click.echo()
     click.echo("Press Ctrl+C to stop the server")
     click.echo()
 
-    # Get the SSE app using http_app with sse transport (fastmcp 2.14+ API)
-    # Configure the SSE path - use secret as part of path if provided
-    sse_path = f"/sse/{secret}" if has_secret else "/sse"
-    app = mcp.http_app(transport="sse", path=sse_path)
+    # Create the app with the selected transport (fastmcp 2.14+ API)
+    app = mcp.http_app(transport=transport, path=endpoint_path)
 
     # Note: Middleware is applied in reverse order (last added = first executed)
     # Add token auth middleware (checked after IP allowlist)
