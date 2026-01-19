@@ -33,11 +33,11 @@ Usage:
 """
 
 import ipaddress
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 
 # Anthropic's outbound IP ranges for Claude Code connections
@@ -120,14 +120,18 @@ def ip_in_cidrs(
     return False
 
 
-class IPAllowlistMiddleware(BaseHTTPMiddleware):
-    """Middleware to restrict access based on client IP addresses.
+class IPAllowlistMiddleware:
+    """Pure ASGI middleware to restrict access based on client IP addresses.
 
     This middleware checks incoming requests against a list of allowed
     CIDR ranges and returns a 403 Forbidden response for requests from
     IPs not in the allowlist.
 
+    Uses pure ASGI style instead of BaseHTTPMiddleware to support SSE
+    streaming without response buffering issues.
+
     Attributes:
+        app: The wrapped ASGI application.
         allowed_cidrs: List of allowed CIDR notation strings.
 
     Example:
@@ -139,55 +143,67 @@ class IPAllowlistMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         allowed_cidrs: List[str],
     ) -> None:
         """Initialize the IP allowlist middleware.
 
         Args:
-            app: The Starlette/FastAPI application.
+            app: The ASGI application to wrap.
             allowed_cidrs: List of allowed CIDR notation strings.
         """
-        super().__init__(app)
+        self.app = app
         self.allowed_cidrs = allowed_cidrs
 
-    async def dispatch(
-        self, request: Request, call_next
-    ) -> Response:
-        """Process a request and check IP against allowlist.
+    async def __call__(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        """Process ASGI requests and check IP against allowlist.
 
         Args:
-            request: The incoming request.
-            call_next: The next middleware or route handler.
-
-        Returns:
-            The response from the next handler if allowed,
-            or a 403 Forbidden response if the IP is not allowed.
+            scope: The ASGI connection scope.
+            receive: The receive callable.
+            send: The send callable.
         """
+        if scope["type"] != "http":
+            # Pass through non-HTTP requests (websocket, lifespan, etc.)
+            await self.app(scope, receive, send)
+            return
+
+        # Build a Request object to use get_client_ip helper
+        request = Request(scope, receive, send)
         client_ip = get_client_ip(request)
 
         if not ip_in_cidrs(client_ip, self.allowed_cidrs):
-            return Response(
+            # Return 403 Forbidden
+            response = Response(
                 content=f"Forbidden: IP address {client_ip} is not allowed",
                 status_code=403,
                 media_type="text/plain",
             )
+            await response(scope, receive, send)
+            return
 
-        return await call_next(request)
+        # IP is allowed, pass through to app
+        await self.app(scope, receive, send)
 
 
-class SecretPathMiddleware(BaseHTTPMiddleware):
-    """Middleware to require a secret path segment for access.
+class SecretPathMiddleware:
+    """Pure ASGI middleware to require a secret path segment for access.
 
     This middleware validates that requests include the correct secret
     in the URL path. If the secret is incorrect or missing, a 404 Not Found
     response is returned (not 403, to avoid revealing that the endpoint exists).
+
+    Uses pure ASGI style instead of BaseHTTPMiddleware to support SSE
+    streaming without response buffering issues.
 
     The secret acts as a pre-shared key in the URL. For example:
     - Without secret: /sse
     - With secret: /sse/my-secret-uuid
 
     Attributes:
+        app: The wrapped ASGI application.
         secret: The required secret path segment, or None to disable.
         base_path: The base path that requires authentication (e.g., "/sse").
 
@@ -209,39 +225,42 @@ class SecretPathMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         secret: Optional[str],
         base_path: str = "/sse",
     ) -> None:
         """Initialize the secret path middleware.
 
         Args:
-            app: The Starlette/FastAPI application.
+            app: The ASGI application to wrap.
             secret: The required secret path segment, or None to disable auth.
             base_path: The base path that requires authentication.
         """
-        super().__init__(app)
+        self.app = app
         self.secret = secret
         self.base_path = base_path.rstrip("/")  # Normalize: remove trailing slash
 
-    async def dispatch(
-        self, request: Request, call_next
-    ) -> Response:
-        """Process a request and validate the secret path.
+    async def __call__(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        """Process ASGI requests and validate the secret path.
 
         Args:
-            request: The incoming request.
-            call_next: The next middleware or route handler.
-
-        Returns:
-            The response from the next handler if allowed,
-            or a 404 Not Found response if the secret is invalid.
+            scope: The ASGI connection scope.
+            receive: The receive callable.
+            send: The send callable.
         """
+        if scope["type"] != "http":
+            # Pass through non-HTTP requests (websocket, lifespan, etc.)
+            await self.app(scope, receive, send)
+            return
+
         # If no secret configured, allow all requests
         if self.secret is None:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        request_path = request.url.path
+        request_path = scope.get("path", "")
 
         # Check if request is for the protected base path
         if request_path == self.base_path or request_path.startswith(self.base_path + "/"):
@@ -250,31 +269,45 @@ class SecretPathMiddleware(BaseHTTPMiddleware):
 
             # Path must match exactly or start with expected_prefix followed by /
             if request_path == expected_prefix or request_path.startswith(expected_prefix + "/"):
-                return await call_next(request)
+                # Rewrite path to strip the secret segment before forwarding
+                # e.g., /sse/secret -> /sse, /sse/secret/foo -> /sse/foo
+                new_path = self.base_path + request_path[len(expected_prefix):]
+                # Ensure we have at least the base path
+                if not new_path:
+                    new_path = self.base_path
+                scope["path"] = new_path
+                await self.app(scope, receive, send)
+                return
 
             # Wrong secret or no secret - return 404 to avoid revealing endpoint
             # Note: We intentionally don't log the actual secret value
-            return Response(
+            response = Response(
                 content="Not Found",
                 status_code=404,
                 media_type="text/plain",
             )
+            await response(scope, receive, send)
+            return
 
         # Request is not for the protected path, allow it through
-        return await call_next(request)
+        await self.app(scope, receive, send)
 
 
-class TokenAuthMiddleware(BaseHTTPMiddleware):
-    """Middleware to require Bearer token authentication.
+class TokenAuthMiddleware:
+    """Pure ASGI middleware to require Bearer token authentication.
 
     This middleware validates that requests include a valid Bearer token
     in the Authorization header. If the token is invalid or missing,
     a 401 Unauthorized response is returned.
 
+    Uses pure ASGI style instead of BaseHTTPMiddleware to support SSE
+    streaming without response buffering issues.
+
     When no token is configured (token=None), all requests are allowed
     through without authentication.
 
     Attributes:
+        app: The wrapped ASGI application.
         token: The required Bearer token, or None to disable authentication.
 
     Example:
@@ -292,62 +325,75 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         token: Optional[str],
     ) -> None:
         """Initialize the token authentication middleware.
 
         Args:
-            app: The Starlette/FastAPI application.
+            app: The ASGI application to wrap.
             token: The required Bearer token, or None to disable authentication.
         """
-        super().__init__(app)
+        self.app = app
         self.token = token
 
-    async def dispatch(
-        self, request: Request, call_next
-    ) -> Response:
-        """Process a request and validate the Bearer token.
+    async def __call__(
+        self, scope: Scope, receive: Receive, send: Send
+    ) -> None:
+        """Process ASGI requests and validate the Bearer token.
 
         Args:
-            request: The incoming request.
-            call_next: The next middleware or route handler.
-
-        Returns:
-            The response from the next handler if allowed,
-            or a 401 Unauthorized response if the token is invalid or missing.
+            scope: The ASGI connection scope.
+            receive: The receive callable.
+            send: The send callable.
         """
+        if scope["type"] != "http":
+            # Pass through non-HTTP requests (websocket, lifespan, etc.)
+            await self.app(scope, receive, send)
+            return
+
         # If no token configured, allow all requests
         if self.token is None:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
+
+        # Build a Request object to access headers
+        request = Request(scope, receive, send)
 
         # Get Authorization header
         auth_header = request.headers.get("Authorization")
 
         if not auth_header:
-            return Response(
+            response = Response(
                 content="Unauthorized: Missing Authorization header",
                 status_code=401,
                 media_type="text/plain",
             )
+            await response(scope, receive, send)
+            return
 
         # Check for Bearer token format
         if not auth_header.startswith("Bearer "):
-            return Response(
+            response = Response(
                 content="Unauthorized: Invalid Authorization header format (expected 'Bearer <token>')",
                 status_code=401,
                 media_type="text/plain",
             )
+            await response(scope, receive, send)
+            return
 
         # Extract and validate token
         provided_token = auth_header[7:]  # Remove "Bearer " prefix
 
         if provided_token != self.token:
             # Note: We intentionally don't log the actual token values
-            return Response(
+            response = Response(
                 content="Unauthorized: Invalid token",
                 status_code=401,
                 media_type="text/plain",
             )
+            await response(scope, receive, send)
+            return
 
-        return await call_next(request)
+        # Token is valid, pass through to app
+        await self.app(scope, receive, send)

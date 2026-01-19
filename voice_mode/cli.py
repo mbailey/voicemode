@@ -1581,7 +1581,6 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
     from .config import setup_logging
     from .serve_middleware import (
         IPAllowlistMiddleware,
-        SecretPathMiddleware,
         TokenAuthMiddleware,
         ANTHROPIC_CIDRS,
         LOCAL_CIDRS,
@@ -1671,25 +1670,24 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
     click.echo("Press Ctrl+C to stop the server")
     click.echo()
 
-    # Get the SSE app and add middleware
-    # Note: Middleware is applied in reverse order (last added = first executed)
-    app = mcp.sse_app()
+    # Get the SSE app using http_app with sse transport (fastmcp 2.14+ API)
+    # Configure the SSE path - use secret as part of path if provided
+    sse_path = f"/sse/{secret}" if has_secret else "/sse"
+    app = mcp.http_app(transport="sse", path=sse_path)
 
+    # Note: Middleware is applied in reverse order (last added = first executed)
     # Add token auth middleware (checked after IP allowlist)
     if has_token:
         app.add_middleware(TokenAuthMiddleware, token=token)
-
-    # Add secret path middleware (checked after token)
-    if has_secret:
-        app.add_middleware(SecretPathMiddleware, secret=secret, base_path="/sse")
 
     # Add IP allowlist middleware (checked first)
     if allowed_cidrs:
         app.add_middleware(IPAllowlistMiddleware, allowed_cidrs=allowed_cidrs)
 
     try:
-        # Run the MCP server with SSE transport
-        mcp.run(transport="sse", host=host, port=port)
+        # Run the app with uvicorn directly to use our middleware
+        import uvicorn
+        uvicorn.run(app, host=host, port=port, log_level=log_level.lower())
     except KeyboardInterrupt:
         click.echo("\nServer stopped")
     except Exception as e:
