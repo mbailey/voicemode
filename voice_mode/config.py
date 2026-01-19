@@ -1207,6 +1207,23 @@ def get_format_export_params(format: str) -> dict:
     
     return params
 
+# ==================== SERVE COMMAND CONFIGURATION ====================
+
+# Allow connections from local/private IP ranges (default: true)
+SERVE_ALLOW_LOCAL = env_bool("VOICEMODE_SERVE_ALLOW_LOCAL", True)
+
+# Allow connections from Anthropic IP ranges for Claude Cowork (default: false)
+SERVE_ALLOW_ANTHROPIC = env_bool("VOICEMODE_SERVE_ALLOW_ANTHROPIC", False)
+
+# Additional allowed CIDR ranges (comma-separated, default: empty)
+SERVE_ALLOWED_IPS = os.getenv("VOICEMODE_SERVE_ALLOWED_IPS", "")
+
+# URL secret path segment for authentication (default: empty/disabled)
+SERVE_SECRET = os.getenv("VOICEMODE_SERVE_SECRET", "")
+
+# Bearer token for authentication (default: empty/disabled)
+SERVE_TOKEN = os.getenv("VOICEMODE_SERVE_TOKEN", "")
+
 # ==================== THINK OUT LOUD CONFIGURATION ====================
 
 # Enable Think Out Loud mode
