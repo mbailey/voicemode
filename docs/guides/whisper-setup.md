@@ -319,8 +319,8 @@ voice-mode statistics
 # Monitor real-time processing
 tail -f ~/.voicemode/services/whisper/logs/performance.log
 
-# Test model functionality
-voice-mode whisper model test base.en
+# List available models
+voice-mode whisper model --all
 ```
 
 ## File Locations
