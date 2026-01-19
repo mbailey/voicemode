@@ -51,8 +51,7 @@ def discover_all_commands() -> List[List[str]]:
     # === WHISPER COMMANDS (restructured with service subgroup) ===
     # Whisper service subcommands
     whisper_service_actions = ['disable', 'enable', 'health', 'install', 'logs',
-                               'restart', 'start', 'status', 'stop', 'uninstall',
-                               'update-files']
+                               'restart', 'start', 'status', 'stop', 'uninstall']
     whisper_service_with_options = ['install', 'logs', 'uninstall']
 
     commands.append(base_cmd + ['whisper', 'service', '--help'])
@@ -69,8 +68,7 @@ def discover_all_commands() -> List[List[str]]:
 
     # === KOKORO COMMANDS (direct, no subgroups) ===
     kokoro_actions = ['disable', 'enable', 'health', 'install', 'logs',
-                      'restart', 'start', 'status', 'stop', 'uninstall',
-                      'update-service-files']
+                      'restart', 'start', 'status', 'stop', 'uninstall']
     kokoro_with_options = ['install', 'logs', 'uninstall']
 
     for action in kokoro_actions:
