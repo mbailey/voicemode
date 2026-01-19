@@ -9,20 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Serve Command Security Options** (VM-458)
-  - `--allow-anthropic` to allow Anthropic's outbound IP ranges (160.79.104.0/21)
-  - `--allow-ip` to add custom CIDR ranges to allowlist (repeatable)
-  - `--allow-local/--no-allow-local` to control localhost access (default: true)
-  - `--secret` for URL path authentication (endpoint becomes `/sse/{secret}`)
-  - `--token` for Bearer token authentication
-  - Defense in depth: IP allowlist and token auth can be combined
-  - Configuration via `voicemode.env` supported
+- **Support for All Claude Products** (VM-434, VM-458)
+  - VoiceMode now works with Claude.ai, Claude Desktop, Claude Cowork, and Claude Mobile
+  - New `voicemode serve` command exposes VoiceMode as HTTP/SSE MCP server
+  - **Security options:**
+    - `--allow-anthropic` to allow Anthropic's outbound IP ranges (160.79.104.0/21)
+    - `--allow-tailscale` to allow Tailscale network ranges (100.64.0.0/10)
+    - `--allow-ip` to add custom CIDR ranges to allowlist (repeatable)
+    - `--allow-local/--no-allow-local` to control localhost access (default: true)
+    - `--secret` for URL path authentication (endpoint becomes `/sse/{secret}`)
+    - `--token` for Bearer token authentication
+    - Defense in depth: IP allowlist and token auth can be combined
+  - **Operational features:**
+    - Access logging with X-Forwarded-For header support for proxy deployments
+    - Environment variable configuration via `voicemode.env`
+    - `VOICEMODE_ALLOW_TAILSCALE` and `VOICEMODE_TRANSPORT` env vars
 
-- **Conch Lock File** (VM-399)
-  - New lock file mechanism at `~/.voicemode/conch` signals when voice conversation is active
+- **Multi-Agent Voice Coordination** (VM-399, VM-404, VM-405)
+  - Conch lock file at `~/.voicemode/conch` signals when voice conversation is active
+  - `wait_for_conch` parameter allows agents to wait for their turn to speak
   - Sound effect hooks automatically mute during voice exchanges
+  - Atomic try_acquire with stale lock detection for crash recovery
   - Prevents notification sounds from disrupting voice recordings
-  - PID-based stale lock detection for crash recovery
+
+- **Auto-Install Voice Services**
+  - Whisper and Kokoro services automatically installed during `voicemode install`
+  - Streamlined first-time setup experience
 
 - **DJ Audio Ducking** (VM-377)
   - Automatically lowers DJ music volume during TTS playback
