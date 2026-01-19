@@ -558,6 +558,43 @@ class MusicLibrary:
 
             return [self._row_to_track(row) for row in cursor.fetchall()]
 
+    def get_history(self, limit: int = 50) -> list[tuple[Track, str]]:
+        """Get recently played tracks.
+
+        Returns tracks with their play timestamps, ordered by most recent first.
+
+        Args:
+            limit: Maximum results to return.
+
+        Returns:
+            List of (Track, played_at) tuples, most recent first.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            cursor.execute(
+                """
+                SELECT
+                    t.id, t.path, t.filename, t.artist, t.album, t.title, t.year,
+                    t.track_number, t.format, t.favorite, t.play_count,
+                    t.is_sidecar, t.sidecar_type, t.parent_track_id,
+                    h.played_at
+                FROM play_history h
+                JOIN tracks t ON h.track_id = t.id
+                ORDER BY h.played_at DESC, h.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+
+            results = []
+            for row in cursor.fetchall():
+                track = self._row_to_track(row)
+                played_at = row["played_at"]
+                results.append((track, played_at))
+            return results
+
     def stats(self) -> LibraryStats:
         """Get library statistics.
 

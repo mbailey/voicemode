@@ -2503,3 +2503,101 @@ def library_stats():
     click.echo(f"Database: {library.db_path}")
 
 
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--limit', '-l', default=20, type=int, help='Number of entries to show')
+def history(limit: int):
+    """Show recently played tracks.
+
+    Displays the play history with timestamps, most recent first.
+    Only shows tracks that are in the indexed music library.
+
+    Examples:
+        voicemode dj history              # Show last 20 plays
+        voicemode dj history --limit 50   # Show last 50 plays
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    entries = library.get_history(limit=limit)
+
+    if not entries:
+        click.echo("No play history yet.")
+        click.echo()
+        click.echo("Play some tracks from your library:")
+        click.echo("  voicemode dj find <search term>")
+        return
+
+    click.echo("Play History")
+    click.echo("============")
+    click.echo()
+
+    for track, played_at in entries:
+        artist = track.artist or "(unknown)"
+        title = track.title
+        fav = "*" if track.is_favorite else ""
+        # Format the timestamp nicely if possible
+        timestamp = played_at[:19] if played_at else ""  # Trim to YYYY-MM-DD HH:MM:SS
+        click.echo(f"[{timestamp}] {fav}{artist} - {title}")
+
+    click.echo()
+    click.echo(f"Showing {len(entries)} play(s)")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def favorite():
+    """Toggle favorite status of the currently playing track.
+
+    Marks the currently playing track as a favorite (or removes it from favorites
+    if already marked). The track must be in the indexed music library.
+
+    Examples:
+        voicemode dj favorite    # Toggle favorite on current track
+    """
+    from pathlib import Path
+    from voice_mode.dj import DJController
+    from voice_mode.dj.library import MusicLibrary
+
+    controller = DJController()
+    status = controller.status()
+
+    if not status:
+        click.echo("DJ is not running", err=True)
+        return
+
+    if not status.path:
+        click.echo("No track path available", err=True)
+        return
+
+    library = MusicLibrary()
+
+    # Try to find the track in the library
+    # The status.path might be an absolute path, so try to match it
+    track_path = Path(status.path)
+
+    # First, try looking up by the path as-is (might be relative)
+    track = library.get_track_by_path(status.path)
+
+    # If not found and it's an absolute path under music_root, try relative
+    if not track and track_path.is_absolute():
+        try:
+            rel_path = str(track_path.relative_to(library.music_root))
+            track = library.get_track_by_path(rel_path)
+        except ValueError:
+            pass
+
+    if not track:
+        click.echo(f"Track not found in library: {status.path}", err=True)
+        click.echo()
+        click.echo("Make sure the track is indexed:")
+        click.echo("  voicemode dj library scan")
+        return
+
+    is_favorite = library.toggle_favorite(track.id)
+    status_str = "added to" if is_favorite else "removed from"
+
+    artist = track.artist or "(unknown)"
+    click.echo(f"{artist} - {track.title} {status_str} favorites")
+
+

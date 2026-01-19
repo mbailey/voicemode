@@ -467,6 +467,72 @@ class TestMusicLibraryPlayHistory:
         track = library.get_track(track_id)
         assert track.play_count == 2
 
+    def test_get_history_empty(self, library):
+        """Test get_history returns empty list when no plays."""
+        library.scan()
+        history = library.get_history()
+        assert history == []
+
+    def test_get_history_returns_plays(self, library):
+        """Test get_history returns recorded plays."""
+        library.scan()
+        results = library.search("One More Time")
+        track_id = results[0].id
+
+        library.record_play(track_id)
+
+        history = library.get_history()
+
+        assert len(history) == 1
+        track, played_at = history[0]
+        assert track.id == track_id
+        assert track.title == "One More Time"
+        assert played_at is not None
+
+    def test_get_history_most_recent_first(self, library):
+        """Test get_history returns most recent plays first."""
+        library.scan()
+        track1 = library.search("One More Time")[0]
+        track2 = library.search("Digital Love")[0]
+
+        # Play track1 first, then track2
+        library.record_play(track1.id)
+        library.record_play(track2.id)
+
+        history = library.get_history()
+
+        assert len(history) == 2
+        # Most recent (track2) should be first (ordered by id DESC as tiebreaker)
+        assert history[0][0].title == "Digital Love"
+        assert history[1][0].title == "One More Time"
+
+    def test_get_history_respects_limit(self, library):
+        """Test get_history respects limit parameter."""
+        library.scan()
+        results = library.search("Daft Punk")
+
+        # Record plays for all 3 Daft Punk tracks
+        for track in results:
+            library.record_play(track.id)
+
+        history = library.get_history(limit=2)
+
+        assert len(history) == 2
+
+    def test_get_history_includes_favorites_status(self, library):
+        """Test get_history includes whether track is favorite."""
+        library.scan()
+        track = library.search("One More Time")[0]
+
+        library.toggle_favorite(track.id)
+        library.record_play(track.id)
+
+        history = library.get_history()
+
+        assert len(history) == 1
+        returned_track, _ = history[0]
+        assert returned_track.is_favorite is True
+
 
 class TestMusicLibraryStats:
     """Tests for MusicLibrary.stats()."""
