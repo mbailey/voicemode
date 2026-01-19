@@ -1520,6 +1520,8 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
               help='Logging level')
 @click.option('--allow-anthropic/--no-allow-anthropic', default=None,
               help='Allow connections from Anthropic IP ranges (for Claude Cowork)')
+@click.option('--allow-tailscale/--no-allow-tailscale', default=None,
+              help='Allow connections from Tailscale IP range (100.64.0.0/10)')
 @click.option('--allow-ip', multiple=True,
               help='Allow connections from custom CIDR ranges (can be specified multiple times)')
 @click.option('--allow-local/--no-allow-local', default=None,
@@ -1529,7 +1531,8 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
 @click.option('--token', default=None,
               help='Require Bearer token authentication via Authorization header')
 def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
-          allow_ip: tuple, allow_local: bool | None, secret: str | None, token: str | None):
+          allow_tailscale: bool | None, allow_ip: tuple, allow_local: bool | None,
+          secret: str | None, token: str | None):
     """Start VoiceMode as an HTTP/SSE server for remote access.
 
     This enables Claude Desktop, Claude Cowork, or other MCP clients to connect
@@ -1555,6 +1558,9 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
 
         # Enable Anthropic IP ranges (for Claude Cowork)
         voicemode serve --host 0.0.0.0 --allow-anthropic
+
+        # Allow all devices on your Tailscale network
+        voicemode serve --allow-tailscale
 
         # Add custom IP allowlist
         voicemode serve --allow-ip 10.0.0.0/8 --allow-ip 192.168.1.100/32
@@ -1583,6 +1589,7 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
         IPAllowlistMiddleware,
         TokenAuthMiddleware,
         ANTHROPIC_CIDRS,
+        TAILSCALE_CIDRS,
         LOCAL_CIDRS,
     )
 
@@ -1611,11 +1618,13 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
         allowed_cidrs.extend(LOCAL_CIDRS)
     if allow_anthropic:
         allowed_cidrs.extend(ANTHROPIC_CIDRS)
+    if allow_tailscale:
+        allowed_cidrs.extend(TAILSCALE_CIDRS)
     if allow_ip:
         allowed_cidrs.extend(allow_ip)
 
     # Determine if any security is enabled
-    has_ip_allowlist = bool(allowed_cidrs) and (allow_anthropic or allow_ip or not allow_local)
+    has_ip_allowlist = bool(allowed_cidrs) and (allow_anthropic or allow_tailscale or allow_ip or not allow_local)
     has_secret = bool(secret)  # secret is set and non-empty
     has_token = bool(token)  # token is set and non-empty
     has_security = has_ip_allowlist or has_secret or has_token
@@ -1645,6 +1654,8 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
                 ip_parts.append("local")
             if allow_anthropic:
                 ip_parts.append(f"Anthropic ({ANTHROPIC_CIDRS[0]})")
+            if allow_tailscale:
+                ip_parts.append(f"Tailscale ({TAILSCALE_CIDRS[0]})")
             if allow_ip:
                 ip_parts.append(f"custom ({len(allow_ip)} CIDRs)")
             click.echo(f"  IP allowlist: {' + '.join(ip_parts)}")

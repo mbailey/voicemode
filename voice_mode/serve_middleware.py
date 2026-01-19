@@ -51,6 +51,12 @@ ANTHROPIC_CIDRS: List[str] = [
     "35.224.118.189/32",
 ]
 
+# Tailscale CGNAT range - covers all devices on any tailnet
+# These IPs are only routable within your tailnet (private network)
+TAILSCALE_CIDRS: List[str] = [
+    "100.64.0.0/10",  # Tailscale CGNAT range
+]
+
 # Local and private network ranges
 LOCAL_CIDRS: List[str] = [
     "127.0.0.0/8",      # IPv4 localhost
