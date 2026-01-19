@@ -267,9 +267,9 @@ cmd_mfp() {
         exit 1
     fi
 
-    # Ensure audio directory exists
+    # Ensure audio and chapters directories exist
     mkdir -p "$MFP_AUDIO_DIR"
-    mkdir -p "$CHAPTERS_DIR"
+    mkdir -p "$MFP_DIR"
 
     stream_url=$("$helper_script" "$episode")
     if [[ $? -ne 0 ]]; then
