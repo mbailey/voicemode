@@ -33,6 +33,7 @@ from .chapters import (
     parse_cue_content,
     get_chapter_count,
 )
+from .library import MusicLibrary, Track, LibraryStats, FileScanner
 
 __all__ = [
     # Core playback
@@ -53,4 +54,9 @@ __all__ = [
     "convert_cue_file",
     "parse_cue_content",
     "get_chapter_count",
+    # Music library
+    "MusicLibrary",
+    "Track",
+    "LibraryStats",
+    "FileScanner",
 ]

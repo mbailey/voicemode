@@ -2370,3 +2370,136 @@ def mfp_sync(force: bool):
     click.echo(f"Cache directory: {service.cache_dir}")
 
 
+# Music library search command (top-level under dj for convenience)
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('query')
+@click.option('--limit', '-l', default=50, type=int, help='Maximum results to show')
+@click.option('--all', '-a', 'include_sidecars', is_flag=True, help='Include sidecars (stems, loops)')
+def find(query: str, limit: int, include_sidecars: bool):
+    """Search music library by artist, album, or title.
+
+    Searches the indexed music library for tracks matching QUERY.
+    Results show track ID, artist, title, and album.
+
+    Examples:
+        voicemode dj find "daft punk"      # Search for Daft Punk tracks
+        voicemode dj find ambient          # Search for ambient music
+        voicemode dj find --limit 10 jazz  # Show top 10 jazz results
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    tracks = library.search(query, limit=limit, include_sidecars=include_sidecars)
+
+    if not tracks:
+        click.echo(f"No tracks found matching '{query}'")
+        click.echo()
+        click.echo("Tip: Make sure you've scanned your library:")
+        click.echo("  voicemode dj library scan --path ~/Audio/music")
+        return
+
+    # Display results in a table format
+    for track in tracks:
+        artist = track.artist or "(unknown)"
+        title = track.title
+        album = track.album or ""
+        fav = "*" if track.is_favorite else ""
+        sidecar = f" [{track.sidecar_type}]" if track.is_sidecar else ""
+        click.echo(f"[{track.id}] {fav}{artist} - {title}{sidecar}")
+        if album:
+            click.echo(f"     Album: {album}")
+
+    click.echo()
+    click.echo(f"Found {len(tracks)} track(s)")
+
+
+# Library subcommand group
+@dj.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def library():
+    """Music library management.
+
+    Commands for scanning, indexing, and managing your local music library.
+
+    Examples:
+        voicemode dj library scan          # Scan default music folder
+        voicemode dj library stats         # Show library statistics
+    """
+    pass
+
+
+@library.command("scan")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--path', '-p', type=click.Path(exists=True), help='Music directory to scan')
+def library_scan(path: str | None):
+    """Scan and index music folder.
+
+    Scans the music directory and indexes all audio files.
+    Metadata is parsed from directory structure: Artist/Year-Album/Track.ext
+
+    Supported formats: mp3, flac, m4a, wav, ogg, opus
+
+    Examples:
+        voicemode dj library scan                    # Scan ~/Audio/music
+        voicemode dj library scan --path ~/Music    # Scan custom path
+    """
+    from pathlib import Path
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    music_path = Path(path) if path else library.music_root
+
+    click.echo(f"Scanning: {music_path}")
+    click.echo()
+
+    count = library.scan(music_path)
+
+    if count > 0:
+        click.echo(f"Indexed {count} file(s)")
+        click.echo()
+        # Show stats
+        stats = library.stats()
+        click.echo(f"Library: {stats.total_tracks} tracks, {stats.total_artists} artists, {stats.total_albums} albums")
+        if stats.total_sidecars > 0:
+            click.echo(f"Sidecars: {stats.total_sidecars} (stems/loops/samples)")
+    else:
+        click.echo("No audio files found.")
+        click.echo()
+        click.echo(f"Make sure {music_path} contains audio files in the format:")
+        click.echo("  Artist/Year-Album/Track.mp3")
+
+
+@library.command("stats")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def library_stats():
+    """Show library statistics.
+
+    Displays summary information about your indexed music library.
+
+    Examples:
+        voicemode dj library stats
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    stats = library.stats()
+
+    if stats.total_tracks == 0:
+        click.echo("Music library is empty.")
+        click.echo()
+        click.echo("Scan your music folder first:")
+        click.echo("  voicemode dj library scan --path ~/Audio/music")
+        return
+
+    click.echo("Music Library Statistics")
+    click.echo("========================")
+    click.echo(f"Total tracks:  {stats.total_tracks}")
+    click.echo(f"Sidecars:      {stats.total_sidecars}")
+    click.echo(f"Favorites:     {stats.total_favorites}")
+    click.echo(f"Artists:       {stats.total_artists}")
+    click.echo(f"Albums:        {stats.total_albums}")
+    click.echo()
+    click.echo(f"Database: {library.db_path}")
+
+
