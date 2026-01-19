@@ -138,12 +138,14 @@ Log levels: `debug`, `info`, `warning`, `error`, `critical`
 | `VOICEMODE_PREFER_LOCAL` | Prefer local services | `true` | `false` |
 | `VOICEMODE_AUTO_START_SERVICES` | Auto-start local services | `false` | `true` |
 
-### Serve Command Security
+### Serve Command
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
+| `VOICEMODE_SERVE_TRANSPORT` | MCP transport protocol (`streamable-http` or `sse`) | `sse` | `streamable-http` |
 | `VOICEMODE_SERVE_ALLOW_LOCAL` | Allow localhost connections | `true` | `false` |
 | `VOICEMODE_SERVE_ALLOW_ANTHROPIC` | Allow Anthropic IP ranges | `false` | `true` |
+| `VOICEMODE_SERVE_ALLOW_TAILSCALE` | Allow Tailscale IP range (100.64.0.0/10) | `false` | `true` |
 | `VOICEMODE_SERVE_ALLOWED_IPS` | Custom CIDR allowlist (comma-separated) | None | `192.168.1.0/24,10.0.0.0/8` |
 | `VOICEMODE_SERVE_SECRET` | URL path secret segment | None | `my-secret-uuid` |
 | `VOICEMODE_SERVE_TOKEN` | Bearer token for authentication | None | `my-secret-token` |

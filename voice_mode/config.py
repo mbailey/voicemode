@@ -1215,6 +1215,9 @@ SERVE_ALLOW_LOCAL = env_bool("VOICEMODE_SERVE_ALLOW_LOCAL", True)
 # Allow connections from Anthropic IP ranges for Claude Cowork (default: false)
 SERVE_ALLOW_ANTHROPIC = env_bool("VOICEMODE_SERVE_ALLOW_ANTHROPIC", False)
 
+# Allow connections from Tailscale IP range 100.64.0.0/10 (default: false)
+SERVE_ALLOW_TAILSCALE = env_bool("VOICEMODE_SERVE_ALLOW_TAILSCALE", False)
+
 # Additional allowed CIDR ranges (comma-separated, default: empty)
 SERVE_ALLOWED_IPS = os.getenv("VOICEMODE_SERVE_ALLOWED_IPS", "")
 
@@ -1223,6 +1226,9 @@ SERVE_SECRET = os.getenv("VOICEMODE_SERVE_SECRET", "")
 
 # Bearer token for authentication (default: empty/disabled)
 SERVE_TOKEN = os.getenv("VOICEMODE_SERVE_TOKEN", "")
+
+# Transport protocol for serve command (streamable-http or sse, default: sse for backwards compat)
+SERVE_TRANSPORT = os.getenv("VOICEMODE_SERVE_TRANSPORT", "sse")
 
 # ==================== THINK OUT LOUD CONFIGURATION ====================
 

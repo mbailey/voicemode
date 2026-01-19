@@ -22,6 +22,7 @@ from voice_mode.config import (
     MIN_RECORDING_DURATION,
     SERVE_ALLOW_LOCAL,
     SERVE_ALLOW_ANTHROPIC,
+    SERVE_ALLOW_TAILSCALE,
     SERVE_ALLOWED_IPS,
     SERVE_SECRET,
     SERVE_TOKEN,
@@ -1605,6 +1606,8 @@ def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
         allow_local = SERVE_ALLOW_LOCAL
     if allow_anthropic is None:
         allow_anthropic = SERVE_ALLOW_ANTHROPIC
+    if allow_tailscale is None:
+        allow_tailscale = SERVE_ALLOW_TAILSCALE
     if not allow_ip and SERVE_ALLOWED_IPS:
         # Parse comma-separated CIDRs from config
         allow_ip = tuple(cidr.strip() for cidr in SERVE_ALLOWED_IPS.split(',') if cidr.strip())
