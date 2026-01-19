@@ -1,5 +1,5 @@
-# voicemode-kokoro.service v1.2.0
-# Last updated: 2025-12-01
+# voicemode-kokoro.service v1.2.1
+# Last updated: 2026-01-20
 # Compatible with: kokoro-fastapi v1.0.0+
 # Simplified: start script handles config via voicemode.env
 
@@ -10,6 +10,7 @@ After=network.target
 [Service]
 Type=simple
 ExecStart={START_SCRIPT}
+WorkingDirectory={KOKORO_DIR}
 Restart=on-failure
 RestartSec=10
 # Don't restart if the executable is missing
