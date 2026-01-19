@@ -20,6 +20,11 @@ from voice_mode.config import (
     DEFAULT_WHISPER_MODEL,
     DEFAULT_LISTEN_DURATION,
     MIN_RECORDING_DURATION,
+    SERVE_ALLOW_LOCAL,
+    SERVE_ALLOW_ANTHROPIC,
+    SERVE_ALLOWED_IPS,
+    SERVE_SECRET,
+    SERVE_TOKEN,
 )
 
 
@@ -1513,7 +1518,18 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
 @click.option('--port', '-p', default=8765, type=int, help='Port to bind to')
 @click.option('--log-level', default='info', type=click.Choice(['debug', 'info', 'warning', 'error']),
               help='Logging level')
-def serve(host, port, log_level):
+@click.option('--allow-anthropic/--no-allow-anthropic', default=None,
+              help='Allow connections from Anthropic IP ranges (for Claude Cowork)')
+@click.option('--allow-ip', multiple=True,
+              help='Allow connections from custom CIDR ranges (can be specified multiple times)')
+@click.option('--allow-local/--no-allow-local', default=None,
+              help='Allow connections from local/private IP ranges (default: enabled)')
+@click.option('--secret', default=None,
+              help='Require a secret path segment for access (e.g., --secret=my-uuid)')
+@click.option('--token', default=None,
+              help='Require Bearer token authentication via Authorization header')
+def serve(host: str, port: int, log_level: str, allow_anthropic: bool | None,
+          allow_ip: tuple, allow_local: bool | None, secret: str | None, token: str | None):
     """Start VoiceMode as an HTTP/SSE server for remote access.
 
     This enables Claude Desktop, Claude Cowork, or other MCP clients to connect
@@ -1537,6 +1553,18 @@ def serve(host, port, log_level):
         # Custom port
         voicemode serve --port 9000
 
+        # Enable Anthropic IP ranges (for Claude Cowork)
+        voicemode serve --host 0.0.0.0 --allow-anthropic
+
+        # Add custom IP allowlist
+        voicemode serve --allow-ip 10.0.0.0/8 --allow-ip 192.168.1.100/32
+
+        # Use secret path for authentication
+        voicemode serve --secret my-secret-uuid
+
+        # Use Bearer token authentication
+        voicemode serve --token my-secret-token
+
     Connect from Claude Desktop using mcp-remote:
 
         {
@@ -1551,22 +1579,113 @@ def serve(host, port, log_level):
     import logging
     from .server import mcp
     from .config import setup_logging
+    from .serve_middleware import (
+        IPAllowlistMiddleware,
+        SecretPathMiddleware,
+        TokenAuthMiddleware,
+        ANTHROPIC_CIDRS,
+        LOCAL_CIDRS,
+    )
 
     # Set up logging based on level
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
     logger = setup_logging()
     logger.setLevel(numeric_level)
 
+    # Apply config defaults when CLI options are not provided
+    # CLI flags always override config file values
+    if allow_local is None:
+        allow_local = SERVE_ALLOW_LOCAL
+    if allow_anthropic is None:
+        allow_anthropic = SERVE_ALLOW_ANTHROPIC
+    if not allow_ip and SERVE_ALLOWED_IPS:
+        # Parse comma-separated CIDRs from config
+        allow_ip = tuple(cidr.strip() for cidr in SERVE_ALLOWED_IPS.split(',') if cidr.strip())
+    if secret is None and SERVE_SECRET:
+        secret = SERVE_SECRET
+    if token is None and SERVE_TOKEN:
+        token = SERVE_TOKEN
+
+    # Build allowed CIDR list
+    allowed_cidrs: list[str] = []
+    if allow_local:
+        allowed_cidrs.extend(LOCAL_CIDRS)
+    if allow_anthropic:
+        allowed_cidrs.extend(ANTHROPIC_CIDRS)
+    if allow_ip:
+        allowed_cidrs.extend(allow_ip)
+
+    # Determine if any security is enabled
+    has_ip_allowlist = bool(allowed_cidrs) and (allow_anthropic or allow_ip or not allow_local)
+    has_secret = bool(secret)  # secret is set and non-empty
+    has_token = bool(token)  # token is set and non-empty
+    has_security = has_ip_allowlist or has_secret or has_token
+
+    # Build the SSE endpoint URL
+    sse_path = f"/sse/{secret}" if secret else "/sse"
+    sse_url = f"http://{host}:{port}{sse_path}"
+
+    # Helper to mask secrets
+    def mask_secret(s: str, show_chars: int = 4) -> str:
+        if len(s) <= show_chars:
+            return s[:1] + "..."
+        return s[:show_chars] + "..."
+
     # Log startup info
     click.echo(f"Starting VoiceMode HTTP/SSE server on {host}:{port}")
-    click.echo(f"SSE endpoint: http://{host}:{port}/sse")
+    click.echo()
+
+    # Print security configuration if any is enabled
+    if has_security:
+        click.echo("Security configuration:")
+
+        # IP allowlist info
+        if allowed_cidrs:
+            ip_parts = []
+            if allow_local:
+                ip_parts.append("local")
+            if allow_anthropic:
+                ip_parts.append(f"Anthropic ({ANTHROPIC_CIDRS[0]})")
+            if allow_ip:
+                ip_parts.append(f"custom ({len(allow_ip)} CIDRs)")
+            click.echo(f"  IP allowlist: {' + '.join(ip_parts)}")
+        else:
+            click.echo("  IP allowlist: disabled (--no-allow-local)")
+
+        # Secret path info
+        if has_secret:
+            click.echo(f"  URL secret: {mask_secret(secret)}")
+
+        # Token auth info
+        if has_token:
+            click.echo(f"  Bearer token: {mask_secret(token)}")
+
+        click.echo()
+
+    click.echo(f"SSE endpoint: {sse_url}")
     click.echo(f"Log level: {log_level}")
     click.echo()
     click.echo("Connect with mcp-remote:")
-    click.echo(f"  npx mcp-remote http://{host}:{port}/sse")
+    click.echo(f"  npx mcp-remote {sse_url}")
     click.echo()
     click.echo("Press Ctrl+C to stop the server")
     click.echo()
+
+    # Get the SSE app and add middleware
+    # Note: Middleware is applied in reverse order (last added = first executed)
+    app = mcp.sse_app()
+
+    # Add token auth middleware (checked after IP allowlist)
+    if has_token:
+        app.add_middleware(TokenAuthMiddleware, token=token)
+
+    # Add secret path middleware (checked after token)
+    if has_secret:
+        app.add_middleware(SecretPathMiddleware, secret=secret, base_path="/sse")
+
+    # Add IP allowlist middleware (checked first)
+    if allowed_cidrs:
+        app.add_middleware(IPAllowlistMiddleware, allowed_cidrs=allowed_cidrs)
 
     try:
         # Run the MCP server with SSE transport

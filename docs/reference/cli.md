@@ -16,10 +16,76 @@ Options:
 ## Core Commands
 
 ### voicemode (default)
-Start the MCP server
+Start the MCP server (stdio transport)
 ```bash
 voicemode
 ```
+
+### serve
+Start the MCP server with HTTP/SSE transport for remote access
+
+```bash
+voicemode serve [OPTIONS]
+
+Options:
+  --host TEXT                  Host to bind to (default: 127.0.0.1)
+  --port INTEGER               Port to bind to (default: 8765)
+  --allow-anthropic            Allow Anthropic IP ranges (160.79.104.0/21)
+  --allow-ip CIDR              Add custom CIDR to allowlist (repeatable)
+  --allow-local / --no-allow-local
+                               Allow localhost connections (default: true)
+  --secret SECRET              Require secret path segment for access
+  --token TOKEN                Require Bearer token authentication
+
+Examples:
+# Local development (default - localhost only)
+voicemode serve
+
+# Allow Anthropic's Claude.ai and Claude Cowork to connect
+voicemode serve --allow-anthropic
+
+# Custom IP allowlist
+voicemode serve --allow-ip 192.168.1.0/24 --allow-ip 10.0.0.0/8
+
+# Strict Anthropic-only mode (no localhost)
+voicemode serve --allow-anthropic --no-allow-local
+
+# URL secret authentication (recommended for Claude.ai)
+voicemode serve --secret my-secret-uuid
+
+# Bearer token authentication
+voicemode serve --token my-secret-token
+
+# Defense in depth: combine IP allowlist + token
+voicemode serve --allow-anthropic --token my-secret-token
+```
+
+#### Security Options
+
+**IP Allowlist**
+
+The `--allow-anthropic` flag adds Anthropic's outbound IP ranges to the allowlist, enabling connections from Claude.ai and Claude Cowork. Use `--allow-ip` to add custom CIDR ranges.
+
+By default, localhost connections are allowed (`--allow-local`). Use `--no-allow-local` to disable this for strict remote-only access.
+
+**URL Secret Authentication**
+
+The `--secret` option adds a secret path segment to the endpoint URL:
+- Endpoint becomes `/sse/{secret}` instead of `/sse`
+- Acts as a pre-shared key embedded in the URL
+- Returns 404 (not 403) for incorrect paths to avoid revealing endpoint existence
+- Ideal for Claude.ai which accepts any URL but doesn't support OAuth
+
+Example: `voicemode serve --secret abc123` creates endpoint at `/sse/abc123`
+
+**Bearer Token Authentication**
+
+The `--token` option requires all requests to include a valid Authorization header:
+```
+Authorization: Bearer <token>
+```
+
+Returns 401 Unauthorized for missing or invalid tokens.
 
 ### converse
 Have a voice conversation directly from the command line

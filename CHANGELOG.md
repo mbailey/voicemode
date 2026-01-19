@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Serve Command Security Options** (VM-458)
+  - `--allow-anthropic` to allow Anthropic's outbound IP ranges (160.79.104.0/21)
+  - `--allow-ip` to add custom CIDR ranges to allowlist (repeatable)
+  - `--allow-local/--no-allow-local` to control localhost access (default: true)
+  - `--secret` for URL path authentication (endpoint becomes `/sse/{secret}`)
+  - `--token` for Bearer token authentication
+  - Defense in depth: IP allowlist and token auth can be combined
+  - Configuration via `voicemode.env` supported
+
 - **Conch Lock File** (VM-399)
   - New lock file mechanism at `~/.voicemode/conch` signals when voice conversation is active
   - Sound effect hooks automatically mute during voice exchanges
