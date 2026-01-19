@@ -2157,3 +2157,69 @@ def resume():
         click.echo("DJ is not running", err=True)
 
 
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def next():
+    """Skip to the next chapter."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    status = controller.next()
+    if status:
+        if status.chapter:
+            click.echo(f"Chapter: {status.chapter}")
+        elif status.chapter_index is not None and status.chapter_count:
+            click.echo(f"Chapter: {status.chapter_index + 1}/{status.chapter_count}")
+        else:
+            click.echo("Skipped to next chapter")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def prev():
+    """Go to the previous chapter."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    status = controller.prev()
+    if status:
+        if status.chapter:
+            click.echo(f"Chapter: {status.chapter}")
+        elif status.chapter_index is not None and status.chapter_count:
+            click.echo(f"Chapter: {status.chapter_index + 1}/{status.chapter_count}")
+        else:
+            click.echo("Skipped to previous chapter")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('level', required=False, type=int)
+def volume(level: int | None):
+    """Get or set the volume level.
+
+    Without LEVEL: Shows the current volume.
+    With LEVEL: Sets volume to the specified level (0-100).
+
+    Examples:
+        voicemode dj volume        # Show current volume
+        voicemode dj volume 30     # Set volume to 30%
+        voicemode dj volume 100    # Set volume to 100%
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    result = controller.volume(level)
+
+    if result is not None:
+        if level is not None:
+            click.echo(f"Volume: {result}%")
+        else:
+            click.echo(f"Volume: {result}%")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
