@@ -6,22 +6,22 @@ Whisper is a local speech recognition service that converts audio to text for Vo
 
 ```bash
 # Install whisper service with default base model (includes Core ML on Apple Silicon!)
-voice-mode whisper install
+voicemode whisper install
 
 # Install with a different model
-voice-mode whisper install --model large-v3
+voicemode whisper install --model large-v3
 
 # Install without any model
-voice-mode whisper install --no-model
+voicemode whisper install --no-model
 
 # List available models and their status
-voice-mode whisper models
+voicemode whisper models
 
 # Download additional models (with Core ML support on Apple Silicon)
-voice-mode whisper model install large-v2
+voicemode whisper model install large-v2
 
 # Start the service
-voice-mode whisper start
+voicemode whisper start
 ```
 
 **Apple Silicon Bonus:** On M1/M2/M3/M4 Macs, VoiceMode automatically downloads pre-built Core ML models for 2-3x faster performance. No Xcode or Python dependencies required!
@@ -36,16 +36,16 @@ VoiceMode includes an installation tool that sets up Whisper.cpp automatically:
 
 ```bash
 # Install with default base model (142MB) - good balance of speed and accuracy
-voice-mode whisper install
+voicemode whisper install
 
 # Install with a specific model
-voice-mode whisper install --model small
+voicemode whisper install --model small
 
 # Skip Core ML on Apple Silicon (not recommended)
-voice-mode whisper install --skip-core-ml
+voicemode whisper install --skip-core-ml
 
 # Install without downloading any model
-voice-mode whisper install --no-model
+voicemode whisper install --no-model
 ```
 
 This will:
@@ -104,7 +104,7 @@ On Apple Silicon Macs (M1/M2/M3/M4), VoiceMode automatically downloads pre-built
 
 To skip Core ML (not recommended):
 ```bash
-voice-mode whisper model install large-v3 --skip-core-ml
+voicemode whisper model install large-v3 --skip-core-ml
 ```
 
 ## Model Management
@@ -130,21 +130,21 @@ voice-mode whisper model install large-v3 --skip-core-ml
 
 ```bash
 # List all models with installation status
-voice-mode whisper models
+voicemode whisper models
 
 # Show/set active model
-voice-mode whisper model active
-voice-mode whisper model active small.en
+voicemode whisper model active
+voicemode whisper model active small.en
 
 # Install models
-voice-mode whisper model install                  # Install default (large-v2)
-voice-mode whisper model install medium           # Install specific model
-voice-mode whisper model install all              # Install all models
-voice-mode whisper model install large-v3 --force # Force re-download
+voicemode whisper model install                  # Install default (large-v2)
+voicemode whisper model install medium           # Install specific model
+voicemode whisper model install all              # Install all models
+voicemode whisper model install large-v3 --force # Force re-download
 
 # Remove models
-voice-mode whisper model remove tiny
-voice-mode whisper model remove tiny.en --force   # Skip confirmation
+voicemode whisper model remove tiny
+voicemode whisper model remove tiny.en --force   # Skip confirmation
 ```
 
 Note: After changing the active model, restart the whisper service for changes to take effect.
@@ -234,7 +234,7 @@ CoreML provides 2-3x faster transcription on Apple Silicon Macs:
 
 ```bash
 # Install with CoreML support (when available)
-voice-mode whisper model install base.en --skip-core-ml=false
+voicemode whisper model install base.en --skip-core-ml=false
 
 # Performance comparison
 # CPU Only: ~1x baseline
@@ -311,16 +311,16 @@ export TTS_VOICE=af_sky                       # Kokoro voice
 
 ```bash
 # Check service status
-voice-mode whisper status
+voicemode whisper status
 
 # View performance statistics
-voice-mode statistics
+voicemode statistics
 
 # Monitor real-time processing
 tail -f ~/.voicemode/services/whisper/logs/performance.log
 
 # List available models
-voice-mode whisper model --all
+voicemode whisper model --all
 ```
 
 ## File Locations
