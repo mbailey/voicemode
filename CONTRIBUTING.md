@@ -58,10 +58,20 @@ pytest tests/test_server_syntax.py
 
 ## Testing Locally
 
+The easiest way to test your changes:
+
+```bash
+uv run voicemode converse
+```
+
+This starts a voice conversation directly, without needing Claude Code or MCP.
+
 ### Testing with MCP
 
-1. Update `.mcp.json` to point to your development version
-2. Run `mcp` to test the connection
+The repo's `.mcp.json` uses `uv run voicemode`, which automatically runs your local development version when Claude Code is started in the repo directory. No configuration changes needed.
+
+1. Start Claude Code from the voicemode repo directory
+2. Your code changes are immediately available via the MCP tools
 3. Use the voice tools to verify functionality
 
 ### Testing Audio
