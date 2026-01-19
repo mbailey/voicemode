@@ -5,7 +5,7 @@ Complete reference of all environment variables used by VoiceMode.
 ## Variable Precedence
 
 Environment variables are processed in this order (highest to lowest priority):
-1. Command-line environment (`OPENAI_API_KEY=xxx voice-mode`)
+1. Command-line environment (`OPENAI_API_KEY=xxx voicemode`)
 2. MCP host configuration
 3. Shell environment variables
 4. Project `.voicemode.env` file
@@ -187,7 +187,7 @@ When used as an MCP server, environment variables can be set in the host configu
 ```json
 {
   "mcpServers": {
-    "voice-mode": {
+    "voicemode": {
       "command": "uvx",
       "args": ["voice-mode"],
       "env": {
@@ -203,10 +203,10 @@ When used as an MCP server, environment variables can be set in the host configu
 
 To see all active environment variables:
 ```bash
-voice-mode config show --env
+voicemode config show --env
 ```
 
 To test with specific variables:
 ```bash
-VOICEMODE_DEBUG=true VOICEMODE_LOG_LEVEL=debug voice-mode converse
+VOICEMODE_DEBUG=true VOICEMODE_LOG_LEVEL=debug voicemode converse
 ```

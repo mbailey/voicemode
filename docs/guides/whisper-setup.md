@@ -268,7 +268,8 @@ export STT_BASE_URL=http://127.0.0.1:2022/v1
 
 Or in MCP configuration:
 ```json
-"voice-mode": {
+"voicemode": {
+  ...
   "env": {
     "STT_BASE_URL": "http://127.0.0.1:2022/v1"
   }

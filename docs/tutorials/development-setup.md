@@ -50,7 +50,7 @@ uv build
 # dist/voice_mode-X.Y.Z.tar.gz
 
 # Test the built package
-uvx --from dist/voice_mode-*.whl voice-mode
+uvx --from dist/voice_mode-*.whl voicemode
 ```
 
 ### Running Tests
@@ -183,13 +183,13 @@ pytest tests/integration/test_whisper.py
 
 ```bash
 # Test voice conversation
-voice-mode converse --debug
+voicemode converse --debug
 
 # Test specific tool
-voice-mode test-tool converse
+voicemode test-tool converse
 
 # Test with different providers
-VOICEMODE_TTS_BASE_URLS=http://localhost:8880/v1 voice-mode converse
+VOICEMODE_TTS_BASE_URLS=http://localhost:8880/v1 voicemode converse
 ```
 
 ## Contributing

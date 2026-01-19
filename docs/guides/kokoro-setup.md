@@ -6,13 +6,13 @@ Kokoro is a high-quality local text-to-speech service that provides natural-soun
 
 ```bash
 # Install kokoro service
-voice-mode kokoro install
+voicemode kokoro install
 
 # Start the service
-voice-mode kokoro start
+voicemode kokoro start
 
 # Check status
-voice-mode kokoro status
+voicemode kokoro status
 ```
 
 Default endpoint: `http://127.0.0.1:8880/v1`
@@ -25,7 +25,7 @@ VoiceMode includes an installation tool that handles everything:
 
 ```bash
 # Install kokoro with default settings
-voice-mode kokoro install
+voicemode kokoro install
 
 # Or using Claude Code
 claude converse "Please install kokoro-fastapi"
@@ -144,7 +144,8 @@ export TTS_VOICE=af_sky  # Optional: specify voice
 
 Or in MCP configuration:
 ```json
-"voice-mode": {
+"voicemode": {
+  ...
   "env": {
     "TTS_BASE_URL": "http://127.0.0.1:8880/v1",
     "TTS_VOICE": "af_sky"

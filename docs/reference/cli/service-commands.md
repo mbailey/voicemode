@@ -73,7 +73,7 @@ $ voicemode kokoro health
    Status: healthy
    Uptime: 2h 15m 30s
 
-$ voice-mode whisper health
+$ voicemode whisper health
 ❌ Whisper not responding on port 2022
 ```
 
