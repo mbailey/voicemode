@@ -6,22 +6,19 @@ Whisper is a local speech recognition service that converts audio to text for Vo
 
 ```bash
 # Install whisper service with default base model (includes Core ML on Apple Silicon!)
-voicemode whisper install
+voicemode whisper service install
 
 # Install with a different model
-voicemode whisper install --model large-v3
-
-# Install without any model
-voicemode whisper install --no-model
+voicemode whisper service install --model large-v3
 
 # List available models and their status
-voicemode whisper models
+voicemode whisper model --all
 
-# Download additional models (with Core ML support on Apple Silicon)
-voicemode whisper model install large-v2
+# Switch to a different model (auto-installs if needed)
+voicemode whisper model large-v2
 
 # Start the service
-voicemode whisper start
+voicemode whisper service start
 ```
 
 **Apple Silicon Bonus:** On M1/M2/M3/M4 Macs, VoiceMode automatically downloads pre-built Core ML models for 2-3x faster performance. No Xcode or Python dependencies required!
@@ -36,16 +33,10 @@ VoiceMode includes an installation tool that sets up Whisper.cpp automatically:
 
 ```bash
 # Install with default base model (142MB) - good balance of speed and accuracy
-voicemode whisper install
+voicemode whisper service install
 
 # Install with a specific model
-voicemode whisper install --model small
-
-# Skip Core ML on Apple Silicon (not recommended)
-voicemode whisper install --skip-core-ml
-
-# Install without downloading any model
-voicemode whisper install --no-model
+voicemode whisper service install --model small
 ```
 
 This will:
@@ -102,10 +93,7 @@ On Apple Silicon Macs (M1/M2/M3/M4), VoiceMode automatically downloads pre-built
 - **Pre-built:** Models are pre-compiled and ready to use
 - **Performance:** 2-3x faster than Metal acceleration alone
 
-To skip Core ML (not recommended):
-```bash
-voicemode whisper model install large-v3 --skip-core-ml
-```
+Core ML models are included automatically when available. The installation process handles this transparently.
 
 ## Model Management
 
@@ -130,24 +118,22 @@ voicemode whisper model install large-v3 --skip-core-ml
 
 ```bash
 # List all models with installation status
-voicemode whisper models
+voicemode whisper model --all
 
-# Show/set active model
-voicemode whisper model active
-voicemode whisper model active small.en
+# Show current active model
+voicemode whisper model
 
-# Install models
-voicemode whisper model install                  # Install default (large-v2)
-voicemode whisper model install medium           # Install specific model
-voicemode whisper model install all              # Install all models
-voicemode whisper model install large-v3 --force # Force re-download
+# Switch to a model (auto-installs if not present)
+voicemode whisper model small.en
 
-# Remove models
-voicemode whisper model remove tiny
-voicemode whisper model remove tiny.en --force   # Skip confirmation
+# Switch model without auto-installing (fails if model not installed)
+voicemode whisper model medium --no-install
+
+# Switch model without restarting service
+voicemode whisper model large-v2 --no-restart
 ```
 
-Note: After changing the active model, restart the whisper service for changes to take effect.
+Note: After changing the active model with `--no-restart`, restart the whisper service manually for changes to take effect.
 
 ## Service Configuration
 
@@ -232,17 +218,14 @@ journalctl --user -u whisper -f
 
 CoreML provides 2-3x faster transcription on Apple Silicon Macs:
 
-```bash
-# Install with CoreML support (when available)
-voicemode whisper model install base.en --skip-core-ml=false
-
+```
 # Performance comparison
 # CPU Only: ~1x baseline
 # Metal: ~3-4x faster
 # CoreML + Metal: ~8-12x faster
 ```
 
-**Note**: CoreML support requires full Xcode installation and may be disabled in some versions due to installation complexity.
+Core ML models are downloaded automatically when installing Whisper on Apple Silicon. No additional configuration needed.
 
 ### GPU Acceleration
 
@@ -306,16 +289,13 @@ export TTS_VOICE=af_sky                       # Kokoro voice
 ### Model Installation Issues
 - Verify adequate disk space (models range from 39MB to 3GB)
 - Check network connectivity to Hugging Face
-- Use `--force` flag to re-download corrupted models
+- Delete corrupted model files from `~/.voicemode/models/whisper/` and re-run the model command
 
 ## Performance Monitoring
 
 ```bash
 # Check service status
-voicemode whisper status
-
-# View performance statistics
-voicemode statistics
+voicemode whisper service status
 
 # Monitor real-time processing
 tail -f ~/.voicemode/services/whisper/logs/performance.log
