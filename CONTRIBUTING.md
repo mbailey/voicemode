@@ -107,7 +107,6 @@ Debug recordings are saved to `~/.voicemode/audio/`
 - **Update dependencies**: Edit `pyproject.toml` and run `uv pip install -e .`
 - **Build package**: `make build-package`
 - **Run tests**: `make test`
-- **Run linting**: `make lint` (if configured)
 
 ## Questions?
 
