@@ -1,8 +1,8 @@
 .external/
 !.external/repos.txt
 
-# Claude workspace
-.claude/
+# Claude workspace - track plugin components, ignore local settings
+.claude/settings.local.json
 
 # Environment configuration
 .env.local
