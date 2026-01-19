@@ -2021,3 +2021,583 @@ complete -c voicemode -f -a '(__fish_voicemode_complete)'
         click.echo(completion_script)
 
 
+# DJ (Background Music) command group
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def dj():
+    """Background music playback for voice sessions.
+
+    Control audio playback via mpv for ambient music during conversations.
+    Supports files, URLs, and chapter navigation.
+
+    Examples:
+        voicemode dj play /path/to/ambient.mp3
+        voicemode dj play https://example.com/stream.mp3 --volume 30
+        voicemode dj status
+        voicemode dj pause
+        voicemode dj stop
+    """
+    pass
+
+
+def _format_time(seconds: float) -> str:
+    """Format seconds as MM:SS or HH:MM:SS."""
+    total_seconds = int(seconds)
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('source')
+@click.option('--chapters', '-c', help='Path to chapters file (FFmetadata or CUE)')
+@click.option('--volume', '-v', default=50, type=int, help='Initial volume (0-100)')
+def play(source: str, chapters: str | None, volume: int):
+    """Start playing a file or URL.
+
+    SOURCE can be a local file path or a URL.
+
+    Examples:
+        voicemode dj play /path/to/music.mp3
+        voicemode dj play /path/to/album.mp3 --chapters /path/to/chapters.txt
+        voicemode dj play https://stream.example.com/audio --volume 30
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.play(source, chapters_file=chapters, volume=volume):
+        click.echo(f"Playing: {source}")
+        if chapters:
+            click.echo(f"Chapters: {chapters}")
+        click.echo(f"Volume: {volume}%")
+    else:
+        click.echo("Failed to start playback", err=True)
+        click.echo("Make sure mpv is installed: brew install mpv", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def status():
+    """Show what's currently playing.
+
+    Displays track information, playback position, volume, and chapter info.
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    track_status = controller.status()
+
+    if track_status:
+        # Track info
+        title = track_status.title or track_status.path or "(unknown)"
+        click.echo(f"Track: {title}")
+
+        # Position
+        pos_str = _format_time(track_status.position)
+        dur_str = _format_time(track_status.duration)
+        progress = track_status.progress_percent
+        click.echo(f"Position: {pos_str} / {dur_str} ({progress:.0f}%)")
+
+        # Volume and state
+        state = "Paused" if track_status.is_paused else "Playing"
+        click.echo(f"Volume: {track_status.volume}%")
+        click.echo(f"State: {state}")
+
+        # Chapter info if available
+        if track_status.chapter_count and track_status.chapter_count > 0:
+            chapter_num = (track_status.chapter_index or 0) + 1
+            chapter_name = track_status.chapter or f"Chapter {chapter_num}"
+            click.echo(f"Chapter: {chapter_name} ({chapter_num}/{track_status.chapter_count})")
+    else:
+        click.echo("DJ is not running")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def stop():
+    """Stop playback and quit the player."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.is_playing():
+        controller.stop()
+        click.echo("Stopped")
+    else:
+        click.echo("DJ is not running")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def pause():
+    """Pause playback."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.pause():
+        click.echo("Paused")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def resume():
+    """Resume playback."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.resume():
+        click.echo("Resumed")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def next():
+    """Skip to the next chapter."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    status = controller.next()
+    if status:
+        if status.chapter:
+            click.echo(f"Chapter: {status.chapter}")
+        elif status.chapter_index is not None and status.chapter_count:
+            click.echo(f"Chapter: {status.chapter_index + 1}/{status.chapter_count}")
+        else:
+            click.echo("Skipped to next chapter")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def prev():
+    """Go to the previous chapter."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    status = controller.prev()
+    if status:
+        if status.chapter:
+            click.echo(f"Chapter: {status.chapter}")
+        elif status.chapter_index is not None and status.chapter_count:
+            click.echo(f"Chapter: {status.chapter_index + 1}/{status.chapter_count}")
+        else:
+            click.echo("Skipped to previous chapter")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('level', required=False, type=int)
+def volume(level: int | None):
+    """Get or set the volume level.
+
+    Without LEVEL: Shows the current volume.
+    With LEVEL: Sets volume to the specified level (0-100).
+
+    Examples:
+        voicemode dj volume        # Show current volume
+        voicemode dj volume 30     # Set volume to 30%
+        voicemode dj volume 100    # Set volume to 100%
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    result = controller.volume(level)
+
+    if result is not None:
+        if level is not None:
+            click.echo(f"Volume: {result}%")
+        else:
+            click.echo(f"Volume: {result}%")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+# MFP (Music For Programming) subcommand group
+@dj.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def mfp():
+    """Music For Programming episodes.
+
+    Play curated ambient mixes designed for coding sessions.
+    Each episode features chapter markers for track navigation.
+
+    Examples:
+        voicemode dj mfp list              # List episodes with chapters
+        voicemode dj mfp play 49           # Play episode 49
+        voicemode dj mfp sync              # Convert CUE files to chapters
+    """
+    pass
+
+
+@mfp.command("list")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--all', '-a', 'show_all', is_flag=True, help='Show all episodes (not just those with chapters)')
+@click.option('--refresh', '-r', is_flag=True, help='Force refresh from RSS feed')
+def mfp_list(show_all: bool, refresh: bool):
+    """List available Music For Programming episodes.
+
+    By default, only shows episodes that have chapter files for track navigation.
+    Use --all to see all episodes from the RSS feed.
+
+    Examples:
+        voicemode dj mfp list              # Episodes with chapters
+        voicemode dj mfp list --all        # All episodes
+        voicemode dj mfp list --refresh    # Refresh from RSS
+    """
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    try:
+        episodes = service.list_episodes(with_chapters_only=not show_all, refresh=refresh)
+    except RuntimeError as e:
+        click.echo(f"Error: {e}", err=True)
+        return
+
+    if not episodes:
+        if show_all:
+            click.echo("No episodes found in RSS feed.")
+        else:
+            click.echo("No episodes with chapter files found.")
+            click.echo("Use --all to see all episodes, or run 'voicemode dj mfp sync' to sync chapters.")
+        return
+
+    title = "All Episodes" if show_all else "Episodes with Chapters"
+    click.echo(f"Music For Programming - {title}")
+    click.echo("=" * (27 + len(title)))
+    click.echo()
+
+    # Header
+    click.echo(f"{'#':>3}  {'Curator':<25}  {'Ch':>3}  {'MP3':>3}")
+    click.echo("-" * 42)
+
+    for ep in episodes:
+        ch_status = "yes" if ep.has_chapters else " - "
+        mp3_status = "yes" if ep.has_local_file else " - "
+        curator = ep.curator[:25] if len(ep.curator) > 25 else ep.curator
+        click.echo(f"{ep.number:3d}  {curator:<25}  {ch_status:>3}  {mp3_status:>3}")
+
+    click.echo()
+    click.echo(f"Total: {len(episodes)} episodes")
+    click.echo()
+    click.echo("Play with: voicemode dj mfp play <number>")
+
+
+@mfp.command("play")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('episode', type=int)
+@click.option('--volume', '-v', default=50, type=int, help='Initial volume (0-100)')
+def mfp_play(episode: int, volume: int):
+    """Play a Music For Programming episode by number.
+
+    Automatically loads chapter files if available for track navigation.
+    Use 'voicemode dj next' and 'voicemode dj prev' to skip between tracks.
+
+    Examples:
+        voicemode dj mfp play 49           # Play episode 49
+        voicemode dj mfp play 76 -v 30     # Play episode 76 at 30% volume
+    """
+    from voice_mode.dj import DJController
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    ep = service.get_episode(episode)
+
+    if not ep:
+        click.echo(f"Episode {episode} not found.", err=True)
+        click.echo("Use 'voicemode dj mfp list --all' to see available episodes.", err=True)
+        return
+
+    # Determine source - prefer local file if available
+    local_path = service.get_local_path(episode)
+    source = str(local_path) if local_path else ep.url
+
+    # Get chapters file if available
+    chapters_path = service.get_chapters_file(episode)
+
+    # Play
+    controller = DJController()
+    if controller.play(source, chapters_file=str(chapters_path) if chapters_path else None, volume=volume):
+        click.echo(f"Playing: MFP {episode} - {ep.curator}")
+        if chapters_path:
+            click.echo(f"Chapters: Loaded ({chapters_path.name})")
+        if local_path:
+            click.echo(f"Source: Local file")
+        else:
+            click.echo(f"Source: Streaming")
+        click.echo(f"Volume: {volume}%")
+    else:
+        click.echo("Failed to start playback", err=True)
+        click.echo("Make sure mpv is installed: brew install mpv", err=True)
+
+
+@mfp.command("sync")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--force', '-f', is_flag=True, help='Re-convert even if FFmeta already exists')
+def mfp_sync(force: bool):
+    """Sync and convert CUE chapter files to FFmetadata format.
+
+    Scans the MFP cache directory for CUE files and converts them
+    to FFmetadata format for mpv compatibility.
+
+    Examples:
+        voicemode dj mfp sync              # Convert new CUE files
+        voicemode dj mfp sync --force      # Re-convert all files
+    """
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    count = service.sync_chapters(force=force)
+
+    if count > 0:
+        click.echo(f"Converted {count} chapter file(s) to FFmetadata format.")
+    else:
+        if force:
+            click.echo("No CUE files found to convert.")
+        else:
+            click.echo("All chapter files already converted. Use --force to re-convert.")
+
+    click.echo(f"Cache directory: {service.cache_dir}")
+
+
+# Music library search command (top-level under dj for convenience)
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('query')
+@click.option('--limit', '-l', default=50, type=int, help='Maximum results to show')
+@click.option('--all', '-a', 'include_sidecars', is_flag=True, help='Include sidecars (stems, loops)')
+def find(query: str, limit: int, include_sidecars: bool):
+    """Search music library by artist, album, or title.
+
+    Searches the indexed music library for tracks matching QUERY.
+    Results show track ID, artist, title, and album.
+
+    Examples:
+        voicemode dj find "daft punk"      # Search for Daft Punk tracks
+        voicemode dj find ambient          # Search for ambient music
+        voicemode dj find --limit 10 jazz  # Show top 10 jazz results
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    tracks = library.search(query, limit=limit, include_sidecars=include_sidecars)
+
+    if not tracks:
+        click.echo(f"No tracks found matching '{query}'")
+        click.echo()
+        click.echo("Tip: Make sure you've scanned your library:")
+        click.echo("  voicemode dj library scan --path ~/Audio/music")
+        return
+
+    # Display results in a table format
+    for track in tracks:
+        artist = track.artist or "(unknown)"
+        title = track.title
+        album = track.album or ""
+        fav = "*" if track.is_favorite else ""
+        sidecar = f" [{track.sidecar_type}]" if track.is_sidecar else ""
+        click.echo(f"[{track.id}] {fav}{artist} - {title}{sidecar}")
+        if album:
+            click.echo(f"     Album: {album}")
+
+    click.echo()
+    click.echo(f"Found {len(tracks)} track(s)")
+
+
+# Library subcommand group
+@dj.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def library():
+    """Music library management.
+
+    Commands for scanning, indexing, and managing your local music library.
+
+    Examples:
+        voicemode dj library scan          # Scan default music folder
+        voicemode dj library stats         # Show library statistics
+    """
+    pass
+
+
+@library.command("scan")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--path', '-p', type=click.Path(exists=True), help='Music directory to scan')
+def library_scan(path: str | None):
+    """Scan and index music folder.
+
+    Scans the music directory and indexes all audio files.
+    Metadata is parsed from directory structure: Artist/Year-Album/Track.ext
+
+    Supported formats: mp3, flac, m4a, wav, ogg, opus
+
+    Examples:
+        voicemode dj library scan                    # Scan ~/Audio/music
+        voicemode dj library scan --path ~/Music    # Scan custom path
+    """
+    from pathlib import Path
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    music_path = Path(path) if path else library.music_root
+
+    click.echo(f"Scanning: {music_path}")
+    click.echo()
+
+    count = library.scan(music_path)
+
+    if count > 0:
+        click.echo(f"Indexed {count} file(s)")
+        click.echo()
+        # Show stats
+        stats = library.stats()
+        click.echo(f"Library: {stats.total_tracks} tracks, {stats.total_artists} artists, {stats.total_albums} albums")
+        if stats.total_sidecars > 0:
+            click.echo(f"Sidecars: {stats.total_sidecars} (stems/loops/samples)")
+    else:
+        click.echo("No audio files found.")
+        click.echo()
+        click.echo(f"Make sure {music_path} contains audio files in the format:")
+        click.echo("  Artist/Year-Album/Track.mp3")
+
+
+@library.command("stats")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def library_stats():
+    """Show library statistics.
+
+    Displays summary information about your indexed music library.
+
+    Examples:
+        voicemode dj library stats
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    stats = library.stats()
+
+    if stats.total_tracks == 0:
+        click.echo("Music library is empty.")
+        click.echo()
+        click.echo("Scan your music folder first:")
+        click.echo("  voicemode dj library scan --path ~/Audio/music")
+        return
+
+    click.echo("Music Library Statistics")
+    click.echo("========================")
+    click.echo(f"Total tracks:  {stats.total_tracks}")
+    click.echo(f"Sidecars:      {stats.total_sidecars}")
+    click.echo(f"Favorites:     {stats.total_favorites}")
+    click.echo(f"Artists:       {stats.total_artists}")
+    click.echo(f"Albums:        {stats.total_albums}")
+    click.echo()
+    click.echo(f"Database: {library.db_path}")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--limit', '-l', default=20, type=int, help='Number of entries to show')
+def history(limit: int):
+    """Show recently played tracks.
+
+    Displays the play history with timestamps, most recent first.
+    Only shows tracks that are in the indexed music library.
+
+    Examples:
+        voicemode dj history              # Show last 20 plays
+        voicemode dj history --limit 50   # Show last 50 plays
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    entries = library.get_history(limit=limit)
+
+    if not entries:
+        click.echo("No play history yet.")
+        click.echo()
+        click.echo("Play some tracks from your library:")
+        click.echo("  voicemode dj find <search term>")
+        return
+
+    click.echo("Play History")
+    click.echo("============")
+    click.echo()
+
+    for track, played_at in entries:
+        artist = track.artist or "(unknown)"
+        title = track.title
+        fav = "*" if track.is_favorite else ""
+        # Format the timestamp nicely if possible
+        timestamp = played_at[:19] if played_at else ""  # Trim to YYYY-MM-DD HH:MM:SS
+        click.echo(f"[{timestamp}] {fav}{artist} - {title}")
+
+    click.echo()
+    click.echo(f"Showing {len(entries)} play(s)")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def favorite():
+    """Toggle favorite status of the currently playing track.
+
+    Marks the currently playing track as a favorite (or removes it from favorites
+    if already marked). The track must be in the indexed music library.
+
+    Examples:
+        voicemode dj favorite    # Toggle favorite on current track
+    """
+    from pathlib import Path
+    from voice_mode.dj import DJController
+    from voice_mode.dj.library import MusicLibrary
+
+    controller = DJController()
+    status = controller.status()
+
+    if not status:
+        click.echo("DJ is not running", err=True)
+        return
+
+    if not status.path:
+        click.echo("No track path available", err=True)
+        return
+
+    library = MusicLibrary()
+
+    # Try to find the track in the library
+    # The status.path might be an absolute path, so try to match it
+    track_path = Path(status.path)
+
+    # First, try looking up by the path as-is (might be relative)
+    track = library.get_track_by_path(status.path)
+
+    # If not found and it's an absolute path under music_root, try relative
+    if not track and track_path.is_absolute():
+        try:
+            rel_path = str(track_path.relative_to(library.music_root))
+            track = library.get_track_by_path(rel_path)
+        except ValueError:
+            pass
+
+    if not track:
+        click.echo(f"Track not found in library: {status.path}", err=True)
+        click.echo()
+        click.echo("Make sure the track is indexed:")
+        click.echo("  voicemode dj library scan")
+        return
+
+    is_favorite = library.toggle_favorite(track.id)
+    status_str = "added to" if is_favorite else "removed from"
+
+    artist = track.artist or "(unknown)"
+    click.echo(f"{artist} - {track.title} {status_str} favorites")
+
+

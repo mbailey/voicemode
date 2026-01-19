@@ -119,15 +119,34 @@ See [Configuration Guide](../../docs/guides/configuration.md) for all options.
 Background music during VoiceMode sessions with track-level control.
 
 ```bash
-mpv-dj mfp 49           # Play Music For Programming episode
-mpv-dj status           # What's playing
-mpv-dj next             # Skip to next track
-mpv-dj stop             # Stop playback
+# Core playback
+voicemode dj play /path/to/music.mp3  # Play a file or URL
+voicemode dj status                    # What's playing
+voicemode dj pause                     # Pause playback
+voicemode dj resume                    # Resume playback
+voicemode dj stop                      # Stop playback
+
+# Navigation and volume
+voicemode dj next                      # Skip to next chapter
+voicemode dj prev                      # Go to previous chapter
+voicemode dj volume 30                 # Set volume to 30%
+
+# Music For Programming
+voicemode dj mfp list                  # List available episodes
+voicemode dj mfp play 49               # Play episode 49
+voicemode dj mfp sync                  # Convert CUE files to chapters
+
+# Music library
+voicemode dj find "daft punk"          # Search library
+voicemode dj library scan              # Index ~/Audio/music
+voicemode dj library stats             # Show library info
+
+# Play history and favorites
+voicemode dj history                   # Show recent plays
+voicemode dj favorite                  # Toggle favorite on current track
 ```
 
 **Configuration:** Set `VOICEMODE_DJ_VOLUME` in `~/.voicemode/voicemode.env` to customize startup volume (default: 50%).
-
-See [DJ Mode docs](docs/dj-mode/README.md) for full documentation.
 
 ## CLI Cheat Sheet
 
@@ -147,10 +166,11 @@ voicemode history search "keyword"
 voicemode history play <exchange_id>
 
 # DJ Mode
-mpv-dj play <file|url>              # Start playback
-mpv-dj status                       # What's playing
-mpv-dj next/prev                    # Navigate chapters
-mpv-dj stop                         # Stop playback
+voicemode dj play <file|url>        # Start playback
+voicemode dj status                 # What's playing
+voicemode dj next/prev              # Navigate chapters
+voicemode dj stop                   # Stop playback
+voicemode dj mfp play 49            # Music For Programming
 ```
 
 ## Documentation Index
