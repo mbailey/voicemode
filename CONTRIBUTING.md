@@ -1,6 +1,6 @@
-# Contributing to voice-mode
+# Contributing to VoiceMode
 
-Thank you for your interest in contributing to voice-mode! This guide will help you get started with development.
+Thank you for your interest in contributing to VoiceMode. This guide will help you get started with development.
 
 ## Development Setup
 
@@ -20,19 +20,14 @@ Thank you for your interest in contributing to voice-mode! This guide will help 
    cd voicemode
    ```
 
-2. **Create a virtual environment**
+2. **Install in development mode**
+
    ```bash
-   uv venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   uv tool install -e .
    ```
 
-3. **Install in development mode**
-   ```bash
-   uv pip install -e .
-   uv pip install -e .[dev,test]
-   ```
+3. **Set up environment variables**
 
-4. **Set up environment variables**
    ```bash
    # Set your API key
    export OPENAI_API_KEY=your-key-here
