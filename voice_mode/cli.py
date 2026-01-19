@@ -2021,3 +2021,139 @@ complete -c voicemode -f -a '(__fish_voicemode_complete)'
         click.echo(completion_script)
 
 
+# DJ (Background Music) command group
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def dj():
+    """Background music playback for voice sessions.
+
+    Control audio playback via mpv for ambient music during conversations.
+    Supports files, URLs, and chapter navigation.
+
+    Examples:
+        voicemode dj play /path/to/ambient.mp3
+        voicemode dj play https://example.com/stream.mp3 --volume 30
+        voicemode dj status
+        voicemode dj pause
+        voicemode dj stop
+    """
+    pass
+
+
+def _format_time(seconds: float) -> str:
+    """Format seconds as MM:SS or HH:MM:SS."""
+    total_seconds = int(seconds)
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('source')
+@click.option('--chapters', '-c', help='Path to chapters file (FFmetadata or CUE)')
+@click.option('--volume', '-v', default=50, type=int, help='Initial volume (0-100)')
+def play(source: str, chapters: str | None, volume: int):
+    """Start playing a file or URL.
+
+    SOURCE can be a local file path or a URL.
+
+    Examples:
+        voicemode dj play /path/to/music.mp3
+        voicemode dj play /path/to/album.mp3 --chapters /path/to/chapters.txt
+        voicemode dj play https://stream.example.com/audio --volume 30
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.play(source, chapters_file=chapters, volume=volume):
+        click.echo(f"Playing: {source}")
+        if chapters:
+            click.echo(f"Chapters: {chapters}")
+        click.echo(f"Volume: {volume}%")
+    else:
+        click.echo("Failed to start playback", err=True)
+        click.echo("Make sure mpv is installed: brew install mpv", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def status():
+    """Show what's currently playing.
+
+    Displays track information, playback position, volume, and chapter info.
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    track_status = controller.status()
+
+    if track_status:
+        # Track info
+        title = track_status.title or track_status.path or "(unknown)"
+        click.echo(f"Track: {title}")
+
+        # Position
+        pos_str = _format_time(track_status.position)
+        dur_str = _format_time(track_status.duration)
+        progress = track_status.progress_percent
+        click.echo(f"Position: {pos_str} / {dur_str} ({progress:.0f}%)")
+
+        # Volume and state
+        state = "Paused" if track_status.is_paused else "Playing"
+        click.echo(f"Volume: {track_status.volume}%")
+        click.echo(f"State: {state}")
+
+        # Chapter info if available
+        if track_status.chapter_count and track_status.chapter_count > 0:
+            chapter_num = (track_status.chapter_index or 0) + 1
+            chapter_name = track_status.chapter or f"Chapter {chapter_num}"
+            click.echo(f"Chapter: {chapter_name} ({chapter_num}/{track_status.chapter_count})")
+    else:
+        click.echo("DJ is not running")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def stop():
+    """Stop playback and quit the player."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.is_playing():
+        controller.stop()
+        click.echo("Stopped")
+    else:
+        click.echo("DJ is not running")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def pause():
+    """Pause playback."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.pause():
+        click.echo("Paused")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def resume():
+    """Resume playback."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.resume():
+        click.echo("Resumed")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
