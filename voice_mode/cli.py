@@ -2223,3 +2223,150 @@ def volume(level: int | None):
         click.echo("DJ is not running", err=True)
 
 
+# MFP (Music For Programming) subcommand group
+@dj.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def mfp():
+    """Music For Programming episodes.
+
+    Play curated ambient mixes designed for coding sessions.
+    Each episode features chapter markers for track navigation.
+
+    Examples:
+        voicemode dj mfp list              # List episodes with chapters
+        voicemode dj mfp play 49           # Play episode 49
+        voicemode dj mfp sync              # Convert CUE files to chapters
+    """
+    pass
+
+
+@mfp.command("list")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--all', '-a', 'show_all', is_flag=True, help='Show all episodes (not just those with chapters)')
+@click.option('--refresh', '-r', is_flag=True, help='Force refresh from RSS feed')
+def mfp_list(show_all: bool, refresh: bool):
+    """List available Music For Programming episodes.
+
+    By default, only shows episodes that have chapter files for track navigation.
+    Use --all to see all episodes from the RSS feed.
+
+    Examples:
+        voicemode dj mfp list              # Episodes with chapters
+        voicemode dj mfp list --all        # All episodes
+        voicemode dj mfp list --refresh    # Refresh from RSS
+    """
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    try:
+        episodes = service.list_episodes(with_chapters_only=not show_all, refresh=refresh)
+    except RuntimeError as e:
+        click.echo(f"Error: {e}", err=True)
+        return
+
+    if not episodes:
+        if show_all:
+            click.echo("No episodes found in RSS feed.")
+        else:
+            click.echo("No episodes with chapter files found.")
+            click.echo("Use --all to see all episodes, or run 'voicemode dj mfp sync' to sync chapters.")
+        return
+
+    title = "All Episodes" if show_all else "Episodes with Chapters"
+    click.echo(f"Music For Programming - {title}")
+    click.echo("=" * (27 + len(title)))
+    click.echo()
+
+    # Header
+    click.echo(f"{'#':>3}  {'Curator':<25}  {'Ch':>3}  {'MP3':>3}")
+    click.echo("-" * 42)
+
+    for ep in episodes:
+        ch_status = "yes" if ep.has_chapters else " - "
+        mp3_status = "yes" if ep.has_local_file else " - "
+        curator = ep.curator[:25] if len(ep.curator) > 25 else ep.curator
+        click.echo(f"{ep.number:3d}  {curator:<25}  {ch_status:>3}  {mp3_status:>3}")
+
+    click.echo()
+    click.echo(f"Total: {len(episodes)} episodes")
+    click.echo()
+    click.echo("Play with: voicemode dj mfp play <number>")
+
+
+@mfp.command("play")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('episode', type=int)
+@click.option('--volume', '-v', default=50, type=int, help='Initial volume (0-100)')
+def mfp_play(episode: int, volume: int):
+    """Play a Music For Programming episode by number.
+
+    Automatically loads chapter files if available for track navigation.
+    Use 'voicemode dj next' and 'voicemode dj prev' to skip between tracks.
+
+    Examples:
+        voicemode dj mfp play 49           # Play episode 49
+        voicemode dj mfp play 76 -v 30     # Play episode 76 at 30% volume
+    """
+    from voice_mode.dj import DJController
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    ep = service.get_episode(episode)
+
+    if not ep:
+        click.echo(f"Episode {episode} not found.", err=True)
+        click.echo("Use 'voicemode dj mfp list --all' to see available episodes.", err=True)
+        return
+
+    # Determine source - prefer local file if available
+    local_path = service.get_local_path(episode)
+    source = str(local_path) if local_path else ep.url
+
+    # Get chapters file if available
+    chapters_path = service.get_chapters_file(episode)
+
+    # Play
+    controller = DJController()
+    if controller.play(source, chapters_file=str(chapters_path) if chapters_path else None, volume=volume):
+        click.echo(f"Playing: MFP {episode} - {ep.curator}")
+        if chapters_path:
+            click.echo(f"Chapters: Loaded ({chapters_path.name})")
+        if local_path:
+            click.echo(f"Source: Local file")
+        else:
+            click.echo(f"Source: Streaming")
+        click.echo(f"Volume: {volume}%")
+    else:
+        click.echo("Failed to start playback", err=True)
+        click.echo("Make sure mpv is installed: brew install mpv", err=True)
+
+
+@mfp.command("sync")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--force', '-f', is_flag=True, help='Re-convert even if FFmeta already exists')
+def mfp_sync(force: bool):
+    """Sync and convert CUE chapter files to FFmetadata format.
+
+    Scans the MFP cache directory for CUE files and converts them
+    to FFmetadata format for mpv compatibility.
+
+    Examples:
+        voicemode dj mfp sync              # Convert new CUE files
+        voicemode dj mfp sync --force      # Re-convert all files
+    """
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    count = service.sync_chapters(force=force)
+
+    if count > 0:
+        click.echo(f"Converted {count} chapter file(s) to FFmetadata format.")
+    else:
+        if force:
+            click.echo("No CUE files found to convert.")
+        else:
+            click.echo("All chapter files already converted. Use --force to re-convert.")
+
+    click.echo(f"Cache directory: {service.cache_dir}")
+
+
