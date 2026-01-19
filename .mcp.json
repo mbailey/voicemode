@@ -8,7 +8,7 @@
         "voicemode"
       ],
       "env": {
-        "XVOICEMODE_SAVE_ALL": "true"
+        "#VOICEMODE_SAVE_ALL": "true"
       }
     }
   }
