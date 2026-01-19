@@ -185,9 +185,6 @@ pytest tests/integration/test_whisper.py
 # Test voice conversation
 voicemode converse --debug
 
-# Test specific tool
-voicemode test-tool converse
-
 # Test with different providers
 VOICEMODE_TTS_BASE_URLS=http://localhost:8880/v1 voicemode converse
 ```
