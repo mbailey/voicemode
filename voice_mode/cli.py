@@ -283,6 +283,15 @@ def service_install(service_name, force):
                 click.echo(f"❌ Kokoro installation failed: {result.get('error', 'Unknown error')}")
         else:
             click.echo(result)
+    elif service_name == 'voicemode':
+        from voice_mode.tools.service import install_voicemode_start_script
+        result = asyncio.run(install_voicemode_start_script())
+        if result.get("success"):
+            click.echo(f"✅ VoiceMode start script installed successfully")
+            if result.get('start_script'):
+                click.echo(f"   Start script: {result['start_script']}")
+        else:
+            click.echo(f"❌ VoiceMode installation failed: {result.get('error', 'Unknown error')}")
     else:
         click.echo(f"❌ Unknown service: {service_name}")
 
