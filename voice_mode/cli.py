@@ -87,28 +87,234 @@ def voice_mode() -> None:
     voice_mode_main_cli()
 
 
-# Service group commands
+# ============================================================================
+# Unified Service Command Group
+# ============================================================================
+# All service management commands under a single group:
+#   voicemode service start <service>
+#   voicemode service stop <service>
+#   voicemode service status [service]
+# etc.
+
+VALID_SERVICES = ['whisper', 'kokoro']
+
+
 @voice_mode_main_cli.group()
-@click.help_option('-h', '--help', help='Show this message and exit')
-def kokoro():
-    """Manage Kokoro TTS service."""
+@click.help_option('-h', '--help')
+def service():
+    """Manage voice services (whisper, kokoro).
+
+    \b
+    Commands:
+      start    Start a service
+      stop     Stop a service
+      restart  Restart a service
+      status   Show service status
+      enable   Enable auto-start at boot/login
+      disable  Disable auto-start
+      logs     View service logs
+      health   Check service health endpoint
+      install  Install a service
+    """
     pass
 
 
-@voice_mode_main_cli.group()
+@service.command('start')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_start(service_name):
+    """Start a voice service (whisper or kokoro)."""
+    from voice_mode.tools.service import start_service
+    result = asyncio.run(start_service(service_name))
+    click.echo(result)
+
+
+@service.command('stop')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_stop(service_name):
+    """Stop a voice service (whisper or kokoro)."""
+    from voice_mode.tools.service import stop_service
+    result = asyncio.run(stop_service(service_name))
+    click.echo(result)
+
+
+@service.command('restart')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_restart(service_name):
+    """Restart a voice service (whisper or kokoro)."""
+    from voice_mode.tools.service import restart_service
+    result = asyncio.run(restart_service(service_name))
+    click.echo(result)
+
+
+@service.command('status')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), required=False, metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_status(service_name):
+    """Show service status for all services or a specific service.
+
+    \b
+    Examples:
+      voicemode service status          # Show all services
+      voicemode service status whisper  # Show only whisper
+    """
+    from voice_mode.tools.service import status_service
+
+    if service_name:
+        # Show specific service
+        result = asyncio.run(status_service(service_name))
+        click.echo(result)
+    else:
+        # Show all services
+        click.echo("VoiceMode Service Status")
+        click.echo("=" * 50)
+        for svc in VALID_SERVICES:
+            result = asyncio.run(status_service(svc))
+            click.echo(f"\n{svc.upper()}:")
+            click.echo(result)
+
+
+@service.command('enable')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_enable(service_name):
+    """Enable a voice service to start at boot/login."""
+    from voice_mode.tools.service import enable_service
+    result = asyncio.run(enable_service(service_name))
+    click.echo(result)
+
+
+@service.command('disable')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_disable(service_name):
+    """Disable a voice service from starting at boot/login."""
+    from voice_mode.tools.service import disable_service
+    result = asyncio.run(disable_service(service_name))
+    click.echo(result)
+
+
+@service.command('logs')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.option('--lines', '-n', default=50, help='Number of log lines to show')
+@click.help_option('-h', '--help')
+def service_logs(service_name, lines):
+    """View service logs for a voice service."""
+    from voice_mode.tools.service import view_logs
+    result = asyncio.run(view_logs(service_name, lines))
+    click.echo(result)
+
+
+@service.command('health')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_health(service_name):
+    """Check health endpoint for a voice service."""
+    if service_name == 'whisper':
+        port = 2022
+        display_name = 'Whisper'
+    elif service_name == 'kokoro':
+        port = 8880
+        display_name = 'Kokoro'
+    else:
+        click.echo(f"❌ Unknown service: {service_name}")
+        return
+
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["curl", "-s", f"http://127.0.0.1:{port}/health"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            import json
+            try:
+                health_data = json.loads(result.stdout)
+                click.echo(f"✅ {display_name} is responding")
+                click.echo(f"   Status: {health_data.get('status', 'unknown')}")
+                if 'uptime' in health_data:
+                    click.echo(f"   Uptime: {health_data['uptime']}")
+            except json.JSONDecodeError:
+                click.echo(f"✅ {display_name} is responding (non-JSON response)")
+        else:
+            click.echo(f"❌ {display_name} not responding on port {port}")
+    except subprocess.TimeoutExpired:
+        click.echo(f"❌ {display_name} health check timed out")
+    except Exception as e:
+        click.echo(f"❌ Health check failed: {e}")
+
+
+@service.command('install')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
+@click.help_option('-h', '--help')
+def service_install(service_name, force):
+    """Install a voice service.
+
+    \b
+    Examples:
+      voicemode service install whisper
+      voicemode service install kokoro --force
+    """
+    if service_name == 'whisper':
+        from voice_mode.tools.whisper.install import whisper_install
+        result = asyncio.run(whisper_install.fn(force_reinstall=force))
+        # Handle dict result from tool
+        if isinstance(result, dict):
+            if result.get("success"):
+                click.echo(f"✅ Whisper installed successfully")
+                if result.get('install_path'):
+                    click.echo(f"   Install path: {result['install_path']}")
+            else:
+                click.echo(f"❌ Whisper installation failed: {result.get('error', 'Unknown error')}")
+        else:
+            click.echo(result)
+    elif service_name == 'kokoro':
+        from voice_mode.tools.kokoro.install import kokoro_install
+        result = asyncio.run(kokoro_install.fn(force_reinstall=force))
+        if isinstance(result, dict):
+            if result.get("success"):
+                click.echo(f"✅ Kokoro installed successfully")
+                if result.get('install_path'):
+                    click.echo(f"   Install path: {result['install_path']}")
+            else:
+                click.echo(f"❌ Kokoro installation failed: {result.get('error', 'Unknown error')}")
+        else:
+            click.echo(result)
+    else:
+        click.echo(f"❌ Unknown service: {service_name}")
+
+
+# ============================================================================
+# Legacy Service Groups (Deprecated)
+# ============================================================================
+# These are hidden from help/tab completion but still functional for backward
+# compatibility. Use 'voicemode service <action> <service>' instead.
+
+@voice_mode_main_cli.group(hidden=True)
+@click.help_option('-h', '--help', help='Show this message and exit')
+def kokoro():
+    """Manage Kokoro TTS service. [DEPRECATED: Use 'voicemode service' instead]"""
+    pass
+
+
+@voice_mode_main_cli.group(hidden=True)
 @click.help_option('-h', '--help', help='Show this message and exit')
 def whisper():
-    """Manage Whisper STT service."""
+    """Manage Whisper STT service. [DEPRECATED: Use 'voicemode service' instead]"""
     pass
 
 
 # Service functions are imported lazily in their respective command handlers to improve startup time
 
 
-# Kokoro service commands
+# Kokoro service commands (deprecated - show warnings)
 @kokoro.command()
 def status():
-    """Show Kokoro service status."""
+    """Show Kokoro service status. [DEPRECATED]"""
+    click.secho("⚠️  Deprecated: Use 'voicemode service status kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import status_service
     result = asyncio.run(status_service("kokoro"))
     click.echo(result)
@@ -116,7 +322,8 @@ def status():
 
 @kokoro.command()
 def start():
-    """Start Kokoro service."""
+    """Start Kokoro service. [DEPRECATED]"""
+    click.secho("⚠️  Deprecated: Use 'voicemode service start kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import start_service
     result = asyncio.run(start_service("kokoro"))
     click.echo(result)
@@ -124,7 +331,8 @@ def start():
 
 @kokoro.command()
 def stop():
-    """Stop Kokoro service."""
+    """Stop Kokoro service. [DEPRECATED]"""
+    click.secho("⚠️  Deprecated: Use 'voicemode service stop kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import stop_service
     result = asyncio.run(stop_service("kokoro"))
     click.echo(result)
@@ -132,7 +340,8 @@ def stop():
 
 @kokoro.command()
 def restart():
-    """Restart Kokoro service."""
+    """Restart Kokoro service. [DEPRECATED]"""
+    click.secho("⚠️  Deprecated: Use 'voicemode service restart kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import restart_service
     result = asyncio.run(restart_service("kokoro"))
     click.echo(result)
@@ -140,7 +349,8 @@ def restart():
 
 @kokoro.command()
 def enable():
-    """Enable Kokoro service to start at boot/login."""
+    """Enable Kokoro service to start at boot/login. [DEPRECATED]"""
+    click.secho("⚠️  Deprecated: Use 'voicemode service enable kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import enable_service
     result = asyncio.run(enable_service("kokoro"))
     click.echo(result)
@@ -148,7 +358,8 @@ def enable():
 
 @kokoro.command()
 def disable():
-    """Disable Kokoro service from starting at boot/login."""
+    """Disable Kokoro service from starting at boot/login. [DEPRECATED]"""
+    click.secho("⚠️  Deprecated: Use 'voicemode service disable kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import disable_service
     result = asyncio.run(disable_service("kokoro"))
     click.echo(result)
@@ -158,7 +369,8 @@ def disable():
 @click.help_option('-h', '--help')
 @click.option('--lines', '-n', default=50, help='Number of log lines to show')
 def logs(lines):
-    """View Kokoro service logs."""
+    """View Kokoro service logs. [DEPRECATED]"""
+    click.secho("⚠️  Deprecated: Use 'voicemode service logs kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import view_logs
     result = asyncio.run(view_logs("kokoro", lines))
     click.echo(result)
@@ -465,40 +677,47 @@ whisper.add_command(whisper_model_unified, name="model")
 
 # Backward compatibility: Add hidden aliases for old direct commands
 # These allow "whisper start" to work as "whisper service start"
+# But show deprecation warnings pointing to the new unified service commands
 @whisper.command("status", hidden=True)
 @click.pass_context
 def whisper_status_alias(ctx):
-    """(Deprecated) Show Whisper service status. Use 'whisper service status' instead."""
+    """(Deprecated) Show Whisper service status. Use 'voicemode service status whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service status whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_status)
 
 @whisper.command("start", hidden=True)
 @click.pass_context
 def whisper_start_alias(ctx):
-    """(Deprecated) Start Whisper service. Use 'whisper service start' instead."""
+    """(Deprecated) Start Whisper service. Use 'voicemode service start whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service start whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_start)
 
 @whisper.command("stop", hidden=True)
 @click.pass_context
 def whisper_stop_alias(ctx):
-    """(Deprecated) Stop Whisper service. Use 'whisper service stop' instead."""
+    """(Deprecated) Stop Whisper service. Use 'voicemode service stop whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service stop whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_stop)
 
 @whisper.command("restart", hidden=True)
 @click.pass_context
 def whisper_restart_alias(ctx):
-    """(Deprecated) Restart Whisper service. Use 'whisper service restart' instead."""
+    """(Deprecated) Restart Whisper service. Use 'voicemode service restart whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service restart whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_restart)
 
 @whisper.command("enable", hidden=True)
 @click.pass_context
 def whisper_enable_alias(ctx):
-    """(Deprecated) Enable Whisper service. Use 'whisper service enable' instead."""
+    """(Deprecated) Enable Whisper service. Use 'voicemode service enable whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service enable whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_enable)
 
 @whisper.command("disable", hidden=True)
 @click.pass_context
 def whisper_disable_alias(ctx):
-    """(Deprecated) Disable Whisper service. Use 'whisper service disable' instead."""
+    """(Deprecated) Disable Whisper service. Use 'voicemode service disable whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service disable whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_disable)
 
 @whisper.command("logs", hidden=True)
@@ -506,13 +725,15 @@ def whisper_disable_alias(ctx):
 @click.option('--lines', '-n', default=50, help='Number of log lines to show')
 @click.pass_context
 def whisper_logs_alias(ctx, lines):
-    """(Deprecated) View Whisper logs. Use 'whisper service logs' instead."""
+    """(Deprecated) View Whisper logs. Use 'voicemode service logs whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service logs whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_logs, lines=lines)
 
 @whisper.command("health", hidden=True)
 @click.pass_context
 def whisper_health_alias(ctx):
-    """(Deprecated) Check Whisper health. Use 'whisper service health' instead."""
+    """(Deprecated) Check Whisper health. Use 'voicemode service health whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service health whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_health)
 
 @whisper.command("install", hidden=True)
@@ -526,7 +747,8 @@ def whisper_health_alias(ctx):
 @click.option('--skip-deps', is_flag=True, help='Skip dependency checks (for advanced users)')
 @click.pass_context
 def whisper_install_alias(ctx, install_dir, model, use_gpu, force, version, auto_enable, skip_deps):
-    """(Deprecated) Install Whisper. Use 'whisper service install' instead."""
+    """(Deprecated) Install Whisper. Use 'voicemode service install whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service install whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_install, install_dir=install_dir, model=model, use_gpu=use_gpu,
                 force=force, version=version, auto_enable=auto_enable, skip_deps=skip_deps)
 
@@ -537,7 +759,8 @@ def whisper_install_alias(ctx, install_dir, model, use_gpu, force, version, auto
 @click.confirmation_option(prompt='Are you sure you want to uninstall Whisper?')
 @click.pass_context
 def whisper_uninstall_alias(ctx, remove_models, remove_all_data):
-    """(Deprecated) Uninstall Whisper. Use 'whisper service uninstall' instead."""
+    """(Deprecated) Uninstall Whisper. Use 'voicemode service uninstall whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service uninstall whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_uninstall, remove_models=remove_models, remove_all_data=remove_all_data)
 
 
