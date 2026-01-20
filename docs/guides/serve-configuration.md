@@ -159,6 +159,8 @@ If using the VoiceMode plugin for Claude Code, it automatically configures stdio
 
 Claude.ai and Claude Cowork can connect to MCP servers via custom connectors. This requires your VoiceMode server to be accessible from the internet.
 
+> **⚠️ Experimental**: The Claude.ai/Cowork integration via Tailscale Funnel is still being refined. The setup works but the workflow may change. Use with caution and expect updates.
+
 #### Prerequisites
 
 1. **Public accessibility**: Your server must be reachable from Anthropic's IP ranges
@@ -167,7 +169,18 @@ Claude.ai and Claude Cowork can connect to MCP servers via custom connectors. Th
 
 #### Setup with Tailscale Funnel
 
-Tailscale Funnel exposes your local server to the internet with automatic HTTPS:
+Tailscale Funnel exposes your local server to the internet with automatic HTTPS.
+
+**Tailscale Prerequisites**:
+
+1. **Tailscale account**: Sign up at [tailscale.com](https://tailscale.com) if you don't have an account
+2. **Tailscale installed**: The Tailscale client must be installed and running on your machine
+3. **Funnel enabled**: Funnel requires explicit enablement in your Tailscale admin console:
+   - Go to [Tailscale Admin Console](https://login.tailscale.com/admin/acls) → Access Controls
+   - Add `"funnel"` to your ACL policy to allow Funnel for your tailnet
+   - See [Tailscale Funnel documentation](https://tailscale.com/kb/1223/funnel) for details
+
+**Setup Steps**:
 
 1. Install and configure Tailscale:
    ```bash
@@ -210,6 +223,23 @@ If you have a public IP and domain:
 #### Anthropic IP Ranges
 
 The `--allow-anthropic` flag adds Anthropic's outbound IP ranges (`160.79.104.0/21`) to the allowlist. This is required for Claude.ai and Claude Cowork connections.
+
+#### Security Considerations for Tailscale Funnel
+
+> **⚠️ Important**: Tailscale Funnel exposes your local service to the public internet. While Tailscale provides the HTTPS layer, you are responsible for application-level security.
+
+**Recommendations**:
+
+1. **Always use authentication**: Never expose VoiceMode without `--secret` or `--token`
+2. **Use IP allowlists**: Combine `--allow-anthropic` with authentication for defense in depth
+3. **Monitor access**: Enable `--log-level debug` initially to monitor connection attempts
+4. **Rotate secrets**: Change your `--secret` UUID periodically, especially if you suspect compromise
+5. **Disable when not needed**: Stop the Funnel (`tailscale funnel off`) when not actively using Claude.ai
+
+**What Funnel exposes**:
+- Your VoiceMode MCP endpoint becomes publicly accessible via HTTPS
+- Anyone with your Tailscale hostname can attempt connections
+- IP allowlists (`--allow-anthropic`) prevent unauthorized access but require proper configuration
 
 ## Security Best Practices
 
@@ -338,9 +368,26 @@ voicemode serve --transport sse
 
 **Solutions**:
 1. Verify Funnel is enabled: `tailscale funnel status`
-2. Check Funnel is allowed in Tailscale admin console
+2. Check Funnel is allowed in Tailscale admin console (ACL policy must include `"funnel"`)
 3. Ensure correct port: `tailscale funnel 8765`
 4. Wait a few minutes for DNS propagation
+5. Verify Tailscale is connected: `tailscale status`
+6. Check your Funnel URL format: `https://<machine-name>.<tailnet-name>.ts.net`
+
+**Diagnostic commands**:
+```bash
+# Check Tailscale status
+tailscale status
+
+# Check Funnel configuration
+tailscale funnel status
+
+# Test local endpoint first
+curl http://127.0.0.1:8765/mcp
+
+# Test Funnel endpoint (replace with your URL)
+curl https://your-machine.tail12345.ts.net/mcp
+```
 
 ### Claude.ai Cannot Connect
 
@@ -384,3 +431,4 @@ CLI options take precedence over environment variables.
 - [CLI Reference](../reference/cli.md) - Complete serve command documentation
 - [Configuration Guide](configuration.md) - VoiceMode configuration options
 - [Claude Code Plugin](claude-code-plugin.md) - Plugin installation for Claude Code
+- [Tailscale Funnel documentation](https://tailscale.com/kb/1223/funnel) - Official Tailscale Funnel setup guide
