@@ -319,73 +319,73 @@ def whisper():
 # Service functions are imported lazily in their respective command handlers to improve startup time
 
 
-# Kokoro service commands (deprecated - show warnings)
-@kokoro.command()
+# Kokoro service commands (deprecated - hidden from help but still functional)
+@kokoro.command(hidden=True)
 def status():
-    """Show Kokoro service status. [DEPRECATED]"""
+    """(Deprecated) Show Kokoro service status. Use 'voicemode service status kokoro' instead."""
     click.secho("⚠️  Deprecated: Use 'voicemode service status kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import status_service
     result = asyncio.run(status_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def start():
-    """Start Kokoro service. [DEPRECATED]"""
+    """(Deprecated) Start Kokoro service. Use 'voicemode service start kokoro' instead."""
     click.secho("⚠️  Deprecated: Use 'voicemode service start kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import start_service
     result = asyncio.run(start_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def stop():
-    """Stop Kokoro service. [DEPRECATED]"""
+    """(Deprecated) Stop Kokoro service. Use 'voicemode service stop kokoro' instead."""
     click.secho("⚠️  Deprecated: Use 'voicemode service stop kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import stop_service
     result = asyncio.run(stop_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def restart():
-    """Restart Kokoro service. [DEPRECATED]"""
+    """(Deprecated) Restart Kokoro service. Use 'voicemode service restart kokoro' instead."""
     click.secho("⚠️  Deprecated: Use 'voicemode service restart kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import restart_service
     result = asyncio.run(restart_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def enable():
-    """Enable Kokoro service to start at boot/login. [DEPRECATED]"""
+    """(Deprecated) Enable Kokoro service. Use 'voicemode service enable kokoro' instead."""
     click.secho("⚠️  Deprecated: Use 'voicemode service enable kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import enable_service
     result = asyncio.run(enable_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def disable():
-    """Disable Kokoro service from starting at boot/login. [DEPRECATED]"""
+    """(Deprecated) Disable Kokoro service. Use 'voicemode service disable kokoro' instead."""
     click.secho("⚠️  Deprecated: Use 'voicemode service disable kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import disable_service
     result = asyncio.run(disable_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 @click.help_option('-h', '--help')
 @click.option('--lines', '-n', default=50, help='Number of log lines to show')
 def logs(lines):
-    """View Kokoro service logs. [DEPRECATED]"""
+    """(Deprecated) View Kokoro logs. Use 'voicemode service logs kokoro' instead."""
     click.secho("⚠️  Deprecated: Use 'voicemode service logs kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import view_logs
     result = asyncio.run(view_logs("kokoro", lines))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def health():
     """Check Kokoro health endpoint."""
     import subprocess
