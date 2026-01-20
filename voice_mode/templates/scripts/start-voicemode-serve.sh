@@ -93,8 +93,9 @@ if [ -n "$SERVE_TOKEN" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bearer token authentication enabled" >> "$STARTUP_LOG"
 fi
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing: python -m voice_mode serve ${CMD_ARGS[*]}" >> "$STARTUP_LOG"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing: voicemode serve ${CMD_ARGS[*]}" >> "$STARTUP_LOG"
 
 # Start VoiceMode HTTP server
 # Using exec to replace this script process with the server
-exec python -m voice_mode serve "${CMD_ARGS[@]}"
+# Use voicemode CLI command which is in ~/.local/bin (added to PATH by launchd plist)
+exec voicemode serve "${CMD_ARGS[@]}"
