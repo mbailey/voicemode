@@ -1,0 +1,24 @@
+# voicemode-serve.service v1.0.0
+# Last updated: 2026-01-21
+# Simplified: start script handles config via voicemode.env
+
+[Unit]
+Description=VoiceMode HTTP Server (Streamable HTTP/SSE)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={START_SCRIPT}
+Restart=on-failure
+RestartSec=10
+
+# Environment - start script sources voicemode.env for host/port/transport config
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-serve
+
+[Install]
+WantedBy=default.target
