@@ -102,10 +102,23 @@ VALID_SERVICES = ['whisper', 'kokoro', 'voicemode']
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help')
 def service():
-    """Manage voice services (whisper, kokoro, voicemode).
+    """Manage VoiceMode services.
 
     \b
-    Commands:
+    Services:
+      whisper    Local speech-to-text (STT) on port 2022
+      kokoro     Local text-to-speech (TTS) on port 8880
+      voicemode  HTTP MCP server for remote access on port 8765
+
+    \b
+    Quick Start:
+      voicemode service status           # Check all services
+      voicemode service start whisper    # Start Whisper STT
+      voicemode service enable voicemode # Auto-start HTTP server
+
+    \b
+    Service Lifecycle:
+      install  Install service software (whisper, kokoro)
       start    Start a service
       stop     Stop a service
       restart  Restart a service
@@ -113,8 +126,7 @@ def service():
       enable   Enable auto-start at boot/login
       disable  Disable auto-start
       logs     View service logs
-      health   Check service health endpoint
-      install  Install a service
+      health   Check if service is responding
     """
     pass
 
@@ -123,7 +135,14 @@ def service():
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
 @click.help_option('-h', '--help')
 def service_start(service_name):
-    """Start a voice service (whisper or kokoro)."""
+    """Start a voice service.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
     from voice_mode.tools.service import start_service
     result = asyncio.run(start_service(service_name))
     click.echo(result)
@@ -133,7 +152,14 @@ def service_start(service_name):
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
 @click.help_option('-h', '--help')
 def service_stop(service_name):
-    """Stop a voice service (whisper or kokoro)."""
+    """Stop a voice service.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
     from voice_mode.tools.service import stop_service
     result = asyncio.run(stop_service(service_name))
     click.echo(result)
@@ -143,7 +169,14 @@ def service_stop(service_name):
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
 @click.help_option('-h', '--help')
 def service_restart(service_name):
-    """Restart a voice service (whisper or kokoro)."""
+    """Restart a voice service.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
     from voice_mode.tools.service import restart_service
     result = asyncio.run(restart_service(service_name))
     click.echo(result)
@@ -153,12 +186,23 @@ def service_restart(service_name):
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), required=False, metavar='SERVICE')
 @click.help_option('-h', '--help')
 def service_status(service_name):
-    """Show service status for all services or a specific service.
+    """Show service status.
+
+    \b
+    Without arguments, shows status for all services.
+    With a service name, shows detailed status for that service.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
 
     \b
     Examples:
       voicemode service status          # Show all services
-      voicemode service status whisper  # Show only whisper
+      voicemode service status whisper  # Show only Whisper
+      voicemode service status voicemode # Show HTTP server status
     """
     from voice_mode.tools.service import status_service
 
@@ -180,7 +224,18 @@ def service_status(service_name):
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
 @click.help_option('-h', '--help')
 def service_enable(service_name):
-    """Enable a voice service to start at boot/login."""
+    """Enable a service to start at boot/login.
+
+    \b
+    On macOS, creates a launchd plist in ~/Library/LaunchAgents/
+    On Linux, creates a systemd user service in ~/.config/systemd/user/
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
     from voice_mode.tools.service import enable_service
     result = asyncio.run(enable_service(service_name))
     click.echo(result)
@@ -190,7 +245,18 @@ def service_enable(service_name):
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
 @click.help_option('-h', '--help')
 def service_disable(service_name):
-    """Disable a voice service from starting at boot/login."""
+    """Disable a service from starting at boot/login.
+
+    \b
+    Removes the service from launchd (macOS) or systemd (Linux).
+    The service will stop running and won't start after reboot.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
     from voice_mode.tools.service import disable_service
     result = asyncio.run(disable_service(service_name))
     click.echo(result)
@@ -201,7 +267,17 @@ def service_disable(service_name):
 @click.option('--lines', '-n', default=50, help='Number of log lines to show')
 @click.help_option('-h', '--help')
 def service_logs(service_name, lines):
-    """View service logs for a voice service."""
+    """View service logs.
+
+    \b
+    On macOS, reads from ~/Library/Logs/ or ~/.voicemode/logs/
+    On Linux, uses journalctl for systemd services
+
+    \b
+    Examples:
+      voicemode service logs whisper       # Last 50 lines
+      voicemode service logs voicemode -n 100  # Last 100 lines
+    """
     from voice_mode.tools.service import view_logs
     result = asyncio.run(view_logs(service_name, lines))
     click.echo(result)
@@ -211,7 +287,14 @@ def service_logs(service_name, lines):
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
 @click.help_option('-h', '--help')
 def service_health(service_name):
-    """Check health endpoint for a voice service."""
+    """Check the health endpoint of a service.
+
+    \b
+    Checks if the service is responding on its expected port:
+      whisper    Port 2022
+      kokoro     Port 8880
+      voicemode  Port 8765 (configurable via VOICEMODE_SERVE_PORT)
+    """
     if service_name == 'whisper':
         port = 2022
         display_name = 'Whisper'
@@ -252,6 +335,12 @@ def service_health(service_name):
 @click.help_option('-h', '--help')
 def service_install(service_name, force):
     """Install a voice service.
+
+    \b
+    Downloads and installs the service software:
+      whisper    whisper.cpp speech-to-text server
+      kokoro     Kokoro text-to-speech server
+      voicemode  Already installed (enables the HTTP server)
 
     \b
     Examples:
