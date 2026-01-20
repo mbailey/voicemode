@@ -14,6 +14,9 @@ import psutil
 from voice_mode.server import mcp
 from voice_mode.config import WHISPER_PORT, KOKORO_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
+
+# Default port for VoiceMode serve command (HTTP MCP server)
+VOICEMODE_SERVE_PORT = 8765
 from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_whisper_model
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support, is_kokoro_starting_up
 
@@ -73,6 +76,14 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "HOME": home,
             "START_SCRIPT": str(start_script) if start_script and start_script.exists() else "",
             "KOKORO_DIR": kokoro_dir,
+        }
+    elif service_name == "voicemode":
+        # VoiceMode serve service - runs the HTTP MCP server
+        start_script = os.path.join(voicemode_dir, "services", "voicemode", "bin", "start-voicemode-serve.sh")
+
+        return {
+            "HOME": home,
+            "START_SCRIPT": start_script,
         }
     else:
         raise ValueError(f"Unknown service: {service_name}")
@@ -137,6 +148,8 @@ async def status_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "voicemode":
+        port = VOICEMODE_SERVE_PORT
     else:
         port = 3000
     
@@ -224,7 +237,7 @@ async def status_service(service_name: str) -> str:
             except:
                 pass
                 
-        else:  # kokoro
+        elif service_name == "kokoro":
             # Try to get version info
             try:
                 from voice_mode.utils.services.version_info import get_kokoro_version
@@ -233,6 +246,24 @@ async def status_service(service_name: str) -> str:
                     extra_info_parts.append(f"API Version: {version_info['api_version']}")
                 elif version_info.get("version"):
                     extra_info_parts.append(f"Version: {version_info['version']}")
+            except:
+                pass
+        elif service_name == "voicemode":
+            # VoiceMode HTTP server info
+            # Extract transport and host from command line
+            transport = "streamable-http"  # default
+            host = "127.0.0.1"  # default
+            for i, arg in enumerate(cmdline):
+                if arg == "--transport" and i + 1 < len(cmdline):
+                    transport = cmdline[i + 1]
+                elif arg == "--host" and i + 1 < len(cmdline):
+                    host = cmdline[i + 1]
+            extra_info_parts.append(f"Transport: {transport}")
+            extra_info_parts.append(f"Host: {host}")
+            # Try to get version info
+            try:
+                from voice_mode.version import __version__
+                extra_info_parts.append(f"Version: {__version__}")
             except:
                 pass
         
@@ -259,6 +290,8 @@ async def start_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "voicemode":
+        port = VOICEMODE_SERVE_PORT
     else:
         port = 3000
     if find_process_by_port(port):
@@ -362,19 +395,29 @@ async def start_service(service_name: str) -> str:
         
         if not start_script.exists():
             return f"❌ Start script not found: {start_script}"
-        
+
         cmd = [str(start_script)]
+
+    elif service_name == "voicemode":
+        # Start voicemode serve command directly
+        # Use sys.executable to ensure we use the same Python that's running this script
+        import sys
+        cmd = [sys.executable, "-m", "voice_mode", "serve", "--port", str(port)]
 
     else:
         return f"❌ Unknown service: {service_name}"
 
     try:
         # Start the process
+        cwd = None
+        if service_name == "kokoro":
+            cwd = Path(kokoro_dir)
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=Path(kokoro_dir) if service_name == "kokoro" else None
+            cwd=cwd
         )
         
         # Wait a moment to check if it started
@@ -402,6 +445,8 @@ async def stop_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "voicemode":
+        port = VOICEMODE_SERVE_PORT
     else:
         port = 3000
     system = platform.system()
@@ -672,16 +717,16 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 
 @mcp.tool()
 async def service(
-    service_name: Literal["whisper", "kokoro"],
+    service_name: Literal["whisper", "kokoro", "voicemode"],
     action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs"] = "status",
     lines: Optional[Union[int, str]] = None
 ) -> str:
     """Unified service management tool for voice mode services.
-    
-    Manage Whisper (STT) and Kokoro (TTS) services with a single tool.
-    
+
+    Manage Whisper (STT), Kokoro (TTS), and VoiceMode (HTTP MCP server) services.
+
     Args:
-        service_name: The service to manage ("whisper" or "kokoro")
+        service_name: The service to manage ("whisper", "kokoro", or "voicemode")
         action: The action to perform (default: "status")
             - status: Show if service is running and resource usage
             - start: Start the service
@@ -691,13 +736,14 @@ async def service(
             - disable: Remove service from boot/login
             - logs: View recent service logs
         lines: Number of log lines to show (only for logs action, default: 50)
-    
+
     Returns:
         Status message indicating the result of the action
-    
+
     Examples:
         service("whisper", "status")  # Check if Whisper is running
         service("kokoro", "start")    # Start Kokoro service
+        service("voicemode", "start") # Start VoiceMode HTTP MCP server
         service("whisper", "logs", 100)  # View last 100 lines of Whisper logs
     """
     # Convert lines to integer if provided as string

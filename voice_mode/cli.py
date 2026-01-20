@@ -96,13 +96,13 @@ def voice_mode() -> None:
 #   voicemode service status [service]
 # etc.
 
-VALID_SERVICES = ['whisper', 'kokoro']
+VALID_SERVICES = ['whisper', 'kokoro', 'voicemode']
 
 
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help')
 def service():
-    """Manage voice services (whisper, kokoro).
+    """Manage voice services (whisper, kokoro, voicemode).
 
     \b
     Commands:
