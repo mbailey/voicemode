@@ -1,8 +1,16 @@
 """Auto-import all tools for registration with FastMCP."""
 import os
 import importlib
+import warnings
 from pathlib import Path
 import logging
+
+# Suppress pydub's audioop deprecation warning before loading any tools
+# This must be here (not in cli.py or server.py) because numpy/scipy imports
+# add their own warning filters, which can push our filters down the list.
+# By setting the filter here, it's applied right before converse.py imports pydub.
+if not os.environ.get('VOICEMODE_DEBUG', '').lower() in ('true', '1', 'yes'):
+    warnings.filterwarnings("ignore", message="'audioop' is deprecated", category=DeprecationWarning)
 
 logger = logging.getLogger("voicemode")
 

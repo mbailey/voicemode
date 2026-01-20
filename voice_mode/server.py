@@ -4,6 +4,10 @@
 import os
 import platform
 
+# Note: audioop deprecation warning is suppressed in tools/__init__.py
+# (right before pydub is imported) to ensure it's applied after numpy/scipy
+# filters are added
+
 # Extend PATH to include common tool locations before any imports that might need them
 # MCP servers run in isolated environments that may not inherit shell PATH
 if platform.system() == "Darwin":
@@ -31,20 +35,15 @@ from . import resources
 # Main entry point
 def main():
     """Run the VoiceMode MCP server."""
-    import os
     import sys
-    import warnings
     from .config import setup_logging, EVENT_LOG_ENABLED, EVENT_LOG_DIR
     from .utils import initialize_event_logger
     from .utils.ffmpeg_check import check_ffmpeg, check_ffprobe, get_install_instructions
     from pathlib import Path
-    
-    # Suppress known deprecation warnings from dependencies
-    # These are upstream issues that don't affect functionality
-    warnings.filterwarnings("ignore", category=SyntaxWarning, module="pydub.utils")
-    warnings.filterwarnings("ignore", message="'audioop' is deprecated", category=DeprecationWarning)
-    warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
-    
+
+    # Note: Warning filters are set at module level (top of file) to catch
+    # deprecation warnings from imports before main() is called
+
     # For MCP mode (stdio transport), we need to let the server start
     # so the LLM can see error messages in tool responses
     # MCP servers use stdio with stdin/stdout connected to pipes, not terminals
