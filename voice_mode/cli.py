@@ -1524,14 +1524,15 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
           secret: str | None, token: str | None):
     """Start VoiceMode as an HTTP/SSE server for remote access.
 
-    This enables Claude Desktop, Claude Cowork, or other MCP clients to connect
-    to VoiceMode over HTTP instead of stdio. Useful for:
+    This enables Claude Code, Claude Desktop, Claude Cowork, or other MCP
+    clients to connect to VoiceMode over HTTP instead of stdio. Useful for:
 
+    - Multiple Claude Code projects sharing one VoiceMode instance
     - Claude Cowork (runs in a sandboxed VM without audio access)
     - Claude Desktop with mcp-remote
-    - Any MCP client that supports HTTP/SSE transport
+    - Any MCP client that supports HTTP transport
 
-    The server exposes all VoiceMode MCP tools via the SSE transport.
+    The server exposes all VoiceMode MCP tools via the HTTP transport.
     Audio capture and playback happens on the host machine.
 
     Examples:
@@ -1560,16 +1561,9 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
         # Use Bearer token authentication
         voicemode serve --token my-secret-token
 
-    Connect from Claude Desktop using mcp-remote:
+    Connect from Claude Code:
 
-        {
-          "mcpServers": {
-            "voicemode": {
-              "command": "npx",
-              "args": ["mcp-remote", "http://localhost:8765/sse"]
-            }
-          }
-        }
+        claude mcp add --transport http voicemode http://localhost:8765/mcp
     """
     import logging
     from .server import mcp
@@ -1682,7 +1676,27 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
     click.echo(f"Endpoint: {endpoint_url}")
     click.echo(f"Log level: {log_level}")
     click.echo()
-    click.echo("Connect with mcp-remote:")
+
+    # Show Claude Code connection options
+    click.echo(click.style("Connect from Claude Code:", bold=True))
+    click.echo()
+    click.echo(f"  claude mcp add --transport http voicemode {endpoint_url}")
+    click.echo()
+
+    # Show JSON config for manual setup
+    click.echo(click.style("Manual configuration:", bold=True))
+    click.echo()
+    click.echo('  {')
+    click.echo('    "mcpServers": {')
+    click.echo('      "voicemode": {')
+    click.echo('        "type": "http",')
+    click.echo(f'        "url": "{endpoint_url}"')
+    click.echo('      }')
+    click.echo('    }')
+    click.echo('  }')
+    click.echo()
+
+    click.echo(click.style("Legacy (mcp-remote):", bold=True))
     click.echo(f"  npx mcp-remote {endpoint_url}")
     click.echo()
     click.echo("Press Ctrl+C to stop the server")

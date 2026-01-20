@@ -136,9 +136,34 @@ For local development, use stdio transport directly in `.claude/mcp.json`:
 
 This is simpler and doesn't require running a separate server.
 
-#### Remote Server
+#### Remote Server (Built-in HTTP Transport)
 
-To connect to a remote VoiceMode server, use mcp-remote:
+Claude Code has built-in HTTP transport support. To connect to a VoiceMode server:
+
+```bash
+# Add to current project (recommended)
+claude mcp add --scope project --transport http voicemode http://127.0.0.1:8765/mcp
+
+# Or add globally for all projects
+claude mcp add --scope user --transport http voicemode http://127.0.0.1:8765/mcp
+```
+
+This creates a configuration like:
+
+```json
+{
+  "mcpServers": {
+    "voicemode": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+#### Remote Server (Legacy mcp-remote)
+
+For older Claude Code versions, use mcp-remote:
 
 ```json
 {
@@ -153,7 +178,7 @@ To connect to a remote VoiceMode server, use mcp-remote:
 
 #### With VoiceMode Plugin
 
-If using the VoiceMode plugin for Claude Code, it automatically configures stdio transport. For remote access, modify the plugin's MCP configuration to use mcp-remote instead.
+If using the VoiceMode plugin for Claude Code, it automatically configures stdio transport. For remote access, disable the plugin and use the HTTP transport configuration above.
 
 ### Claude.ai and Claude Cowork
 
