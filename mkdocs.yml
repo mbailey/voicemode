@@ -84,6 +84,7 @@ nav:
     - MacBook Portable Mode: guides/macbook-portable.md
     - Claude Code Plugin: guides/claude-code-plugin.md
     - Selective Tool Loading: guides/selective-tool-loading.md
+    - Remote Access (serve): guides/serve-configuration.md
   - Local Services:
     - Whisper STT: guides/whisper-setup.md
     - Kokoro TTS: guides/kokoro-setup.md
