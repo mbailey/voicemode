@@ -29,10 +29,15 @@ voicemode serve [OPTIONS]
 
 Options:
   --host TEXT                  Host to bind to (default: 127.0.0.1)
-  --port INTEGER               Port to bind to (default: 8765)
+  -p, --port INTEGER           Port to bind to (default: 8765)
   --transport, -t [streamable-http|sse]
                                Transport protocol to use (default: streamable-http)
-  --allow-anthropic            Allow Anthropic IP ranges (160.79.104.0/21)
+  --log-level [debug|info|warning|error]
+                               Logging level (default: info)
+  --allow-anthropic / --no-allow-anthropic
+                               Allow Anthropic IP ranges (160.79.104.0/21)
+  --allow-tailscale / --no-allow-tailscale
+                               Allow Tailscale IP range (100.64.0.0/10)
   --allow-ip CIDR              Add custom CIDR to allowlist (repeatable)
   --allow-local / --no-allow-local
                                Allow localhost connections (default: true)
@@ -55,6 +60,9 @@ voicemode serve --allow-anthropic
 # Custom IP allowlist
 voicemode serve --allow-ip 192.168.1.0/24 --allow-ip 10.0.0.0/8
 
+# Allow all devices on your Tailscale network
+voicemode serve --allow-tailscale
+
 # Strict Anthropic-only mode (no localhost)
 voicemode serve --allow-anthropic --no-allow-local
 
@@ -69,6 +77,9 @@ voicemode serve --allow-anthropic --token my-secret-token
 
 # SSE with secret path segment (deprecated)
 voicemode serve --transport sse --secret my-secret-uuid
+
+# Enable debug logging for troubleshooting
+voicemode serve --log-level debug
 ```
 
 #### Transport Options
@@ -125,9 +136,13 @@ If you are currently using SSE transport and want to migrate to streamable-http:
 
 **IP Allowlist**
 
-The `--allow-anthropic` flag adds Anthropic's outbound IP ranges to the allowlist, enabling connections from Claude.ai and Claude Cowork. Use `--allow-ip` to add custom CIDR ranges.
+The `--allow-anthropic` flag adds Anthropic's outbound IP ranges to the allowlist, enabling connections from Claude.ai and Claude Cowork. The `--allow-tailscale` flag adds the Tailscale CGNAT range (100.64.0.0/10), allowing any device on your Tailscale network to connect. Use `--allow-ip` to add custom CIDR ranges.
 
 By default, localhost connections are allowed (`--allow-local`). Use `--no-allow-local` to disable this for strict remote-only access.
+
+**Logging**
+
+The `--log-level` option controls the verbosity of server logs. Available levels are `debug`, `info` (default), `warning`, and `error`. Use `--log-level debug` for troubleshooting connection issues.
 
 **URL Secret Authentication**
 
