@@ -332,6 +332,37 @@ TTS \\bAPI\\b A P I # API as individual letters
 # VOICEMODE_SERVICE_AUTO_ENABLE=true
 
 #############
+# HTTP Serve Configuration
+#############
+
+# Host/IP address to bind the server to (default: 127.0.0.1)
+# VOICEMODE_SERVE_HOST=127.0.0.1
+
+# Port to bind the server to (default: 8765)
+# VOICEMODE_SERVE_PORT=8765
+
+# Transport protocol: streamable-http or sse (default: streamable-http)
+# VOICEMODE_SERVE_TRANSPORT=streamable-http
+
+# Security: Allow connections from local/private IP ranges (default: true)
+# VOICEMODE_SERVE_ALLOW_LOCAL=true
+
+# Security: Allow connections from Anthropic IP ranges for Claude Cowork (default: false)
+# VOICEMODE_SERVE_ALLOW_ANTHROPIC=false
+
+# Security: Allow connections from Tailscale IP range 100.64.0.0/10 (default: false)
+# VOICEMODE_SERVE_ALLOW_TAILSCALE=false
+
+# Security: Additional allowed CIDR ranges (comma-separated)
+# VOICEMODE_SERVE_ALLOWED_IPS=
+
+# Authentication: URL secret path segment (e.g., /secret-path/mcp)
+# VOICEMODE_SERVE_SECRET=
+
+# Authentication: Bearer token for Authorization header
+# VOICEMODE_SERVE_TOKEN=
+
+#############
 # Advanced Configuration
 #############
 
@@ -1208,6 +1239,12 @@ def get_format_export_params(format: str) -> dict:
     return params
 
 # ==================== SERVE COMMAND CONFIGURATION ====================
+
+# Host/IP address to bind the server to (default: 127.0.0.1)
+SERVE_HOST = os.getenv("VOICEMODE_SERVE_HOST", "127.0.0.1")
+
+# Port to bind the server to (default: 8765)
+SERVE_PORT = int(os.getenv("VOICEMODE_SERVE_PORT", "8765"))
 
 # Allow connections from local/private IP ranges (default: true)
 SERVE_ALLOW_LOCAL = env_bool("VOICEMODE_SERVE_ALLOW_LOCAL", True)

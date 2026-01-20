@@ -14,6 +14,9 @@ import psutil
 from voice_mode.server import mcp
 from voice_mode.config import WHISPER_PORT, KOKORO_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
+
+# Default port for VoiceMode serve command (HTTP MCP server)
+VOICEMODE_SERVE_PORT = 8765
 from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_whisper_model
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support, is_kokoro_starting_up
 
@@ -74,8 +77,56 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "START_SCRIPT": str(start_script) if start_script and start_script.exists() else "",
             "KOKORO_DIR": kokoro_dir,
         }
+    elif service_name == "voicemode":
+        # VoiceMode serve service - runs the HTTP MCP server
+        start_script = os.path.join(voicemode_dir, "services", "voicemode", "bin", "start-voicemode-serve.sh")
+
+        return {
+            "HOME": home,
+            "START_SCRIPT": start_script,
+        }
     else:
         raise ValueError(f"Unknown service: {service_name}")
+
+
+async def install_voicemode_start_script() -> Dict[str, Any]:
+    """Install the VoiceMode start script to the expected location.
+
+    Unlike whisper/kokoro which require compilation, voicemode is built into
+    the package. This function copies the start script template to the
+    ~/.voicemode/services/voicemode/bin/ directory.
+
+    Returns:
+        Dict with success status and start_script path
+    """
+    voicemode_dir = os.path.expanduser(os.environ.get("VOICEMODE_BASE_DIR", "~/.voicemode"))
+    bin_dir = os.path.join(voicemode_dir, "services", "voicemode", "bin")
+    start_script_path = os.path.join(bin_dir, "start-voicemode-serve.sh")
+
+    try:
+        # Create bin directory if it doesn't exist
+        os.makedirs(bin_dir, exist_ok=True)
+
+        # Load template script from package
+        template_path = Path(__file__).parent.parent / "templates" / "scripts" / "start-voicemode-serve.sh"
+        if not template_path.exists():
+            return {"success": False, "error": f"Template not found: {template_path}"}
+
+        template_content = template_path.read_text()
+
+        # Write the start script
+        with open(start_script_path, 'w') as f:
+            f.write(template_content)
+
+        # Make executable
+        os.chmod(start_script_path, 0o755)
+
+        logger.info(f"Installed VoiceMode start script at {start_script_path}")
+        return {"success": True, "start_script": start_script_path}
+
+    except Exception as e:
+        logger.error(f"Error installing VoiceMode start script: {e}")
+        return {"success": False, "error": str(e)}
 
 
 def load_service_template(service_name: str) -> str:
@@ -83,10 +134,13 @@ def load_service_template(service_name: str) -> str:
     system = platform.system()
     templates_dir = Path(__file__).parent.parent / "templates"
 
+    # Map service name to template name (voicemode uses "serve" in template names)
+    template_name = "serve" if service_name == "voicemode" else service_name
+
     if system == "Darwin":
-        template_path = templates_dir / "launchd" / f"com.voicemode.{service_name}.plist"
+        template_path = templates_dir / "launchd" / f"com.voicemode.{template_name}.plist"
     else:
-        template_path = templates_dir / "systemd" / f"voicemode-{service_name}.service"
+        template_path = templates_dir / "systemd" / f"voicemode-{template_name}.service"
 
     if not template_path.exists():
         raise FileNotFoundError(f"Service template not found: {template_path}")
@@ -101,7 +155,7 @@ def create_service_file(service_name: str) -> tuple[Path, str]:
     Templates are simplified - start scripts handle config via voicemode.env.
 
     Args:
-        service_name: Name of the service (whisper, kokoro)
+        service_name: Name of the service (whisper, kokoro, voicemode)
 
     Returns:
         Tuple of (destination_path, file_content)
@@ -118,14 +172,17 @@ def create_service_file(service_name: str) -> tuple[Path, str]:
     # Format template with config vars
     content = template.format(**config_vars)
 
+    # Map service name to file name (voicemode uses "serve" in file names)
+    file_name = "serve" if service_name == "voicemode" else service_name
+
     # Determine destination path
     if system == "Darwin":
-        dest_path = Path(home) / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
+        dest_path = Path(home) / "Library" / "LaunchAgents" / f"com.voicemode.{file_name}.plist"
     else:
-        dest_path = Path(home) / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
+        dest_path = Path(home) / ".config" / "systemd" / "user" / f"voicemode-{file_name}.service"
 
-    # Ensure log directory exists
-    log_dir = Path(home) / ".voicemode" / "logs" / service_name
+    # Ensure log directory exists (voicemode uses 'serve' for logs too)
+    log_dir = Path(home) / ".voicemode" / "logs" / file_name
     log_dir.mkdir(parents=True, exist_ok=True)
 
     return dest_path, content
@@ -137,6 +194,8 @@ async def status_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "voicemode":
+        port = VOICEMODE_SERVE_PORT
     else:
         port = 3000
     
@@ -224,7 +283,7 @@ async def status_service(service_name: str) -> str:
             except:
                 pass
                 
-        else:  # kokoro
+        elif service_name == "kokoro":
             # Try to get version info
             try:
                 from voice_mode.utils.services.version_info import get_kokoro_version
@@ -233,6 +292,24 @@ async def status_service(service_name: str) -> str:
                     extra_info_parts.append(f"API Version: {version_info['api_version']}")
                 elif version_info.get("version"):
                     extra_info_parts.append(f"Version: {version_info['version']}")
+            except:
+                pass
+        elif service_name == "voicemode":
+            # VoiceMode HTTP server info
+            # Extract transport and host from command line
+            transport = "streamable-http"  # default
+            host = "127.0.0.1"  # default
+            for i, arg in enumerate(cmdline):
+                if arg == "--transport" and i + 1 < len(cmdline):
+                    transport = cmdline[i + 1]
+                elif arg == "--host" and i + 1 < len(cmdline):
+                    host = cmdline[i + 1]
+            extra_info_parts.append(f"Transport: {transport}")
+            extra_info_parts.append(f"Host: {host}")
+            # Try to get version info
+            try:
+                from voice_mode.version import __version__
+                extra_info_parts.append(f"Version: {__version__}")
             except:
                 pass
         
@@ -259,16 +336,21 @@ async def start_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "voicemode":
+        port = VOICEMODE_SERVE_PORT
     else:
         port = 3000
     if find_process_by_port(port):
         return f"{service_name.capitalize()} is already running on port {port}"
-    
+
     system = platform.system()
-    
+
+    # Map service name to file name (voicemode uses "serve" in file names)
+    file_name = "serve" if service_name == "voicemode" else service_name
+
     # Check if managed by service manager
     if system == "Darwin":
-        plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
+        plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{file_name}.plist"
         if plist_path.exists():
             # Use launchctl load
             result = subprocess.run(
@@ -288,19 +370,20 @@ async def start_service(service_name: str) -> str:
                 if "already loaded" in error.lower():
                     # Service is loaded but maybe not running - try to start it
                     # This can happen if the service crashed
-                    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.voicemode.{service_name}"], capture_output=True)
+                    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.voicemode.{file_name}"], capture_output=True)
                     await asyncio.sleep(2)
                     if find_process_by_port(port):
                         return f"✅ {service_name.capitalize()} restarted"
                     return f"⚠️ {service_name.capitalize()} is loaded but failed to start"
                 return f"❌ Failed to start {service_name}: {error}"
-    
+
     elif system == "Linux":
-        service_file = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
+        service_unit = f"voicemode-{file_name}.service"
+        service_file = Path.home() / ".config" / "systemd" / "user" / service_unit
         if service_file.exists():
             # Use systemctl start
             result = subprocess.run(
-                ["systemctl", "--user", "start", f"voicemode-{service_name}.service"],
+                ["systemctl", "--user", "start", service_unit],
                 capture_output=True,
                 text=True
             )
@@ -362,19 +445,29 @@ async def start_service(service_name: str) -> str:
         
         if not start_script.exists():
             return f"❌ Start script not found: {start_script}"
-        
+
         cmd = [str(start_script)]
+
+    elif service_name == "voicemode":
+        # Start voicemode serve command directly
+        # Use sys.executable to ensure we use the same Python that's running this script
+        import sys
+        cmd = [sys.executable, "-m", "voice_mode", "serve", "--port", str(port)]
 
     else:
         return f"❌ Unknown service: {service_name}"
 
     try:
         # Start the process
+        cwd = None
+        if service_name == "kokoro":
+            cwd = Path(kokoro_dir)
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            cwd=Path(kokoro_dir) if service_name == "kokoro" else None
+            cwd=cwd
         )
         
         # Wait a moment to check if it started
@@ -402,13 +495,18 @@ async def stop_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "voicemode":
+        port = VOICEMODE_SERVE_PORT
     else:
         port = 3000
     system = platform.system()
-    
+
+    # Map service name to file name (voicemode uses "serve" in file names)
+    file_name = "serve" if service_name == "voicemode" else service_name
+
     # Check if managed by service manager
     if system == "Darwin":
-        plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
+        plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{file_name}.plist"
         if plist_path.exists():
             # Use launchctl unload (without -w to preserve enable state)
             result = subprocess.run(
@@ -424,13 +522,14 @@ async def stop_service(service_name: str) -> str:
                 if "could not find specified service" in error.lower():
                     return f"{service_name.capitalize()} is not running"
                 return f"❌ Failed to stop {service_name}: {error}"
-    
+
     elif system == "Linux":
-        service_file = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
+        service_unit = f"voicemode-{file_name}.service"
+        service_file = Path.home() / ".config" / "systemd" / "user" / service_unit
         if service_file.exists():
             # Use systemctl stop
             result = subprocess.run(
-                ["systemctl", "--user", "stop", f"voicemode-{service_name}.service"],
+                ["systemctl", "--user", "stop", service_unit],
                 capture_output=True,
                 text=True
             )
@@ -500,6 +599,16 @@ async def enable_service(service_name: str) -> str:
             if not start_script or not Path(start_script).exists():
                 return "❌ Kokoro start script not found. Please run kokoro_install first."
 
+        elif service_name == "voicemode":
+            start_script = config_vars.get("START_SCRIPT", "")
+            if not start_script or not Path(start_script).exists():
+                # Auto-install the start script for voicemode since it's built-in
+                install_result = await install_voicemode_start_script()
+                if not install_result.get("success"):
+                    return f"❌ Failed to install VoiceMode start script: {install_result.get('error', 'Unknown error')}"
+                start_script = install_result.get("start_script", "")
+                logger.info(f"Auto-installed VoiceMode start script at {start_script}")
+
         # Create parent directories
         service_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -521,17 +630,21 @@ async def enable_service(service_name: str) -> str:
                 return f"❌ Failed to enable {service_name} service: {error}"
 
         else:  # Linux
+            # Map service name to file name (voicemode uses "serve" in file names)
+            file_name = "serve" if service_name == "voicemode" else service_name
+            service_unit = f"voicemode-{file_name}.service"
+
             # Reload and enable systemd
             subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
             result = subprocess.run(
-                ["systemctl", "--user", "enable", f"voicemode-{service_name}.service"],
+                ["systemctl", "--user", "enable", service_unit],
                 capture_output=True,
                 text=True
             )
 
             if result.returncode == 0:
                 # Also start it now
-                subprocess.run(["systemctl", "--user", "start", f"voicemode-{service_name}.service"], check=True)
+                subprocess.run(["systemctl", "--user", "start", service_unit], check=True)
                 return f"✅ {service_name.capitalize()} service enabled and started.\nService: {service_path}"
             else:
                 error = result.stderr or result.stdout
@@ -545,21 +658,24 @@ async def enable_service(service_name: str) -> str:
 async def disable_service(service_name: str) -> str:
     """Disable a service from starting at boot/login."""
     system = platform.system()
-    
+
+    # Map service name to file name (voicemode uses "serve" in file names)
+    file_name = "serve" if service_name == "voicemode" else service_name
+
     try:
         if system == "Darwin":
-            plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
-            
+            plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{file_name}.plist"
+
             if not plist_path.exists():
                 return f"{service_name.capitalize()} service is not installed"
-            
+
             # Unload with launchctl
             result = subprocess.run(
                 ["launchctl", "unload", "-w", str(plist_path)],
                 capture_output=True,
                 text=True
             )
-            
+
             if result.returncode == 0:
                 # Remove the plist file
                 plist_path.unlink()
@@ -571,27 +687,27 @@ async def disable_service(service_name: str) -> str:
                     plist_path.unlink()
                     return f"✅ {service_name.capitalize()} service was already disabled, plist removed"
                 return f"❌ Failed to disable {service_name} service: {error}"
-                
+
         else:  # Linux
-            service_name_full = f"voicemode-{service_name}.service"
-            
+            service_unit = f"voicemode-{file_name}.service"
+
             # Stop and disable
-            subprocess.run(["systemctl", "--user", "stop", service_name_full], check=True)
+            subprocess.run(["systemctl", "--user", "stop", service_unit], check=True)
             result = subprocess.run(
-                ["systemctl", "--user", "disable", service_name_full],
+                ["systemctl", "--user", "disable", service_unit],
                 capture_output=True,
                 text=True
             )
-            
+
             if result.returncode == 0:
                 # Remove service file
-                service_path = Path.home() / ".config" / "systemd" / "user" / service_name_full
+                service_path = Path.home() / ".config" / "systemd" / "user" / service_unit
                 if service_path.exists():
                     service_path.unlink()
-                
+
                 # Reload systemd
                 subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-                
+
                 return f"✅ {service_name.capitalize()} service disabled and removed"
             else:
                 error = result.stderr or result.stdout
@@ -606,27 +722,31 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
     """View service logs."""
     system = platform.system()
     lines = lines or 50
-    
+
+    # Map service name to file/log name (voicemode uses "serve" in file names)
+    log_name = "serve" if service_name == "voicemode" else service_name
+
     try:
         if system == "Darwin":
             # Use log show command
+            process_name = "voicemode-serve" if service_name == "voicemode" else f"{service_name}-server"
             cmd = [
                 "log", "show",
-                "--predicate", f'process == "{service_name}-server" OR process == "kokoro-fastapi"',
+                "--predicate", f'process == "{process_name}" OR process == "kokoro-fastapi"',
                 "--last", f"{lines}",
                 "--style", "compact"
             ]
-            
+
             result = subprocess.run(cmd, capture_output=True, text=True)
-            
+
             if result.returncode == 0 and result.stdout.strip():
                 return f"=== Last {lines} log entries for {service_name} ===\n{result.stdout}"
             else:
-                # Fallback to log files
-                log_dir = Path.home() / ".voicemode" / "logs"
-                out_log = log_dir / f"{service_name}.out.log"
-                err_log = log_dir / f"{service_name}.err.log"
-                
+                # Fallback to log files (voicemode logs to serve/ directory)
+                log_dir = Path.home() / ".voicemode" / "logs" / log_name
+                out_log = log_dir / f"{log_name}.out.log"
+                err_log = log_dir / f"{log_name}.err.log"
+
                 logs = []
                 if out_log.exists():
                     with open(out_log) as f:
@@ -634,7 +754,7 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
                         if stdout_lines:
                             logs.append(f"=== stdout (last {len(stdout_lines)} lines) ===")
                             logs.extend(stdout_lines)
-                
+
                 if err_log.exists():
                     with open(err_log) as f:
                         stderr_lines = f.readlines()[-lines:]
@@ -643,17 +763,17 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
                                 logs.append("")
                             logs.append(f"=== stderr (last {len(stderr_lines)} lines) ===")
                             logs.extend(stderr_lines)
-                
+
                 if logs:
                     return "".join(logs).rstrip()
                 else:
                     return f"No logs found for {service_name}"
-                    
+
         else:  # Linux
             # Use journalctl
             cmd = [
                 "journalctl", "--user",
-                "-u", f"voicemode-{service_name}.service",
+                "-u", f"voicemode-{log_name}.service",
                 "-n", str(lines),
                 "--no-pager"
             ]
@@ -672,16 +792,16 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 
 @mcp.tool()
 async def service(
-    service_name: Literal["whisper", "kokoro"],
+    service_name: Literal["whisper", "kokoro", "voicemode"],
     action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs"] = "status",
     lines: Optional[Union[int, str]] = None
 ) -> str:
     """Unified service management tool for voice mode services.
-    
-    Manage Whisper (STT) and Kokoro (TTS) services with a single tool.
-    
+
+    Manage Whisper (STT), Kokoro (TTS), and VoiceMode (HTTP MCP server) services.
+
     Args:
-        service_name: The service to manage ("whisper" or "kokoro")
+        service_name: The service to manage ("whisper", "kokoro", or "voicemode")
         action: The action to perform (default: "status")
             - status: Show if service is running and resource usage
             - start: Start the service
@@ -691,13 +811,14 @@ async def service(
             - disable: Remove service from boot/login
             - logs: View recent service logs
         lines: Number of log lines to show (only for logs action, default: 50)
-    
+
     Returns:
         Status message indicating the result of the action
-    
+
     Examples:
         service("whisper", "status")  # Check if Whisper is running
         service("kokoro", "start")    # Start Kokoro service
+        service("voicemode", "start") # Start VoiceMode HTTP MCP server
         service("whisper", "logs", 100)  # View last 100 lines of Whisper logs
     """
     # Convert lines to integer if provided as string
@@ -732,30 +853,33 @@ async def install_service(service_name: str) -> Dict[str, Any]:
     try:
         system = platform.system()
         config_vars = get_service_config_vars(service_name)
-        
+
         # Load template
         template_content = load_service_template(service_name)
-        
+
         # Replace placeholders
         for key, value in config_vars.items():
             template_content = template_content.replace(f"{{{key}}}", str(value))
-        
+
+        # Map service name to file name (voicemode uses "serve" in file names)
+        file_name = "serve" if service_name == "voicemode" else service_name
+
         if system == "Darwin":
             # Install launchd plist
-            plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
+            plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{file_name}.plist"
             plist_path.parent.mkdir(parents=True, exist_ok=True)
             plist_path.write_text(template_content)
             return {"success": True, "service_file": str(plist_path)}
         else:
             # Install systemd service
-            service_path = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
+            service_path = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{file_name}.service"
             service_path.parent.mkdir(parents=True, exist_ok=True)
             service_path.write_text(template_content)
-            
+
             # Reload systemd
             subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
             return {"success": True, "service_file": str(service_path)}
-            
+
     except Exception as e:
         logger.error(f"Error installing service {service_name}: {e}")
         return {"success": False, "error": str(e)}
@@ -765,16 +889,19 @@ async def uninstall_service(service_name: str) -> Dict[str, Any]:
     """Remove service files for a service."""
     try:
         system = platform.system()
-        
+
+        # Map service name to file name (voicemode uses "serve" in file names)
+        file_name = "serve" if service_name == "voicemode" else service_name
+
         if system == "Darwin":
-            plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{service_name}.plist"
+            plist_path = Path.home() / "Library" / "LaunchAgents" / f"com.voicemode.{file_name}.plist"
             if plist_path.exists():
                 plist_path.unlink()
                 return {"success": True, "message": f"Removed {plist_path}"}
             else:
                 return {"success": True, "message": "Service file not found"}
         else:
-            service_path = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{service_name}.service"
+            service_path = Path.home() / ".config" / "systemd" / "user" / f"voicemode-{file_name}.service"
             if service_path.exists():
                 service_path.unlink()
                 # Reload systemd
@@ -782,7 +909,7 @@ async def uninstall_service(service_name: str) -> Dict[str, Any]:
                 return {"success": True, "message": f"Removed {service_path}"}
             else:
                 return {"success": True, "message": "Service file not found"}
-                
+
     except Exception as e:
         logger.error(f"Error uninstalling service {service_name}: {e}")
         return {"success": False, "error": str(e)}

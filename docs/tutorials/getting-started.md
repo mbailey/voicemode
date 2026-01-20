@@ -102,16 +102,31 @@ For complete privacy, you can run voice services locally instead of using OpenAI
 ### Quick Setup
 
 ```bash
-# Install local services (use --yes for non-interactive environments like Claude Code)
-voicemode whisper install   # Speech-to-text
-voicemode kokoro install    # Text-to-speech
+# Install local services
+voicemode service install whisper   # Speech-to-text
+voicemode service install kokoro    # Text-to-speech
 
 # Start services
-voicemode whisper start
-voicemode kokoro start
+voicemode service start whisper
+voicemode service start kokoro
+
+# Check status of all services
+voicemode service status
 ```
 
 VoiceMode will automatically detect and use these local services when available.
+
+### Enable Auto-Start (Recommended)
+
+To have services start automatically at login:
+
+```bash
+# Enable services to start at boot/login
+voicemode service enable whisper
+voicemode service enable kokoro
+```
+
+On macOS, this creates launchd agents. On Linux, it creates systemd user services.
 
 ### Download Sizes and Requirements
 
@@ -199,12 +214,36 @@ voicemode converse
 
 ```bash
 # Check service status
-voicemode whisper status
-voicemode kokoro status
+voicemode service status           # All services
+voicemode service status whisper   # Specific service
 
 # View logs
-voicemode logs --tail 50
+voicemode service logs whisper -n 50
+voicemode service logs kokoro -n 50
+
+# Check if service is responding
+voicemode service health whisper
+voicemode service health kokoro
 ```
+
+## Running VoiceMode as a Service (Advanced)
+
+For remote access or persistent operation, run VoiceMode as a background service:
+
+```bash
+# Start the VoiceMode HTTP server
+voicemode service start voicemode
+
+# Enable auto-start at boot/login
+voicemode service enable voicemode
+
+# Check all services
+voicemode service status
+```
+
+The HTTP server enables remote access from other machines on your network or via secure tunnels.
+
+For security best practices when running remotely, see the [Configuration Guide](../guides/configuration.md#http-server-security).
 
 ## Next Steps
 
