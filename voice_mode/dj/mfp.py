@@ -370,11 +370,47 @@ class MfpService:
         except ValueError:
             return None
 
+    def _copy_chapters_from_package(self, filename_base: str) -> bool:
+        """Copy chapter files from package to local cache directory.
+
+        Copies both CUE and FFmeta files if they exist in the package.
+
+        Args:
+            filename_base: Episode filename base (e.g., "music_for_programming_49-julien_mier").
+
+        Returns:
+            True if at least one file was copied, False otherwise.
+        """
+        package_dir = self.get_package_mfp_dir()
+        if package_dir is None:
+            return False
+
+        self._ensure_cache_dir()
+        copied = False
+
+        # Copy FFmeta if available
+        package_ffmeta = package_dir / f"{filename_base}.ffmeta"
+        if package_ffmeta.exists():
+            local_ffmeta = self.cache_dir / f"{filename_base}.ffmeta"
+            local_ffmeta.write_bytes(package_ffmeta.read_bytes())
+            copied = True
+
+        # Copy CUE if available
+        package_cue = package_dir / f"{filename_base}.cue"
+        if package_cue.exists():
+            local_cue = self.cache_dir / f"{filename_base}.cue"
+            local_cue.write_bytes(package_cue.read_bytes())
+            copied = True
+
+        return copied
+
     def get_chapters_file(self, number: int) -> Path | None:
         """Get path to chapters file for an episode.
 
         Prefers FFmeta format if available, otherwise returns CUE.
         If only CUE exists, converts it to FFmeta first.
+        If no local files exist, checks for bundled chapter files in the package
+        and copies them to the local cache directory on-demand.
 
         Args:
             number: Episode number.
@@ -407,6 +443,19 @@ class MfpService:
             except Exception:
                 # If conversion fails, return the CUE file
                 return cue_path
+
+        # No local files - try to copy from package
+        if self._copy_chapters_from_package(filename_base):
+            # Retry after copying
+            if ffmeta_path.exists():
+                return ffmeta_path
+            if cue_path.exists():
+                try:
+                    ffmeta_content = convert_cue_to_ffmetadata(cue_path.read_text())
+                    ffmeta_path.write_text(ffmeta_content)
+                    return ffmeta_path
+                except Exception:
+                    return cue_path
 
         return None
 
