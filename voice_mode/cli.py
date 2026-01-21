@@ -2695,29 +2695,30 @@ def mfp_play(episode: int, volume: int):
 
 @mfp.command("sync")
 @click.help_option('-h', '--help', help='Show this message and exit')
-@click.option('--force', '-f', is_flag=True, help='Re-convert even if FFmeta already exists')
+@click.option('--force', '-f', is_flag=True, help='Overwrite local files even if modified')
 def mfp_sync(force: bool):
-    """Sync and convert CUE chapter files to FFmetadata format.
+    """Sync chapter files from package to local cache.
 
-    Scans the MFP cache directory for CUE files and converts them
-    to FFmetadata format for mpv compatibility.
+    Copies chapter files bundled with VoiceMode to your local cache directory.
+    Compares checksums to identify new and updated files.
+
+    User modifications are preserved unless --force is used, in which case
+    they are backed up with a .user extension.
 
     Examples:
-        voicemode dj mfp sync              # Convert new CUE files
-        voicemode dj mfp sync --force      # Re-convert all files
+        voicemode dj mfp sync              # Sync new chapter files
+        voicemode dj mfp sync --force      # Overwrite local modifications
     """
     from voice_mode.dj.mfp import MfpService
 
     service = MfpService()
-    count = service.sync_chapters(force=force)
+    results = service.sync_chapters(force=force)
 
-    if count > 0:
-        click.echo(f"Converted {count} chapter file(s) to FFmetadata format.")
+    if not results:
+        click.echo("No chapter files found in package.")
     else:
-        if force:
-            click.echo("No CUE files found to convert.")
-        else:
-            click.echo("All chapter files already converted. Use --force to re-convert.")
+        click.echo()
+        click.echo("Chapter sync complete")
 
     click.echo(f"Cache directory: {service.cache_dir}")
 

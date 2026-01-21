@@ -141,48 +141,53 @@ See [chapters.md](chapters.md) for the chapter file format details.
 VoiceMode includes chapter files for select episodes in the package. These are automatically copied to your local directory when you first play an episode.
 
 **Available chapters:**
-- Episode 49, 51, 52, 70, 71, 74
+- Episode 49 (Julien Mier)
 
 **How it works:**
-1. When you run `mpv-dj mfp 49` for the first time, the chapter file is copied from the package
+1. When you run `voicemode dj mfp play 49` for the first time, chapter files are copied from the package to `~/.voicemode/music-for-programming/`
 2. The chapter file enables track-level navigation immediately
-3. User modifications to chapter files are preserved during updates
+3. User modifications to chapter files are preserved during updates (backed up with `.user` extension)
 
 ### Syncing Chapter Files
 
-Use the `sync-chapters` command to manage chapter files:
+Use the `sync` command to manage chapter files:
 
 ```bash
 # Sync all chapter files from package
-mpv-dj mfp sync-chapters
+voicemode dj mfp sync
 
-# Force overwrite (ignores user modifications)
-mpv-dj mfp sync-chapters --force
+# Force overwrite (backs up user modifications to .user)
+voicemode dj mfp sync --force
 ```
 
 **Sync behavior:**
 - **New files**: Copied from package to local directory
 - **Unchanged files**: Skipped (already up to date)
 - **Updated files**: If you modified a chapter file, your version is backed up to `.user` before updating
+- **Skipped files**: Local modifications preserved unless `--force` is used
 
 Example output:
 ```
-  Added: music_for_programming_49-julien_mier.ffmeta
-  Unchanged: music_for_programming_51-mücha.ffmeta
-  Updated: music_for_programming_74-ncw.ffmeta (user version saved as .user)
+Added: music_for_programming_49-julien_mier.cue
+Added: music_for_programming_49-julien_mier.ffmeta
+Unchanged: music_for_programming_51-mücha.ffmeta
+
 Chapter sync complete
+Cache directory: /Users/you/.voicemode/music-for-programming
 ```
+
+**Checksum-based sync**: The sync compares SHA256 checksums between package and local files to detect changes accurately. Local checksums are stored in `.chapters.sha256` (hidden file).
 
 ### Contributing Chapter Files
 
 Community contributions to improve chapter accuracy are welcome! To contribute:
 
 1. **Fork the VoiceMode repository** on GitHub
-2. **Create or improve chapter files** in `skills/voicemode/mfp/`
+2. **Create or improve chapter files** in `voice_mode/data/mfp/`
 3. **Update the checksums** by regenerating `chapters.sha256`:
    ```bash
-   cd skills/voicemode/mfp
-   shasum -a 256 *.ffmeta > chapters.sha256
+   cd voice_mode/data/mfp
+   shasum -a 256 *.cue *.ffmeta > chapters.sha256
    ```
 4. **Submit a Pull Request** with your changes
 
@@ -191,7 +196,7 @@ Community contributions to improve chapter accuracy are welcome! To contribute:
 **Quality guidelines:**
 - Timestamps should be accurate to within a few seconds
 - Track titles should match the official MFP tracklist
-- Test playback with `mpv-dj mfp <episode>` and verify navigation works
+- Test playback with `voicemode dj mfp play <episode>` and verify navigation works
 
 ## Listing Episodes
 
