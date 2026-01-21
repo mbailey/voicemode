@@ -8,6 +8,7 @@ including RSS parsing, episode streaming URLs, and chapter file management.
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 from typing import Protocol
 from urllib.error import URLError
@@ -116,6 +117,41 @@ class MfpService:
         self._fetcher = fetcher or HttpFetcher()
         self._rss_cache_file = self.cache_dir / "rss.xml"
         self._episodes_cache: dict[int, MfpEpisode] | None = None
+
+    def get_package_mfp_dir(self) -> Path | None:
+        """Get the path to bundled MFP chapter files in the package.
+
+        Uses importlib.resources to locate the package data directory.
+        This works both when running from source and when installed as a package.
+
+        Returns:
+            Path to the package mfp data directory, or None if not found.
+        """
+        try:
+            package_mfp = files("voice_mode.data.mfp")
+            # Check if it's a valid directory with content
+            if not package_mfp.is_dir():
+                return None
+
+            # MultiplexedPath has _paths attribute with actual Path objects
+            if hasattr(package_mfp, "_paths") and package_mfp._paths:
+                return Path(package_mfp._paths[0])
+
+            # Fallback: iterate to find a file and get its parent
+            try:
+                for item in package_mfp.iterdir():
+                    if hasattr(item, "_paths") and item._paths:
+                        return Path(item._paths[0]).parent
+                    # For PosixPath items (when running from source)
+                    if isinstance(item, Path):
+                        return item.parent
+            except (StopIteration, AttributeError):
+                pass
+
+            return None
+        except (ModuleNotFoundError, TypeError):
+            # Package data not found
+            return None
 
     def _ensure_cache_dir(self) -> None:
         """Ensure the cache directory exists."""
