@@ -351,6 +351,117 @@ class TestCuratorExtraction:
         assert episode.curator == "name with multiple parts"
 
 
+class TestChapterDistribution:
+    """Tests for chapter file distribution from package."""
+
+    @pytest.fixture
+    def mock_fetcher(self):
+        """Create a mock fetcher."""
+        return MockFetcher()
+
+    @pytest.fixture
+    def service(self, tmp_path, mock_fetcher):
+        """Create an MFP service with mock fetcher and temp cache."""
+        return MfpService(cache_dir=tmp_path, fetcher=mock_fetcher)
+
+    def test_get_package_mfp_dir_returns_valid_path(self, service):
+        """Test get_package_mfp_dir() returns a valid path with expected content."""
+        package_dir = service.get_package_mfp_dir()
+
+        # Should return a valid Path
+        assert package_dir is not None
+        assert isinstance(package_dir, Path)
+        assert package_dir.is_dir()
+
+        # Should contain the bundled chapter files
+        expected_files = [
+            "music_for_programming_49-julien_mier.cue",
+            "music_for_programming_49-julien_mier.ffmeta",
+            "chapters.sha256",
+        ]
+        for filename in expected_files:
+            file_path = package_dir / filename
+            assert file_path.exists(), f"Expected file {filename} not found in package dir"
+
+    def test_get_package_mfp_dir_checksum_file_valid(self, service):
+        """Test that package checksum file has valid format."""
+        package_dir = service.get_package_mfp_dir()
+        assert package_dir is not None
+
+        checksum_file = package_dir / "chapters.sha256"
+        assert checksum_file.exists()
+
+        # Load and validate checksums
+        checksums = service._load_checksums(checksum_file)
+        assert len(checksums) >= 2  # At least CUE and FFmeta for episode 49
+        assert "music_for_programming_49-julien_mier.cue" in checksums
+        assert "music_for_programming_49-julien_mier.ffmeta" in checksums
+
+        # Each checksum should be a valid hex SHA256 (64 chars)
+        for filename, checksum in checksums.items():
+            assert len(checksum) == 64, f"Invalid checksum length for {filename}"
+            assert all(c in "0123456789abcdef" for c in checksum), f"Invalid hex for {filename}"
+
+    def test_sync_chapters_detects_package_update(self, service, tmp_path):
+        """Test sync detects when package has updated files (different checksum)."""
+        # First sync - adds files
+        results1 = service.sync_chapters()
+        assert "music_for_programming_49-julien_mier.cue" in results1
+        assert results1["music_for_programming_49-julien_mier.cue"] == "Added"
+
+        # Verify local checksum file was created
+        local_checksum_file = tmp_path / ".chapters.sha256"
+        assert local_checksum_file.exists()
+
+        # Simulate scenario where package was updated with new content
+        # by modifying the local checksum file to have an old (different) checksum
+        # This simulates: local file matches OLD package version, package has NEW version
+        local_checksums = service._load_checksums(local_checksum_file)
+        # Change the stored checksum to simulate "old version"
+        local_checksums["music_for_programming_49-julien_mier.cue"] = "0" * 64
+        service._save_checksums(local_checksums, local_checksum_file)
+
+        # Also update local file to match the "old" checksum we just saved
+        # (The file content doesn't matter, what matters is that its hash matches
+        # the stored local checksum but differs from package checksum)
+        local_cue = tmp_path / "music_for_programming_49-julien_mier.cue"
+        # Write content that produces a different hash than the package file
+        old_content = "OLD VERSION - will be updated"
+        local_cue.write_text(old_content)
+        # Update the local checksum to match this file
+        actual_hash = service._compute_file_sha256(local_cue)
+        local_checksums["music_for_programming_49-julien_mier.cue"] = actual_hash
+        service._save_checksums(local_checksums, local_checksum_file)
+
+        # Now sync again - should detect the package has a newer version
+        results2 = service.sync_chapters()
+
+        # The CUE file should be marked as Updated (package version is newer)
+        assert results2.get("music_for_programming_49-julien_mier.cue") == "Updated"
+
+        # Local file should now have package content (not old content)
+        assert local_cue.read_text() != old_content
+
+    def test_on_demand_copy_creates_both_files(self, service, tmp_path):
+        """Test that on-demand copy creates both CUE and FFmeta files when available."""
+        # Ensure no local files exist
+        local_cue = tmp_path / "music_for_programming_49-julien_mier.cue"
+        local_ffmeta = tmp_path / "music_for_programming_49-julien_mier.ffmeta"
+        assert not local_cue.exists()
+        assert not local_ffmeta.exists()
+
+        # Call get_chapters_file which triggers on-demand copy
+        result = service.get_chapters_file(49)
+
+        # Should return FFmeta file
+        assert result is not None
+        assert result.suffix == ".ffmeta"
+
+        # Both files should now exist locally
+        assert local_ffmeta.exists(), "FFmeta file should exist after on-demand copy"
+        assert local_cue.exists(), "CUE file should exist after on-demand copy"
+
+
 class TestHttpFetcher:
     """Tests for HttpFetcher class."""
 
