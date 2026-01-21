@@ -5,7 +5,9 @@ Provides access to the Music For Programming (MFP) podcast episodes,
 including RSS parsing, episode streaming URLs, and chapter file management.
 """
 
+import hashlib
 import re
+import shutil
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from importlib.resources import files
@@ -459,36 +461,151 @@ class MfpService:
 
         return None
 
-    def sync_chapters(self, force: bool = False) -> int:
-        """Convert all CUE files to FFmeta format.
-
-        Scans the cache directory for CUE files and converts them
-        to FFmeta format for mpv compatibility.
+    def _compute_file_sha256(self, file_path: Path) -> str:
+        """Compute SHA256 checksum of a file.
 
         Args:
-            force: Re-convert even if FFmeta already exists.
+            file_path: Path to file.
 
         Returns:
-            Number of files converted.
+            Lowercase hex SHA256 hash.
+        """
+        sha256_hash = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                sha256_hash.update(chunk)
+        return sha256_hash.hexdigest()
+
+    def _load_checksums(self, checksum_file: Path) -> dict[str, str]:
+        """Load checksums from a sha256sum-format file.
+
+        Args:
+            checksum_file: Path to checksum file.
+
+        Returns:
+            Dictionary mapping filename to SHA256 hash.
+        """
+        checksums = {}
+        if not checksum_file.exists():
+            return checksums
+
+        for line in checksum_file.read_text().strip().split("\n"):
+            if not line.strip():
+                continue
+            # Format: <hash>  <filename> (two spaces)
+            parts = line.split("  ", 1)
+            if len(parts) == 2:
+                checksum, filename = parts
+                checksums[filename] = checksum
+        return checksums
+
+    def _save_checksums(self, checksums: dict[str, str], checksum_file: Path) -> None:
+        """Save checksums to a sha256sum-format file.
+
+        Args:
+            checksums: Dictionary mapping filename to SHA256 hash.
+            checksum_file: Path to write checksum file.
+        """
+        lines = [f"{checksum}  {filename}" for filename, checksum in sorted(checksums.items())]
+        checksum_file.write_text("\n".join(lines) + "\n")
+
+    def sync_chapters(self, force: bool = False) -> dict[str, str]:
+        """Sync chapter files from package to local cache.
+
+        Compares checksums to identify new and updated files, copies them
+        from the package to the local cache directory, and preserves user
+        modifications by backing them up with a .user extension.
+
+        Also converts CUE files to FFmeta format for mpv compatibility.
+
+        Args:
+            force: Overwrite local files even if they have user modifications.
+
+        Returns:
+            Dictionary mapping filenames to status: "Added", "Updated", "Unchanged", "Skipped".
         """
         self._ensure_cache_dir()
-        converted = 0
+        results: dict[str, str] = {}
 
+        # Get package directory
+        package_dir = self.get_package_mfp_dir()
+        if package_dir is None:
+            print("No package chapter files found")
+            return results
+
+        # Load package checksums
+        package_checksum_file = package_dir / "chapters.sha256"
+        if not package_checksum_file.exists():
+            print("Package chapters.sha256 not found")
+            return results
+        package_checksums = self._load_checksums(package_checksum_file)
+
+        # Load local checksums (hidden file with dot prefix)
+        local_checksum_file = self.cache_dir / ".chapters.sha256"
+        local_checksums = self._load_checksums(local_checksum_file)
+
+        # Track updated local checksums
+        updated_checksums = dict(local_checksums)
+
+        # Process each file in package
+        for filename, package_hash in package_checksums.items():
+            package_file = package_dir / filename
+            local_file = self.cache_dir / filename
+
+            if not package_file.exists():
+                # File listed in checksums but missing from package
+                continue
+
+            if not local_file.exists():
+                # New file - copy from package
+                shutil.copy2(package_file, local_file)
+                updated_checksums[filename] = package_hash
+                results[filename] = "Added"
+                print(f"Added: {filename}")
+            else:
+                # File exists locally - check if it matches package
+                local_hash = self._compute_file_sha256(local_file)
+
+                if local_hash == package_hash:
+                    # Unchanged - matches package
+                    results[filename] = "Unchanged"
+                    print(f"Unchanged: {filename}")
+                elif filename in local_checksums and local_hash == local_checksums[filename]:
+                    # Local file matches last synced version, package has update
+                    shutil.copy2(package_file, local_file)
+                    updated_checksums[filename] = package_hash
+                    results[filename] = "Updated"
+                    print(f"Updated: {filename}")
+                else:
+                    # Local file was modified by user
+                    if force:
+                        # Backup user modifications and update
+                        user_backup = self.cache_dir / f"{filename}.user"
+                        shutil.copy2(local_file, user_backup)
+                        shutil.copy2(package_file, local_file)
+                        updated_checksums[filename] = package_hash
+                        results[filename] = "Updated"
+                        print(f"Updated: {filename} (user version backed up to {filename}.user)")
+                    else:
+                        # Skip - preserve user modifications
+                        results[filename] = "Skipped"
+                        print(f"Skipped: {filename} (local modifications, use --force to overwrite)")
+
+        # Save updated checksums
+        if updated_checksums:
+            self._save_checksums(updated_checksums, local_checksum_file)
+
+        # Also convert any CUE files to FFmeta for mpv compatibility
         for cue_file in self.cache_dir.glob("music_for_programming_*.cue"):
             ffmeta_file = cue_file.with_suffix(".ffmeta")
+            if not ffmeta_file.exists():
+                try:
+                    ffmeta_content = convert_cue_to_ffmetadata(cue_file.read_text())
+                    ffmeta_file.write_text(ffmeta_content)
+                except Exception:
+                    pass
 
-            if ffmeta_file.exists() and not force:
-                continue
-
-            try:
-                ffmeta_content = convert_cue_to_ffmetadata(cue_file.read_text())
-                ffmeta_file.write_text(ffmeta_content)
-                converted += 1
-            except Exception:
-                # Skip files that can't be converted
-                continue
-
-        return converted
+        return results
 
     def refresh(self) -> int:
         """Force refresh the RSS feed and return episode count.
