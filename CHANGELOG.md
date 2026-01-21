@@ -45,10 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Restores original volume after speech completes
   - Configurable duck amount via `VOICEMODE_DJ_DUCK_AMOUNT` (default: 20%)
 
-- **MFP Chapter File Distribution** (VM-369)
-  - Local chapter/cue files for Music For Programming episodes
-  - `mpv-dj sync-chapters` command to sync from source repository
-  - Chapter-aware playback for seamless track navigation
+- **MFP Chapter File Distribution** (VM-369, VM-480)
+  - Chapter files bundled in the VoiceMode package for automatic distribution
+  - On-demand copy: chapter files copied from package on first episode play
+  - Checksum-based sync via `voicemode dj mfp sync` command
+  - User modifications preserved (backed up to `.user` extension on update)
+  - Episode 49 (Julien Mier) included as initial verified chapter data
 
 - **MFP Episode Management** (VM-386, VM-400)
   - `mfp-rss-helper` script for dynamic episode URL lookup from RSS feed
