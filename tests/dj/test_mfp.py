@@ -231,54 +231,57 @@ class TestMfpService:
         assert ";FFMETADATA1" in content
 
     def test_sync_chapters(self, service, tmp_path):
-        """Test syncing CUE files to FFmeta."""
-        # Create CUE files
-        for ep in [49, 76]:
-            cue_file = tmp_path / f"music_for_programming_{ep}-artist.cue"
-            cue_file.write_text(f'''TRACK 01 AUDIO
-    TITLE "Episode {ep}"
-    INDEX 01 00:00:00
-''')
+        """Test syncing chapter files from package to local."""
+        # sync_chapters should copy files from package to local
+        results = service.sync_chapters()
 
-        count = service.sync_chapters()
+        # Should have added files from package (episode 49 CUE and FFmeta)
+        added_files = [f for f, status in results.items() if status == "Added"]
+        assert len(added_files) == 2
+        assert "music_for_programming_49-julien_mier.cue" in added_files
+        assert "music_for_programming_49-julien_mier.ffmeta" in added_files
 
-        assert count == 2
-        # Check FFmeta files were created
-        assert (tmp_path / "music_for_programming_49-artist.ffmeta").exists()
-        assert (tmp_path / "music_for_programming_76-artist.ffmeta").exists()
+        # Files should exist in local cache
+        assert (tmp_path / "music_for_programming_49-julien_mier.cue").exists()
+        assert (tmp_path / "music_for_programming_49-julien_mier.ffmeta").exists()
 
-    def test_sync_chapters_skips_existing(self, service, tmp_path):
-        """Test that sync doesn't overwrite existing FFmeta."""
-        # Create CUE and FFmeta files
-        cue_file = tmp_path / "music_for_programming_49-artist.cue"
-        cue_file.write_text("TRACK 01\n  INDEX 01 00:00:00\n")
+        # Local checksum file should be created
+        assert (tmp_path / ".chapters.sha256").exists()
 
-        ffmeta_file = tmp_path / "music_for_programming_49-artist.ffmeta"
-        ffmeta_file.write_text("existing content")
+    def test_sync_chapters_skips_unchanged(self, service, tmp_path):
+        """Test that sync detects unchanged files."""
+        # First sync - should add files
+        results1 = service.sync_chapters()
+        added_count = len([f for f, s in results1.items() if s == "Added"])
+        assert added_count == 2
 
-        count = service.sync_chapters()
-
-        assert count == 0
-        # Original content preserved
-        assert ffmeta_file.read_text() == "existing content"
+        # Second sync - should detect unchanged
+        results2 = service.sync_chapters()
+        unchanged_count = len([f for f, s in results2.items() if s == "Unchanged"])
+        assert unchanged_count == 2
 
     def test_sync_chapters_force(self, service, tmp_path):
-        """Test force sync overwrites existing."""
-        # Create CUE and FFmeta files
-        cue_file = tmp_path / "music_for_programming_49-artist.cue"
-        cue_file.write_text('''TRACK 01 AUDIO
-    TITLE "New Content"
-    INDEX 01 00:00:00
-''')
+        """Test force sync backs up user modifications."""
+        # First sync to get files
+        service.sync_chapters()
 
-        ffmeta_file = tmp_path / "music_for_programming_49-artist.ffmeta"
-        ffmeta_file.write_text("old content")
+        # Modify a local file (simulate user edit)
+        cue_file = tmp_path / "music_for_programming_49-julien_mier.cue"
+        cue_file.write_text("USER MODIFIED CONTENT")
 
-        count = service.sync_chapters(force=True)
+        # Sync with force - should backup user file and restore package version
+        results = service.sync_chapters(force=True)
 
-        assert count == 1
-        # Content should be updated
-        assert ";FFMETADATA1" in ffmeta_file.read_text()
+        # Should show updated (because local was modified)
+        assert results.get("music_for_programming_49-julien_mier.cue") == "Updated"
+
+        # User backup should exist
+        backup_file = tmp_path / "music_for_programming_49-julien_mier.cue.user"
+        assert backup_file.exists()
+        assert backup_file.read_text() == "USER MODIFIED CONTENT"
+
+        # Original should be restored from package
+        assert cue_file.read_text() != "USER MODIFIED CONTENT"
 
     def test_refresh(self, service, mock_fetcher):
         """Test refresh forces new RSS fetch."""
