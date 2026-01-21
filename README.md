@@ -1,6 +1,6 @@
 # VoiceMode
 
-> Talk to Claude Code when typing isn't an option.
+> Natural voice conversations with Claude Code (and other MCP capable agents)
 
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode)](https://pepy.tech/project/voice-mode)
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode/month)](https://pepy.tech/project/voice-mode)
