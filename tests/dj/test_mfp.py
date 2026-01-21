@@ -1,7 +1,10 @@
 """Tests for the Music For Programming service module."""
 
 import pytest
+from io import BytesIO
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 from voice_mode.dj.mfp import (
     HttpFetcher,
@@ -474,3 +477,209 @@ class TestHttpFetcher:
         """Test default timeout."""
         fetcher = HttpFetcher()
         assert fetcher.timeout == 10
+
+
+class TestGitHubChapterFetching:
+    """Tests for GitHub fallback chapter fetching."""
+
+    @pytest.fixture
+    def mock_fetcher(self):
+        """Create a mock RSS fetcher."""
+        return MockFetcher()
+
+    @pytest.fixture
+    def service(self, tmp_path, mock_fetcher):
+        """Create an MFP service with mock fetcher and temp cache."""
+        return MfpService(cache_dir=tmp_path, fetcher=mock_fetcher)
+
+    def test_fetch_chapters_from_github_success_ffmeta(self, service, tmp_path):
+        """Test successful FFmeta fetch from GitHub."""
+        filename_base = "music_for_programming_99-test_artist"
+        ffmeta_content = ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=60000\ntitle=Test Chapter\n"
+
+        def mock_urlopen(url, timeout=None):
+            if url.endswith(".ffmeta"):
+                response = MagicMock()
+                response.read.return_value = ffmeta_content.encode("utf-8")
+                response.__enter__ = MagicMock(return_value=response)
+                response.__exit__ = MagicMock(return_value=False)
+                return response
+            raise HTTPError(url, 404, "Not Found", {}, None)
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            result = service._fetch_chapters_from_github(filename_base)
+
+        assert result is not None
+        assert result.suffix == ".ffmeta"
+        assert result.exists()
+        assert result.read_text() == ffmeta_content
+
+    def test_fetch_chapters_from_github_success_cue(self, service, tmp_path):
+        """Test successful CUE fetch from GitHub (when FFmeta not available)."""
+        filename_base = "music_for_programming_99-test_artist"
+        cue_content = 'TRACK 01 AUDIO\n  TITLE "Test Track"\n  INDEX 01 00:00:00\n'
+
+        def mock_urlopen(url, timeout=None):
+            if url.endswith(".ffmeta"):
+                raise HTTPError(url, 404, "Not Found", {}, None)
+            if url.endswith(".cue"):
+                response = MagicMock()
+                response.read.return_value = cue_content.encode("utf-8")
+                response.__enter__ = MagicMock(return_value=response)
+                response.__exit__ = MagicMock(return_value=False)
+                return response
+            raise HTTPError(url, 404, "Not Found", {}, None)
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            result = service._fetch_chapters_from_github(filename_base)
+
+        assert result is not None
+        assert result.suffix == ".cue"
+        assert result.exists()
+        assert result.read_text() == cue_content
+
+    def test_fetch_chapters_from_github_file_cached_locally(self, service, tmp_path):
+        """Test that fetched file is cached in local cache directory."""
+        filename_base = "music_for_programming_99-test_artist"
+        ffmeta_content = ";FFMETADATA1\n[CHAPTER]\n"
+
+        def mock_urlopen(url, timeout=None):
+            response = MagicMock()
+            response.read.return_value = ffmeta_content.encode("utf-8")
+            response.__enter__ = MagicMock(return_value=response)
+            response.__exit__ = MagicMock(return_value=False)
+            return response
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            result = service._fetch_chapters_from_github(filename_base)
+
+        # Verify file is cached in the local cache directory
+        expected_path = tmp_path / f"{filename_base}.ffmeta"
+        assert result == expected_path
+        assert expected_path.exists()
+        assert expected_path.read_text() == ffmeta_content
+
+    def test_fetch_chapters_from_github_timeout_handling(self, service, tmp_path):
+        """Test network timeout is handled gracefully."""
+        filename_base = "music_for_programming_99-test_artist"
+
+        def mock_urlopen(url, timeout=None):
+            raise TimeoutError("Connection timed out")
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            result = service._fetch_chapters_from_github(filename_base)
+
+        assert result is None
+
+    def test_fetch_chapters_from_github_404_handling(self, service, tmp_path):
+        """Test 404 response (no chapters available) is handled gracefully."""
+        filename_base = "music_for_programming_99-test_artist"
+
+        def mock_urlopen(url, timeout=None):
+            raise HTTPError(url, 404, "Not Found", {}, None)
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            result = service._fetch_chapters_from_github(filename_base)
+
+        assert result is None
+
+    def test_fetch_chapters_from_github_network_error_handling(self, service, tmp_path):
+        """Test network error is handled gracefully."""
+        filename_base = "music_for_programming_99-test_artist"
+
+        def mock_urlopen(url, timeout=None):
+            raise URLError("Network unreachable")
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            result = service._fetch_chapters_from_github(filename_base)
+
+        assert result is None
+
+    def test_fetch_chapters_from_github_uses_5_second_timeout(self, service, tmp_path):
+        """Test that GitHub fetch uses 5-second timeout."""
+        filename_base = "music_for_programming_99-test_artist"
+        captured_timeout = None
+
+        def mock_urlopen(url, timeout=None):
+            nonlocal captured_timeout
+            captured_timeout = timeout
+            raise HTTPError(url, 404, "Not Found", {}, None)
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            service._fetch_chapters_from_github(filename_base)
+
+        assert captured_timeout == 5
+
+    def test_fetch_chapters_from_github_tries_ffmeta_first(self, service, tmp_path):
+        """Test that FFmeta is tried before CUE."""
+        filename_base = "music_for_programming_99-test_artist"
+        urls_tried = []
+
+        def mock_urlopen(url, timeout=None):
+            urls_tried.append(url)
+            raise HTTPError(url, 404, "Not Found", {}, None)
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            service._fetch_chapters_from_github(filename_base)
+
+        assert len(urls_tried) == 2
+        assert urls_tried[0].endswith(".ffmeta")
+        assert urls_tried[1].endswith(".cue")
+
+    def test_existing_local_file_not_overwritten_by_github_fetch(self, service, tmp_path):
+        """Test that get_chapters_file doesn't overwrite existing local file with GitHub fetch."""
+        filename_base = "music_for_programming_49-julien_mier"
+        original_content = ";FFMETADATA1\n;User customized content\n"
+
+        # Create existing local FFmeta file
+        local_ffmeta = tmp_path / f"{filename_base}.ffmeta"
+        local_ffmeta.write_text(original_content)
+
+        # Even if GitHub fetch would be called, it shouldn't be because local file exists
+        def mock_urlopen(url, timeout=None):
+            # This should never be reached for this filename_base
+            raise AssertionError(f"GitHub fetch should not be called when local file exists: {url}")
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            result = service.get_chapters_file(49)
+
+        assert result is not None
+        assert result.read_text() == original_content
+
+    def test_get_chapters_file_uses_github_as_fallback(self, service, tmp_path, mock_fetcher):
+        """Test that get_chapters_file uses GitHub when local and package files don't exist."""
+        # Use a custom RSS with an episode that doesn't have bundled chapters
+        rss_with_ep99 = '''<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <item>
+      <title>Episode 99: Test Artist</title>
+      <enclosure url="https://datashat.net/music_for_programming_99-test_artist.mp3" length="145678901" type="audio/mpeg"/>
+    </item>
+  </channel>
+</rss>
+'''
+        mock_fetcher.content = rss_with_ep99
+        service._episodes_cache = None  # Clear cache to pick up new RSS
+
+        ffmeta_content = ";FFMETADATA1\n[CHAPTER]\nSTART=0\ntitle=From GitHub\n"
+        github_was_called = False
+
+        def mock_urlopen(url, timeout=None):
+            nonlocal github_was_called
+            if "github" in url.lower() or "raw.githubusercontent.com" in url:
+                github_was_called = True
+                if url.endswith(".ffmeta"):
+                    response = MagicMock()
+                    response.read.return_value = ffmeta_content.encode("utf-8")
+                    response.__enter__ = MagicMock(return_value=response)
+                    response.__exit__ = MagicMock(return_value=False)
+                    return response
+            raise HTTPError(url, 404, "Not Found", {}, None)
+
+        with patch("voice_mode.dj.mfp.urlopen", mock_urlopen):
+            result = service.get_chapters_file(99)
+
+        assert github_was_called, "GitHub should be called as fallback"
+        assert result is not None
+        assert result.exists()

@@ -138,15 +138,28 @@ See [chapters.md](chapters.md) for the chapter file format details.
 
 ### Chapter Distribution
 
-VoiceMode includes chapter files for select episodes in the package. These are automatically copied to your local directory when you first play an episode.
+VoiceMode provides chapter files through a three-tier lookup system that ensures you have access to chapter metadata even for episodes not bundled with your installed version.
 
-**Available chapters:**
-- Episode 49 (Julien Mier)
+**Lookup order (local → package → GitHub):**
+
+1. **Local cache** (`~/.voicemode/music-for-programming/`) - fastest, checked first
+2. **Bundled package** - chapter files included in VoiceMode, copied to cache on-demand
+3. **GitHub repository** - fallback for newly added chapters not yet in your installed version
 
 **How it works:**
-1. When you run `voicemode dj mfp play 49` for the first time, chapter files are copied from the package to `~/.voicemode/music-for-programming/`
-2. The chapter file enables track-level navigation immediately
-3. User modifications to chapter files are preserved during updates (backed up with `.user` extension)
+1. When you run `voicemode dj mfp play 49`, the system checks for chapter files in the local cache
+2. If not found locally, chapter files are copied from the bundled package to the cache
+3. If not in the package, chapters are fetched from GitHub (requires network, 5-second timeout)
+4. Fetched files are cached locally for future use
+5. User modifications to chapter files are preserved during updates (backed up with `.user` extension)
+
+**Benefits of GitHub fallback:**
+- Access chapter files added after your VoiceMode version was released
+- Community contributions available immediately without upgrading
+- Graceful degradation: playback continues without chapters if unavailable
+
+**Available bundled chapters:**
+- Episode 49 (Julien Mier)
 
 ### Syncing Chapter Files
 

@@ -6,6 +6,7 @@ including RSS parsing, episode streaming URLs, and chapter file management.
 """
 
 import hashlib
+import logging
 import re
 import shutil
 import xml.etree.ElementTree as ET
@@ -13,8 +14,10 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 from typing import Protocol
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
+
+logger = logging.getLogger(__name__)
 
 from .chapters import convert_cue_to_ffmetadata
 
@@ -406,13 +409,45 @@ class MfpService:
 
         return copied
 
+    def _fetch_chapters_from_github(self, filename_base: str) -> Path | None:
+        """Fetch chapter file from GitHub and cache locally.
+
+        Tries FFmeta format first, then CUE. Uses a 5-second timeout.
+        On success, caches the file locally and returns the path.
+
+        Args:
+            filename_base: Episode filename base (e.g., "music_for_programming_49-julien_mier").
+
+        Returns:
+            Path to cached chapter file, or None if not available on GitHub.
+        """
+        github_base = "https://raw.githubusercontent.com/mbailey/voicemode/master/voice_mode/data/mfp"
+
+        self._ensure_cache_dir()
+
+        for ext in [".ffmeta", ".cue"]:
+            url = f"{github_base}/{filename_base}{ext}"
+            try:
+                with urlopen(url, timeout=5) as response:
+                    content = response.read().decode("utf-8")
+                    local_path = self.cache_dir / f"{filename_base}{ext}"
+                    local_path.write_text(content)
+                    return local_path
+            except (HTTPError, URLError, TimeoutError):
+                continue
+
+        return None
+
     def get_chapters_file(self, number: int) -> Path | None:
         """Get path to chapters file for an episode.
 
         Prefers FFmeta format if available, otherwise returns CUE.
         If only CUE exists, converts it to FFmeta first.
-        If no local files exist, checks for bundled chapter files in the package
-        and copies them to the local cache directory on-demand.
+
+        Lookup order:
+        1. Local cache directory
+        2. Bundled package files (copied to cache on-demand)
+        3. GitHub repository (fetched and cached on-demand)
 
         Args:
             number: Episode number.
@@ -432,12 +467,14 @@ class MfpService:
         ffmeta_path = self.cache_dir / f"{filename_base}.ffmeta"
         cue_path = self.cache_dir / f"{filename_base}.cue"
 
-        # Prefer existing FFmeta
+        # Prefer existing FFmeta (local cache)
         if ffmeta_path.exists():
+            logger.debug("Chapters for episode %d found in local cache", number)
             return ffmeta_path
 
-        # Convert CUE to FFmeta if needed
+        # Convert CUE to FFmeta if needed (local cache)
         if cue_path.exists():
+            logger.debug("Chapters for episode %d found in local cache (CUE)", number)
             try:
                 ffmeta_content = convert_cue_to_ffmetadata(cue_path.read_text())
                 ffmeta_path.write_text(ffmeta_content)
@@ -448,6 +485,7 @@ class MfpService:
 
         # No local files - try to copy from package
         if self._copy_chapters_from_package(filename_base):
+            logger.debug("Chapters for episode %d copied from package", number)
             # Retry after copying
             if ffmeta_path.exists():
                 return ffmeta_path
@@ -458,6 +496,20 @@ class MfpService:
                     return ffmeta_path
                 except Exception:
                     return cue_path
+
+        # Final fallback - try to fetch from GitHub
+        github_path = self._fetch_chapters_from_github(filename_base)
+        if github_path:
+            logger.info("Chapters for episode %d fetched from GitHub", number)
+            # If we got a CUE file, convert to FFmeta
+            if github_path.suffix == ".cue":
+                try:
+                    ffmeta_content = convert_cue_to_ffmetadata(github_path.read_text())
+                    ffmeta_path.write_text(ffmeta_content)
+                    return ffmeta_path
+                except Exception:
+                    return github_path
+            return github_path
 
         return None
 
