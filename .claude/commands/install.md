@@ -13,8 +13,8 @@ For a fast, fully automated install on Apple Silicon:
 
 ```bash
 uvx voice-mode-install --yes
-voicemode whisper service install
-voicemode kokoro install
+voicemode service install whisper
+voicemode service install kokoro
 ```
 
 ## What Gets Installed
@@ -42,14 +42,14 @@ voicemode kokoro install
    uvx voice-mode-install --yes
 
    # Install local services
-   voicemode whisper service install
-   voicemode kokoro install
+   voicemode service install whisper
+   voicemode service install kokoro
    ```
 
 4. **Verify services are running:**
    ```bash
-   voicemode whisper service status
-   voicemode kokoro status
+   voicemode service status whisper
+   voicemode service status kokoro
    ```
 
 5. **Reconnect MCP server:**
