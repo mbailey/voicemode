@@ -14,6 +14,10 @@ from .event_logger import (
     log_tool_request_end
 )
 
+# macos_mic is intentionally not imported here - it uses lazy loading
+# via voice_mode.utils.macos_mic to avoid loading CoreAudio frameworks
+# on non-macOS platforms or when the feature is disabled.
+
 __all__ = [
     "EventLogger",
     "get_event_logger",

@@ -9,6 +9,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
+
+def pytest_configure(config):
+    """Configure test environment before collection.
+
+    This hook runs before any tests are collected, ensuring environment
+    variables are set before any voice_mode imports occur.
+    """
+    # Disable macOS VoiceProcessingIO in tests. When enabled, it attempts real
+    # microphone capture via CoreAudio which requires user permission prompts
+    # and blocks waiting for audio input. Tests should use mocked audio instead.
+    os.environ["VOICEMODE_MACOS_VOICE_PROCESSING"] = "false"
+
+
 # Add voice_mode to path for testing
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

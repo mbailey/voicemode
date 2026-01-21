@@ -669,6 +669,10 @@ MIN_RECORDING_DURATION = float(os.getenv("VOICEMODE_MIN_RECORDING_DURATION", "0.
 VAD_CHUNK_DURATION_MS = 30  # VAD frame size (must be 10, 20, or 30ms)
 INITIAL_SILENCE_GRACE_PERIOD = float(os.getenv("VOICEMODE_INITIAL_SILENCE_GRACE_PERIOD", "1"))  # No initial silence grace period by default
 
+# macOS Voice Processing (enables Voice Isolation, Wide Spectrum, Standard mic modes)
+# When enabled on macOS, uses VoiceProcessingIO audio unit instead of sounddevice
+MACOS_VOICE_PROCESSING = os.getenv("VOICEMODE_MACOS_VOICE_PROCESSING", "true").lower() in ("true", "1", "yes", "on")
+
 # Default listen duration for converse tool
 DEFAULT_LISTEN_DURATION = float(os.getenv("VOICEMODE_DEFAULT_LISTEN_DURATION", "120.0"))  # Default 120s listening time
 

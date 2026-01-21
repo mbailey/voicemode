@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+import platform
 import time
 import traceback
 from typing import Optional, Literal, Tuple, Dict, Union
@@ -23,6 +24,31 @@ try:
 except ImportError as e:
     webrtcvad = None
     VAD_AVAILABLE = False
+
+# Optional macOS VoiceProcessingIO for mic mode support (Voice Isolation, Wide Spectrum)
+# Lazy-loaded and cached to avoid importing CoreAudio frameworks unnecessarily
+_VPIO_CHECKED = False
+_VPIO_AVAILABLE = False
+_vpio_record = None
+
+def _check_vpio_available():
+    """Check and cache VoiceProcessingIO availability."""
+    global _VPIO_CHECKED, _VPIO_AVAILABLE, _vpio_record
+    if _VPIO_CHECKED:
+        return _VPIO_AVAILABLE
+    _VPIO_CHECKED = True
+    if platform.system() == "Darwin":
+        try:
+            from voice_mode.config import MACOS_VOICE_PROCESSING
+            if MACOS_VOICE_PROCESSING:
+                from voice_mode.utils.macos_mic import is_available, record_audio
+                if is_available():
+                    _VPIO_AVAILABLE = True
+                    _vpio_record = record_audio
+                    logger.debug("VoiceProcessingIO available and enabled")
+        except Exception as e:
+            logger.debug(f"VoiceProcessingIO not available: {e}")
+    return _VPIO_AVAILABLE
 
 from voice_mode.server import mcp
 from voice_mode.conch import Conch
@@ -63,7 +89,7 @@ from voice_mode.config import (
     MP3_BITRATE,
     CONCH_ENABLED,
     CONCH_TIMEOUT,
-    CONCH_CHECK_INTERVAL
+    CONCH_CHECK_INTERVAL,
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -805,12 +831,38 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
     """
     
     logger.info(f"record_audio_with_silence_detection called - VAD_AVAILABLE={VAD_AVAILABLE}, DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}, min_duration={min_duration}")
-    
+
+    # On macOS, try VoiceProcessingIO for mic mode support (Voice Isolation, Wide Spectrum, etc.)
+    # Note: VPIO uses energy-based VAD with different thresholds than webrtcvad's neural model.
+    # The vad_aggressiveness parameter maps to RMS energy thresholds (0=0.002 to 3=0.02),
+    # which may behave differently than webrtcvad's aggressiveness levels.
+    if _check_vpio_available():
+        try:
+            logger.info("Using VoiceProcessingIO for macOS mic mode support")
+            effective_vad = vad_aggressiveness if vad_aggressiveness is not None else VAD_AGGRESSIVENESS
+            audio_float32, speech_detected, sample_rate = _vpio_record(
+                max_duration=max_duration,
+                min_duration=min_duration if min_duration > 0 else MIN_RECORDING_DURATION,
+                silence_threshold_ms=SILENCE_THRESHOLD_MS,
+                vad_aggressiveness=effective_vad,
+            )
+            # Convert float32 to int16 and resample to target rate if needed
+            audio_int16 = (audio_float32 * 32767).astype(np.int16)
+            if sample_rate != SAMPLE_RATE:
+                from scipy import signal
+                num_samples = int(len(audio_int16) * SAMPLE_RATE / sample_rate)
+                audio_int16 = signal.resample(audio_int16, num_samples).astype(np.int16)
+                logger.debug(f"Resampled from {sample_rate}Hz to {SAMPLE_RATE}Hz")
+            logger.info(f"✓ VoiceProcessingIO recorded {len(audio_int16)} samples, speech_detected={speech_detected}")
+            return (audio_int16, speech_detected)
+        except Exception as e:
+            logger.warning(f"VoiceProcessingIO failed, falling back to sounddevice: {e}")
+
     if not VAD_AVAILABLE:
         logger.warning("webrtcvad not available, falling back to fixed duration recording")
         # For fallback, assume speech is present since we can't detect
         return (record_audio(max_duration), True)
-    
+
     if DISABLE_SILENCE_DETECTION or disable_silence_detection:
         if disable_silence_detection:
             logger.info("Silence detection disabled for this interaction by request")
