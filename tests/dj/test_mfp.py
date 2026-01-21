@@ -175,10 +175,31 @@ class TestMfpService:
         assert path.exists()
 
     def test_get_chapters_file_none(self, service):
-        """Test chapters file when none exists."""
-        path = service.get_chapters_file(49)
+        """Test chapters file when none exists locally or in package."""
+        # Use episode 76 which doesn't have bundled chapters
+        path = service.get_chapters_file(76)
 
         assert path is None
+
+    def test_get_chapters_file_copies_from_package(self, service, tmp_path):
+        """Test that chapters are copied from package on-demand for bundled episodes."""
+        # Episode 49 has bundled chapters in the package
+        # Ensure no local files exist initially
+        local_ffmeta = tmp_path / "music_for_programming_49-julien_mier.ffmeta"
+        local_cue = tmp_path / "music_for_programming_49-julien_mier.cue"
+        assert not local_ffmeta.exists()
+        assert not local_cue.exists()
+
+        # Get chapters file - should copy from package
+        path = service.get_chapters_file(49)
+
+        # Should return a valid path
+        assert path is not None
+        assert path.suffix == ".ffmeta"
+        assert path.exists()
+
+        # Local files should now exist (copied from package)
+        assert local_ffmeta.exists() or local_cue.exists()
 
     def test_get_chapters_file_ffmeta(self, service, tmp_path):
         """Test getting existing FFmeta chapters file."""
