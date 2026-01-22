@@ -16,6 +16,20 @@ set -o nounset -o pipefail -o errexit
 # -----------------------------------------------------------------------------
 
 VOICEMODE_PACKAGE="voice-mode"
+INTERACTIVE=true
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -y|--yes)
+            INTERACTIVE=false
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
 
 # -----------------------------------------------------------------------------
 # Output helpers
@@ -40,6 +54,11 @@ warn() {
 # Print info message (for progress)
 info() {
     echo "  $1"
+}
+
+# Check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
 }
 
 # -----------------------------------------------------------------------------
@@ -115,6 +134,73 @@ detect_linux_distro() {
 }
 
 # -----------------------------------------------------------------------------
+# Prerequisite Installation
+# -----------------------------------------------------------------------------
+
+# Ensure Homebrew is available (macOS only)
+# Homebrew requires sudo for initial installation
+ensure_homebrew() {
+    if command_exists brew; then
+        ok "Homebrew found"
+        return 0
+    fi
+
+    if [[ "$INTERACTIVE" != "true" ]]; then
+        die "Homebrew not found. Install Homebrew first, then re-run:
+    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"
+
+Non-interactive mode cannot install Homebrew (requires sudo)."
+    fi
+
+    warn "Homebrew not found"
+    info "Homebrew is required on macOS for system dependencies."
+    echo ""
+    read -r -p "Install Homebrew now? [y/N] " response
+    case "$response" in
+        [yY][eE][sS]|[yY])
+            info "Installing Homebrew (may require sudo)..."
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            if command_exists brew; then
+                ok "Homebrew installed"
+            else
+                die "Homebrew installation failed"
+            fi
+            ;;
+        *)
+            die "Homebrew is required. Please install it manually:
+    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+            ;;
+    esac
+}
+
+# Ensure uv package manager is available
+# uv can be installed without sudo
+ensure_uv() {
+    if command_exists uv; then
+        ok "uv found"
+        return 0
+    fi
+
+    info "Installing uv package manager..."
+    if command_exists curl; then
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+    elif command_exists wget; then
+        wget -qO- https://astral.sh/uv/install.sh | sh
+    else
+        die "Neither curl nor wget found. Cannot install uv."
+    fi
+
+    # Add uv to PATH for this session
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+    if command_exists uv; then
+        ok "uv installed"
+    else
+        die "uv installation failed. Please install manually: https://docs.astral.sh/uv/getting-started/installation/"
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 
@@ -145,9 +231,20 @@ main() {
             ;;
     esac
 
-    # Placeholder for subsequent features
+    # Check prerequisites
+    case "$os" in
+        macos)
+            ensure_homebrew
+            ;;
+        linux)
+            # Linux uses system package manager directly, no Homebrew needed
+            ;;
+    esac
+    ensure_uv
+
+    # Placeholder for VoiceMode installation (impl-003)
     echo ""
-    info "Platform detection complete. Further installation steps coming soon."
+    info "Prerequisites satisfied. VoiceMode installation coming in next feature."
     echo ""
 }
 
