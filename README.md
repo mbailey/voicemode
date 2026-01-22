@@ -26,11 +26,11 @@ VoiceMode enables natural voice conversations with Claude Code. Voice isn't abou
 
 ### Option 1: Claude Code Plugin (Recommended)
 
-The fastest way to get started:
+The fastest way for Claude Code users to get started:
 
 ```bash
 # Add the plugin marketplace
-claude plugin marketplace add https://github.com/mbailey/claude-plugins
+claude plugin marketplace add mbailey/plugins
 
 # Install VoiceMode plugin
 claude plugin install voicemode@mbailey
@@ -43,11 +43,9 @@ claude plugin install voicemode@mbailey
 /voicemode:converse
 ```
 
-The plugin handles everything - just install and go.
+### Option 2: Python installer package
 
-### Option 2: MCP Server
-
-Add VoiceMode as an MCP server for more control:
+Installs dependencies and the VoiceMode Python package.
 
 ```bash
 # Install UV package manager (if needed)
