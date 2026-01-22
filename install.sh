@@ -32,28 +32,66 @@ while [[ $# -gt 0 ]]; do
 done
 
 # -----------------------------------------------------------------------------
+# Color Support
+# -----------------------------------------------------------------------------
+
+# Respect NO_COLOR environment variable (see https://no-color.org/)
+# Also disable colors when not connected to a terminal
+setup_colors() {
+    if [[ -n "${NO_COLOR:-}" ]] || [[ ! -t 1 ]]; then
+        # No colors
+        RED=""
+        GREEN=""
+        YELLOW=""
+        BLUE=""
+        BOLD=""
+        RESET=""
+    else
+        RED=$'\033[0;31m'
+        GREEN=$'\033[0;32m'
+        YELLOW=$'\033[0;33m'
+        BLUE=$'\033[0;34m'
+        BOLD=$'\033[1m'
+        RESET=$'\033[0m'
+    fi
+}
+
+# Initialize colors
+setup_colors
+
+# -----------------------------------------------------------------------------
 # Output helpers
 # -----------------------------------------------------------------------------
 
 # Print error message to stderr and exit
 die() {
-    echo "Error: $1" >&2
+    echo "${RED}Error:${RESET} $1" >&2
     exit 1
 }
 
 # Print status message with checkmark
 ok() {
-    echo "✓ $1"
+    echo "${GREEN}✓${RESET} $1"
 }
 
 # Print warning message
 warn() {
-    echo "⚠️  $1"
+    echo "${YELLOW}⚠${RESET}  $1"
 }
 
 # Print info message (for progress)
 info() {
     echo "  $1"
+}
+
+# Display VoiceMode logo
+# Compact 3-line version that fits in ~45 columns
+show_logo() {
+    echo ""
+    echo "${BOLD}██╗   ██╗ ██████╗ ██╗ ██████╗███████╗${RESET}"
+    echo "${BOLD}██║   ██║██╔═══██╗██║██╔════╝██╔════╝${RESET}   ${BLUE}MODE${RESET}"
+    echo "${BOLD} ╚████╔╝ ╚██████╔╝██║╚██████╗███████╗${RESET}"
+    echo ""
 }
 
 # Check if a command exists
@@ -266,10 +304,8 @@ main() {
     os=$(detect_os)
     arch=$(detect_arch)
 
-    # Display header
-    echo ""
-    echo "🎙️  VoiceMode Installer"
-    echo ""
+    # Display logo
+    show_logo
 
     # Show detected platform
     case "$os" in
