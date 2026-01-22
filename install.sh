@@ -201,6 +201,61 @@ ensure_uv() {
 }
 
 # -----------------------------------------------------------------------------
+# VoiceMode Installation
+# -----------------------------------------------------------------------------
+
+# Install VoiceMode using uv
+install_voicemode() {
+    info "Installing VoiceMode..."
+
+    local output
+    # Use uv tool install for isolated tool installation
+    # Capture output to check for "already installed" message
+    if output=$(uv tool install "$VOICEMODE_PACKAGE" 2>&1); then
+        if echo "$output" | grep -q "already installed"; then
+            ok "VoiceMode already installed"
+        else
+            ok "VoiceMode installed"
+        fi
+    else
+        # Installation failed
+        if command_exists voicemode; then
+            # Already installed but uv failed (shouldn't happen normally)
+            ok "VoiceMode already installed"
+        else
+            echo "$output" >&2
+            die "VoiceMode installation failed"
+        fi
+    fi
+}
+
+# Verify VoiceMode installation and show version
+verify_voicemode() {
+    # Refresh PATH to pick up newly installed tools
+    export PATH="$HOME/.local/bin:$PATH"
+
+    if ! command_exists voicemode; then
+        die "VoiceMode command not found after installation.
+Please ensure ~/.local/bin is in your PATH:
+    export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+
+    local version
+    version=$(voicemode --version 2>/dev/null | sed 's/VoiceMode, version //' || echo "unknown")
+    ok "VoiceMode $version ready"
+}
+
+# Display next steps for the user
+show_next_steps() {
+    echo ""
+    echo "Next steps:"
+    echo "  voicemode deps     Check system dependencies"
+    echo "  voicemode --help   Show all commands"
+    echo ""
+    echo "Documentation: https://getvoicemode.com/docs"
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 
@@ -242,10 +297,10 @@ main() {
     esac
     ensure_uv
 
-    # Placeholder for VoiceMode installation (impl-003)
-    echo ""
-    info "Prerequisites satisfied. VoiceMode installation coming in next feature."
-    echo ""
+    # Install and verify VoiceMode
+    install_voicemode
+    verify_voicemode
+    show_next_steps
 }
 
 main "$@"
