@@ -650,6 +650,115 @@ _audio_cleanup_interval = 300  # 5 minutes
 _audio_max_age = 600  # 10 minutes
 
 
+# ============================================================================
+# Ask Session Management - Claude Code voice questions via watch
+# ============================================================================
+
+@dataclass
+class AskSession:
+    """
+    Represents an ask session where Claude Code asks a question via voice
+    and waits for the user's spoken response.
+    """
+    id: str
+    question: str
+    status: str  # pending, listening, completed, timeout, error
+    audio_id: str
+    response_text: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    timeout_at: datetime = field(default_factory=datetime.now)
+    completed_at: Optional[datetime] = None
+    error: Optional[str] = None
+
+
+class AskSessionManager:
+    """Manages active ask sessions for Claude Code voice questions."""
+
+    def __init__(self):
+        self.sessions: dict[str, AskSession] = {}
+        self._default_timeout = 1800  # 30 minutes default
+
+    def create_session(
+        self,
+        question: str,
+        audio_id: str,
+        timeout_seconds: int = None
+    ) -> AskSession:
+        """Create a new ask session."""
+        session_id = str(uuid.uuid4())[:8]
+        timeout = timeout_seconds or self._default_timeout
+        now = datetime.now()
+
+        session = AskSession(
+            id=session_id,
+            question=question,
+            status="pending",
+            audio_id=audio_id,
+            created_at=now,
+            timeout_at=now + __import__('datetime').timedelta(seconds=timeout)
+        )
+        self.sessions[session_id] = session
+        logger.info(f"Created ask session: {session_id} (timeout={timeout}s)")
+        return session
+
+    def get_session(self, session_id: str) -> Optional[AskSession]:
+        """Get a session by ID, checking for timeout."""
+        session = self.sessions.get(session_id)
+        if session and session.status == "pending":
+            # Check if timed out
+            if datetime.now() > session.timeout_at:
+                session.status = "timeout"
+                logger.info(f"Ask session {session_id} timed out")
+        return session
+
+    def complete_session(
+        self,
+        session_id: str,
+        response_text: str
+    ) -> Optional[AskSession]:
+        """Mark session as completed with response."""
+        session = self.sessions.get(session_id)
+        if session:
+            session.status = "completed"
+            session.response_text = response_text
+            session.completed_at = datetime.now()
+            logger.info(f"Ask session {session_id} completed: '{response_text[:50]}...'")
+        return session
+
+    def set_listening(self, session_id: str) -> Optional[AskSession]:
+        """Mark session as listening (user is recording)."""
+        session = self.sessions.get(session_id)
+        if session:
+            session.status = "listening"
+            logger.info(f"Ask session {session_id} now listening")
+        return session
+
+    def set_error(self, session_id: str, error: str) -> Optional[AskSession]:
+        """Mark session as errored."""
+        session = self.sessions.get(session_id)
+        if session:
+            session.status = "error"
+            session.error = error
+            logger.error(f"Ask session {session_id} error: {error}")
+        return session
+
+    def cleanup_old_sessions(self, max_age_seconds: int = 3600):
+        """Remove sessions older than max age."""
+        now = datetime.now()
+        old = [
+            sid for sid, s in self.sessions.items()
+            if (now - s.created_at).total_seconds() > max_age_seconds
+        ]
+        for sid in old:
+            del self.sessions[sid]
+        if old:
+            logger.info(f"Cleaned up {len(old)} old ask sessions")
+
+
+# Global ask session manager
+ask_session_manager = AskSessionManager()
+
+
 def cleanup_old_audio():
     """Remove audio files older than max age."""
     now = datetime.now()
@@ -897,6 +1006,316 @@ async def handle_audio_fetch_latest(request: web.Request) -> web.Response:
     )
 
 
+# ============================================================================
+# Ask Endpoints - Claude Code voice questions
+# ============================================================================
+
+async def handle_ask_create(request: web.Request) -> web.Response:
+    """
+    Create a new ask session - Claude Code asks a question via voice.
+
+    POST /ask
+
+    Accepts: JSON with:
+      - question: Text of the question to ask
+      - timeout_seconds: Optional timeout (default 1800 = 30 min)
+      - voice: Optional TTS voice
+
+    Returns: JSON with session_id, status, audio_url
+    """
+    import aiohttp
+    import ssl
+
+    try:
+        body = await request.json()
+        question = body.get("question")
+        timeout_seconds = body.get("timeout_seconds", 1800)
+        voice = body.get("voice", TTS_VOICES[0] if TTS_VOICES else "af_sky")
+
+        if not question:
+            return web.json_response({"error": "No question provided"}, status=400)
+
+        logger.info(f"Ask request: question='{question[:50]}...', timeout={timeout_seconds}s")
+
+        # Generate TTS for the question
+        from openai import AsyncOpenAI
+        from .provider_discovery import detect_provider_type, is_local_provider
+
+        audio_data = None
+        used_provider = None
+        used_voice = voice
+
+        for base_url in TTS_BASE_URLS:
+            provider_type = detect_provider_type(base_url)
+            api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
+
+            if provider_type == "openai":
+                openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+                if voice not in openai_voices:
+                    voice_mapping = {
+                        "af_sky": "nova", "af_sarah": "nova", "af_alloy": "alloy",
+                        "am_adam": "onyx", "am_echo": "echo", "am_onyx": "onyx"
+                    }
+                    used_voice = voice_mapping.get(voice, "alloy")
+                else:
+                    used_voice = voice
+            else:
+                used_voice = voice
+
+            max_retries = 0 if is_local_provider(base_url) else 2
+            client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=30.0,
+                max_retries=max_retries
+            )
+
+            try:
+                response = await client.audio.speech.create(
+                    model="tts-1",
+                    input=question,
+                    voice=used_voice,
+                    response_format="mp3"
+                )
+                audio_data = response.content
+                used_provider = provider_type
+                logger.info(f"Ask TTS succeeded with {base_url}")
+                break
+            except Exception as e:
+                logger.warning(f"Ask TTS failed for {base_url}: {e}")
+                continue
+
+        if not audio_data:
+            return web.json_response({"error": "TTS failed"}, status=503)
+
+        # Store audio
+        audio_id = str(uuid.uuid4())[:8]
+        _audio_storage[audio_id] = (audio_data, datetime.now(), question)
+        logger.info(f"Stored ask audio {audio_id}: {len(audio_data)} bytes")
+
+        # Create ask session
+        session = ask_session_manager.create_session(
+            question=question,
+            audio_id=audio_id,
+            timeout_seconds=timeout_seconds
+        )
+
+        # Clean up old audio
+        cleanup_old_audio()
+
+        # Build audio URL
+        audio_url = f"https://192.168.10.10:8890/audio/{audio_id}"
+
+        # Send notification via Argus with ask type
+        argus_url = "https://beelink.local:8080/api/notifications"
+        notification_payload = {
+            "title": "Grotto",
+            "body": question[:100],
+            "to_athena": True,
+            "data": {
+                "type": "grotto_ask",
+                "session_id": session.id,
+                "audio_url": audio_url,
+                "audio_id": audio_id,
+                "question": question
+            }
+        }
+
+        # Load mTLS certs for Argus call
+        cert_dir = Path.home() / ".config" / "argus"
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.load_cert_chain(
+            cert_dir / "client.crt",
+            cert_dir / "client.key"
+        )
+        ssl_ctx.load_verify_locations(cert_dir / "ca.crt")
+
+        async with aiohttp.ClientSession() as http_session:
+            async with http_session.post(
+                argus_url,
+                json=notification_payload,
+                ssl=ssl_ctx
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    sent = result.get("sent", 0)
+                    logger.info(f"Ask notification sent to {sent} device(s)")
+                    return web.json_response({
+                        "session_id": session.id,
+                        "status": session.status,
+                        "audio_url": audio_url,
+                        "audio_id": audio_id,
+                        "devices_notified": sent,
+                        "timeout_seconds": timeout_seconds
+                    })
+                else:
+                    error_text = await resp.text()
+                    logger.error(f"Argus notification failed: {error_text}")
+                    # Session created but notification failed
+                    return web.json_response({
+                        "session_id": session.id,
+                        "status": session.status,
+                        "audio_url": audio_url,
+                        "audio_id": audio_id,
+                        "warning": "Notification delivery failed",
+                        "details": error_text
+                    }, status=202)  # Accepted but notification issue
+
+    except json.JSONDecodeError:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+    except Exception as e:
+        logger.error(f"Ask create error: {e}", exc_info=True)
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ask_status(request: web.Request) -> web.Response:
+    """
+    Get ask session status - poll for completion.
+
+    GET /ask/{session_id}/status
+
+    Returns: JSON with status, response_text (if completed), elapsed_ms
+    """
+    session_id = request.match_info["session_id"]
+    session = ask_session_manager.get_session(session_id)
+
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    elapsed_ms = int((datetime.now() - session.created_at).total_seconds() * 1000)
+
+    response = {
+        "session_id": session.id,
+        "status": session.status,
+        "question": session.question,
+        "elapsed_ms": elapsed_ms,
+    }
+
+    if session.status == "completed":
+        response["response_text"] = session.response_text
+        if session.completed_at:
+            response["completed_at"] = session.completed_at.isoformat()
+
+    if session.status == "timeout":
+        response["timeout_at"] = session.timeout_at.isoformat()
+
+    if session.status == "error":
+        response["error"] = session.error
+
+    return web.json_response(response)
+
+
+async def handle_ask_respond(request: web.Request) -> web.Response:
+    """
+    Submit response to ask session - watch uploads recorded audio.
+
+    POST /ask/{session_id}/respond
+
+    Accepts: multipart/form-data with:
+      - audio: OGG audio file
+
+    Returns: JSON with status, transcription
+    """
+    session_id = request.match_info["session_id"]
+    session = ask_session_manager.get_session(session_id)
+
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    if session.status == "completed":
+        return web.json_response({
+            "error": "Session already completed",
+            "response_text": session.response_text
+        }, status=409)
+
+    if session.status == "timeout":
+        return web.json_response({"error": "Session timed out"}, status=410)
+
+    try:
+        # Parse multipart data
+        reader = await request.multipart()
+        audio_data = None
+
+        async for field in reader:
+            if field.name == "audio" or field.name == "file":
+                audio_data = await field.read()
+
+        if not audio_data:
+            return web.json_response({"error": "No audio file provided"}, status=400)
+
+        logger.info(f"Ask respond: session={session_id}, audio_bytes={len(audio_data)}")
+
+        # Mark as listening (processing)
+        ask_session_manager.set_listening(session_id)
+
+        # Convert audio to WAV for STT
+        audio_io = io.BytesIO(audio_data)
+        audio = AudioSegment.from_file(audio_io, format="ogg")
+        audio = audio.set_channels(1).set_frame_rate(16000)
+
+        wav_io = io.BytesIO()
+        audio.export(wav_io, format="wav")
+        wav_io.seek(0)
+        wav_io.name = "audio.wav"
+
+        # Transcribe
+        stt_result = await simple_stt_failover(wav_io, model="whisper-1")
+
+        if not stt_result or stt_result.get("error_type"):
+            error_type = stt_result.get("error_type", "unknown") if stt_result else "unknown"
+            ask_session_manager.set_error(session_id, f"STT failed: {error_type}")
+            return web.json_response({
+                "error": f"Transcription failed: {error_type}",
+                "status": "error"
+            }, status=503)
+
+        transcription = stt_result.get("text", "")
+        logger.info(f"Ask response transcribed: '{transcription[:100]}...'")
+
+        # Complete the session
+        ask_session_manager.complete_session(session_id, transcription)
+
+        return web.json_response({
+            "status": "ok",
+            "transcription": transcription,
+            "session_id": session_id,
+            "provider": stt_result.get("provider")
+        })
+
+    except Exception as e:
+        logger.error(f"Ask respond error: {e}", exc_info=True)
+        ask_session_manager.set_error(session_id, str(e))
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_ask_listening(request: web.Request) -> web.Response:
+    """
+    Mark ask session as listening - watch started recording.
+
+    POST /ask/{session_id}/listening
+
+    Returns: JSON with status
+    """
+    session_id = request.match_info["session_id"]
+    session = ask_session_manager.get_session(session_id)
+
+    if not session:
+        return web.json_response({"error": "Session not found"}, status=404)
+
+    if session.status != "pending":
+        return web.json_response({
+            "error": f"Cannot set listening - current status is {session.status}"
+        }, status=409)
+
+    ask_session_manager.set_listening(session_id)
+
+    return web.json_response({
+        "status": "ok",
+        "session_id": session_id,
+        "session_status": "listening"
+    })
+
+
 def create_app() -> web.Application:
     """Create and configure the aiohttp application."""
     app = web.Application()
@@ -925,6 +1344,12 @@ def create_app() -> web.Application:
     app.router.add_get("/audio/pending", handle_audio_pending)
     app.router.add_get("/audio/latest", handle_audio_fetch_latest)
     app.router.add_get("/audio/{audio_id}", handle_audio_fetch)
+
+    # Ask endpoints (Claude Code voice questions)
+    app.router.add_post("/ask", handle_ask_create)
+    app.router.add_get("/ask/{session_id}/status", handle_ask_status)
+    app.router.add_post("/ask/{session_id}/respond", handle_ask_respond)
+    app.router.add_post("/ask/{session_id}/listening", handle_ask_listening)
 
     return app
 
