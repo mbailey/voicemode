@@ -198,19 +198,6 @@ def load_voicemode_env():
 # VOICEMODE_KOKORO_DEFAULT_VOICE=af_sky
 
 #############
-# LiveKit Configuration
-#############
-
-# LiveKit server port (default: 7880)
-# VOICEMODE_LIVEKIT_PORT=7880
-
-# Frontend server host (default: 127.0.0.1)
-# VOICEMODE_FRONTEND_HOST=127.0.0.1
-
-# Frontend server port (default: 3000)
-# VOICEMODE_FRONTEND_PORT=3000
-
-#############
 # Recording & Voice Activity Detection
 #############
 
@@ -375,13 +362,6 @@ TTS \\bAPI\\b A P I # API as individual letters
 
 # OpenAI API key for cloud TTS/STT
 # OPENAI_API_KEY=your-key-here
-
-# LiveKit server URL
-# LIVEKIT_URL=ws://127.0.0.1:7880
-
-# LiveKit API credentials
-# LIVEKIT_API_KEY=devkey
-# LIVEKIT_API_SECRET=secret
 '''
         with open(default_path, 'w') as f:
             f.write(default_config)
@@ -603,11 +583,6 @@ def reload_configuration():
 # - VOICEMODE_VOICES (comma-separated list)
 # - VOICEMODE_TTS_MODELS (comma-separated list)
 
-# LiveKit configuration
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://127.0.0.1:7880")
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
-
 # ==================== WHISPER CONFIGURATION ====================
 
 # Default Whisper model for installation and runtime
@@ -626,18 +601,6 @@ KOKORO_PORT = int(os.getenv("VOICEMODE_KOKORO_PORT", "8880"))
 KOKORO_MODELS_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_MODELS_DIR", str(BASE_DIR / "models" / "kokoro")))
 KOKORO_CACHE_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_CACHE_DIR", str(BASE_DIR / "cache" / "kokoro")))
 KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
-
-# ==================== LIVEKIT CONFIGURATION ====================
-
-# LiveKit-specific configuration
-LIVEKIT_PORT = int(os.getenv("VOICEMODE_LIVEKIT_PORT", "7880"))
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", f"ws://localhost:{LIVEKIT_PORT}")
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
-
-# LiveKit Frontend configuration
-FRONTEND_HOST = os.getenv("VOICEMODE_FRONTEND_HOST", "127.0.0.1")
-FRONTEND_PORT = int(os.getenv("VOICEMODE_FRONTEND_PORT", "3000"))
 
 # ==================== SERVICE MANAGEMENT CONFIGURATION ====================
 
