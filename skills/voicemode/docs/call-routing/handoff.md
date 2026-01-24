@@ -96,12 +96,23 @@ After spawning the new agent, **stop using the converse tool**:
 
 ### Step 4: Monitor (Optional)
 
-You can watch the new agent's output to confirm the handoff succeeded. Use your orchestration system's monitoring capabilities to check the receiving agent's output.
+If your orchestration system allows you to observe the receiving agent's interactions, you can confirm the handoff succeeded before fully going quiet.
 
 **What to look for:**
 - Skill loaded successfully
-- First converse call made
-- User response received (confirms audio is working)
+- First converse call made (confirms they're speaking)
+- User response received (confirms audio round-trip works)
+
+**Confirming handoff via converse:**
+
+If you can observe the receiving agent's tool calls, watch for their first `converse` call. Once they've started speaking to the user, you know the handoff worked. This is more reliable than just watching for process startup.
+
+**If handoff fails:**
+
+If the receiving agent doesn't start speaking within a reasonable time:
+- Resume the conversation yourself
+- Apologize and explain there was an issue
+- Either retry the handoff or continue directly
 
 ## Hand-back Process
 
