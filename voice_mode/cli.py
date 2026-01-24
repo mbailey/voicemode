@@ -2404,6 +2404,56 @@ def _format_time(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+def _truncate(text: str, max_len: int) -> str:
+    """Truncate text with ellipsis if too long."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 2] + ".."
+
+
+def _print_status_line(status) -> None:
+    """Print compact one-line status for tmux status bar.
+
+    Format: Artist - Title Position (-Remaining) ♪
+    With tmux color codes for remaining time warnings.
+    """
+    # Get chapter info or fall back to track info
+    if status.chapter:
+        # Chapter format is typically "Title - Artist" from ffmeta
+        display = status.chapter
+    elif status.artist and status.title:
+        display = f"{status.artist} - {status.title}"
+    elif status.title:
+        display = status.title
+    else:
+        display = status.path or "Unknown"
+
+    # Truncate display to reasonable length
+    display = _truncate(display, 40)
+
+    # Position
+    pos_str = _format_time(status.position)
+
+    # Remaining time with color coding
+    remaining = int(status.remaining)
+    remaining_str = _format_time(status.remaining)
+
+    if remaining < 10:
+        color = "#[fg=red,bold]"
+        reset = "#[fg=default,nobold]"
+    elif remaining < 30:
+        color = "#[fg=yellow]"
+        reset = "#[fg=default]"
+    else:
+        color = ""
+        reset = ""
+
+    # Paused indicator
+    icon = "⏸" if status.is_paused else "♪"
+
+    click.echo(f"{display} {pos_str} {color}(-{remaining_str}){reset} {icon}")
+
+
 @dj.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
 @click.argument('source')
@@ -2433,11 +2483,14 @@ def play(source: str, chapters: str | None, volume: int):
 
 
 @dj.command()
+@click.option('--line', '-l', is_flag=True, help='One-line output for tmux status bar')
 @click.help_option('-h', '--help', help='Show this message and exit')
-def status():
+def status(line: bool):
     """Show what's currently playing.
 
     Displays track information, playback position, volume, and chapter info.
+
+    Use --line for compact tmux status bar output.
     """
     from voice_mode.dj import DJController
 
@@ -2445,28 +2498,34 @@ def status():
     track_status = controller.status()
 
     if track_status:
-        # Track info
-        title = track_status.title or track_status.path or "(unknown)"
-        click.echo(f"Track: {title}")
+        if line:
+            # Compact one-line format for tmux status bar
+            _print_status_line(track_status)
+        else:
+            # Full multi-line format
+            # Track info
+            title = track_status.title or track_status.path or "(unknown)"
+            click.echo(f"Track: {title}")
 
-        # Position
-        pos_str = _format_time(track_status.position)
-        dur_str = _format_time(track_status.duration)
-        progress = track_status.progress_percent
-        click.echo(f"Position: {pos_str} / {dur_str} ({progress:.0f}%)")
+            # Position
+            pos_str = _format_time(track_status.position)
+            dur_str = _format_time(track_status.duration)
+            progress = track_status.progress_percent
+            click.echo(f"Position: {pos_str} / {dur_str} ({progress:.0f}%)")
 
-        # Volume and state
-        state = "Paused" if track_status.is_paused else "Playing"
-        click.echo(f"Volume: {track_status.volume}%")
-        click.echo(f"State: {state}")
+            # Volume and state
+            state = "Paused" if track_status.is_paused else "Playing"
+            click.echo(f"Volume: {track_status.volume}%")
+            click.echo(f"State: {state}")
 
-        # Chapter info if available
-        if track_status.chapter_count and track_status.chapter_count > 0:
-            chapter_num = (track_status.chapter_index or 0) + 1
-            chapter_name = track_status.chapter or f"Chapter {chapter_num}"
-            click.echo(f"Chapter: {chapter_name} ({chapter_num}/{track_status.chapter_count})")
+            # Chapter info if available
+            if track_status.chapter_count and track_status.chapter_count > 0:
+                chapter_num = (track_status.chapter_index or 0) + 1
+                chapter_name = track_status.chapter or f"Chapter {chapter_num}"
+                click.echo(f"Chapter: {chapter_name} ({chapter_num}/{track_status.chapter_count})")
     else:
-        click.echo("DJ is not running")
+        if not line:
+            click.echo("DJ is not running")
 
 
 @dj.command()
