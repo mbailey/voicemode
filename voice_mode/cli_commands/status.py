@@ -21,7 +21,6 @@ import click
 from voice_mode.config import (
     WHISPER_PORT,
     KOKORO_PORT,
-    LIVEKIT_PORT,
     TTS_VOICES,
     OPENAI_API_KEY,
     env_bool,
