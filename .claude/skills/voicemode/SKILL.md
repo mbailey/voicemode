@@ -61,6 +61,23 @@ For all parameters, see [Converse Parameters](../../docs/reference/converse-para
 4. **Let VoiceMode auto-select** - Don't hardcode providers unless user has preference
 5. **First run is slow** - Model downloads happen on first start (2-5 min), then instant
 
+## Handling Pauses and Wait Requests
+
+When the user asks you to wait or give them time:
+
+**Short pauses (up to 60 seconds):** If the user says something ending with "wait" (e.g., "hang on", "give me a sec", "wait"), VoiceMode automatically pauses for 60 seconds then resumes listening. This is built-in.
+
+**Longer pauses (2+ minutes):** Use `bash sleep N` where N is seconds. For example, if the user says "give me 5 minutes":
+```bash
+sleep 300  # Wait 5 minutes
+```
+Then call converse again when the wait is over:
+```python
+voicemode:converse("Five minutes is up. Ready when you are.")
+```
+
+**Configuration:** The short pause duration is configurable via `VOICEMODE_WAIT_DURATION` (default: 60 seconds).
+
 ## Check Status
 
 ```bash
@@ -98,7 +115,7 @@ voicemode:service("whisper", "logs", lines=50)
 |---------|------|---------|
 | whisper | 2022 | Speech-to-text |
 | kokoro | 8880 | Text-to-speech |
-| livekit | 7880 | Real-time rooms |
+| voicemode | 8765 | HTTP/SSE server |
 
 **Actions:** status, start, stop, restart, logs, enable, disable
 
