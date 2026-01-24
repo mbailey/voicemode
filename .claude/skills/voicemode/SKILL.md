@@ -173,6 +173,47 @@ voicemode dj stop                   # Stop playback
 voicemode dj mfp play 49            # Music For Programming
 ```
 
+## Voice Handoff Between Agents
+
+Transfer voice conversations between Claude Code agents for multi-agent workflows.
+
+**Use cases:**
+- Personal assistant routing to project-specific foremen
+- Foremen delegating to workers for focused tasks
+- Returning control when work is complete
+
+### Quick Reference
+
+```python
+# 1. Announce the transfer
+voicemode:converse("Transferring you to a project agent.", wait_for_response=False)
+
+# 2. Spawn with voice instructions (mechanism depends on your setup)
+spawn_agent(path="/path", prompt="Load voicemode skill, use converse to greet user")
+
+# 3. Go quiet - let new agent take over
+```
+
+**Hand-back:**
+```python
+voicemode:converse("Transferring you back to the assistant.", wait_for_response=False)
+# Stop conversing, exit or go idle
+```
+
+### Key Principles
+
+1. **Announce transfers**: Always tell the user before transferring
+2. **One speaker**: Only one agent should use converse at a time
+3. **Distinct voices**: Different voices make handoffs audible
+4. **Provide context**: Tell receiving agent why user is being transferred
+
+### Detailed Documentation
+
+See [docs/call-routing/](./docs/call-routing/) for comprehensive guides:
+- [Handoff Pattern](./docs/call-routing/handoff.md) - Complete hand-off and hand-back process
+- [Voice Proxy](./docs/call-routing/proxy.md) - Relay pattern for agents without voice
+- [Call Routing Overview](./docs/call-routing/README.md) - All routing patterns
+
 ## Documentation Index
 
 | Topic | Link |
