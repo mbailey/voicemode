@@ -202,6 +202,43 @@ ensure_uv() {
     fi
 }
 
+# Ensure Rust is available (for ARM64 Kokoro dependencies)
+# Uses rustup for latest version since distro packages are often too old
+ensure_rust() {
+    # Check if Rust is already installed and recent enough (1.82+)
+    if command_exists rustc; then
+        local rust_version
+        rust_version=$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+).*/\1/')
+        local major minor
+        major=$(echo "$rust_version" | cut -d. -f1)
+        minor=$(echo "$rust_version" | cut -d. -f2)
+        if [[ "$major" -gt 1 ]] || { [[ "$major" -eq 1 ]] && [[ "$minor" -ge 82 ]]; }; then
+            ok "Rust $rust_version found"
+            return 0
+        fi
+        info "Rust $rust_version is too old (need 1.82+), installing via rustup..."
+    else
+        info "Installing Rust via rustup..."
+    fi
+
+    if command_exists curl; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+    elif command_exists wget; then
+        wget -qO- https://sh.rustup.rs | sh -s -- -y --no-modify-path
+    else
+        die "Neither curl nor wget found. Cannot install Rust."
+    fi
+
+    # Add cargo to PATH for this session
+    export PATH="$HOME/.cargo/bin:$PATH"
+
+    if command_exists rustc; then
+        ok "Rust installed via rustup"
+    else
+        die "Rust installation failed. Please install manually: https://rustup.rs/"
+    fi
+}
+
 # -----------------------------------------------------------------------------
 # macOS System Dependencies
 # -----------------------------------------------------------------------------
@@ -328,12 +365,21 @@ install_linux_deps() {
     case "$distro" in
         debian)
             all_packages=(python3-dev gcc libasound2-dev libportaudio2 ffmpeg)
+            # ARM64 needs g++ for Kokoro's mojimoji dependency
+            if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+                all_packages+=(g++)
+            fi
             ;;
         fedora)
             all_packages=(python3-devel gcc alsa-lib-devel portaudio ffmpeg)
+            # ARM64 needs g++ for Kokoro's mojimoji dependency
+            if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+                all_packages+=(gcc-c++)
+            fi
             ;;
         arch)
             all_packages=(python gcc alsa-lib portaudio ffmpeg)
+            # Arch gcc package includes g++, no extras needed
             ;;
         *)
             warn "Unknown Linux distro. Please install build dependencies manually:"
@@ -487,6 +533,10 @@ main() {
             ;;
         linux)
             install_linux_deps "$distro"
+            # ARM64 Linux needs Rust via rustup for Kokoro dependencies
+            if [[ "$arch" == "arm64" ]]; then
+                ensure_rust
+            fi
             ;;
     esac
     ensure_uv
