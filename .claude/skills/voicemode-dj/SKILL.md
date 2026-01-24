@@ -12,7 +12,7 @@ Background music control during VoiceMode sessions via `voicemode dj` commands.
 ```bash
 voicemode dj play <file|url>     # Start playback
 voicemode dj stop                # Stop playback
-voicemode dj mfp play <episode>  # Play MFP episode
+voicemode dj mfp play 49         # Play MFP episode (Julien Mier)
 voicemode dj status              # What's playing
 voicemode dj next / prev         # Chapter navigation
 voicemode dj volume [0-100]      # Get/set volume
