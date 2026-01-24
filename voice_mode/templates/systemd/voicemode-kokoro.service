@@ -17,7 +17,8 @@ RestartSec=10
 RestartPreventExitStatus=127
 
 # Environment - start script sources voicemode.env for port config
-Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Include .cargo/bin for ARM64 Linux where Rust may be needed to build dependencies
+Environment="PATH=%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Resource limits
 MemoryLimit=4G
