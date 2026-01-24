@@ -280,8 +280,8 @@ install_macos_prerequisites() {
         echo "    - $pkg"
     done
 
-    # Prompt for confirmation in interactive mode
-    if [[ "$INTERACTIVE" == "true" ]]; then
+    # Prompt for confirmation in interactive mode (only if TTY available)
+    if [[ "$INTERACTIVE" == "true" ]] && [[ -r /dev/tty ]]; then
         echo ""
         read -r -p "Proceed with installation? [Y/n] " response </dev/tty
         case "$response" in
@@ -294,7 +294,7 @@ install_macos_prerequisites() {
                 return 0
                 ;;
         esac
-    elif [[ "$need_homebrew" == "true" ]]; then
+    elif [[ "$need_homebrew" == "true" ]] && [[ "$INTERACTIVE" == "false" || ! -r /dev/tty ]]; then
         # Non-interactive mode can't install Homebrew (needs sudo)
         die "Homebrew not found. Install it first, then re-run:
     /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
@@ -440,8 +440,8 @@ install_linux_deps() {
         echo "    - $pkg"
     done
 
-    # Prompt for confirmation in interactive mode
-    if [[ "$INTERACTIVE" == "true" ]]; then
+    # Prompt for confirmation in interactive mode (only if TTY available)
+    if [[ "$INTERACTIVE" == "true" ]] && [[ -r /dev/tty ]]; then
         echo ""
         read -r -p "Install these packages? [Y/n] " response </dev/tty
         case "$response" in
@@ -599,8 +599,8 @@ install_voice_services() {
 
     info "Available: $services_to_install ($download_size download)"
 
-    # Prompt for installation
-    if [[ "$INTERACTIVE" == "true" ]]; then
+    # Prompt for installation (only if interactive AND TTY available)
+    if [[ "$INTERACTIVE" == "true" ]] && [[ -r /dev/tty ]]; then
         echo ""
         read -r -p "Install local voice services? [Y/n] " response </dev/tty
         case "$response" in
