@@ -226,10 +226,10 @@ voicemode:converse("Transferring you back to the assistant.", wait_for_response=
 
 ### Detailed Documentation
 
-See [docs/call-routing/](./docs/call-routing/) for comprehensive guides:
-- [Handoff Pattern](./docs/call-routing/handoff.md) - Complete hand-off and hand-back process
-- [Voice Proxy](./docs/call-routing/proxy.md) - Relay pattern for agents without voice
-- [Call Routing Overview](./docs/call-routing/README.md) - All routing patterns
+See [Call Routing](../../../docs/guides/agents/call-routing/) for comprehensive guides:
+- [Handoff Pattern](../../../docs/guides/agents/call-routing/handoff.md) - Complete hand-off and hand-back process
+- [Voice Proxy](../../../docs/guides/agents/call-routing/proxy.md) - Relay pattern for agents without voice
+- [Call Routing Overview](../../../docs/guides/agents/call-routing/README.md) - All routing patterns
 
 ## Documentation Index
 
