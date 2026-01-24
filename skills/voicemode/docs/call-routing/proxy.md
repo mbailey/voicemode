@@ -35,10 +35,14 @@ The proxy agent:
 A worker focused on a specific task doesn't need voicemode overhead:
 
 ```python
-# Foreman spawns worker for code review (no voice)
-Bash(command='agents minion start /path --name reviewer --prompt "Review the PR and write findings to /tmp/review-output.txt"')
+# Spawn worker for code review (no voice) - mechanism depends on your setup
+spawn_agent(
+    path="/path",
+    name="reviewer",
+    prompt="Review the PR and write findings to /tmp/review-output.txt"
+)
 
-# Foreman monitors output and speaks it
+# Primary agent monitors output and speaks it
 while True:
     output = read_file("/tmp/review-output.txt")
     if output:
@@ -112,8 +116,8 @@ Watch agent output for speech markers:
 # Worker marks speech with special prefix
 print("SPEAK: I've finished the analysis")
 
-# Proxy monitors output
-for line in monitor_minion_output("m-worker"):
+# Proxy monitors output (use your orchestration system's output stream)
+for line in monitor_agent_output("worker"):
     if line.startswith("SPEAK: "):
         message = line[7:]  # Remove prefix
         voicemode:converse(message, wait_for_response=False)
