@@ -198,7 +198,8 @@ class DJController:
         chapter_meta = self._player.get_chapter_metadata()
         chapter_title = None
         if chapter_meta and isinstance(chapter_meta, dict):
-            chapter_title = chapter_meta.get("title")
+            # mpv returns metadata keys in UPPERCASE
+            chapter_title = chapter_meta.get("TITLE") or chapter_meta.get("title")
 
         return TrackStatus(
             is_playing=True,

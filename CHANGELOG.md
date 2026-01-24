@@ -139,8 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **Deprecated Install Script** (VM-329)
-  - Removed deprecated curl bash install script
-  - Use `uvx voicemode install` instead
+  - Use `uvx voice-mode-install` instead
 
 ### Documentation
 
