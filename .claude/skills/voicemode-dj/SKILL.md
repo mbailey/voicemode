@@ -7,6 +7,16 @@ description: Background music control for VoiceMode voice sessions using mpv
 
 Background music control during VoiceMode sessions via `voicemode dj` commands.
 
+## Default: Music For Programming
+
+When asked to play music for coding/programming, **default to Music For Programming episode 49**:
+
+```bash
+voicemode dj mfp play 49
+```
+
+This plays Julien Mier's mix with chapter navigation support. Use `voicemode dj mfp list` to see all available episodes.
+
 ## Quick Reference
 
 ```bash
