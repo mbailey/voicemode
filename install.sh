@@ -485,20 +485,12 @@ install_linux_deps() {
 
 # Check if Whisper STT is installed
 is_whisper_installed() {
-    if command_exists voicemode; then
-        voicemode whisper version &>/dev/null
-    else
-        return 1
-    fi
+    [[ -d "$HOME/.voicemode/services/whisper" ]]
 }
 
 # Check if Kokoro TTS is installed
 is_kokoro_installed() {
-    if command_exists voicemode; then
-        voicemode kokoro version &>/dev/null
-    else
-        return 1
-    fi
+    [[ -d "$HOME/.voicemode/services/kokoro" ]]
 }
 
 # Assess system capability for local voice services
