@@ -26,7 +26,7 @@ voicemode dj stop      # Stop playback
 | Command | Description |
 |---------|-------------|
 | `voicemode dj play <source> [--chapters <file>]` | Start playback |
-| `voicemode dj status` | Show current track, position, volume |
+| `voicemode dj status [--line]` | Show current track, position, volume |
 | `voicemode dj pause` / `resume` | Pause or resume playback |
 | `voicemode dj next` / `prev` | Navigate chapters |
 | `voicemode dj volume [0-100]` | Get or set volume |
@@ -55,6 +55,7 @@ voicemode dj stop      # Stop playback
 - [Music For Programming](mfp.md) - Primary content integration
 - [Chapter Files](chapters.md) - FFmpeg format and CUE conversion
 - [Installation](installation.md) - Setup mpv and dependencies
+- [tmux Status Line](tmux-status.md) - Show current track in tmux
 - [IPC Reference](ipc.md) - Raw socket commands
 
 ## Configuration
@@ -80,6 +81,7 @@ The DJ starts at 50% volume by default, which works well during voice conversati
 - IPC socket for programmatic control
 - Play history tracking (last 100 sessions)
 - Favorites system (save/list/remove tracks)
+- [tmux status line integration](tmux-status.md) with color-coded warnings
 
 ### Planned
 
