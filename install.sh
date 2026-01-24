@@ -246,7 +246,7 @@ install_macos_prerequisites() {
     # Prompt for confirmation in interactive mode
     if [[ "$INTERACTIVE" == "true" ]]; then
         echo ""
-        read -r -p "Proceed with installation? [Y/n] " response
+        read -r -p "Proceed with installation? [Y/n] " response </dev/tty
         case "$response" in
             [nN][oO]|[nN])
                 if [[ "$need_homebrew" == "true" ]]; then
@@ -369,7 +369,7 @@ install_linux_deps() {
     # Prompt for confirmation in interactive mode
     if [[ "$INTERACTIVE" == "true" ]]; then
         echo ""
-        read -r -p "Install these packages? [Y/n] " response
+        read -r -p "Install these packages? [Y/n] " response </dev/tty
         case "$response" in
             [nN][oO]|[nN])
                 warn "Skipping dependency installation"
