@@ -102,11 +102,9 @@ command_exists() {
 # Check if /dev/tty is available for interactive input
 # (needed for curl|bash and SSH scenarios)
 tty_available() {
-    # Try to open /dev/tty - returns false if not available
-    exec 3</dev/tty 2>/dev/null
-    local result=$?
-    exec 3>&- 2>/dev/null  # Close fd 3
-    return $result
+    # Try to open /dev/tty in a subshell to avoid polluting fd table
+    # and to properly suppress errors
+    (exec </dev/tty) 2>/dev/null
 }
 
 # -----------------------------------------------------------------------------
