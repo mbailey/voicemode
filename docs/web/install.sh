@@ -251,11 +251,12 @@ ensure_rust() {
 # macOS System Dependencies
 # -----------------------------------------------------------------------------
 
-# Install all macOS prerequisites (Homebrew + packages) with single confirmation
+# Install all macOS prerequisites (Homebrew + packages + uv) with single confirmation
 install_macos_prerequisites() {
     local -a packages=(portaudio ffmpeg)
     local -a to_install=()
     local need_homebrew=false
+    local need_uv=false
     local pkg
 
     # Check if Homebrew is installed
@@ -273,8 +274,15 @@ install_macos_prerequisites() {
         done
     fi
 
+    # Check if uv is installed
+    if ! command_exists uv; then
+        need_uv=true
+    else
+        ok "uv found"
+    fi
+
     # If nothing to install, we're done
-    if [[ "$need_homebrew" == "false" ]] && [[ ${#to_install[@]} -eq 0 ]]; then
+    if [[ "$need_homebrew" == "false" ]] && [[ ${#to_install[@]} -eq 0 ]] && [[ "$need_uv" == "false" ]]; then
         ok "All dependencies already installed"
         return 0
     fi
@@ -287,6 +295,9 @@ install_macos_prerequisites() {
     for pkg in "${to_install[@]}"; do
         echo "    - $pkg"
     done
+    if [[ "$need_uv" == "true" ]]; then
+        echo "    - uv (Python package manager)"
+    fi
 
     # Prompt for confirmation in interactive mode (only if TTY available)
     if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
@@ -351,7 +362,25 @@ install_macos_prerequisites() {
     if [[ ${#to_install[@]} -gt 0 ]]; then
         info "Installing packages..."
         brew install "${to_install[@]}"
-        ok "Dependencies installed"
+        ok "Packages installed"
+    fi
+
+    # Install uv if needed
+    if [[ "$need_uv" == "true" ]]; then
+        info "Installing uv..."
+        if command_exists curl; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+        elif command_exists wget; then
+            wget -qO- https://astral.sh/uv/install.sh | sh
+        else
+            die "Neither curl nor wget found. Cannot install uv."
+        fi
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+        if command_exists uv; then
+            ok "uv installed"
+        else
+            die "uv installation failed"
+        fi
     fi
 }
 
@@ -380,13 +409,14 @@ is_package_installed() {
     esac
 }
 
-# Install required system packages on Linux
+# Install required system packages on Linux (+ uv)
 # These are needed for compiling webrtcvad and simpleaudio
 install_linux_deps() {
     local distro="$1"
     local -a all_packages missing_packages
     local SUDO=""
     local pkg
+    local need_uv=false
 
     # Use sudo if not running as root and sudo is available
     if [[ "$(id -u)" != "0" ]]; then
@@ -436,22 +466,32 @@ install_linux_deps() {
         fi
     done
 
-    # If all packages are installed, we're done
-    if [[ ${#missing_packages[@]} -eq 0 ]]; then
+    # Check if uv is installed
+    if ! command_exists uv; then
+        need_uv=true
+    else
+        ok "uv found"
+    fi
+
+    # If everything is installed, we're done
+    if [[ ${#missing_packages[@]} -eq 0 ]] && [[ "$need_uv" == "false" ]]; then
         ok "All dependencies already installed"
         return 0
     fi
 
     # Show what needs to be installed
-    info "The following packages need to be installed:"
+    info "The following will be installed:"
     for pkg in "${missing_packages[@]}"; do
         echo "    - $pkg"
     done
+    if [[ "$need_uv" == "true" ]]; then
+        echo "    - uv (Python package manager)"
+    fi
 
     # Prompt for confirmation in interactive mode (only if TTY available)
     if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
         echo ""
-        read -r -p "Install these packages? [Y/n] " response </dev/tty
+        read -r -p "Install these? [Y/n] " response </dev/tty
         case "$response" in
             [nN][oO]|[nN])
                 warn "Skipping dependency installation"
@@ -462,21 +502,71 @@ install_linux_deps() {
     fi
 
     # Install missing packages
-    info "Installing packages..."
-    case "$distro" in
-        debian)
-            export DEBIAN_FRONTEND=noninteractive
-            $SUDO apt-get update -qq >/dev/null
-            $SUDO apt-get install -y -qq "${missing_packages[@]}" >/dev/null
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        info "Installing packages..."
+        case "$distro" in
+            debian)
+                export DEBIAN_FRONTEND=noninteractive
+                $SUDO apt-get update -qq >/dev/null
+                $SUDO apt-get install -y -qq "${missing_packages[@]}" >/dev/null
+                ;;
+            fedora)
+                $SUDO dnf install -y -q "${missing_packages[@]}" >/dev/null
+                ;;
+            arch)
+                $SUDO pacman -S --noconfirm -q "${missing_packages[@]}" >/dev/null
+                ;;
+        esac
+        ok "Packages installed"
+    fi
+
+    # Install uv if needed
+    if [[ "$need_uv" == "true" ]]; then
+        info "Installing uv..."
+        if command_exists curl; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+        elif command_exists wget; then
+            wget -qO- https://astral.sh/uv/install.sh | sh
+        else
+            die "Neither curl nor wget found. Cannot install uv."
+        fi
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+        if command_exists uv; then
+            ok "uv installed"
+        else
+            die "uv installation failed"
+        fi
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# System Dependencies (orchestration)
+# -----------------------------------------------------------------------------
+
+# Install all system dependencies for the detected platform
+install_system_deps() {
+    local os="$1"
+    local arch="$2"
+    local distro
+
+    case "$os" in
+        macos)
+            ok "Platform: macOS ($arch)"
+            install_macos_prerequisites
             ;;
-        fedora)
-            $SUDO dnf install -y -q "${missing_packages[@]}" >/dev/null
+        linux)
+            distro=$(detect_linux_distro)
+            ok "Platform: Linux/$distro ($arch)"
+            install_linux_deps "$distro"
+            # ARM64 Linux needs Rust via rustup for Kokoro dependencies
+            if [[ "$arch" == "arm64" ]]; then
+                ensure_rust
+            fi
             ;;
-        arch)
-            $SUDO pacman -S --noconfirm -q "${missing_packages[@]}" >/dev/null
+        windows)
+            die "Windows is not yet supported. Please use WSL2 instead."
             ;;
     esac
-    ok "Dependencies installed"
 }
 
 # -----------------------------------------------------------------------------
@@ -707,26 +797,8 @@ main() {
     # Display logo
     show_logo
 
-    # Detect platform and install dependencies
-    case "$os" in
-        macos)
-            ok "Platform: macOS ($arch)"
-            install_macos_prerequisites
-            ;;
-        linux)
-            distro=$(detect_linux_distro)
-            ok "Platform: Linux/$distro ($arch)"
-            install_linux_deps "$distro"
-            # ARM64 Linux needs Rust via rustup for Kokoro dependencies
-            if [[ "$arch" == "arm64" ]]; then
-                ensure_rust
-            fi
-            ;;
-        windows)
-            die "Windows is not yet supported. Please use WSL2 instead."
-            ;;
-    esac
-    ensure_uv
+    # Install system dependencies (includes uv)
+    install_system_deps "$os" "$arch"
 
     # Install and verify VoiceMode
     install_voicemode
