@@ -304,6 +304,14 @@ install_macos_prerequisites() {
     if [[ "$need_homebrew" == "true" ]]; then
         info "Installing Homebrew (may require password)..."
         /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+        # Add Homebrew to PATH for this session (Apple Silicon uses /opt/homebrew)
+        if [[ -x /opt/homebrew/bin/brew ]]; then
+            eval "$(/opt/homebrew/bin/brew shellenv)"
+        elif [[ -x /usr/local/bin/brew ]]; then
+            eval "$(/usr/local/bin/brew shellenv)"
+        fi
+
         if command_exists brew; then
             ok "Homebrew installed"
         else
