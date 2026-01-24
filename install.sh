@@ -384,14 +384,14 @@ install_linux_deps() {
     case "$distro" in
         debian)
             export DEBIAN_FRONTEND=noninteractive
-            $SUDO apt-get update -qq
-            $SUDO apt-get install -y "${missing_packages[@]}"
+            $SUDO apt-get update -qq >/dev/null
+            $SUDO apt-get install -y -qq "${missing_packages[@]}" >/dev/null
             ;;
         fedora)
-            $SUDO dnf install -y "${missing_packages[@]}"
+            $SUDO dnf install -y -q "${missing_packages[@]}" >/dev/null
             ;;
         arch)
-            $SUDO pacman -S --noconfirm "${missing_packages[@]}"
+            $SUDO pacman -S --noconfirm -q "${missing_packages[@]}" >/dev/null
             ;;
     esac
     ok "Dependencies installed"
