@@ -175,42 +175,6 @@ detect_linux_distro() {
 # Prerequisite Installation
 # -----------------------------------------------------------------------------
 
-# Ensure Homebrew is available (macOS only)
-# Homebrew requires sudo for initial installation
-ensure_homebrew() {
-    if command_exists brew; then
-        ok "Homebrew found"
-        return 0
-    fi
-
-    if [[ "$INTERACTIVE" != "true" ]]; then
-        die "Homebrew not found. Install Homebrew first, then re-run:
-    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"
-
-Non-interactive mode cannot install Homebrew (requires sudo)."
-    fi
-
-    warn "Homebrew not found"
-    info "Homebrew is required on macOS for system dependencies."
-    echo ""
-    read -r -p "Install Homebrew now? [y/N] " response
-    case "$response" in
-        [yY][eE][sS]|[yY])
-            info "Installing Homebrew (may require sudo)..."
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            if command_exists brew; then
-                ok "Homebrew installed"
-            else
-                die "Homebrew installation failed"
-            fi
-            ;;
-        *)
-            die "Homebrew is required. Please install it manually:
-    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
-            ;;
-    esac
-}
-
 # Ensure uv package manager is available
 # uv can be installed without sudo
 ensure_uv() {
@@ -236,6 +200,201 @@ ensure_uv() {
     else
         die "uv installation failed. Please install manually: https://docs.astral.sh/uv/getting-started/installation/"
     fi
+}
+
+# -----------------------------------------------------------------------------
+# macOS System Dependencies
+# -----------------------------------------------------------------------------
+
+# Install all macOS prerequisites (Homebrew + packages) with single confirmation
+install_macos_prerequisites() {
+    local -a packages=(portaudio ffmpeg)
+    local -a to_install=()
+    local need_homebrew=false
+    local pkg
+
+    # Check if Homebrew is installed
+    if ! command_exists brew; then
+        need_homebrew=true
+        # If no Homebrew, we'll need all packages too
+        to_install=("${packages[@]}")
+    else
+        ok "Homebrew found"
+        # Check which packages are missing
+        for pkg in "${packages[@]}"; do
+            if ! brew list "$pkg" &>/dev/null; then
+                to_install+=("$pkg")
+            fi
+        done
+    fi
+
+    # If nothing to install, we're done
+    if [[ "$need_homebrew" == "false" ]] && [[ ${#to_install[@]} -eq 0 ]]; then
+        ok "All dependencies already installed"
+        return 0
+    fi
+
+    # Show what will be installed
+    info "The following will be installed:"
+    if [[ "$need_homebrew" == "true" ]]; then
+        echo "    - Homebrew (package manager)"
+    fi
+    for pkg in "${to_install[@]}"; do
+        echo "    - $pkg"
+    done
+
+    # Prompt for confirmation in interactive mode
+    if [[ "$INTERACTIVE" == "true" ]]; then
+        echo ""
+        read -r -p "Proceed with installation? [Y/n] " response
+        case "$response" in
+            [nN][oO]|[nN])
+                if [[ "$need_homebrew" == "true" ]]; then
+                    die "Homebrew is required for VoiceMode on macOS"
+                fi
+                warn "Skipping package installation"
+                warn "VoiceMode may not work correctly without these packages"
+                return 0
+                ;;
+        esac
+    elif [[ "$need_homebrew" == "true" ]]; then
+        # Non-interactive mode can't install Homebrew (needs sudo)
+        die "Homebrew not found. Install it first, then re-run:
+    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    fi
+
+    # Install Homebrew if needed
+    if [[ "$need_homebrew" == "true" ]]; then
+        info "Installing Homebrew (may require password)..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        if command_exists brew; then
+            ok "Homebrew installed"
+        else
+            die "Homebrew installation failed"
+        fi
+    fi
+
+    # Install packages if needed
+    if [[ ${#to_install[@]} -gt 0 ]]; then
+        info "Installing packages..."
+        brew install "${to_install[@]}"
+        ok "Dependencies installed"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Linux System Dependencies
+# -----------------------------------------------------------------------------
+
+# Check if a package is installed (distro-specific)
+is_package_installed() {
+    local distro="$1"
+    local package="$2"
+
+    case "$distro" in
+        debian)
+            dpkg -s "$package" &>/dev/null
+            ;;
+        fedora)
+            rpm -q "$package" &>/dev/null
+            ;;
+        arch)
+            pacman -Q "$package" &>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Install required system packages on Linux
+# These are needed for compiling webrtcvad and simpleaudio
+install_linux_deps() {
+    local distro="$1"
+    local -a all_packages missing_packages
+    local SUDO=""
+    local pkg
+
+    # Use sudo if not running as root and sudo is available
+    if [[ "$(id -u)" != "0" ]]; then
+        if command_exists sudo; then
+            SUDO="sudo"
+        else
+            die "This script requires root privileges or sudo. Please run as root or install sudo."
+        fi
+    fi
+
+    # Define packages per distro
+    case "$distro" in
+        debian)
+            all_packages=(python3-dev gcc libasound2-dev libportaudio2 ffmpeg)
+            ;;
+        fedora)
+            all_packages=(python3-devel gcc alsa-lib-devel portaudio ffmpeg)
+            ;;
+        arch)
+            all_packages=(python gcc alsa-lib portaudio ffmpeg)
+            ;;
+        *)
+            warn "Unknown Linux distro. Please install build dependencies manually:"
+            echo "  - C compiler (gcc)"
+            echo "  - Python development headers"
+            echo "  - ALSA development libraries"
+            echo "  - PortAudio library"
+            echo "  - FFmpeg"
+            return 0
+            ;;
+    esac
+
+    # Check which packages are missing
+    missing_packages=()
+    for pkg in "${all_packages[@]}"; do
+        if ! is_package_installed "$distro" "$pkg"; then
+            missing_packages+=("$pkg")
+        fi
+    done
+
+    # If all packages are installed, we're done
+    if [[ ${#missing_packages[@]} -eq 0 ]]; then
+        ok "All dependencies already installed"
+        return 0
+    fi
+
+    # Show what needs to be installed
+    info "The following packages need to be installed:"
+    for pkg in "${missing_packages[@]}"; do
+        echo "    - $pkg"
+    done
+
+    # Prompt for confirmation in interactive mode
+    if [[ "$INTERACTIVE" == "true" ]]; then
+        echo ""
+        read -r -p "Install these packages? [Y/n] " response
+        case "$response" in
+            [nN][oO]|[nN])
+                warn "Skipping dependency installation"
+                warn "VoiceMode may not work correctly without these packages"
+                return 0
+                ;;
+        esac
+    fi
+
+    # Install missing packages
+    info "Installing packages..."
+    case "$distro" in
+        debian)
+            export DEBIAN_FRONTEND=noninteractive
+            $SUDO apt-get update -qq
+            $SUDO apt-get install -y "${missing_packages[@]}"
+            ;;
+        fedora)
+            $SUDO dnf install -y "${missing_packages[@]}"
+            ;;
+        arch)
+            $SUDO pacman -S --noconfirm "${missing_packages[@]}"
+            ;;
+    esac
+    ok "Dependencies installed"
 }
 
 # -----------------------------------------------------------------------------
@@ -298,7 +457,7 @@ show_next_steps() {
 # -----------------------------------------------------------------------------
 
 main() {
-    local os arch
+    local os arch distro
 
     # Detect platform
     os=$(detect_os)
@@ -313,7 +472,6 @@ main() {
             ok "Platform: macOS ($arch)"
             ;;
         linux)
-            local distro
             distro=$(detect_linux_distro)
             ok "Platform: Linux/$distro ($arch)"
             ;;
@@ -322,13 +480,13 @@ main() {
             ;;
     esac
 
-    # Check prerequisites
+    # Check prerequisites and install dependencies
     case "$os" in
         macos)
-            ensure_homebrew
+            install_macos_prerequisites
             ;;
         linux)
-            # Linux uses system package manager directly, no Homebrew needed
+            install_linux_deps "$distro"
             ;;
     esac
     ensure_uv
