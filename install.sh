@@ -306,10 +306,30 @@ install_macos_prerequisites() {
         /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
         # Add Homebrew to PATH for this session (Apple Silicon uses /opt/homebrew)
+        local brew_path=""
         if [[ -x /opt/homebrew/bin/brew ]]; then
-            eval "$(/opt/homebrew/bin/brew shellenv)"
+            brew_path="/opt/homebrew/bin/brew"
         elif [[ -x /usr/local/bin/brew ]]; then
-            eval "$(/usr/local/bin/brew shellenv)"
+            brew_path="/usr/local/bin/brew"
+        fi
+
+        if [[ -n "$brew_path" ]]; then
+            eval "$($brew_path shellenv)"
+
+            # Persist to shell profile for future sessions
+            local shell_profile=""
+            if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
+                shell_profile="$HOME/.zprofile"
+            else
+                shell_profile="$HOME/.bash_profile"
+            fi
+
+            local shellenv_line="eval \"\$($brew_path shellenv)\""
+            if ! grep -q "brew shellenv" "$shell_profile" 2>/dev/null; then
+                echo "" >> "$shell_profile"
+                echo "# Homebrew" >> "$shell_profile"
+                echo "$shellenv_line" >> "$shell_profile"
+            fi
         fi
 
         if command_exists brew; then
