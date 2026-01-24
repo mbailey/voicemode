@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-01-25
+
 ### Added
+
+- **VoiceMode DJ** (VM-406, VM-457, VM-377)
+  - Background music playback for voice sessions with track-level control
+  - `voicemode dj play/stop/pause/resume/status` for core playback
+  - `voicemode dj next/prev/volume` for navigation and volume control
+  - `voicemode dj find` and `voicemode dj library scan/stats` for music library
+  - Automatic audio ducking during TTS - lowers music volume when speaking
+  - Configurable default volume via `VOICEMODE_DJ_VOLUME` environment variable
+  - Configurable duck amount via `VOICEMODE_DJ_DUCK_AMOUNT` (default: 20%)
+
+- **Music For Programming Playback** (VM-369, VM-386, VM-400, VM-480, VM-481)
+  - [Music For Programming](https://musicforprogramming.net) is a curated series of mixes for coding
+  - `voicemode dj mfp list` shows available episodes with local chapter status
+  - `voicemode dj mfp play <episode>` plays an episode with chapter navigation
+  - `voicemode dj next/prev` skips between tracks within an episode
+  - Chapter files bundled in package with automatic distribution on first play
+  - Three-tier chapter lookup: local cache → bundled package → GitHub repository
+  - `voicemode dj mfp sync` for checksum-based sync (preserves user modifications)
 
 - **Support for All Claude Products** (VM-434, VM-458, VM-462)
   - VoiceMode now works with Claude.ai, Claude Desktop, Claude Cowork, and Claude Mobile
@@ -37,47 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Prevents notification sounds from disrupting voice recordings
 
 - **Auto-Install Voice Services**
-  - Whisper and Kokoro services automatically installed during `voicemode install`
+  - Whisper and Kokoro services automatically installed during `voice-mode-install`
+  - New `install.sh` curl|bash script for quick setup
   - Streamlined first-time setup experience
-
-- **DJ Audio Ducking** (VM-377)
-  - Automatically lowers DJ music volume during TTS playback
-  - Restores original volume after speech completes
-  - Configurable duck amount via `VOICEMODE_DJ_DUCK_AMOUNT` (default: 20%)
-
-- **MFP Chapter File Distribution** (VM-369, VM-480, VM-481)
-  - Chapter files bundled in the VoiceMode package for automatic distribution
-  - On-demand copy: chapter files copied from package on first episode play
-  - Checksum-based sync via `voicemode dj mfp sync` command
-  - User modifications preserved (backed up to `.user` extension on update)
-  - Episode 49 (Julien Mier) included as initial verified chapter data
-  - GitHub fallback: fetches chapter files from repository for episodes not yet bundled
-  - Three-tier lookup order: local cache → bundled package → GitHub repository
-
-- **MFP Episode Management** (VM-386, VM-400)
-  - `mfp-rss-helper` script for dynamic episode URL lookup from RSS feed
-  - RSS feed caching for offline episode discovery
-  - `mpv-dj mfp list` command shows available episodes with local chapter status
-  - RSS-based naming convention for chapter files
-
-- **Reliable mpv-dj Startup** (VM-372)
-  - Added socket wait/retry pattern to handle race condition between mpv start and socket availability
-  - Commands now wait for the IPC socket to be ready before reporting success
-  - Configurable timeout via `MPV_SOCKET_TIMEOUT` (default: 10 seconds)
-  - Configurable retry delay via `MPV_SOCKET_DELAY` (default: 0.1 seconds)
-  - Clear error message if socket doesn't become available: "Error: mpv socket not ready after Xs"
-
-- **DJ Subcommand Integration** (VM-457)
-  - New `voicemode dj` CLI command group replacing standalone `mpv-dj` bash scripts
-  - Full Python implementation with type-safe models and testable architecture
-  - **Core playback:** `voicemode dj play/stop/pause/resume/status`
-  - **Navigation:** `voicemode dj next/prev/volume`
-  - **Music For Programming:** `voicemode dj mfp list/play/sync` with RSS feed integration
-  - **Music library:** `voicemode dj find`, `voicemode dj library scan/stats`
-  - **History & favorites:** `voicemode dj history`, `voicemode dj favorite`
-  - DJ module exported from main package: `from voice_mode import DJController`
-  - 168 unit tests with mock backend for mpv IPC
-  - Standalone bash scripts (`mpv-dj`, `mpv-dj-library`, `cue-to-chapters`, `mfp-rss-helper`) deprecated
 
 ### Fixed
 
