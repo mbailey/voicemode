@@ -55,6 +55,29 @@ Then use the converse tool to greet them and ask how you can help."
 - **Skill loading**: Explicit instruction to load voicemode
 - **Action**: Tell them to use converse to speak
 - **Greeting**: Have them introduce themselves
+- **Return path**: Who to transfer back to (see below)
+
+### Handoff Context
+
+Include metadata so the receiving agent knows how to hand back:
+
+```
+You were called by [originator name].
+When finished, announce "Transferring you back to [originator name]"
+and signal completion via [signaling method].
+```
+
+**Recommended context to pass:**
+| Field | Purpose | Example |
+|-------|---------|---------|
+| Originator name | For verbal announcement | "Cora", "the assistant" |
+| Session ID | For direct messaging (if available) | `session_abc123` |
+| Signaling method | How to notify completion | "exit", "write to /tmp/done" |
+
+This enables the receiving agent to:
+1. Address the originator by name when handing back
+2. Optionally send a direct wake-up signal
+3. Use the appropriate completion mechanism
 
 ### Step 3: Go Quiet
 
@@ -82,9 +105,14 @@ You can watch the new agent's output to confirm the handoff succeeded. Use your 
 
 ## Hand-back Process
 
-When the receiving agent's work is complete:
+When the receiving agent's work is complete, they must:
+1. Announce the return to the user
+2. Signal the originating agent to resume
+3. Go quiet
 
 ### Step 1: Announce the Return
+
+Use the originator's name (passed during handoff):
 
 ```python
 voicemode:converse(
@@ -93,26 +121,47 @@ voicemode:converse(
 )
 ```
 
-### Step 2: Stop Conversing
+### Step 2: Signal the Originating Agent
 
-After announcing, don't call converse again:
+The originating agent needs to know when to resume speaking. Choose a signaling method based on your orchestration system:
 
+| Method | How It Works | Best For |
+|--------|--------------|----------|
+| **Process exit** | Originator waits for subprocess to end | Simple spawning |
+| **File signal** | Write to agreed-upon path (e.g., `/tmp/handback-ready`) | Any setup |
+| **Direct message** | Send to originator's session ID | Frameworks with messaging |
+| **Status polling** | Originator polls for "completed" status | Orchestration systems |
+
+**Example: File-based signaling**
 ```python
-# Final message sent, now go quiet
-# Let the original agent resume
+# Receiving agent signals completion
+write_file("/tmp/handback-ready", "done")
+
+# Originating agent detects and resumes
+while not exists("/tmp/handback-ready"):
+    sleep(1)
+delete_file("/tmp/handback-ready")
+voicemode:converse("I'm back! How did it go with the project agent?")
 ```
 
-### Step 3: Exit or Idle
+**Example: Process-based (simplest)**
+```python
+# Originating agent spawns and waits
+process = spawn_agent(...)
+process.wait()  # Blocks until receiving agent exits
+voicemode:converse("Welcome back! The project agent has finished.")
+```
 
-The agent can:
-- Exit cleanly (session ends)
-- Go idle (available for future work)
-- Signal completion through a status file or message
+### Step 3: Go Quiet and Exit
 
-The original agent detects this through:
-- Your orchestration system's status monitoring
-- Polling output for completion signals
-- Watching for process exit
+After signaling, stop using converse immediately:
+
+```python
+# Signal sent, now go quiet
+# Exit or idle - originating agent takes over
+```
+
+**Important:** The receiving agent must not call converse after signaling, or audio will conflict with the resuming originator.
 
 ## Complete Example
 
@@ -129,17 +178,24 @@ voicemode:converse(
 )
 
 # Spawn project agent with different voice (mechanism depends on your setup)
-# Key: include voice instructions in the prompt
+# Key: include handoff context in the prompt
 spawn_agent(
     project="~/Code/voicemode",
     prompt="""The user wants to work on voice handoff documentation.
+
+    HANDOFF CONTEXT:
+    - You were called by: Cora (the personal assistant)
+    - When finished: Announce "Transferring you back to Cora" then exit
+
     Load the voicemode skill with /voicemode:voicemode.
     Use converse to greet the user and ask which aspect of handoff docs they'd like to focus on.""",
     env={"VOICEMODE_TTS_VOICE": "alloy"}  # Different voice
 )
 
-# Go quiet - project agent takes over
-# Monitor in background if needed
+# Go quiet while project agent works
+# Wait for project agent to exit, then resume
+process.wait()
+voicemode:converse("Welcome back! How did it go with the project agent?")
 ```
 
 ### Project Agent Greeting and Working
@@ -158,13 +214,14 @@ voicemode:converse(
 ### Project Agent Handing Back
 
 ```python
-# Work complete
+# Work complete - use originator name from handoff context
 voicemode:converse(
-    "I've updated the handoff documentation and committed the changes. Transferring you back to the assistant.",
+    "I've updated the handoff documentation and committed the changes. Transferring you back to Cora.",
     wait_for_response=False
 )
 
-# Exit or go idle - primary agent resumes
+# Exit cleanly - this signals Cora to resume
+# (Cora is waiting on process.wait())
 ```
 
 ## Voice Configuration
