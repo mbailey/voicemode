@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.1] - 2026-01-25
+
+### Fixed
+
+- **CLI Import Error** (GH-217)
+  - Fixed broken import in status.py that prevented CLI commands from running
+  - Removed unused LIVEKIT_PORT reference that was leftover from LiveKit removal
+
 ## [8.0.0] - 2026-01-25
 
 ### Added
