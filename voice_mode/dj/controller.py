@@ -26,8 +26,8 @@ class DJController:
     The player can be injected for testing purposes.
     """
 
-    # Default volume for new playback sessions
-    DEFAULT_VOLUME = 50
+    # Default volume for new playback sessions (configurable via VOICEMODE_DJ_VOLUME)
+    DEFAULT_VOLUME = int(os.environ.get("VOICEMODE_DJ_VOLUME", "50"))
 
     # Timeout for waiting for mpv to start (seconds)
     STARTUP_TIMEOUT = 5.0
