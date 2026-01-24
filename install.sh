@@ -446,8 +446,8 @@ Please ensure ~/.local/bin is in your PATH:
 show_next_steps() {
     echo ""
     echo "Next steps:"
-    echo "  voicemode deps     Check system dependencies"
-    echo "  voicemode --help   Show all commands"
+    echo "  voicemode --help   Show available commands"
+    echo "  voicemode status   Check service status"
     echo ""
     echo "Documentation: https://getvoicemode.com/docs"
 }
