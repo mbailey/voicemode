@@ -166,17 +166,17 @@ Transfer voice conversations between Claude Code agents for multi-agent workflow
 
 ```python
 # 1. Announce the transfer
-voicemode:converse("Transferring you to a foreman for VoiceMode.", wait_for_response=False)
+voicemode:converse("Transferring you to a project agent.", wait_for_response=False)
 
-# 2. Spawn with voice instructions
-Bash(command='agents minion start /path --name foreman --prompt "Load voicemode skill, use converse to greet user"')
+# 2. Spawn with voice instructions (mechanism depends on your setup)
+spawn_agent(path="/path", prompt="Load voicemode skill, use converse to greet user")
 
 # 3. Go quiet - let new agent take over
 ```
 
 **Hand-back:**
 ```python
-voicemode:converse("Transferring you back to Cora.", wait_for_response=False)
+voicemode:converse("Transferring you back to the assistant.", wait_for_response=False)
 # Stop conversing, exit or go idle
 ```
 
@@ -193,10 +193,6 @@ See [docs/call-routing/](./docs/call-routing/) for comprehensive guides:
 - [Handoff Pattern](./docs/call-routing/handoff.md) - Complete hand-off and hand-back process
 - [Voice Proxy](./docs/call-routing/proxy.md) - Relay pattern for agents without voice
 - [Call Routing Overview](./docs/call-routing/README.md) - All routing patterns
-
-### Related
-
-- [VM-326: The Conch](~/tasks/projects/voicemode/VM-326_feat_the-conch-multi-agent-voice-coordination-to-prevent-overlapping-speech/) - Multi-agent voice coordination
 
 ## Documentation Index
 

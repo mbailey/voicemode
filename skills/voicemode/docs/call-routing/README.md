@@ -28,10 +28,10 @@ Call routing enables sophisticated voice conversation management across multiple
 
 ```python
 # 1. Announce
-voicemode:converse("Transferring you to the project foreman.", wait_for_response=False)
+voicemode:converse("Transferring you to the project agent.", wait_for_response=False)
 
-# 2. Spawn with voice instructions
-Bash(command='agents minion start /path --prompt "Load voicemode skill, use converse to greet user"')
+# 2. Spawn with voice instructions (mechanism depends on your setup)
+spawn_agent(path="/path", prompt="Load voicemode skill, use converse to greet user")
 
 # 3. Go quiet - let new agent take over
 ```
@@ -40,7 +40,7 @@ Bash(command='agents minion start /path --prompt "Load voicemode skill, use conv
 
 ```python
 # 1. Announce return
-voicemode:converse("Transferring you back to Cora.", wait_for_response=False)
+voicemode:converse("Transferring you back to the assistant.", wait_for_response=False)
 
 # 2. Stop conversing and exit
 ```
@@ -49,12 +49,12 @@ voicemode:converse("Transferring you back to Cora.", wait_for_response=False)
 
 ```
 +------------------------------------------------------------------+
-|                    Personal Assistant (Cora)                      |
-|                     Voice: nova (familiar)                        |
+|                    Primary Agent (Orchestrator)                   |
+|                      Voice: nova (familiar)                       |
 |                                                                   |
-|  - Routes conversations to appropriate foremen                    |
+|  - Routes conversations to appropriate project agents             |
 |  - Maintains overview of all projects                             |
-|  - Resumes after foreman completes work                           |
+|  - Resumes after project agent completes work                     |
 +------------------------------------------------------------------+
                               |
                     Handoff (announce -> spawn -> quiet)
@@ -62,8 +62,8 @@ voicemode:converse("Transferring you back to Cora.", wait_for_response=False)
         +---------------------+---------------------+
         v                     v                     v
 +---------------+   +---------------+   +---------------+
-| VoiceMode     |   | Agents        |   | Taskmaster    |
-| Foreman       |   | Foreman       |   | Foreman       |
+| Project A     |   | Project B     |   | Project C     |
+| Agent         |   | Agent         |   | Agent         |
 | Voice: alloy  |   | Voice: onyx   |   | Voice: echo   |
 |               |   |               |   |               |
 | Deep context  |   | Deep context  |   | Deep context  |
@@ -75,7 +75,7 @@ voicemode:converse("Transferring you back to Cora.", wait_for_response=False)
                     Hand-back (announce -> quiet -> exit)
                               |
                               v
-                    Personal Assistant resumes
+                      Primary agent resumes
 ```
 
 ## Key Concepts
@@ -112,18 +112,12 @@ Different voices signal different agents:
 
 ## Implementation Status
 
-| Component | Status | Task |
-|-----------|--------|------|
-| Handoff documentation | Complete | VM-293 |
-| Hand-back documentation | Complete | VM-293 |
-| Proxy documentation | Complete | VM-293 |
-| The Conch (coordination) | Planned | VM-326 |
-| Call waiting beeps | Planned | VM-326 |
-| Voicemail | Planned | VM-326 |
-| Operator patterns | Planned | VM-326 |
-
-## Related Resources
-
-- [VM-293: Voice Handoff Documentation](~/tasks/projects/voicemode/VM-293_docs_document-voice-handoff-pattern-in-voicemode-skill-how-to-transfer-voice-conversation-between-agents/)
-- [VM-326: The Conch Epic](~/tasks/projects/voicemode/VM-326_feat_the-conch-multi-agent-voice-coordination-to-prevent-overlapping-speech/)
-- [AG-114: Handoff Architecture](~/tasks/projects/agents/AG-114_epic_personal-assistant-to-project-foreman-voice-handoff-architecture/)
+| Component | Status |
+|-----------|--------|
+| Handoff documentation | Complete |
+| Hand-back documentation | Complete |
+| Proxy documentation | Complete |
+| The Conch (coordination) | Planned |
+| Call waiting beeps | Planned |
+| Voicemail | Planned |
+| Operator patterns | Planned |

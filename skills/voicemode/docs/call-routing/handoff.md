@@ -40,15 +40,14 @@ voicemode:converse(
 
 ### Step 2: Spawn the Receiving Agent
 
-Start a new agent with explicit instructions to use voice:
+Start a new agent instance with explicit instructions to use voice. The spawning mechanism depends on your multi-agent setup (subprocess, orchestrator, etc.):
 
-```bash
-agents minion start /path/to/project \
-  --name project-foreman \
-  --role FOREMAN \
-  --prompt "Mike has been transferred to you to help with [task context].
+```
+Spawn an agent for [project] with these instructions:
+
+"The user has been transferred to you to help with [task context].
 Load the voicemode skill with /voicemode:voicemode.
-Then use the converse tool to greet Mike and ask how you can help."
+Then use the converse tool to greet them and ask how you can help."
 ```
 
 **Key elements in the spawn prompt:**
@@ -74,15 +73,7 @@ After spawning the new agent, **stop using the converse tool**:
 
 ### Step 4: Monitor (Optional)
 
-You can watch the new agent's output to confirm the handoff succeeded:
-
-```bash
-# Check minion output
-agents minion read m-project-foreman --lines 20
-
-# Or use tmux to view the session
-tmux capture-pane -t session:m-project-foreman -p
-```
+You can watch the new agent's output to confirm the handoff succeeded. Use your orchestration system's monitoring capabilities to check the receiving agent's output.
 
 **What to look for:**
 - Skill loaded successfully
@@ -116,45 +107,47 @@ After announcing, don't call converse again:
 The agent can:
 - Exit cleanly (session ends)
 - Go idle (available for future work)
-- Signal completion through a status file
+- Signal completion through a status file or message
 
-The original agent detects this by:
-- Monitoring minion status: `agents minion status m-project-foreman`
+The original agent detects this through:
+- Your orchestration system's status monitoring
 - Polling output for completion signals
 - Watching for process exit
 
 ## Complete Example
 
-### Personal Assistant (Cora) Initiating Handoff
+### Primary Agent Initiating Handoff
 
 ```python
-# User asks to work on VoiceMode
+# User asks to work on a project
 user_request = "I want to work on the voice handoff documentation"
 
 # Announce transfer
 voicemode:converse(
-    "Great! Let me transfer you to a foreman for the VoiceMode project.",
+    "Great! Let me transfer you to a project agent for VoiceMode.",
     wait_for_response=False
 )
 
-# Spawn foreman with different voice
-Bash(command="""
-VOICEMODE_TTS_VOICE=alloy agents minion start ~/Code/voicemode \
-  --name vm-foreman \
-  --role FOREMAN \
-  --prompt "Mike wants to work on voice handoff documentation. Load the voicemode skill with /voicemode:voicemode. Use converse to greet Mike and ask which aspect of handoff docs he'd like to focus on."
-""")
+# Spawn project agent with different voice (mechanism depends on your setup)
+# Key: include voice instructions in the prompt
+spawn_agent(
+    project="~/Code/voicemode",
+    prompt="""The user wants to work on voice handoff documentation.
+    Load the voicemode skill with /voicemode:voicemode.
+    Use converse to greet the user and ask which aspect of handoff docs they'd like to focus on.""",
+    env={"VOICEMODE_TTS_VOICE": "alloy"}  # Different voice
+)
 
-# Go quiet - foreman takes over
+# Go quiet - project agent takes over
 # Monitor in background if needed
 ```
 
-### Foreman Greeting and Working
+### Project Agent Greeting and Working
 
 ```python
-# Foreman's first action after loading skill
+# Project agent's first action after loading skill
 voicemode:converse(
-    "Hey Mike! I'm the VoiceMode foreman. I understand you want to work on handoff documentation. Would you like to focus on the hand-off process, hand-back process, or the examples section?",
+    "Hey! I'm the VoiceMode project agent. I understand you want to work on handoff documentation. Would you like to focus on the hand-off process, hand-back process, or the examples section?",
     wait_for_response=True
 )
 
@@ -162,35 +155,35 @@ voicemode:converse(
 # ... do work ...
 ```
 
-### Foreman Handing Back
+### Project Agent Handing Back
 
 ```python
 # Work complete
 voicemode:converse(
-    "I've updated the handoff documentation and committed the changes. Transferring you back to Cora.",
+    "I've updated the handoff documentation and committed the changes. Transferring you back to the assistant.",
     wait_for_response=False
 )
 
-# Exit or go idle - Cora resumes
+# Exit or go idle - primary agent resumes
 ```
 
 ## Voice Configuration
 
-### Different Voices for Different Roles
+### Different Voices for Different Agents
 
 Make handoffs audible by using distinct voices:
 
-| Role | Suggested Voice | Why |
-|------|-----------------|-----|
-| Personal Assistant | User preference (e.g., `nova`) | Familiar, comfortable |
-| Project Foreman | `alloy` or `onyx` | Professional, distinct |
-| Worker | `echo` or `fable` | Different again |
+| Agent Type | Suggested Voice | Why |
+|------------|-----------------|-----|
+| Primary/Orchestrator | User preference (e.g., `nova`) | Familiar, comfortable |
+| Project Agent | `alloy` or `onyx` | Professional, distinct |
+| Task Agent | `echo` or `fable` | Different again |
 
 ### Setting Voice per Agent
 
-**Via environment variable:**
+**Via environment variable (when spawning):**
 ```bash
-VOICEMODE_TTS_VOICE=alloy agents minion start ...
+VOICEMODE_TTS_VOICE=alloy  # Set before spawning agent
 ```
 
 **Via project .voicemode file:**
@@ -255,7 +248,3 @@ export VOICEMODE_VOICES=af_alloy,alloy
 - **[Call Waiting](./call-waiting.md)**: Handling multiple waiting agents (planned)
 - **[Voicemail](./voicemail.md)**: Async message passing (planned)
 
-## See Also
-
-- [AG-114: Voice Handoff Architecture](~/tasks/projects/agents/AG-114_epic_personal-assistant-to-project-foreman-voice-handoff-architecture/): Epic for handoff implementation
-- [VM-326: The Conch](~/tasks/projects/voicemode/VM-326_feat_the-conch-multi-agent-voice-coordination-to-prevent-overlapping-speech/): Multi-agent voice coordination
