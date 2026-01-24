@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.2] - 2026-01-25
+
+### Added
+
+- **DJ Status Line Output** (VM-219)
+  - `voicemode dj status --line` (or `-l`) for compact tmux status bar format
+  - Shows track/chapter, position, and remaining time with color warnings
+  - Replaces need for external tmux-mpv-status script
+  - [Documentation](docs/reference/dj/tmux-status.md)
+
+### Fixed
+
+- **DJ Chapter Titles Not Displaying**
+  - Fixed uppercase metadata key handling (mpv returns `TITLE` not `title`)
+  - Chapter titles from FFmetadata files now display correctly in status output
+
 ## [8.0.1] - 2026-01-25
 
 ### Fixed
