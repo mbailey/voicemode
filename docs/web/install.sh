@@ -707,31 +707,23 @@ main() {
     # Display logo
     show_logo
 
-    # Show detected platform
+    # Detect platform and install dependencies
     case "$os" in
         macos)
             ok "Platform: macOS ($arch)"
+            install_macos_prerequisites
             ;;
         linux)
             distro=$(detect_linux_distro)
             ok "Platform: Linux/$distro ($arch)"
-            ;;
-        windows)
-            die "Windows is not yet supported. Please use WSL2 instead."
-            ;;
-    esac
-
-    # Check prerequisites and install dependencies
-    case "$os" in
-        macos)
-            install_macos_prerequisites
-            ;;
-        linux)
             install_linux_deps "$distro"
             # ARM64 Linux needs Rust via rustup for Kokoro dependencies
             if [[ "$arch" == "arm64" ]]; then
                 ensure_rust
             fi
+            ;;
+        windows)
+            die "Windows is not yet supported. Please use WSL2 instead."
             ;;
     esac
     ensure_uv
