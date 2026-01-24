@@ -472,6 +472,173 @@ install_linux_deps() {
 }
 
 # -----------------------------------------------------------------------------
+# Local Voice Services (Whisper & Kokoro)
+# -----------------------------------------------------------------------------
+
+# Check if Whisper STT is installed
+is_whisper_installed() {
+    if command_exists voicemode; then
+        voicemode whisper version &>/dev/null
+    else
+        return 1
+    fi
+}
+
+# Check if Kokoro TTS is installed
+is_kokoro_installed() {
+    if command_exists voicemode; then
+        voicemode kokoro version &>/dev/null
+    else
+        return 1
+    fi
+}
+
+# Assess system capability for local voice services
+# Returns: "excellent", "good", or "limited"
+assess_voice_capability() {
+    local os="$1"
+    local arch="$2"
+    local ram_gb=0
+
+    # Get RAM in GB
+    case "$os" in
+        macos)
+            ram_gb=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
+            ;;
+        linux)
+            ram_gb=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024 ))
+            ;;
+    esac
+
+    # Apple Silicon Mac: excellent (unified memory, Neural Engine)
+    # Everything else: depends on RAM
+    if [[ "$os" == "macos" && "$arch" == "arm64" ]]; then
+        echo "excellent"
+    elif [[ $ram_gb -ge 16 ]]; then
+        echo "good"
+    elif [[ $ram_gb -ge 8 ]]; then
+        echo "limited"
+    else
+        echo "limited"
+    fi
+}
+
+# Get human-readable capability message
+get_capability_message() {
+    local capability="$1"
+
+    case "$capability" in
+        excellent)
+            echo "Local voice services should run excellently on this system."
+            ;;
+        good)
+            echo "Local voice services should run well on this system."
+            ;;
+        limited)
+            echo "Local voice services may be slow on this system."
+            ;;
+    esac
+}
+
+# Prompt user to install local voice services
+install_voice_services() {
+    local os="$1"
+    local arch="$2"
+    local whisper_installed=false
+    local kokoro_installed=false
+
+    # Check what's already installed
+    if is_whisper_installed; then
+        whisper_installed=true
+        ok "Whisper STT already installed"
+    fi
+
+    if is_kokoro_installed; then
+        kokoro_installed=true
+        ok "Kokoro TTS already installed"
+    fi
+
+    # If both are installed, nothing to do
+    if [[ "$whisper_installed" == "true" && "$kokoro_installed" == "true" ]]; then
+        return 0
+    fi
+
+    # Assess system capability
+    local capability
+    capability=$(assess_voice_capability "$os" "$arch")
+    local capability_msg
+    capability_msg=$(get_capability_message "$capability")
+
+    # Show info about local voice services
+    echo ""
+    echo "${BOLD}Local Voice Services${RESET}"
+    info "$capability_msg"
+
+    # Build list of what would be installed
+    local services_to_install=""
+    if [[ "$whisper_installed" == "false" ]]; then
+        services_to_install="Whisper (speech-to-text)"
+    fi
+    if [[ "$kokoro_installed" == "false" ]]; then
+        if [[ -n "$services_to_install" ]]; then
+            services_to_install="$services_to_install, Kokoro (text-to-speech)"
+        else
+            services_to_install="Kokoro (text-to-speech)"
+        fi
+    fi
+
+    # Show download size estimate
+    local download_size="~3GB"
+    if [[ "$whisper_installed" == "false" && "$kokoro_installed" == "false" ]]; then
+        download_size="~3GB total"
+    elif [[ "$whisper_installed" == "false" ]]; then
+        download_size="~1.5GB"
+    elif [[ "$kokoro_installed" == "false" ]]; then
+        download_size="~1.5GB"
+    fi
+
+    info "Available: $services_to_install ($download_size download)"
+
+    # Prompt for installation
+    if [[ "$INTERACTIVE" == "true" ]]; then
+        echo ""
+        read -r -p "Install local voice services? [Y/n] " response </dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                info "Skipping local voice services"
+                info "You can install them later with: voicemode whisper install && voicemode kokoro install"
+                return 0
+                ;;
+        esac
+    else
+        # Non-interactive: skip voice services by default (they're large downloads)
+        info "Skipping local voice services (non-interactive mode)"
+        info "Install later with: voicemode whisper install && voicemode kokoro install"
+        return 0
+    fi
+
+    # Install Whisper if needed
+    if [[ "$whisper_installed" == "false" ]]; then
+        info "Installing Whisper STT..."
+        if voicemode whisper install; then
+            ok "Whisper STT installed"
+        else
+            warn "Whisper installation failed - you can retry with: voicemode whisper install"
+        fi
+    fi
+
+    # Install Kokoro if needed
+    if [[ "$kokoro_installed" == "false" ]]; then
+        info "Installing Kokoro TTS..."
+        if voicemode kokoro install; then
+            ok "Kokoro TTS installed"
+        else
+            warn "Kokoro installation failed - you can retry with: voicemode kokoro install"
+        fi
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # VoiceMode Installation
 # -----------------------------------------------------------------------------
 
@@ -572,6 +739,10 @@ main() {
     # Install and verify VoiceMode
     install_voicemode
     verify_voicemode
+
+    # Offer to install local voice services
+    install_voice_services "$os" "$arch"
+
     show_next_steps
 }
 
