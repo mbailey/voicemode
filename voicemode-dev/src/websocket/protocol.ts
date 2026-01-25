@@ -93,12 +93,23 @@ export interface HeartbeatMessage extends BaseMessage {
   type: "heartbeat";
 }
 
+/**
+ * Resume message: Client requests to resume a previous session.
+ * Sent immediately after WebSocket connection is established.
+ */
+export interface ResumeMessage extends BaseMessage {
+  type: "resume";
+  /** Session token from previous connection */
+  sessionToken: string;
+}
+
 /** Union type of all client-to-server messages */
 export type ClientMessage =
   | AuthMessage
   | ReadyMessage
   | TranscriptionMessage
-  | HeartbeatMessage;
+  | HeartbeatMessage
+  | ResumeMessage;
 
 // ============================================================================
 // Server → Client Messages
@@ -222,6 +233,26 @@ export interface ErrorMessage extends BaseMessage {
   details?: unknown;
 }
 
+/**
+ * Session resumed message: Server confirms session was resumed successfully.
+ * Sent in response to a valid resume request.
+ */
+export interface SessionResumedMessage extends BaseMessage {
+  type: "session_resumed";
+  /** The session token (same as provided in resume request) */
+  sessionToken: string;
+  /** Number of queued messages that will be delivered */
+  queuedMessageCount: number;
+  /** Whether the session was authenticated */
+  authenticated: boolean;
+  /** User ID if authenticated */
+  userId?: string | null;
+  /** How long the session was disconnected (ms) */
+  disconnectedDuration: number;
+  /** Server timestamp */
+  timestamp: number;
+}
+
 /** Union type of all server-to-client messages */
 export type ServerMessage =
   | SpeakMessage
@@ -231,7 +262,8 @@ export type ServerMessage =
   | ConnectedMessage
   | HeartbeatAckMessage
   | ServerHeartbeatMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | SessionResumedMessage;
 
 // ============================================================================
 // Message Validation
@@ -246,6 +278,8 @@ export enum MessageErrorCode {
   UNKNOWN_TYPE = "UNKNOWN_TYPE",
   AUTH_REQUIRED = "AUTH_REQUIRED",
   INVALID_TOKEN = "INVALID_TOKEN",
+  SESSION_EXPIRED = "SESSION_EXPIRED",
+  SESSION_NOT_FOUND = "SESSION_NOT_FOUND",
 }
 
 /** Result of message validation */
@@ -291,6 +325,8 @@ export function validateClientMessage(data: unknown): ValidationResult {
     case "heartbeat":
       // Heartbeat has no required fields beyond type
       return { valid: true };
+    case "resume":
+      return validateResumeMessage(msg);
     default:
       // Unknown message type - we handle gracefully but flag it
       return {
@@ -366,6 +402,27 @@ function validateTranscriptionMessage(
       valid: false,
       error: "Transcription message must have an 'id' field (string)",
       errorCode: MessageErrorCode.MISSING_FIELD,
+    };
+  }
+  return { valid: true };
+}
+
+/**
+ * Validate a resume message.
+ */
+function validateResumeMessage(msg: Record<string, unknown>): ValidationResult {
+  if (!msg.sessionToken || typeof msg.sessionToken !== "string") {
+    return {
+      valid: false,
+      error: "Resume message must have a 'sessionToken' field (string)",
+      errorCode: MessageErrorCode.MISSING_FIELD,
+    };
+  }
+  if (msg.sessionToken.length < 10) {
+    return {
+      valid: false,
+      error: "Session token appears to be invalid (too short)",
+      errorCode: MessageErrorCode.INVALID_TOKEN,
     };
   }
   return { valid: true };
@@ -496,6 +553,50 @@ export function createErrorMessage(
 export function createHeartbeatMessage(): ServerHeartbeatMessage {
   return {
     type: "heartbeat",
+    timestamp: Date.now(),
+  };
+}
+
+/** Generate a unique session token */
+export function generateSessionToken(): string {
+  // Cryptographically secure random token
+  const array = new Uint8Array(24);
+  crypto.getRandomValues(array);
+  return `sess-${Array.from(array)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+/** Create a session_resumed message */
+export function createSessionResumedMessage(
+  sessionToken: string,
+  queuedMessageCount: number,
+  authenticated: boolean,
+  disconnectedDuration: number,
+  userId?: string | null
+): SessionResumedMessage {
+  return {
+    type: "session_resumed",
+    sessionToken,
+    queuedMessageCount,
+    authenticated,
+    userId,
+    disconnectedDuration,
+    timestamp: Date.now(),
+  };
+}
+
+/** Create a connected message with session token */
+export function createConnectedMessage(
+  authenticated: boolean,
+  sessionToken: string,
+  userId?: string | null
+): ConnectedMessage {
+  return {
+    type: "connected",
+    authenticated,
+    userId,
+    sessionId: sessionToken,
     timestamp: Date.now(),
   };
 }

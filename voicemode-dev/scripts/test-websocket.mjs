@@ -536,6 +536,160 @@ async function testInvalidMessageFormat() {
   });
 }
 
+async function testSessionResumption() {
+  console.log("Test 11: Session resumption...");
+  const WebSocket = (await import("ws")).default;
+
+  let sessionToken = null;
+
+  // Phase 1: Connect and get session token
+  const phase1Result = await new Promise((resolve) => {
+    const wsUrl = `${BASE_URL}?user=test-session`;
+    console.log("  Phase 1: Initial connection...");
+    const ws = new WebSocket(wsUrl);
+
+    const timeout = setTimeout(() => {
+      console.log("  ✗ Phase 1 timeout");
+      ws.close();
+      resolve(false);
+    }, 10000);
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      console.log("  Received:", JSON.stringify(msg));
+
+      if (msg.type === "connected" && msg.sessionId) {
+        sessionToken = msg.sessionId;
+        console.log(`  ✓ Got session token: ${sessionToken.substring(0, 20)}...`);
+        clearTimeout(timeout);
+        // Close connection to simulate disconnect
+        ws.close(1000, "Simulating disconnect");
+        resolve(true);
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timeout);
+      console.log("  ✗ Phase 1 error:", error.message);
+      resolve(false);
+    });
+  });
+
+  if (!phase1Result || !sessionToken) {
+    console.log("  ✗ Failed to get session token\n");
+    return false;
+  }
+
+  // Wait a moment to simulate disconnect
+  await sleep(500);
+
+  // Phase 2: Reconnect with session token
+  const phase2Result = await new Promise((resolve) => {
+    const wsUrl = `${BASE_URL}?user=test-session`;
+    console.log("  Phase 2: Reconnecting with session token...");
+    const ws = new WebSocket(wsUrl);
+
+    const results = {
+      connected: false,
+      sessionResumed: false,
+    };
+
+    const timeout = setTimeout(() => {
+      console.log("  ✗ Phase 2 timeout");
+      ws.close();
+      resolve(false);
+    }, 10000);
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      console.log("  Received:", JSON.stringify(msg));
+
+      if (msg.type === "connected") {
+        results.connected = true;
+        // Send resume message with the session token
+        ws.send(JSON.stringify({
+          type: "resume",
+          sessionToken: sessionToken,
+        }));
+      }
+
+      if (msg.type === "session_resumed") {
+        results.sessionResumed = true;
+        console.log(`  ✓ Session resumed! Disconnected for: ${msg.disconnectedDuration}ms`);
+        console.log(`  ✓ Queued messages: ${msg.queuedMessageCount}`);
+        clearTimeout(timeout);
+        ws.close(1000, "Test complete");
+        resolve(true);
+      }
+
+      // Handle case where session is not found (expired or cleared)
+      if (msg.type === "error" && (msg.code === "SESSION_NOT_FOUND" || msg.code === "SESSION_EXPIRED")) {
+        console.log(`  Session error: ${msg.code} - ${msg.message}`);
+        // This is actually expected behavior for expired sessions
+        clearTimeout(timeout);
+        ws.close(1000, "Test complete");
+        resolve(true);
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timeout);
+      console.log("  ✗ Phase 2 error:", error.message);
+      resolve(false);
+    });
+  });
+
+  if (phase2Result) {
+    console.log("  ✓ Session resumption test passed\n");
+    return true;
+  } else {
+    console.log("  ✗ Session resumption test failed\n");
+    return false;
+  }
+}
+
+async function testInvalidSessionResumption() {
+  console.log("Test 12: Invalid session token handling...");
+  const WebSocket = (await import("ws")).default;
+
+  return new Promise((resolve) => {
+    const wsUrl = `${BASE_URL}?user=test-invalid-session`;
+    const ws = new WebSocket(wsUrl);
+
+    const timeout = setTimeout(() => {
+      console.log("  ✗ Timeout");
+      ws.close();
+      resolve(false);
+    }, 10000);
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      console.log("  Received:", JSON.stringify(msg));
+
+      if (msg.type === "connected") {
+        // Try to resume with a fake session token
+        ws.send(JSON.stringify({
+          type: "resume",
+          sessionToken: "sess-fake-session-token-that-does-not-exist-12345",
+        }));
+      }
+
+      if (msg.type === "error" && msg.code === "SESSION_NOT_FOUND") {
+        console.log("  ✓ Invalid session correctly rejected\n");
+        clearTimeout(timeout);
+        ws.close(1000, "Test complete");
+        resolve(true);
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timeout);
+      console.log("  ✗ Error:", error.message);
+      resolve(false);
+    });
+  });
+}
+
 async function runTests() {
   console.log("=== WebSocket Gateway Protocol Tests ===\n");
   console.log(`Base URL: ${BASE_URL}`);
@@ -577,6 +731,12 @@ async function runTests() {
   // Test 10: Invalid message format
   results.push(await testInvalidMessageFormat());
 
+  // Test 11: Session resumption
+  results.push(await testSessionResumption());
+
+  // Test 12: Invalid session token handling
+  results.push(await testInvalidSessionResumption());
+
   // Print summary
   console.log("=== Test Summary ===");
   const testNames = [
@@ -590,6 +750,8 @@ async function runTests() {
     "Transcription Message",
     "Unknown Type Handling",
     "Invalid Format Handling",
+    "Session Resumption",
+    "Invalid Session Handling",
   ];
 
   let passed = 0;

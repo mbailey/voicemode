@@ -13,18 +13,24 @@ import {
   createAckMessage,
   createErrorMessage,
   createHeartbeatMessage,
+  createConnectedMessage,
+  createSessionResumedMessage,
   generateMessageId,
+  generateSessionToken,
   MessageErrorCode,
   ClientMessage,
   AuthMessage,
   ReadyMessage,
   TranscriptionMessage,
   HeartbeatMessage,
+  ResumeMessage,
   SpeakMessage,
   ListenMessage,
   StopMessage,
   AckMessage,
   ServerHeartbeatMessage,
+  SessionResumedMessage,
+  ConnectedMessage,
 } from "./protocol";
 
 describe("Message Validation", () => {
@@ -177,6 +183,32 @@ describe("Message Validation", () => {
         valid: false,
         error: "Transcription message must have an 'id' field (string)",
         errorCode: MessageErrorCode.MISSING_FIELD,
+      });
+    });
+
+    it("validates resume messages", () => {
+      // Valid resume message
+      expect(
+        validateClientMessage({
+          type: "resume",
+          sessionToken: "sess-1234567890abcdef",
+        })
+      ).toEqual({ valid: true });
+
+      // Missing sessionToken
+      expect(validateClientMessage({ type: "resume" })).toEqual({
+        valid: false,
+        error: "Resume message must have a 'sessionToken' field (string)",
+        errorCode: MessageErrorCode.MISSING_FIELD,
+      });
+
+      // Session token too short
+      expect(
+        validateClientMessage({ type: "resume", sessionToken: "short" })
+      ).toEqual({
+        valid: false,
+        error: "Session token appears to be invalid (too short)",
+        errorCode: MessageErrorCode.INVALID_TOKEN,
       });
     });
   });
@@ -370,6 +402,75 @@ describe("Message Factories", () => {
       expect(msg.timestamp).toBeLessThanOrEqual(after);
     });
   });
+
+  describe("generateSessionToken", () => {
+    it("generates unique session tokens", () => {
+      const token1 = generateSessionToken();
+      const token2 = generateSessionToken();
+      expect(token1).not.toBe(token2);
+    });
+
+    it("generates tokens with expected format", () => {
+      const token = generateSessionToken();
+      expect(token).toMatch(/^sess-[a-f0-9]{48}$/);
+    });
+
+    it("generates tokens with sufficient length for security", () => {
+      const token = generateSessionToken();
+      // sess- prefix (5) + 48 hex chars = 53 total chars
+      expect(token.length).toBe(53);
+    });
+  });
+
+  describe("createSessionResumedMessage", () => {
+    it("creates a session_resumed message with all fields", () => {
+      const msg = createSessionResumedMessage(
+        "sess-abc123",
+        5,
+        true,
+        30000,
+        "user-123"
+      );
+      expect(msg.type).toBe("session_resumed");
+      expect(msg.sessionToken).toBe("sess-abc123");
+      expect(msg.queuedMessageCount).toBe(5);
+      expect(msg.authenticated).toBe(true);
+      expect(msg.disconnectedDuration).toBe(30000);
+      expect(msg.userId).toBe("user-123");
+      expect(msg.timestamp).toBeDefined();
+    });
+
+    it("creates a session_resumed message for unauthenticated session", () => {
+      const msg = createSessionResumedMessage(
+        "sess-xyz789",
+        0,
+        false,
+        0,
+        null
+      );
+      expect(msg.authenticated).toBe(false);
+      expect(msg.userId).toBeNull();
+      expect(msg.queuedMessageCount).toBe(0);
+    });
+  });
+
+  describe("createConnectedMessage", () => {
+    it("creates a connected message for authenticated user", () => {
+      const msg = createConnectedMessage(true, "sess-abc123", "user-123");
+      expect(msg.type).toBe("connected");
+      expect(msg.authenticated).toBe(true);
+      expect(msg.sessionId).toBe("sess-abc123");
+      expect(msg.userId).toBe("user-123");
+      expect(msg.timestamp).toBeDefined();
+    });
+
+    it("creates a connected message for anonymous user", () => {
+      const msg = createConnectedMessage(false, "sess-xyz789", null);
+      expect(msg.authenticated).toBe(false);
+      expect(msg.userId).toBeNull();
+      expect(msg.sessionId).toBe("sess-xyz789");
+    });
+  });
 });
 
 describe("Type Definitions", () => {
@@ -475,5 +576,42 @@ describe("Type Definitions", () => {
     };
     expect(msg.type).toBe("heartbeat");
     expect(typeof msg.timestamp).toBe("number");
+  });
+
+  it("ResumeMessage has correct structure", () => {
+    const msg: ResumeMessage = {
+      type: "resume",
+      sessionToken: "sess-abc123def456",
+      id: "msg-1",
+    };
+    expect(msg.type).toBe("resume");
+    expect(msg.sessionToken).toBe("sess-abc123def456");
+  });
+
+  it("SessionResumedMessage has correct structure", () => {
+    const msg: SessionResumedMessage = {
+      type: "session_resumed",
+      sessionToken: "sess-abc123",
+      queuedMessageCount: 3,
+      authenticated: true,
+      userId: "user-123",
+      disconnectedDuration: 5000,
+      timestamp: Date.now(),
+    };
+    expect(msg.type).toBe("session_resumed");
+    expect(msg.queuedMessageCount).toBe(3);
+    expect(msg.disconnectedDuration).toBe(5000);
+  });
+
+  it("ConnectedMessage has correct structure with session ID", () => {
+    const msg: ConnectedMessage = {
+      type: "connected",
+      authenticated: true,
+      userId: "user-123",
+      sessionId: "sess-abc123",
+      timestamp: Date.now(),
+    };
+    expect(msg.type).toBe("connected");
+    expect(msg.sessionId).toBe("sess-abc123");
   });
 });

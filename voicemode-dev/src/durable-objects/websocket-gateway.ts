@@ -18,12 +18,17 @@ import {
   ReadyMessage,
   TranscriptionMessage,
   HeartbeatMessage,
+  ResumeMessage,
+  ServerMessage,
   parseClientMessage,
   createAckMessage,
   createSpeakMessage,
   createListenMessage,
   createStopMessage,
   createHeartbeatMessage,
+  createConnectedMessage,
+  createSessionResumedMessage,
+  generateSessionToken,
   MessageErrorCode,
 } from "../websocket/protocol";
 
@@ -47,6 +52,57 @@ const CLOSE_CODE_NORMAL = 1000;
 const CLOSE_CODE_GOING_AWAY = 1001;
 const CLOSE_CODE_POLICY_VIOLATION = 1008;
 
+// ============================================================================
+// Session and Reconnection Configuration
+// ============================================================================
+
+/** Session expiry time (in milliseconds) - sessions are cleared after this duration */
+const SESSION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+/** Maximum number of messages to queue per session */
+const MAX_QUEUED_MESSAGES = 100;
+
+/** Storage key prefixes */
+const STORAGE_PREFIX_SESSION = "session:";
+const STORAGE_PREFIX_MESSAGES = "messages:";
+
+/** Persisted session data stored in Durable Object storage */
+interface PersistedSession {
+  /** Session token */
+  sessionToken: string;
+  /** User ID (if authenticated) */
+  userId: string | null;
+  /** Whether the session was authenticated */
+  authenticated: boolean;
+  /** User info from authentication */
+  userInfo?: AuthenticatedUser;
+  /** Device info from ready message */
+  deviceInfo?: {
+    platform?: string;
+    appVersion?: string;
+  };
+  /** Client capabilities */
+  capabilities?: {
+    tts?: boolean;
+    stt?: boolean;
+    maxAudioDuration?: number;
+  };
+  /** Timestamp when session was created */
+  createdAt: number;
+  /** Timestamp when client last connected */
+  lastConnectedAt: number;
+  /** Timestamp when client disconnected (null if currently connected) */
+  disconnectedAt: number | null;
+}
+
+/** Queued message waiting for delivery */
+interface QueuedMessage {
+  /** Message content */
+  message: ServerMessage;
+  /** When the message was queued */
+  queuedAt: number;
+}
+
 /** Authenticated user info from JWT validation */
 interface AuthenticatedUser {
   userId: string;
@@ -59,6 +115,8 @@ interface AuthenticatedUser {
 interface ConnectionState {
   /** WebSocket connection */
   websocket: WebSocket;
+  /** Session token for this connection */
+  sessionToken: string;
   /** User ID from JWT token */
   userId: string | null;
   /** Whether the connection is authenticated */
@@ -71,6 +129,8 @@ interface ConnectionState {
   lastActivity: number;
   /** Connection established timestamp */
   connectedAt: number;
+  /** Whether this is a resumed session */
+  isResumed: boolean;
   /** Device info from client */
   deviceInfo?: {
     platform?: string;
@@ -110,10 +170,14 @@ export class WebSocketGateway extends DurableObject {
 
   /**
    * Durable Object alarm handler.
-   * Called periodically to send heartbeats and check for stale connections.
+   * Called periodically to send heartbeats, check for stale connections,
+   * and clean up expired sessions.
    */
   async alarm(): Promise<void> {
     this.heartbeatAlarmScheduled = false;
+
+    // Always clean up expired sessions, even if no active connections
+    await this.cleanupExpiredSessions();
 
     if (this.connections.size === 0) {
       console.log("[WebSocketGateway] No connections, skipping heartbeat");
@@ -295,30 +359,39 @@ export class WebSocketGateway extends DurableObject {
       }
     }
 
+    // Generate a new session token for this connection
+    const sessionToken = generateSessionToken();
+
     // Initialize connection state
+    const now = Date.now();
     const state: ConnectionState = {
       websocket: server,
+      sessionToken,
       userId: authenticatedUser?.userId || null,
       authenticated: !!authenticatedUser,
       userInfo: authenticatedUser,
       ready: false,
-      lastActivity: Date.now(),
-      connectedAt: Date.now(),
+      lastActivity: now,
+      connectedAt: now,
+      isResumed: false,
     };
     this.connections.set(server, state);
 
+    // Persist session to storage
+    await this.persistSession(state);
+
     console.log(
       `[WebSocketGateway] Connection state change: CONNECTED. ` +
-        `User: ${state.userId || 'anonymous'}, Authenticated: ${state.authenticated}, Total: ${this.connections.size}`
+        `User: ${state.userId || 'anonymous'}, Session: ${sessionToken.substring(0, 12)}..., ` +
+        `Authenticated: ${state.authenticated}, Total: ${this.connections.size}`
     );
 
-    // Send welcome message with authentication status
-    this.send(server, {
-      type: "connected",
-      authenticated: state.authenticated,
-      userId: state.userId,
-      timestamp: Date.now(),
-    });
+    // Send welcome message with session token for reconnection
+    this.send(server, createConnectedMessage(
+      state.authenticated,
+      sessionToken,
+      state.userId
+    ));
 
     // Schedule heartbeat alarm if this is the first connection
     this.scheduleHeartbeatAlarm();
@@ -376,6 +449,7 @@ export class WebSocketGateway extends DurableObject {
 
   /**
    * Handle WebSocket close event.
+   * Marks the session as disconnected but preserves it for potential reconnection.
    */
   async webSocketClose(
     ws: WebSocket,
@@ -391,11 +465,16 @@ export class WebSocketGateway extends DurableObject {
       console.log(
         `[WebSocketGateway] Connection state change: CLOSED. ` +
           `User: ${state.userId || 'anonymous'}, ` +
+          `Session: ${state.sessionToken.substring(0, 12)}..., ` +
           `Code: ${code}, Reason: ${reason || 'none'}, ` +
           `Clean: ${wasClean}, ` +
-          `Session: ${Math.round(sessionDuration / 1000)}s, ` +
+          `Duration: ${Math.round(sessionDuration / 1000)}s, ` +
           `Last activity: ${Math.round(timeSinceActivity / 1000)}s ago`
       );
+
+      // Mark session as disconnected (preserves it for reconnection)
+      await this.markSessionDisconnected(state.sessionToken);
+
       this.connections.delete(ws);
     }
     console.log(
@@ -447,6 +526,10 @@ export class WebSocketGateway extends DurableObject {
 
       case "heartbeat":
         this.handleHeartbeatMessage(ws, state, msg);
+        break;
+
+      case "resume":
+        await this.handleResumeMessage(ws, state, msg);
         break;
 
       default: {
@@ -681,6 +764,247 @@ export class WebSocketGateway extends DurableObject {
     return msg.id;
   }
 
+  // ============================================================================
+  // Session Persistence and Message Queuing
+  // ============================================================================
+
+  /**
+   * Persist session data to Durable Object storage.
+   */
+  private async persistSession(state: ConnectionState): Promise<void> {
+    const session: PersistedSession = {
+      sessionToken: state.sessionToken,
+      userId: state.userId,
+      authenticated: state.authenticated,
+      userInfo: state.userInfo,
+      deviceInfo: state.deviceInfo,
+      capabilities: state.capabilities,
+      createdAt: state.connectedAt,
+      lastConnectedAt: Date.now(),
+      disconnectedAt: null,
+    };
+
+    await this.ctx.storage.put(
+      `${STORAGE_PREFIX_SESSION}${state.sessionToken}`,
+      session
+    );
+
+    console.log(
+      `[WebSocketGateway] Session persisted: ${state.sessionToken.substring(0, 12)}...`
+    );
+  }
+
+  /**
+   * Retrieve a persisted session from storage.
+   */
+  private async getPersistedSession(
+    sessionToken: string
+  ): Promise<PersistedSession | null> {
+    const session = await this.ctx.storage.get<PersistedSession>(
+      `${STORAGE_PREFIX_SESSION}${sessionToken}`
+    );
+    return session || null;
+  }
+
+  /**
+   * Mark a session as disconnected.
+   */
+  private async markSessionDisconnected(sessionToken: string): Promise<void> {
+    const session = await this.getPersistedSession(sessionToken);
+    if (session) {
+      session.disconnectedAt = Date.now();
+      await this.ctx.storage.put(
+        `${STORAGE_PREFIX_SESSION}${sessionToken}`,
+        session
+      );
+      console.log(
+        `[WebSocketGateway] Session marked disconnected: ${sessionToken.substring(0, 12)}...`
+      );
+    }
+  }
+
+  /**
+   * Delete a session and its queued messages.
+   */
+  private async deleteSession(sessionToken: string): Promise<void> {
+    await this.ctx.storage.delete(`${STORAGE_PREFIX_SESSION}${sessionToken}`);
+    await this.ctx.storage.delete(`${STORAGE_PREFIX_MESSAGES}${sessionToken}`);
+    console.log(
+      `[WebSocketGateway] Session deleted: ${sessionToken.substring(0, 12)}...`
+    );
+  }
+
+  /**
+   * Queue a message for later delivery when client reconnects.
+   */
+  private async queueMessage(
+    sessionToken: string,
+    message: ServerMessage
+  ): Promise<void> {
+    const key = `${STORAGE_PREFIX_MESSAGES}${sessionToken}`;
+    const existingMessages =
+      (await this.ctx.storage.get<QueuedMessage[]>(key)) || [];
+
+    // Enforce maximum queue size
+    if (existingMessages.length >= MAX_QUEUED_MESSAGES) {
+      console.warn(
+        `[WebSocketGateway] Message queue full for session ${sessionToken.substring(0, 12)}..., dropping oldest message`
+      );
+      existingMessages.shift(); // Remove oldest message
+    }
+
+    existingMessages.push({
+      message,
+      queuedAt: Date.now(),
+    });
+
+    await this.ctx.storage.put(key, existingMessages);
+    console.log(
+      `[WebSocketGateway] Message queued for session ${sessionToken.substring(0, 12)}... (total: ${existingMessages.length})`
+    );
+  }
+
+  /**
+   * Get and clear queued messages for a session.
+   */
+  private async getAndClearQueuedMessages(
+    sessionToken: string
+  ): Promise<QueuedMessage[]> {
+    const key = `${STORAGE_PREFIX_MESSAGES}${sessionToken}`;
+    const messages = (await this.ctx.storage.get<QueuedMessage[]>(key)) || [];
+    await this.ctx.storage.delete(key);
+    return messages;
+  }
+
+  /**
+   * Clean up expired sessions.
+   * Called periodically from the alarm handler.
+   */
+  private async cleanupExpiredSessions(): Promise<void> {
+    const now = Date.now();
+    const allKeys = await this.ctx.storage.list({ prefix: STORAGE_PREFIX_SESSION });
+
+    let cleanedCount = 0;
+    for (const [key, value] of allKeys) {
+      const session = value as PersistedSession;
+      const lastActivity = session.disconnectedAt || session.lastConnectedAt;
+
+      if (now - lastActivity > SESSION_EXPIRY_MS) {
+        const sessionToken = key.replace(STORAGE_PREFIX_SESSION, "");
+        await this.deleteSession(sessionToken);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(
+        `[WebSocketGateway] Cleaned up ${cleanedCount} expired sessions`
+      );
+    }
+  }
+
+  /**
+   * Handle resume message from client.
+   * Attempts to resume a previous session and deliver queued messages.
+   */
+  private async handleResumeMessage(
+    ws: WebSocket,
+    state: ConnectionState,
+    msg: ResumeMessage
+  ): Promise<void> {
+    console.log(
+      `[WebSocketGateway] Resume request for session: ${msg.sessionToken.substring(0, 12)}...`
+    );
+
+    // Look up the session
+    const persistedSession = await this.getPersistedSession(msg.sessionToken);
+
+    if (!persistedSession) {
+      console.log(
+        `[WebSocketGateway] Session not found: ${msg.sessionToken.substring(0, 12)}...`
+      );
+      this.sendError(
+        ws,
+        MessageErrorCode.SESSION_NOT_FOUND,
+        "Session not found or has been cleared"
+      );
+      return;
+    }
+
+    // Check if session has expired
+    const lastActivity =
+      persistedSession.disconnectedAt || persistedSession.lastConnectedAt;
+    if (Date.now() - lastActivity > SESSION_EXPIRY_MS) {
+      console.log(
+        `[WebSocketGateway] Session expired: ${msg.sessionToken.substring(0, 12)}...`
+      );
+      await this.deleteSession(msg.sessionToken);
+      this.sendError(
+        ws,
+        MessageErrorCode.SESSION_EXPIRED,
+        "Session has expired"
+      );
+      return;
+    }
+
+    // Calculate disconnected duration
+    const disconnectedDuration = persistedSession.disconnectedAt
+      ? Date.now() - persistedSession.disconnectedAt
+      : 0;
+
+    // Delete the old session token from the current connection state
+    // and adopt the resumed session's token
+    const oldToken = state.sessionToken;
+    await this.deleteSession(oldToken);
+
+    // Update connection state with resumed session data
+    state.sessionToken = msg.sessionToken;
+    state.userId = persistedSession.userId;
+    state.authenticated = persistedSession.authenticated;
+    state.userInfo = persistedSession.userInfo;
+    state.deviceInfo = persistedSession.deviceInfo;
+    state.capabilities = persistedSession.capabilities;
+    state.isResumed = true;
+
+    // Update the persisted session as reconnected
+    persistedSession.disconnectedAt = null;
+    persistedSession.lastConnectedAt = Date.now();
+    await this.ctx.storage.put(
+      `${STORAGE_PREFIX_SESSION}${msg.sessionToken}`,
+      persistedSession
+    );
+
+    // Get queued messages
+    const queuedMessages = await this.getAndClearQueuedMessages(msg.sessionToken);
+
+    console.log(
+      `[WebSocketGateway] Session resumed: ${msg.sessionToken.substring(0, 12)}..., ` +
+        `queued messages: ${queuedMessages.length}, ` +
+        `disconnected for: ${Math.round(disconnectedDuration / 1000)}s`
+    );
+
+    // Send session_resumed confirmation
+    this.send(
+      ws,
+      createSessionResumedMessage(
+        msg.sessionToken,
+        queuedMessages.length,
+        state.authenticated,
+        disconnectedDuration,
+        state.userId
+      )
+    );
+
+    // Deliver queued messages
+    for (const qm of queuedMessages) {
+      this.send(ws, qm.message);
+      console.log(
+        `[WebSocketGateway] Delivered queued message: type=${qm.message.type}, ` +
+          `queued ${Math.round((Date.now() - qm.queuedAt) / 1000)}s ago`
+      );
+    }
+  }
+
   /**
    * Send a message to a WebSocket client.
    */
@@ -754,5 +1078,93 @@ export class WebSocketGateway extends DurableObject {
       }
     }
     return result;
+  }
+
+  /**
+   * Send a message to a user, or queue it if they're disconnected.
+   * Returns true if the message was sent immediately, false if queued.
+   */
+  async sendOrQueue(
+    userId: string,
+    message: ServerMessage
+  ): Promise<{ sent: boolean; queued: boolean }> {
+    // Try to find an active connection for this user
+    const connections = this.getAuthenticatedConnections(userId);
+
+    if (connections.length > 0) {
+      // Send to all active connections
+      for (const ws of connections) {
+        this.send(ws, message);
+      }
+      console.log(
+        `[WebSocketGateway] Message sent to ${connections.length} connection(s) for user ${userId}`
+      );
+      return { sent: true, queued: false };
+    }
+
+    // No active connections - try to queue for any disconnected session
+    const allSessions = await this.ctx.storage.list<PersistedSession>({
+      prefix: STORAGE_PREFIX_SESSION,
+    });
+
+    let queued = false;
+    for (const [_, session] of allSessions) {
+      if (
+        session.userId === userId &&
+        session.disconnectedAt !== null
+      ) {
+        await this.queueMessage(session.sessionToken, message);
+        queued = true;
+        console.log(
+          `[WebSocketGateway] Message queued for disconnected user ${userId}, session ${session.sessionToken.substring(0, 12)}...`
+        );
+      }
+    }
+
+    if (!queued) {
+      console.log(
+        `[WebSocketGateway] No active or disconnected sessions for user ${userId}, message dropped`
+      );
+    }
+
+    return { sent: false, queued };
+  }
+
+  /**
+   * Get session statistics for debugging/monitoring.
+   */
+  async getSessionStats(): Promise<{
+    activeConnections: number;
+    totalSessions: number;
+    disconnectedSessions: number;
+    totalQueuedMessages: number;
+  }> {
+    const allSessions = await this.ctx.storage.list<PersistedSession>({
+      prefix: STORAGE_PREFIX_SESSION,
+    });
+
+    let disconnectedSessions = 0;
+    for (const [_, session] of allSessions) {
+      if (session.disconnectedAt !== null) {
+        disconnectedSessions++;
+      }
+    }
+
+    // Count queued messages
+    const allMessageQueues = await this.ctx.storage.list<QueuedMessage[]>({
+      prefix: STORAGE_PREFIX_MESSAGES,
+    });
+
+    let totalQueuedMessages = 0;
+    for (const [_, messages] of allMessageQueues) {
+      totalQueuedMessages += messages.length;
+    }
+
+    return {
+      activeConnections: this.connections.size,
+      totalSessions: allSessions.size,
+      disconnectedSessions,
+      totalQueuedMessages,
+    };
   }
 }
