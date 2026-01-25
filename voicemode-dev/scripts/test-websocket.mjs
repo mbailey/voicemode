@@ -249,7 +249,6 @@ async function testHeartbeatAndPing() {
       connected: false,
       welcomeReceived: false,
       heartbeatAck: false,
-      pingPong: false,
     };
 
     const timeout = setTimeout(() => {
@@ -274,14 +273,7 @@ async function testHeartbeatAndPing() {
 
       if (msg.type === "heartbeat_ack") {
         results.heartbeatAck = true;
-        console.log("  ✓ Heartbeat acknowledged");
-        // Send ping
-        ws.send(JSON.stringify({ type: "ping" }));
-      }
-
-      if (msg.type === "pong") {
-        results.pingPong = true;
-        console.log("  ✓ Pong received\n");
+        console.log("  ✓ Heartbeat acknowledged\n");
         clearTimeout(timeout);
         ws.close(1000, "Test complete");
 
@@ -298,8 +290,254 @@ async function testHeartbeatAndPing() {
   });
 }
 
+async function testReadyMessage() {
+  console.log("Test 7: Ready message protocol...");
+  const WebSocket = (await import("ws")).default;
+
+  return new Promise((resolve) => {
+    const wsUrl = `${BASE_URL}?user=test-ready`;
+    const ws = new WebSocket(wsUrl);
+
+    const results = {
+      connected: false,
+      readyAcked: false,
+    };
+
+    const timeout = setTimeout(() => {
+      console.log("  ✗ Timeout");
+      ws.close();
+      resolve(false);
+    }, 10000);
+
+    ws.on("open", () => {
+      results.connected = true;
+    });
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      console.log("  Received:", JSON.stringify(msg));
+
+      if (msg.type === "connected") {
+        // Send ready message with device info and capabilities
+        ws.send(JSON.stringify({
+          type: "ready",
+          id: "ready-001",
+          device: {
+            platform: "test",
+            appVersion: "1.0.0",
+            model: "TestDevice",
+            osVersion: "1.0",
+          },
+          capabilities: {
+            tts: true,
+            stt: true,
+            maxAudioDuration: 120,
+          },
+        }));
+      }
+
+      if (msg.type === "ack" && msg.id === "ready-001") {
+        if (msg.status === "ok") {
+          results.readyAcked = true;
+          console.log("  ✓ Ready message acknowledged\n");
+          clearTimeout(timeout);
+          ws.close(1000, "Test complete");
+          resolve(true);
+        } else {
+          console.log("  ✗ Ready rejected:", msg.error);
+          clearTimeout(timeout);
+          ws.close();
+          resolve(false);
+        }
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timeout);
+      console.log("  ✗ Error:", error.message);
+      resolve(false);
+    });
+  });
+}
+
+async function testTranscriptionMessage() {
+  console.log("Test 8: Transcription message protocol...");
+  const WebSocket = (await import("ws")).default;
+
+  return new Promise((resolve) => {
+    const wsUrl = `${BASE_URL}?user=test-transcription`;
+    const ws = new WebSocket(wsUrl);
+
+    const results = {
+      connected: false,
+      ready: false,
+      transcriptionAcked: false,
+    };
+
+    const timeout = setTimeout(() => {
+      console.log("  ✗ Timeout");
+      ws.close();
+      resolve(false);
+    }, 10000);
+
+    ws.on("open", () => {
+      results.connected = true;
+    });
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      console.log("  Received:", JSON.stringify(msg));
+
+      if (msg.type === "connected") {
+        // First send ready message
+        ws.send(JSON.stringify({
+          type: "ready",
+          id: "ready-002",
+        }));
+      }
+
+      if (msg.type === "ack" && msg.id === "ready-002") {
+        results.ready = true;
+        // Now send transcription
+        ws.send(JSON.stringify({
+          type: "transcription",
+          id: "trans-001",
+          text: "Hello, this is a test transcription",
+          confidence: 0.95,
+          duration: 2.5,
+          language: "en",
+        }));
+      }
+
+      if (msg.type === "ack" && msg.id === "trans-001") {
+        if (msg.status === "ok") {
+          results.transcriptionAcked = true;
+          console.log("  ✓ Transcription acknowledged\n");
+          clearTimeout(timeout);
+          ws.close(1000, "Test complete");
+          resolve(true);
+        } else {
+          console.log("  ✗ Transcription rejected:", msg.error);
+          clearTimeout(timeout);
+          ws.close();
+          resolve(false);
+        }
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timeout);
+      console.log("  ✗ Error:", error.message);
+      resolve(false);
+    });
+  });
+}
+
+async function testUnknownMessageType() {
+  console.log("Test 9: Unknown message type handling...");
+  const WebSocket = (await import("ws")).default;
+
+  return new Promise((resolve) => {
+    const wsUrl = `${BASE_URL}?user=test-unknown`;
+    const ws = new WebSocket(wsUrl);
+
+    const results = {
+      connected: false,
+      errorReceived: false,
+    };
+
+    const timeout = setTimeout(() => {
+      console.log("  ✗ Timeout");
+      ws.close();
+      resolve(false);
+    }, 10000);
+
+    ws.on("open", () => {
+      results.connected = true;
+    });
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      console.log("  Received:", JSON.stringify(msg));
+
+      if (msg.type === "connected") {
+        // Send unknown message type
+        ws.send(JSON.stringify({
+          type: "unknown_type_12345",
+          id: "unknown-001",
+          data: "test",
+        }));
+      }
+
+      // Should receive ack with error status for unknown types
+      if (msg.type === "ack" && msg.status === "error") {
+        results.errorReceived = true;
+        console.log("  ✓ Unknown type handled gracefully\n");
+        clearTimeout(timeout);
+        ws.close(1000, "Test complete");
+        resolve(true);
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timeout);
+      console.log("  ✗ Error:", error.message);
+      resolve(false);
+    });
+  });
+}
+
+async function testInvalidMessageFormat() {
+  console.log("Test 10: Invalid message format handling...");
+  const WebSocket = (await import("ws")).default;
+
+  return new Promise((resolve) => {
+    const wsUrl = `${BASE_URL}?user=test-invalid`;
+    const ws = new WebSocket(wsUrl);
+
+    const results = {
+      connected: false,
+      errorReceived: false,
+    };
+
+    const timeout = setTimeout(() => {
+      console.log("  ✗ Timeout");
+      ws.close();
+      resolve(false);
+    }, 10000);
+
+    ws.on("open", () => {
+      results.connected = true;
+    });
+
+    ws.on("message", (data) => {
+      const msg = JSON.parse(data.toString());
+      console.log("  Received:", JSON.stringify(msg));
+
+      if (msg.type === "connected") {
+        // Send invalid JSON
+        ws.send("not valid json {{{");
+      }
+
+      if (msg.type === "error" && msg.code === "PARSE_ERROR") {
+        results.errorReceived = true;
+        console.log("  ✓ Parse error handled correctly\n");
+        clearTimeout(timeout);
+        ws.close(1000, "Test complete");
+        resolve(true);
+      }
+    });
+
+    ws.on("error", (error) => {
+      clearTimeout(timeout);
+      console.log("  ✗ Error:", error.message);
+      resolve(false);
+    });
+  });
+}
+
 async function runTests() {
-  console.log("=== WebSocket Gateway Authentication Tests ===\n");
+  console.log("=== WebSocket Gateway Protocol Tests ===\n");
   console.log(`Base URL: ${BASE_URL}`);
   console.log(`JWT Token: ${JWT_TOKEN ? "Provided" : "Not provided"}\n`);
 
@@ -324,8 +562,20 @@ async function runTests() {
   // Test 5: Invalid token handling
   results.push(await testInvalidToken());
 
-  // Test 6: Heartbeat and ping
+  // Test 6: Heartbeat
   results.push(await testHeartbeatAndPing());
+
+  // Test 7: Ready message
+  results.push(await testReadyMessage());
+
+  // Test 8: Transcription message
+  results.push(await testTranscriptionMessage());
+
+  // Test 9: Unknown message type
+  results.push(await testUnknownMessageType());
+
+  // Test 10: Invalid message format
+  results.push(await testInvalidMessageFormat());
 
   // Print summary
   console.log("=== Test Summary ===");
@@ -335,7 +585,11 @@ async function runTests() {
     "Anonymous Connection",
     "Authenticated Connection",
     "Invalid Token Handling",
-    "Heartbeat/Ping",
+    "Heartbeat",
+    "Ready Message",
+    "Transcription Message",
+    "Unknown Type Handling",
+    "Invalid Format Handling",
   ];
 
   let passed = 0;

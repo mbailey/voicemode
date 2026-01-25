@@ -12,6 +12,19 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import {
+  ClientMessage,
+  AuthMessage,
+  ReadyMessage,
+  TranscriptionMessage,
+  HeartbeatMessage,
+  parseClientMessage,
+  createAckMessage,
+  createSpeakMessage,
+  createListenMessage,
+  createStopMessage,
+  MessageErrorCode,
+} from "../websocket/protocol";
 
 export interface Env {
   WEBSOCKET_GATEWAY: DurableObjectNamespace;
@@ -46,6 +59,21 @@ interface ConnectionState {
   deviceInfo?: {
     platform?: string;
     appVersion?: string;
+  };
+  /** Client capabilities (TTS, STT support) */
+  capabilities?: {
+    tts?: boolean;
+    stt?: boolean;
+    maxAudioDuration?: number;
+  };
+  /** Last transcription received from client */
+  lastTranscription?: {
+    id: string;
+    text: string;
+    confidence?: number;
+    duration?: number;
+    language?: string;
+    receivedAt: number;
   };
 }
 
@@ -169,26 +197,31 @@ export class WebSocketGateway extends DurableObject {
     // Update last activity timestamp
     state.lastActivity = Date.now();
 
-    // Parse message (expect JSON)
-    let data: unknown;
-    try {
-      const msgStr =
-        typeof message === "string"
-          ? message
-          : new TextDecoder().decode(message);
-      data = JSON.parse(msgStr);
-    } catch (e) {
-      this.sendError(ws, "PARSE_ERROR", "Invalid JSON message");
+    // Parse and validate message using protocol
+    const result = parseClientMessage(message);
+    if (result.error) {
+      // Handle parse/validation errors
+      const errorCode = result.error.errorCode || MessageErrorCode.INVALID_MESSAGE;
+
+      // For unknown message types, log but don't send error (graceful handling)
+      if (errorCode === MessageErrorCode.UNKNOWN_TYPE) {
+        console.log(`[WebSocketGateway] ${result.error.error}`);
+        // Send ack with error status for unknown types
+        this.send(ws, createAckMessage(
+          "unknown",
+          "error",
+          result.error.error,
+          errorCode
+        ));
+        return;
+      }
+
+      this.sendError(ws, errorCode, result.error.error || "Invalid message");
       return;
     }
 
-    // Handle message based on type
-    if (typeof data === "object" && data !== null && "type" in data) {
-      const msg = data as { type: string; [key: string]: unknown };
-      await this.handleMessage(ws, state, msg);
-    } else {
-      this.sendError(ws, "INVALID_MESSAGE", "Message must have a type field");
-    }
+    // Handle validated message
+    await this.handleMessage(ws, state, result.message);
   }
 
   /**
@@ -226,37 +259,258 @@ export class WebSocketGateway extends DurableObject {
 
   /**
    * Handle a typed message from a client.
+   * Dispatches to specific handlers based on message type.
    */
   private async handleMessage(
     ws: WebSocket,
     state: ConnectionState,
-    msg: { type: string; [key: string]: unknown }
+    msg: ClientMessage
   ): Promise<void> {
     console.log(
       `[WebSocketGateway] Message type: ${msg.type}, authenticated: ${state.authenticated}`
     );
 
     switch (msg.type) {
+      case "auth":
+        await this.handleAuthMessage(ws, state, msg);
+        break;
+
+      case "ready":
+        await this.handleReadyMessage(ws, state, msg);
+        break;
+
+      case "transcription":
+        await this.handleTranscriptionMessage(ws, state, msg);
+        break;
+
       case "heartbeat":
-        // Respond to heartbeat immediately
-        this.send(ws, { type: "heartbeat_ack", timestamp: Date.now() });
+        this.handleHeartbeatMessage(ws, state, msg);
         break;
 
-      case "ping":
-        // Simple ping/pong for latency measurement
-        this.send(ws, { type: "pong", timestamp: Date.now() });
-        break;
-
-      default:
-        // For now, echo unknown messages for testing
-        // In production, this would be handled by specific message handlers
-        console.log(`[WebSocketGateway] Unhandled message type: ${msg.type}`);
-        this.send(ws, {
-          type: "echo",
-          original: msg,
-          timestamp: Date.now(),
-        });
+      default: {
+        // This shouldn't happen due to validation, but handle gracefully
+        const unknownMsg = msg as { type: string; id?: string };
+        console.log(`[WebSocketGateway] Unexpected message type: ${unknownMsg.type}`);
+        this.send(ws, createAckMessage(
+          unknownMsg.id || "unknown",
+          "error",
+          "Unexpected message type",
+          MessageErrorCode.UNKNOWN_TYPE
+        ));
+      }
     }
+  }
+
+  /**
+   * Handle auth message from client.
+   * Used for in-connection authentication (token refresh, late auth).
+   */
+  private async handleAuthMessage(
+    ws: WebSocket,
+    state: ConnectionState,
+    msg: AuthMessage
+  ): Promise<void> {
+    console.log(`[WebSocketGateway] Auth message received`);
+
+    // TODO: Validate the token against Auth0
+    // For now, acknowledge receipt but note that validation should happen
+    // This would require access to the Auth0 validation logic
+
+    // In the current architecture, authentication happens at connection time
+    // via query param. This message type is for re-authentication or late auth.
+    // Full implementation would validate the token here.
+
+    this.send(ws, createAckMessage(
+      msg.id || "auth",
+      "ok"
+    ));
+
+    // Note: Full token validation would update state.authenticated and state.userInfo
+    console.log(`[WebSocketGateway] Auth message acknowledged. Token validation pending implementation.`);
+  }
+
+  /**
+   * Handle ready message from client.
+   * Marks the client as ready to receive commands.
+   */
+  private async handleReadyMessage(
+    ws: WebSocket,
+    state: ConnectionState,
+    msg: ReadyMessage
+  ): Promise<void> {
+    console.log(`[WebSocketGateway] Client ready`);
+
+    // Update connection state
+    state.ready = true;
+
+    // Store device info if provided
+    if (msg.device) {
+      state.deviceInfo = {
+        platform: msg.device.platform,
+        appVersion: msg.device.appVersion,
+      };
+      console.log(
+        `[WebSocketGateway] Device: ${msg.device.platform} v${msg.device.appVersion}`
+      );
+    }
+
+    // Store capabilities if provided
+    if (msg.capabilities) {
+      state.capabilities = msg.capabilities;
+      console.log(
+        `[WebSocketGateway] Capabilities: TTS=${msg.capabilities.tts}, STT=${msg.capabilities.stt}`
+      );
+    }
+
+    // Acknowledge ready state
+    this.send(ws, createAckMessage(msg.id || "ready", "ok"));
+
+    console.log(
+      `[WebSocketGateway] Client is now ready. User: ${state.userId}, Device: ${state.deviceInfo?.platform || 'unknown'}`
+    );
+  }
+
+  /**
+   * Handle transcription message from client.
+   * Receives STT result in response to a 'listen' command.
+   */
+  private async handleTranscriptionMessage(
+    ws: WebSocket,
+    state: ConnectionState,
+    msg: TranscriptionMessage
+  ): Promise<void> {
+    console.log(
+      `[WebSocketGateway] Transcription received: "${msg.text.substring(0, 50)}..." (id: ${msg.id})`
+    );
+
+    // Validate that client is ready
+    if (!state.ready) {
+      console.warn(`[WebSocketGateway] Transcription from non-ready client`);
+      this.send(ws, createAckMessage(
+        msg.id,
+        "error",
+        "Client must send 'ready' message before transcriptions",
+        MessageErrorCode.INVALID_MESSAGE
+      ));
+      return;
+    }
+
+    // Store the transcription for retrieval by MCP server
+    // TODO: Implement transcription queue/storage for MCP integration
+    state.lastTranscription = {
+      id: msg.id,
+      text: msg.text,
+      confidence: msg.confidence,
+      duration: msg.duration,
+      language: msg.language,
+      receivedAt: Date.now(),
+    };
+
+    // Acknowledge receipt
+    this.send(ws, createAckMessage(msg.id, "ok"));
+
+    console.log(
+      `[WebSocketGateway] Transcription stored. Confidence: ${msg.confidence || 'N/A'}, Duration: ${msg.duration || 'N/A'}s`
+    );
+  }
+
+  /**
+   * Handle heartbeat message from client.
+   * Responds immediately to keep connection alive.
+   */
+  private handleHeartbeatMessage(
+    ws: WebSocket,
+    state: ConnectionState,
+    msg: HeartbeatMessage
+  ): void {
+    // Respond to heartbeat immediately
+    this.send(ws, { type: "heartbeat_ack", timestamp: Date.now() });
+  }
+
+  // ============================================================================
+  // Server → Client Message Senders
+  // ============================================================================
+
+  /**
+   * Send a speak command to the client.
+   * Client should synthesize and play the text via TTS.
+   * Returns the message ID for correlation with transcription response.
+   */
+  sendSpeak(
+    ws: WebSocket,
+    text: string,
+    options?: {
+      voice?: string;
+      speed?: number;
+      waitForResponse?: boolean;
+      instructions?: string;
+    }
+  ): string {
+    const msg = createSpeakMessage(text, options);
+    this.send(ws, msg);
+    console.log(`[WebSocketGateway] Sent speak command (id: ${msg.id}): "${text.substring(0, 50)}..."`);
+    return msg.id;
+  }
+
+  /**
+   * Send a listen command to the client.
+   * Client should start recording and send transcription when done.
+   * Returns the message ID for correlation with transcription response.
+   */
+  sendListen(
+    ws: WebSocket,
+    options?: {
+      maxDuration?: number;
+      minDuration?: number;
+      useVAD?: boolean;
+      language?: string;
+      prompt?: string;
+    }
+  ): string {
+    const msg = createListenMessage(options);
+    this.send(ws, msg);
+    console.log(`[WebSocketGateway] Sent listen command (id: ${msg.id})`);
+    return msg.id;
+  }
+
+  /**
+   * Send a stop command to the client.
+   * Client should stop the specified operation.
+   */
+  sendStop(
+    ws: WebSocket,
+    target?: "tts" | "stt" | "all",
+    reason?: string
+  ): void {
+    const msg = createStopMessage(target, reason);
+    this.send(ws, msg);
+    console.log(`[WebSocketGateway] Sent stop command (target: ${target || 'all'})`);
+  }
+
+  /**
+   * Send a speak+listen flow: speak text, then wait for response.
+   * Returns the message ID for correlation.
+   */
+  sendSpeakAndListen(
+    ws: WebSocket,
+    text: string,
+    options?: {
+      voice?: string;
+      speed?: number;
+      listenMaxDuration?: number;
+      listenMinDuration?: number;
+      useVAD?: boolean;
+      language?: string;
+    }
+  ): string {
+    const msg = createSpeakMessage(text, {
+      voice: options?.voice,
+      speed: options?.speed,
+      waitForResponse: true,
+    });
+    this.send(ws, msg);
+    console.log(`[WebSocketGateway] Sent speak+listen command (id: ${msg.id})`);
+    return msg.id;
   }
 
   /**
@@ -299,6 +553,8 @@ export class WebSocketGateway extends DurableObject {
         connectedAt: state.connectedAt,
         lastActivity: state.lastActivity,
         deviceInfo: state.deviceInfo,
+        capabilities: state.capabilities,
+        hasTranscription: !!state.lastTranscription,
       });
     }
     return {
