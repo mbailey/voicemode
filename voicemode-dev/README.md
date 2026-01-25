@@ -15,8 +15,11 @@ Cloudflare Worker for voicemode.dev - MCP server with WebSocket gateway for Clau
 ## Features
 
 - **WebSocket Gateway**: Durable Objects for per-user WebSocket connection state
+- **JWT Authentication**: Auth0 JWT validation with JWKS support
+- **Message Protocol**: Typed message protocol for client-server communication
+- **Heartbeat/Keepalive**: Server-initiated heartbeat with stale connection detection
+- **Session Resumption**: Reconnection support with message queueing
 - **MCP Server**: Streamable HTTP MCP server (coming soon)
-- **OAuth**: Auth0 integration for authentication (coming soon)
 
 ## Development
 
@@ -39,18 +42,20 @@ npm run dev
 
 This starts a local development server at `http://localhost:8787`.
 
-### Test WebSocket
+### Run tests
 
 ```bash
-# In another terminal while dev server is running
+# Unit tests (no server required)
+npm test
+
+# Integration tests (requires dev server running)
 npm run test:ws
+
+# Manual testing with wscat
+npx wscat -c "ws://localhost:8787/ws?user=test"
 ```
 
-Or manually with wscat:
-
-```bash
-npx wscat -c ws://localhost:8787/ws/test-user
-```
+See [docs/TESTING.md](docs/TESTING.md) for comprehensive testing documentation.
 
 ### Type checking
 
@@ -77,22 +82,34 @@ Returns service status and feature flags.
 ### WebSocket Gateway
 
 ```
-wss://voicemode.dev/ws/{userId}
+wss://voicemode.dev/ws?token=<jwt>&user=<userId>
 ```
 
-Connect with WebSocket for real-time communication. Query param `?token=<jwt>` will be used for authentication (coming in ws-002).
+Connect with WebSocket for real-time communication:
+- `token` - JWT token for authentication (required in production)
+- `user` - User identifier (optional, for tracking in dev mode)
 
 #### Message Types
 
 **Client → Server:**
+- `ready` - Announce client device info and capabilities
+- `transcription` - Send transcribed speech text
 - `heartbeat` - Keep connection alive, server responds with `heartbeat_ack`
-- `ping` - Latency measurement, server responds with `pong`
+- `resume` - Reconnect using previous session token
+- `auth` - Authenticate with JWT after connection
 
 **Server → Client:**
-- `heartbeat_ack` - Response to heartbeat
-- `pong` - Response to ping
-- `echo` - Echoes unknown message types (for testing)
+- `connected` - Welcome message with session token and auth status
+- `ack` - Acknowledge client message (status: ok/error)
+- `heartbeat` - Server-initiated keepalive (30s interval)
+- `heartbeat_ack` - Response to client heartbeat
+- `session_resumed` - Successful session resumption
+- `speak` - Command to speak text (for MCP integration)
+- `listen` - Command to start listening
+- `stop` - Command to stop speak/listen
 - `error` - Error response with code and message
+
+See [docs/TESTING.md](docs/TESTING.md) for full message protocol reference.
 
 ## Project Structure
 
@@ -100,10 +117,18 @@ Connect with WebSocket for real-time communication. Query param `?token=<jwt>` w
 voicemode-dev/
 ├── src/
 │   ├── index.ts              # Main worker entry point
+│   ├── auth/
+│   │   ├── jwt.ts            # JWT validation with Auth0 JWKS
+│   │   └── jwt.test.ts       # JWT unit tests
+│   ├── websocket/
+│   │   ├── protocol.ts       # Message protocol types and validation
+│   │   └── protocol.test.ts  # Protocol unit tests
 │   └── durable-objects/
 │       └── websocket-gateway.ts   # WebSocket Durable Object
 ├── scripts/
-│   └── test-websocket.mjs    # WebSocket test script
+│   └── test-websocket.mjs    # WebSocket integration test script
+├── docs/
+│   └── TESTING.md            # Testing guide
 ├── wrangler.toml             # Cloudflare configuration
 ├── package.json
 ├── tsconfig.json
@@ -115,11 +140,11 @@ voicemode-dev/
 | Feature | Status | Task |
 |---------|--------|------|
 | Durable Objects setup | ✅ Complete | ws-001 |
-| JWT Authentication | ⏳ Pending | ws-002 |
-| Message Protocol | ⏳ Pending | ws-003 |
-| Heartbeat/Keepalive | ⏳ Pending | ws-004 |
-| Session Resumption | ⏳ Pending | ws-005 |
-| Integration Tests | ⏳ Pending | ws-006 |
+| JWT Authentication | ✅ Complete | ws-002 |
+| Message Protocol | ✅ Complete | ws-003 |
+| Heartbeat/Keepalive | ✅ Complete | ws-004 |
+| Session Resumption | ✅ Complete | ws-005 |
+| Integration Tests | ✅ Complete | ws-006 |
 
 ## Environment Variables
 
