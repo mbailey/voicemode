@@ -189,10 +189,20 @@ export interface ConnectedMessage extends BaseMessage {
 }
 
 /**
- * Heartbeat acknowledgment: Server responds to heartbeat.
+ * Heartbeat acknowledgment: Server responds to client heartbeat.
  */
 export interface HeartbeatAckMessage extends BaseMessage {
   type: "heartbeat_ack";
+  /** Server timestamp */
+  timestamp: number;
+}
+
+/**
+ * Server heartbeat message: Server sends to check client liveness.
+ * Client should respond with heartbeat_ack.
+ */
+export interface ServerHeartbeatMessage extends BaseMessage {
+  type: "heartbeat";
   /** Server timestamp */
   timestamp: number;
 }
@@ -220,6 +230,7 @@ export type ServerMessage =
   | AckMessage
   | ConnectedMessage
   | HeartbeatAckMessage
+  | ServerHeartbeatMessage
   | ErrorMessage;
 
 // ============================================================================
@@ -477,6 +488,14 @@ export function createErrorMessage(
     code,
     message,
     details,
+    timestamp: Date.now(),
+  };
+}
+
+/** Create a server heartbeat message */
+export function createHeartbeatMessage(): ServerHeartbeatMessage {
+  return {
+    type: "heartbeat",
     timestamp: Date.now(),
   };
 }

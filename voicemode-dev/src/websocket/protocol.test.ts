@@ -12,6 +12,7 @@ import {
   createStopMessage,
   createAckMessage,
   createErrorMessage,
+  createHeartbeatMessage,
   generateMessageId,
   MessageErrorCode,
   ClientMessage,
@@ -23,6 +24,7 @@ import {
   ListenMessage,
   StopMessage,
   AckMessage,
+  ServerHeartbeatMessage,
 } from "./protocol";
 
 describe("Message Validation", () => {
@@ -351,6 +353,23 @@ describe("Message Factories", () => {
       expect(msg.timestamp).toBeDefined();
     });
   });
+
+  describe("createHeartbeatMessage", () => {
+    it("creates a server heartbeat message", () => {
+      const msg = createHeartbeatMessage();
+      expect(msg.type).toBe("heartbeat");
+      expect(msg.timestamp).toBeDefined();
+      expect(typeof msg.timestamp).toBe("number");
+    });
+
+    it("generates current timestamp", () => {
+      const before = Date.now();
+      const msg = createHeartbeatMessage();
+      const after = Date.now();
+      expect(msg.timestamp).toBeGreaterThanOrEqual(before);
+      expect(msg.timestamp).toBeLessThanOrEqual(after);
+    });
+  });
 });
 
 describe("Type Definitions", () => {
@@ -447,5 +466,14 @@ describe("Type Definitions", () => {
       timestamp: Date.now(),
     };
     expect(msg.type).toBe("ack");
+  });
+
+  it("ServerHeartbeatMessage has correct structure", () => {
+    const msg: ServerHeartbeatMessage = {
+      type: "heartbeat",
+      timestamp: Date.now(),
+    };
+    expect(msg.type).toBe("heartbeat");
+    expect(typeof msg.timestamp).toBe("number");
   });
 });

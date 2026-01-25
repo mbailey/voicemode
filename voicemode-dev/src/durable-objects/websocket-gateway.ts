@@ -23,6 +23,7 @@ import {
   createSpeakMessage,
   createListenMessage,
   createStopMessage,
+  createHeartbeatMessage,
   MessageErrorCode,
 } from "../websocket/protocol";
 
@@ -30,6 +31,21 @@ export interface Env {
   WEBSOCKET_GATEWAY: DurableObjectNamespace;
   ENVIRONMENT: string;
 }
+
+// ============================================================================
+// Heartbeat and Keepalive Configuration
+// ============================================================================
+
+/** Interval between server heartbeat pings (in milliseconds) */
+const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
+
+/** Timeout for considering a connection stale (in milliseconds) */
+const STALE_CONNECTION_TIMEOUT_MS = 90_000; // 90 seconds (3 missed heartbeats)
+
+/** WebSocket close codes */
+const CLOSE_CODE_NORMAL = 1000;
+const CLOSE_CODE_GOING_AWAY = 1001;
+const CLOSE_CODE_POLICY_VIOLATION = 1008;
 
 /** Authenticated user info from JWT validation */
 interface AuthenticatedUser {
@@ -81,8 +97,138 @@ export class WebSocketGateway extends DurableObject {
   /** Active connections (a user may have multiple devices) */
   private connections: Map<WebSocket, ConnectionState> = new Map();
 
+  /** Whether heartbeat alarm is currently scheduled */
+  private heartbeatAlarmScheduled = false;
+
   constructor(state: DurableObjectState, env: Env) {
     super(state, env);
+  }
+
+  // ============================================================================
+  // Heartbeat and Keepalive Management
+  // ============================================================================
+
+  /**
+   * Durable Object alarm handler.
+   * Called periodically to send heartbeats and check for stale connections.
+   */
+  async alarm(): Promise<void> {
+    this.heartbeatAlarmScheduled = false;
+
+    if (this.connections.size === 0) {
+      console.log("[WebSocketGateway] No connections, skipping heartbeat");
+      return;
+    }
+
+    const now = Date.now();
+    const staleConnections: WebSocket[] = [];
+
+    console.log(
+      `[WebSocketGateway] Heartbeat check. Connections: ${this.connections.size}`
+    );
+
+    // Check each connection and send heartbeat
+    for (const [ws, state] of this.connections) {
+      const timeSinceActivity = now - state.lastActivity;
+
+      // Check if connection is stale
+      if (timeSinceActivity > STALE_CONNECTION_TIMEOUT_MS) {
+        console.log(
+          `[WebSocketGateway] Stale connection detected. User: ${state.userId}, ` +
+            `Last activity: ${Math.round(timeSinceActivity / 1000)}s ago`
+        );
+        staleConnections.push(ws);
+        continue;
+      }
+
+      // Send heartbeat to active connections
+      try {
+        this.send(ws, createHeartbeatMessage());
+        console.log(
+          `[WebSocketGateway] Heartbeat sent. User: ${state.userId}, ` +
+            `Last activity: ${Math.round(timeSinceActivity / 1000)}s ago`
+        );
+      } catch (e) {
+        console.error(
+          `[WebSocketGateway] Failed to send heartbeat. User: ${state.userId}`,
+          e
+        );
+        staleConnections.push(ws);
+      }
+    }
+
+    // Close stale connections
+    for (const ws of staleConnections) {
+      this.closeStaleConnection(ws);
+    }
+
+    // Schedule next heartbeat if we still have connections
+    if (this.connections.size > 0) {
+      this.scheduleHeartbeatAlarm();
+    }
+  }
+
+  /**
+   * Schedule the next heartbeat alarm.
+   */
+  private scheduleHeartbeatAlarm(): void {
+    if (this.heartbeatAlarmScheduled) {
+      return;
+    }
+
+    const nextAlarmTime = Date.now() + HEARTBEAT_INTERVAL_MS;
+    this.ctx.storage.setAlarm(nextAlarmTime);
+    this.heartbeatAlarmScheduled = true;
+
+    console.log(
+      `[WebSocketGateway] Heartbeat alarm scheduled for ${new Date(nextAlarmTime).toISOString()}`
+    );
+  }
+
+  /**
+   * Close a stale connection with appropriate logging.
+   */
+  private closeStaleConnection(ws: WebSocket): void {
+    const state = this.connections.get(ws);
+    if (!state) {
+      return;
+    }
+
+    const timeSinceActivity = Date.now() - state.lastActivity;
+    const timeSinceConnect = Date.now() - state.connectedAt;
+
+    console.log(
+      `[WebSocketGateway] Closing stale connection. ` +
+        `User: ${state.userId}, ` +
+        `Connected for: ${Math.round(timeSinceConnect / 1000)}s, ` +
+        `Inactive for: ${Math.round(timeSinceActivity / 1000)}s`
+    );
+
+    // Send error message before closing
+    try {
+      this.send(ws, {
+        type: "error",
+        code: "CONNECTION_TIMEOUT",
+        message: "Connection closed due to inactivity",
+        timestamp: Date.now(),
+      });
+    } catch (e) {
+      // Ignore send errors for stale connections
+    }
+
+    // Close the WebSocket
+    try {
+      ws.close(CLOSE_CODE_POLICY_VIOLATION, "Connection timeout");
+    } catch (e) {
+      console.error("[WebSocketGateway] Error closing stale WebSocket:", e);
+    }
+
+    // Remove from connections map
+    this.connections.delete(ws);
+
+    console.log(
+      `[WebSocketGateway] Stale connection removed. Remaining: ${this.connections.size}`
+    );
   }
 
   /**
@@ -162,7 +308,8 @@ export class WebSocketGateway extends DurableObject {
     this.connections.set(server, state);
 
     console.log(
-      `[WebSocketGateway] New connection. User: ${state.userId || 'anonymous'}, Authenticated: ${state.authenticated}, Total: ${this.connections.size}`
+      `[WebSocketGateway] Connection state change: CONNECTED. ` +
+        `User: ${state.userId || 'anonymous'}, Authenticated: ${state.authenticated}, Total: ${this.connections.size}`
     );
 
     // Send welcome message with authentication status
@@ -172,6 +319,9 @@ export class WebSocketGateway extends DurableObject {
       userId: state.userId,
       timestamp: Date.now(),
     });
+
+    // Schedule heartbeat alarm if this is the first connection
+    this.scheduleHeartbeatAlarm();
 
     // Return the client side of the WebSocket pair
     return new Response(null, {
@@ -235,13 +385,21 @@ export class WebSocketGateway extends DurableObject {
   ): Promise<void> {
     const state = this.connections.get(ws);
     if (state) {
+      const sessionDuration = Date.now() - state.connectedAt;
+      const timeSinceActivity = Date.now() - state.lastActivity;
+
       console.log(
-        `[WebSocketGateway] Connection closed. User: ${state.userId}, Code: ${code}, Reason: ${reason}`
+        `[WebSocketGateway] Connection state change: CLOSED. ` +
+          `User: ${state.userId || 'anonymous'}, ` +
+          `Code: ${code}, Reason: ${reason || 'none'}, ` +
+          `Clean: ${wasClean}, ` +
+          `Session: ${Math.round(sessionDuration / 1000)}s, ` +
+          `Last activity: ${Math.round(timeSinceActivity / 1000)}s ago`
       );
       this.connections.delete(ws);
     }
     console.log(
-      `[WebSocketGateway] Connection removed. Total: ${this.connections.size}`
+      `[WebSocketGateway] Connections remaining: ${this.connections.size}`
     );
   }
 
@@ -250,8 +408,12 @@ export class WebSocketGateway extends DurableObject {
    */
   async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
     const state = this.connections.get(ws);
+    const sessionDuration = state ? Date.now() - state.connectedAt : 0;
+
     console.error(
-      `[WebSocketGateway] WebSocket error. User: ${state?.userId}`,
+      `[WebSocketGateway] Connection state change: ERROR. ` +
+        `User: ${state?.userId || 'unknown'}, ` +
+        `Session: ${Math.round(sessionDuration / 1000)}s`,
       error
     );
     this.connections.delete(ws);
@@ -416,13 +578,19 @@ export class WebSocketGateway extends DurableObject {
 
   /**
    * Handle heartbeat message from client.
-   * Responds immediately to keep connection alive.
+   * Updates activity timestamp and responds immediately to keep connection alive.
    */
   private handleHeartbeatMessage(
     ws: WebSocket,
     state: ConnectionState,
     msg: HeartbeatMessage
   ): void {
+    // Note: lastActivity is already updated in webSocketMessage handler
+    // Log heartbeat receipt for debugging
+    console.log(
+      `[WebSocketGateway] Heartbeat received from client. User: ${state.userId || 'anonymous'}`
+    );
+
     // Respond to heartbeat immediately
     this.send(ws, { type: "heartbeat_ack", timestamp: Date.now() });
   }
