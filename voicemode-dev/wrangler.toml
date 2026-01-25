@@ -1,0 +1,28 @@
+name = "voicemode-dev"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Durable Objects for WebSocket connection state management
+[[durable_objects.bindings]]
+name = "WEBSOCKET_GATEWAY"
+class_name = "WebSocketGateway"
+
+# Migrations required for Durable Objects
+[[migrations]]
+tag = "v1"
+new_classes = ["WebSocketGateway"]
+
+# Environment variables (set via wrangler secret or dashboard)
+# AUTH0_DOMAIN - Auth0 tenant domain
+# AUTH0_CLIENT_ID - Auth0 application client ID
+# AUTH0_CLIENT_SECRET - Auth0 application client secret (for token validation)
+# AUTH0_AUDIENCE - Auth0 API identifier
+
+[vars]
+ENVIRONMENT = "development"
+
+# KV namespace for session storage (optional, for session resume)
+# [[kv_namespaces]]
+# binding = "SESSIONS"
+# id = "your-kv-namespace-id"
