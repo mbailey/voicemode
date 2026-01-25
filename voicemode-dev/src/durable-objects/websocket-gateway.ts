@@ -18,6 +18,14 @@ export interface Env {
   ENVIRONMENT: string;
 }
 
+/** Authenticated user info from JWT validation */
+interface AuthenticatedUser {
+  userId: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+}
+
 /** Connection state for a WebSocket client */
 interface ConnectionState {
   /** WebSocket connection */
@@ -26,6 +34,8 @@ interface ConnectionState {
   userId: string | null;
   /** Whether the connection is authenticated */
   authenticated: boolean;
+  /** Full user info from JWT (if authenticated) */
+  userInfo?: AuthenticatedUser;
   /** Whether the client has sent the ready message */
   ready: boolean;
   /** Last activity timestamp (for keepalive) */
@@ -87,6 +97,7 @@ export class WebSocketGateway extends DurableObject {
   /**
    * Handle WebSocket upgrade request.
    * Creates a new WebSocket pair and accepts the connection.
+   * Extracts authenticated user info from request headers if present.
    */
   private async handleWebSocketUpgrade(request: Request): Promise<Response> {
     // Create WebSocket pair (client and server sides)
@@ -96,11 +107,26 @@ export class WebSocketGateway extends DurableObject {
     // Accept the WebSocket connection on the server side
     this.ctx.acceptWebSocket(server);
 
-    // Initialize connection state (not yet authenticated)
+    // Check for authenticated user info from the worker
+    let authenticatedUser: AuthenticatedUser | undefined;
+    const userHeader = request.headers.get("X-Authenticated-User");
+    if (userHeader) {
+      try {
+        authenticatedUser = JSON.parse(userHeader);
+        console.log(
+          `[WebSocketGateway] Authenticated user: ${authenticatedUser?.userId}`
+        );
+      } catch (e) {
+        console.error("[WebSocketGateway] Failed to parse user info header:", e);
+      }
+    }
+
+    // Initialize connection state
     const state: ConnectionState = {
       websocket: server,
-      userId: null,
-      authenticated: false,
+      userId: authenticatedUser?.userId || null,
+      authenticated: !!authenticatedUser,
+      userInfo: authenticatedUser,
       ready: false,
       lastActivity: Date.now(),
       connectedAt: Date.now(),
@@ -108,8 +134,16 @@ export class WebSocketGateway extends DurableObject {
     this.connections.set(server, state);
 
     console.log(
-      `[WebSocketGateway] New connection. Total: ${this.connections.size}`
+      `[WebSocketGateway] New connection. User: ${state.userId || 'anonymous'}, Authenticated: ${state.authenticated}, Total: ${this.connections.size}`
     );
+
+    // Send welcome message with authentication status
+    this.send(server, {
+      type: "connected",
+      authenticated: state.authenticated,
+      userId: state.userId,
+      timestamp: Date.now(),
+    });
 
     // Return the client side of the WebSocket pair
     return new Response(null, {
@@ -257,6 +291,10 @@ export class WebSocketGateway extends DurableObject {
       connections.push({
         userId: state.userId,
         authenticated: state.authenticated,
+        userInfo: state.userInfo ? {
+          email: state.userInfo.email,
+          name: state.userInfo.name,
+        } : undefined,
         ready: state.ready,
         connectedAt: state.connectedAt,
         lastActivity: state.lastActivity,
