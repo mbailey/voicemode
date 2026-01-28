@@ -840,39 +840,53 @@ def initialize_directories():
 # ==================== SOUND FONTS INITIALIZATION ====================
 
 def initialize_soundfonts():
-    """Install default sound fonts from package data if not present."""
+    """Install package sound fonts and set up soundfonts directory structure.
+
+    Directory structure:
+        ~/.voicemode/soundfonts/
+            voicemode/     - Package-managed soundfonts (always synced from package)
+            current -> voicemode  - Symlink to active soundfont (user can change)
+
+    Users can create custom soundfont directories and point 'current' to them.
+    The 'voicemode' directory is always overwritten on package updates.
+    """
     import shutil
     import importlib.resources
-    
+
     soundfonts_dir = BASE_DIR / "soundfonts"
-    default_soundfont_dir = soundfonts_dir / "default"
+    package_soundfont_dir = soundfonts_dir / "voicemode"
     current_symlink = soundfonts_dir / "current"
-    
-    # Skip if soundfonts already exist (user has customized them)
-    if default_soundfont_dir.exists():
-        # Ensure symlink exists if directory exists
-        if not current_symlink.exists():
-            try:
-                current_symlink.symlink_to(default_soundfont_dir.resolve())
-            except OSError:
-                # Symlinks might not work on all systems
-                pass
-        return
-    
+
+    # Migration: rename old 'default' directory to 'voicemode'
+    old_default_dir = soundfonts_dir / "default"
+    if old_default_dir.exists() and not package_soundfont_dir.exists():
+        try:
+            old_default_dir.rename(package_soundfont_dir)
+            # Update symlink if it pointed to default
+            if current_symlink.is_symlink():
+                target = current_symlink.resolve()
+                if target == old_default_dir.resolve() or "default" in str(current_symlink.readlink()):
+                    current_symlink.unlink()
+                    current_symlink.symlink_to(package_soundfont_dir.resolve())
+        except OSError:
+            pass  # Migration failed, will recreate below
+
     try:
         # Create soundfonts directory
         soundfonts_dir.mkdir(exist_ok=True)
-        
-        # Copy default soundfonts from package data
+
+        # Always sync package soundfonts to 'voicemode' directory
+        # This ensures updates are applied
         try:
             # For Python 3.9+
             from importlib.resources import files
             package_soundfonts = files("voice_mode.data.soundfonts.default")
-            
+
             if package_soundfonts.is_dir():
-                # Create the default directory
-                default_soundfont_dir.mkdir(exist_ok=True)
-                
+                # Remove existing package-managed directory to ensure clean sync
+                if package_soundfont_dir.exists():
+                    shutil.rmtree(package_soundfont_dir)
+
                 # Recursively copy all files from package data
                 def copy_tree(src, dst):
                     """Recursively copy directory tree from package data."""
@@ -883,31 +897,34 @@ def initialize_soundfonts():
                             target.write_bytes(item.read_bytes())
                         elif item.is_dir():
                             copy_tree(item, dst / item.name)
-                
+
                 # Copy entire tree structure
-                copy_tree(package_soundfonts, default_soundfont_dir)
+                copy_tree(package_soundfonts, package_soundfont_dir)
         except ImportError:
             # Fallback for older Python versions
             import pkg_resources
-            
-            # Create the default directory
-            default_soundfont_dir.mkdir(exist_ok=True)
-            
+
+            # Remove existing package-managed directory to ensure clean sync
+            if package_soundfont_dir.exists():
+                shutil.rmtree(package_soundfont_dir)
+            package_soundfont_dir.mkdir(exist_ok=True)
+
             # List all resources in the soundfonts directory
             resource_dir = "data/soundfonts/default"
             if pkg_resources.resource_exists("voice_mode", resource_dir):
                 # This is a bit more complex with pkg_resources
                 # We'll need to manually copy the structure
                 pass
-        
-        # Create symlink to current soundfont (points to default)
-        if default_soundfont_dir.exists() and not current_symlink.exists():
+
+        # Create symlink to current soundfont (points to voicemode)
+        # Only create if it doesn't exist - user may have customized it
+        if package_soundfont_dir.exists() and not current_symlink.exists():
             try:
-                current_symlink.symlink_to(default_soundfont_dir.resolve())
+                current_symlink.symlink_to(package_soundfont_dir.resolve())
             except OSError:
                 # Symlinks might not work on all systems (e.g., Windows without admin)
                 pass
-                
+
     except Exception as e:
         # Don't fail initialization if soundfonts can't be installed
         # They're optional and disabled by default
