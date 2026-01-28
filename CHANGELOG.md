@@ -7,9 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [8.0.6] - 2026-01-29
-
-## [8.0.6] - 2026-01-29
+## [8.0.7] - 2026-01-29
 
 ### Fixed
 
@@ -17,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `artifacts` setting to sdist build target in pyproject.toml
   - MP3/WAV files were being excluded from sdist due to .gitignore
   - PyPI wheels built from sdist now include all soundfont audio files
+
+## [8.0.6] - 2026-01-29
+
+_Note: Fix not committed - use 8.0.7_
 
 ## [8.0.5] - 2026-01-29
 
