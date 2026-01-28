@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.0.7] - 2026-01-29
 
+## [8.0.7] - 2026-01-29
+
 ### Fixed
 
 - **Soundfonts Not in PyPI Package** (GH-223)
