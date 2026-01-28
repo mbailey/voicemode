@@ -60,7 +60,24 @@ claude mcp list
 
 You should see `voicemode` in the list of connected servers.
 
-### 4. Start Using Voice
+### 4. Configure Permissions (Optional)
+
+By default, Claude Code prompts for permission each time VoiceMode tools are used. To enable automatic approval, add to `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__voicemode__converse",
+      "mcp__voicemode__service"
+    ]
+  }
+}
+```
+
+This allows voice conversations and service management without prompts. For more permission options, see the [Permissions Guide](../guides/permissions.md).
+
+### 5. Start Using Voice
 
 In Claude Code, simply type:
 ```

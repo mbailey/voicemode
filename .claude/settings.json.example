@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__voicemode__converse",
+      "mcp__voicemode__service"
+    ]
+  }
+}

@@ -93,6 +93,23 @@ voicemode config edit
 
 See the [Configuration Guide](docs/guides/configuration.md) for all options.
 
+## Permissions Setup (Optional)
+
+To use VoiceMode without permission prompts, add to `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__voicemode__converse",
+      "mcp__voicemode__service"
+    ]
+  }
+}
+```
+
+See the [Permissions Guide](docs/guides/permissions.md) for more options.
+
 ## Local Voice Services
 
 For privacy or offline use, install local speech services:
