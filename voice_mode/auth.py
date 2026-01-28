@@ -28,7 +28,7 @@ import httpx
 
 # Auth0 configuration
 AUTH0_DOMAIN = "dev-2q681p5hobd1dtmm.us.auth0.com"
-AUTH0_CLIENT_ID = "voicemode-cli"  # Public client ID for native app
+AUTH0_CLIENT_ID = "1uJR1Q4HMkLkhzOXTg5JFuqBCq0FBsXK"  # Public client ID for native app
 AUTH0_SCOPES = "openid profile email offline_access"
 AUTH0_AUDIENCE = "https://voicemode.dev/api"
 

@@ -3287,10 +3287,15 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
 
     while running:
         try:
-            # Connect with auth token in header
-            headers = {'Authorization': f'Bearer {token}'}
+            # Connect with auth token as query parameter (server expects ?token=...)
+            import urllib.parse
+            ws_url = url
+            if '?' in ws_url:
+                ws_url = f"{ws_url}&token={urllib.parse.quote(token)}"
+            else:
+                ws_url = f"{ws_url}?token={urllib.parse.quote(token)}"
 
-            with ws_sync.connect(url, additional_headers=headers) as ws:
+            with ws_sync.connect(ws_url) as ws:
                 connected = True
                 retry_delay = 1  # Reset retry delay on successful connection
 
@@ -3322,12 +3327,26 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
                 click.echo("   Press Ctrl+C to stop")
                 click.echo()
 
+                # Start heartbeat thread
+                heartbeat_stop = threading.Event()
+                def heartbeat_sender():
+                    while not heartbeat_stop.wait(25):  # Every 25 seconds
+                        try:
+                            ws.send(json.dumps({
+                                'type': 'heartbeat',
+                                'timestamp': int(time.time() * 1000),
+                            }))
+                        except Exception:
+                            break  # Connection likely closed
+
+                heartbeat_thread = threading.Thread(target=heartbeat_sender, daemon=True)
+                heartbeat_thread.start()
+
                 # Main message loop
                 while running:
                     try:
-                        # Use timeout so we can check running flag
-                        ws.socket.settimeout(5.0)
-                        raw = ws.recv()
+                        # Use websockets library timeout (not socket timeout)
+                        raw = ws.recv(timeout=30)
                         msg = json.loads(raw)
 
                         msg_type = msg.get('type')
@@ -3373,6 +3392,9 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
                         if running:
                             click.echo(f"Error receiving message: {e}")
                         break
+
+                # Clean up heartbeat thread
+                heartbeat_stop.set()
 
         except Exception as e:
             if running:
