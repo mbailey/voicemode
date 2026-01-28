@@ -74,6 +74,10 @@ def _(Path):
 @app.cell
 def _(FAVORITES_FILE, MFP_DIR, Path):
     import json as json_lib
+    import re as re_lib
+
+    # MFP RSS base URL for streaming
+    MFP_BASE_URL = "https://datashat.net/music_for_programming_"
 
     def load_favorites():
         """Load favorites list from config file."""
@@ -84,6 +88,16 @@ def _(FAVORITES_FILE, MFP_DIR, Path):
             except:
                 return set()
         return set()
+
+    def get_streaming_url(cue_name: str) -> str | None:
+        """Extract streaming URL from CUE filename.
+
+        CUE files are named like: music_for_programming_49-julien_mier.cue
+        Streaming URL: https://datashat.net/music_for_programming_49-julien_mier.mp3
+        """
+        if cue_name.startswith("music_for_programming_"):
+            return f"{MFP_BASE_URL}{cue_name[len('music_for_programming_'):]}.mp3"
+        return None
 
     def get_episodes():
         """Scan MFP directory for CUE files (that's what we edit)."""
@@ -108,10 +122,14 @@ def _(FAVORITES_FILE, MFP_DIR, Path):
             mp3_file = cue_file.with_suffix(".mp3")
             has_audio = mp3_file.exists()
 
+            # Get streaming URL for fallback
+            streaming_url = get_streaming_url(name)
+
             episodes.append({
                 "name": name,
                 "path": str(cue_file),  # Path to CUE file
                 "mp3_path": str(mp3_file) if has_audio else None,
+                "streaming_url": streaming_url,
                 "completed": is_completed,
                 "has_audio": has_audio,
             })
@@ -125,7 +143,7 @@ def _(FAVORITES_FILE, MFP_DIR, Path):
     for _ep in all_episodes:
         _ep["favorite"] = _ep["name"] in favorites_set
 
-    return all_episodes, favorites_set, get_episodes, json_lib, load_favorites
+    return MFP_BASE_URL, all_episodes, favorites_set, get_episodes, get_streaming_url, json_lib, load_favorites, re_lib
 
 
 @app.cell
@@ -333,18 +351,21 @@ def _(Path, episode_dropdown):
 
 @app.cell
 def _(Path, all_episodes, episode_dropdown, sidecar_path_value):
-    # Get selected CUE file path and find matching MP3
+    # Get selected CUE file path and find matching MP3 or streaming URL
     # sidecar_path_value is now a CUE file path (or None)
     cue_path = Path(sidecar_path_value) if sidecar_path_value else None
     mp3_path = None
+    streaming_url = None
     mfp_dir = None
 
     if cue_path and cue_path.exists():
         mfp_dir = cue_path.parent  # Directory containing the files
-        # Find matching MP3 from episode data
+        # Find matching MP3 and streaming URL from episode data
         for ep in all_episodes:
-            if ep["path"] == str(cue_path) and ep.get("mp3_path"):
-                mp3_path = Path(ep["mp3_path"])
+            if ep["path"] == str(cue_path):
+                if ep.get("mp3_path"):
+                    mp3_path = Path(ep["mp3_path"])
+                streaming_url = ep.get("streaming_url")
                 break
         # Fallback: check for MP3 with same basename
         if not mp3_path:
@@ -352,7 +373,7 @@ def _(Path, all_episodes, episode_dropdown, sidecar_path_value):
             if not mp3_path.exists():
                 mp3_path = None
 
-    return cue_path, mfp_dir, mp3_path
+    return cue_path, mfp_dir, mp3_path, streaming_url
 
 
 @app.cell
@@ -605,23 +626,27 @@ def _():
 
 
 @app.cell
-def _(Path, mo, mp3_path, subprocess, shutil):
+def _(Path, mo, mp3_path, streaming_url, subprocess, shutil):
     # Find audio file for waveform display
-    # Simple: use the MP3 directly (it's alongside the CUE file)
+    # Prefer local MP3, fall back to streaming URL
     preview_status = None
     wav_path = None
     wav_filename = None
+    audio_url = None  # URL for WaveSurfer (local or streaming)
 
     if mp3_path and mp3_path.exists():
-        # Use the MP3 directly
+        # Use the local MP3 directly
         wav_path = mp3_path
         wav_filename = mp3_path.name
         file_size_mb = mp3_path.stat().st_size / (1024 * 1024)
-        # Simple status text instead of prominent callout
-        preview_status = mo.md(f"*Audio: {mp3_path.name} ({file_size_mb:.0f} MB)*")
+        preview_status = mo.md(f"*Audio: {mp3_path.name} ({file_size_mb:.0f} MB) - local*")
+    elif streaming_url:
+        # Fall back to streaming URL
+        audio_url = streaming_url
+        preview_status = mo.md(f"*Audio: Streaming from datashat.net*")
     elif mp3_path:
         preview_status = mo.callout(
-            mo.md(f"**MP3 not found:** `{mp3_path.name}`"),
+            mo.md(f"**MP3 not found:** `{mp3_path.name}` and no streaming URL available"),
             kind="warn"
         )
     else:
@@ -630,17 +655,28 @@ def _(Path, mo, mp3_path, subprocess, shutil):
             kind="info"
         )
 
-    return preview_status, wav_filename, wav_path
+    return audio_url, preview_status, wav_filename, wav_path
 
 
 @app.cell
-def _(AUDIO_SERVER_PORT, MFP_DIR, cue_data, cue_path, get_refresh, mo, wav_filename):
+def _(AUDIO_SERVER_PORT, MFP_DIR, audio_url, cue_data, cue_path, get_refresh, mo, wav_filename):
     # Create WaveSurfer widget - write HTML to MFP_DIR and load via iframe
     refresh_count = get_refresh()  # Cache-bust when CUE changes
     # CUE filename for save requests (relative to MFP_DIR)
     cue_relative_path = cue_path.name if cue_path else ""
 
+    # Determine audio source: local file served via HTTP or direct streaming URL
     if wav_filename:
+        audio_source = wav_filename  # Will be loaded relative to the iframe's origin
+        is_streaming = False
+    elif audio_url:
+        audio_source = audio_url  # Direct URL to streaming source
+        is_streaming = True
+    else:
+        audio_source = None
+        is_streaming = False
+
+    if audio_source:
         # Build regions JavaScript array (each track is a region from start to next track)
         # Only include tracks that have timestamps
         if cue_data and cue_data['tracks']:
@@ -755,7 +791,8 @@ def _(AUDIO_SERVER_PORT, MFP_DIR, cue_data, cue_path, get_refresh, mo, wav_filen
         }});
 
         // Load audio from same origin (file in MFP_DIR)
-        wavesurfer.load('{wav_filename}');
+        // Load audio - either local file served via HTTP or direct streaming URL
+        wavesurfer.load('{audio_source}');
 
         const playPauseBtn = document.getElementById('playPause');
         const back15Btn = document.getElementById('back15');
@@ -1076,12 +1113,12 @@ def _(AUDIO_SERVER_PORT, MFP_DIR, cue_data, cue_path, get_refresh, mo, wav_filen
         waveform_widget = mo.Html(iframe_html)
     else:
         waveform_widget = mo.callout(
-            mo.md("**No MP3 file found** - ensure MP3 exists alongside CUE file"),
+            mo.md("**No audio available** - no local MP3 or streaming URL found"),
             kind="warn"
         )
 
     waveform_widget
-    return cue_relative_path, player_path, player_url, refresh_count, regions_js, waveform_widget, wavesurfer_html
+    return audio_source, cue_relative_path, is_streaming, player_path, player_url, refresh_count, regions_js, waveform_widget, wavesurfer_html
 
 
 @app.cell
