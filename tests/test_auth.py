@@ -998,3 +998,120 @@ class TestStatusCLI:
             assert "Logged in to voicemode.dev" in result.output
             assert "expired" in result.output.lower()
             assert "refreshed automatically" in result.output
+
+
+class TestStandbyCLI:
+    """Test the 'voicemode connect standby' CLI command authentication integration."""
+
+    def test_standby_command_exists(self):
+        """Test that standby command is registered under connect group."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+        result = runner.invoke(connect, ["standby", "--help"])
+
+        assert result.exit_code == 0
+        assert "Wait for incoming voice sessions" in result.output
+        assert "--token" in result.output
+        assert "--url" in result.output
+
+    def test_standby_not_logged_in_no_token(self):
+        """Test standby fails when not logged in and no token provided."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+
+        with patch("voice_mode.auth.get_valid_credentials", return_value=None):
+            result = runner.invoke(connect, ["standby"])
+
+            assert result.exit_code == 1
+            assert "Not logged in" in result.output
+            assert "voicemode connect login" in result.output
+
+    def test_standby_uses_stored_credentials(self):
+        """Test standby uses stored credentials when available."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        mock_credentials = Credentials(
+            access_token="test_access_token",
+            refresh_token="test_refresh_token",
+            expires_at=time.time() + 3600,
+            token_type="Bearer",
+            user_info={"email": "test@example.com", "name": "Test User"},
+        )
+
+        runner = CliRunner()
+
+        # Mock get_valid_credentials to return credentials
+        # Mock websockets import to raise ImportError (stops early for testing)
+        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials):
+            # We expect it to get past auth and fail on websockets import
+            result = runner.invoke(connect, ["standby"])
+
+            # Should show that credentials were loaded
+            assert "Using stored credentials for: test@example.com" in result.output
+            # Will fail on websockets import (or connection), but that's after auth
+            # The key assertion is that we got past the auth check
+
+    def test_standby_auth_refresh_failure(self):
+        """Test standby shows appropriate error when auth refresh fails."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+        from voice_mode.auth import AuthError
+
+        runner = CliRunner()
+
+        # Mock get_valid_credentials to raise AuthError
+        with patch("voice_mode.auth.get_valid_credentials", side_effect=AuthError("Token refresh failed")):
+            result = runner.invoke(connect, ["standby"])
+
+            assert result.exit_code == 1
+            assert "Authentication failed" in result.output
+            assert "voicemode connect login" in result.output
+
+    def test_standby_token_overrides_credentials(self):
+        """Test --token option overrides stored credentials."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        mock_credentials = Credentials(
+            access_token="stored_token",
+            refresh_token="refresh_token",
+            expires_at=time.time() + 3600,
+            token_type="Bearer",
+            user_info={"email": "test@example.com"},
+        )
+
+        runner = CliRunner()
+
+        # Provide explicit token - should not call get_valid_credentials
+        with patch("voice_mode.auth.get_valid_credentials") as mock_get_creds:
+            result = runner.invoke(connect, ["standby", "--token", "explicit_token"])
+
+            # get_valid_credentials should NOT be called when --token is provided
+            mock_get_creds.assert_not_called()
+            # Should proceed with the explicit token (may fail on websockets, but that's ok)
+            assert "Not logged in" not in result.output
+
+    def test_standby_env_token_overrides_credentials(self):
+        """Test VOICEMODE_DEV_TOKEN env var overrides stored credentials."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+
+        # Set environment variable
+        with patch("voice_mode.auth.get_valid_credentials") as mock_get_creds:
+            result = runner.invoke(
+                connect,
+                ["standby"],
+                env={"VOICEMODE_DEV_TOKEN": "env_token"},
+            )
+
+            # get_valid_credentials should NOT be called when env var is set
+            mock_get_creds.assert_not_called()
+            # Should proceed with the env token
+            assert "Not logged in" not in result.output

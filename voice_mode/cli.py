@@ -3166,11 +3166,15 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
 
     The connection stays alive, waiting for calls. Press Ctrl+C to stop.
 
+    Authentication:
+        Run 'voicemode connect login' first to authenticate, or use --token
+        to provide a token directly.
+
     Examples:
-        # Basic usage (requires VOICEMODE_DEV_TOKEN environment variable)
+        # Basic usage (after running 'voicemode connect login')
         voicemode connect standby
 
-        # Specify token directly
+        # Specify token directly (overrides stored credentials)
         voicemode connect standby --token your-token-here
 
         # Custom Claude command
@@ -3181,13 +3185,30 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
     import signal
     import threading
 
-    # Check for token
+    from voice_mode.auth import get_valid_credentials, AuthError
+
+    # Get authentication token
+    # Priority: --token flag > VOICEMODE_DEV_TOKEN env > stored credentials
     if not token:
-        click.echo("Error: Authentication token required.", err=True)
-        click.echo()
-        click.echo("Set VOICEMODE_DEV_TOKEN environment variable or use --token option.")
-        click.echo("Get your token from https://voicemode.dev/settings")
-        sys.exit(1)
+        # Try to load stored credentials
+        try:
+            credentials = get_valid_credentials(auto_refresh=True)
+            if credentials:
+                token = credentials.access_token
+                user_info = credentials.user_info or {}
+                email = user_info.get("email", "authenticated user")
+                click.echo(f"Using stored credentials for: {email}")
+            else:
+                click.echo("Error: Not logged in.", err=True)
+                click.echo()
+                click.echo("Run 'voicemode connect login' to authenticate.")
+                click.echo("Or use --token to provide a token directly.")
+                sys.exit(1)
+        except AuthError as e:
+            click.echo(f"Error: Authentication failed: {e}", err=True)
+            click.echo()
+            click.echo("Your credentials may have expired. Run 'voicemode connect login' to re-authenticate.")
+            sys.exit(1)
 
     # Try to import websockets
     try:
