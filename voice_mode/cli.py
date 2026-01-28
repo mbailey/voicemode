@@ -3027,10 +3027,98 @@ def connect():
     starting Claude Code when someone initiates a voice session.
 
     Examples:
+        voicemode connect login
         voicemode connect standby
         voicemode connect status
     """
     pass
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--no-browser', is_flag=True, help='Print URL instead of opening browser')
+def login(no_browser: bool):
+    """Authenticate with voicemode.dev using your browser.
+
+    Opens your browser to complete authentication via Auth0.
+    After successful login, your credentials are stored locally
+    and used automatically by 'voicemode connect standby'.
+
+    The login process:
+    1. Opens browser to voicemode.dev/Auth0 login page
+    2. You authenticate with your account
+    3. Browser redirects to local callback URL
+    4. Credentials are stored in ~/.voicemode/credentials
+
+    Examples:
+        # Standard login (opens browser automatically)
+        voicemode connect login
+
+        # Print URL instead of opening browser
+        voicemode connect login --no-browser
+    """
+    from voice_mode.auth import login as auth_login, AuthError, format_expiry
+
+    click.echo("Starting authentication with voicemode.dev...")
+
+    def on_browser_open(url: str) -> None:
+        """Called when browser should be opened."""
+        if no_browser:
+            click.echo()
+            click.echo("Open this URL in your browser to authenticate:")
+            click.echo()
+            click.echo(f"  {url}")
+            click.echo()
+        else:
+            click.echo("Opening browser...")
+
+    def on_waiting() -> None:
+        """Called while waiting for user to complete auth."""
+        click.echo()
+        click.echo("Waiting for authentication...")
+        click.echo("Complete the login in your browser, then return here.")
+        click.echo("Press Ctrl+C to cancel.")
+        click.echo()
+
+    try:
+        credentials = auth_login(
+            open_browser=not no_browser,
+            on_browser_open=on_browser_open,
+            on_waiting=on_waiting,
+        )
+
+        # Display success message
+        click.echo("✓ Authentication successful!")
+        click.echo()
+
+        if credentials.user_info:
+            email = credentials.user_info.get("email", "unknown")
+            name = credentials.user_info.get("name", "")
+            if name:
+                click.echo(f"  Logged in as: {name} ({email})")
+            else:
+                click.echo(f"  Logged in as: {email}")
+        else:
+            click.echo("  Logged in successfully")
+
+        click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+        click.echo()
+        click.echo("You can now use 'voicemode connect standby' to receive calls.")
+
+    except KeyboardInterrupt:
+        click.echo()
+        click.echo("Authentication cancelled.")
+        sys.exit(1)
+
+    except AuthError as e:
+        click.echo()
+        click.echo(f"Authentication failed: {e}", err=True)
+        sys.exit(1)
+
+    except Exception as e:
+        click.echo()
+        click.echo(f"Unexpected error during authentication: {e}", err=True)
+        sys.exit(1)
 
 
 @connect.command()

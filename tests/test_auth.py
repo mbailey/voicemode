@@ -683,3 +683,119 @@ class TestFormatExpiry:
         """Test formatting time in days."""
         result = format_expiry(time.time() + 86400 * 2)  # 2 days
         assert "day" in result
+
+
+class TestLoginCLI:
+    """Test the 'voicemode connect login' CLI command."""
+
+    def test_login_command_exists(self):
+        """Test that login command is registered under connect group."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+        result = runner.invoke(connect, ["login", "--help"])
+
+        assert result.exit_code == 0
+        assert "Authenticate with voicemode.dev" in result.output
+        assert "--no-browser" in result.output
+
+    def test_login_success(self):
+        """Test successful login flow."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        mock_credentials = Credentials(
+            access_token="test_access_token",
+            refresh_token="test_refresh_token",
+            expires_at=time.time() + 3600,
+            token_type="Bearer",
+            user_info={"email": "test@example.com", "name": "Test User"},
+        )
+
+        runner = CliRunner()
+
+        with patch("voice_mode.auth.login", return_value=mock_credentials) as mock_login:
+            result = runner.invoke(connect, ["login", "--no-browser"])
+
+            # Should have called auth.login
+            assert mock_login.called
+            call_kwargs = mock_login.call_args[1]
+            assert call_kwargs["open_browser"] is False
+
+            # Should show success output
+            assert result.exit_code == 0
+            assert "Authentication successful" in result.output
+            assert "Test User" in result.output
+            assert "test@example.com" in result.output
+
+    def test_login_cancelled(self):
+        """Test login cancelled by user (Ctrl+C)."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+
+        with patch("voice_mode.auth.login", side_effect=KeyboardInterrupt()):
+            result = runner.invoke(connect, ["login", "--no-browser"])
+
+            assert result.exit_code == 1
+            assert "cancelled" in result.output.lower()
+
+    def test_login_timeout(self):
+        """Test login timeout."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+
+        with patch("voice_mode.auth.login", side_effect=AuthError("Authentication timed out. Please try again.")):
+            result = runner.invoke(connect, ["login", "--no-browser"])
+
+            assert result.exit_code == 1
+            assert "timed out" in result.output.lower()
+
+    def test_login_auth_error(self):
+        """Test login with auth error."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+
+        with patch("voice_mode.auth.login", side_effect=AuthError("No available ports")):
+            result = runner.invoke(connect, ["login", "--no-browser"])
+
+            assert result.exit_code == 1
+            assert "failed" in result.output.lower()
+            assert "No available ports" in result.output
+
+    def test_login_no_browser_shows_url(self):
+        """Test --no-browser option shows URL in output."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        mock_credentials = Credentials(
+            access_token="test_access_token",
+            refresh_token="test_refresh_token",
+            expires_at=time.time() + 3600,
+            token_type="Bearer",
+            user_info=None,
+        )
+
+        runner = CliRunner()
+
+        def mock_login(open_browser, on_browser_open, on_waiting):
+            # Simulate callback with URL
+            if on_browser_open:
+                on_browser_open("https://auth0.test/authorize?foo=bar")
+            if on_waiting:
+                on_waiting()
+            return mock_credentials
+
+        with patch("voice_mode.auth.login", side_effect=mock_login):
+            result = runner.invoke(connect, ["login", "--no-browser"])
+
+            assert result.exit_code == 0
+            # When --no-browser is set, URL should be displayed
+            assert "https://auth0.test/authorize" in result.output
+            assert "Open this URL" in result.output
