@@ -2818,8 +2818,9 @@ def mfp_edit(episode: int | None):
         sys.exit(1)
 
     # Build the command - run marimo with the editor script
-    # Use 'uv run' to ensure dependencies are available
-    cmd = ["uv", "run", "marimo", "run", str(editor_path)]
+    # Use 'uv run' to ensure marimo is available, and --sandbox
+    # to install the inline script dependencies (PEP 723)
+    cmd = ["uv", "run", "marimo", "run", "--sandbox", str(editor_path)]
 
     click.echo("Starting MFP Chapter Editor...")
     click.echo(f"Opening in browser at http://localhost:2718")

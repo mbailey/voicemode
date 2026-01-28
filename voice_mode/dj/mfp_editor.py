@@ -722,13 +722,13 @@ def _(download_button, download_target, get_refresh, mo, set_refresh, streaming_
             urllib.request.urlretrieve(streaming_url, download_target)
 
             # Get file size
-            file_size_mb = download_target.stat().st_size / (1024 * 1024)
+            _file_size_mb = download_target.stat().st_size / (1024 * 1024)
 
             # Trigger refresh to update the audio source
             set_refresh(get_refresh() + 1)
 
             download_status = mo.callout(
-                mo.md(f"✅ **Downloaded!** `{download_target.name}` ({file_size_mb:.0f} MB)\n\nRefresh the page to use the local file."),
+                mo.md(f"✅ **Downloaded!** `{download_target.name}` ({_file_size_mb:.0f} MB)\n\nRefresh the page to use the local file."),
                 kind="success"
             )
         except urllib.error.URLError as e:
@@ -1195,8 +1195,8 @@ def _(AUDIO_SERVER_PORT, MFP_DIR, audio_url, cue_data, cue_path, get_refresh, mo
         player_path.write_text(wavesurfer_html)
 
         # Load iframe with cache bust
-        episode_name = cue_path.stem if cue_path else ""
-        player_url = f"http://localhost:{AUDIO_SERVER_PORT}/_player.html?v={refresh_count}&ep={episode_name}"
+        _ep_name = cue_path.stem if cue_path else ""
+        player_url = f"http://localhost:{AUDIO_SERVER_PORT}/_player.html?v={refresh_count}&ep={_ep_name}"
         iframe_html = f'<iframe src="{player_url}" style="width: 100%; height: 220px; border: none; border-radius: 8px;"></iframe>'
         waveform_widget = mo.Html(iframe_html)
     else:
@@ -1290,10 +1290,10 @@ def _(AUDIO_SERVER_PORT, MFP_DIR, Path, cue_data, cue_path, get_reference_files,
                     try:
                         # Get relative path from MFP_DIR (using symlink path, not resolved)
                         rel_path = ref_file.relative_to(MFP_DIR)
-                        audio_url = f"http://localhost:{AUDIO_SERVER_PORT}/{rel_path}"
+                        _ref_audio_url = f"http://localhost:{AUDIO_SERVER_PORT}/{rel_path}"
                         _ref_player = mo.vstack([
                             mo.md(f"**Reference:** `{ref_file.name}`"),
-                            mo.Html(f'<audio controls src="{audio_url}" style="width: 100%;"></audio>')
+                            mo.Html(f'<audio controls src="{_ref_audio_url}" style="width: 100%;"></audio>')
                         ])
                     except ValueError:
                         # File not under MFP_DIR
@@ -1416,7 +1416,7 @@ def _(cue_data, cue_path, episode_name, is_draft, mfp_dir, mo):
 
         if all_have_timestamps:
             # All tracks have timestamps - ready to graduate
-            new_cue_path = mfp_dir / f"{episode_name}.cue"
+            _new_cue_path = mfp_dir / f"{episode_name}.cue"
             graduate_button = mo.ui.run_button(
                 label="📋 Graduate to Complete (.cue)",
                 kind="success"
@@ -1448,13 +1448,13 @@ def _(cue_path, episode_name, get_refresh, graduate_button, is_draft, mfp_dir, m
     graduate_result = None
     if graduate_button is not None and graduate_button.value and is_draft and cue_path and mfp_dir:
         try:
-            new_cue_path = mfp_dir / f"{episode_name}.cue"
+            _graduated_path = mfp_dir / f"{episode_name}.cue"
             # Rename .cue-draft to .cue
-            cue_path.rename(new_cue_path)
+            cue_path.rename(_graduated_path)
             # Trigger refresh
             set_refresh(get_refresh() + 1)
             graduate_result = mo.callout(
-                mo.md(f"✅ Graduated! `{cue_path.name}` → `{new_cue_path.name}`\n\nRefresh the page to see the updated episode."),
+                mo.md(f"✅ Graduated! `{cue_path.name}` → `{_graduated_path.name}`\n\nRefresh the page to see the updated episode."),
                 kind="success"
             )
         except Exception as e:
