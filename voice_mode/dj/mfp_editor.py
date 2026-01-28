@@ -661,13 +661,15 @@ def _():
 
 
 @app.cell
-def _(Path, mo, mp3_path, streaming_url, subprocess, shutil):
+def _(MFP_DIR, Path, episode_name, mo, mp3_path, streaming_url, subprocess, shutil):
     # Find audio file for waveform display
     # Prefer local MP3, fall back to streaming URL
     preview_status = None
     wav_path = None
     wav_filename = None
     audio_url = None  # URL for WaveSurfer (local or streaming)
+    download_button = None  # Button to download MP3 when streaming
+    download_target = None  # Target path for download
 
     if mp3_path and mp3_path.exists():
         # Use the local MP3 directly
@@ -676,9 +678,16 @@ def _(Path, mo, mp3_path, streaming_url, subprocess, shutil):
         file_size_mb = mp3_path.stat().st_size / (1024 * 1024)
         preview_status = mo.md(f"*Audio: {mp3_path.name} ({file_size_mb:.0f} MB) - local*")
     elif streaming_url:
-        # Fall back to streaming URL
+        # Fall back to streaming URL, offer download
         audio_url = streaming_url
-        preview_status = mo.md(f"*Audio: Streaming from datashat.net*")
+        # Calculate target path for download
+        if episode_name:
+            download_target = MFP_DIR / f"{episode_name}.mp3"
+        download_button = mo.ui.run_button(label="⬇️ Download MP3", kind="neutral")
+        preview_status = mo.hstack([
+            mo.md(f"*Audio: Streaming from datashat.net*"),
+            download_button
+        ], gap=2)
     elif mp3_path:
         preview_status = mo.callout(
             mo.md(f"**MP3 not found:** `{mp3_path.name}` and no streaming URL available"),
@@ -690,7 +699,51 @@ def _(Path, mo, mp3_path, streaming_url, subprocess, shutil):
             kind="info"
         )
 
-    return audio_url, preview_status, wav_filename, wav_path
+    return audio_url, download_button, download_target, preview_status, wav_filename, wav_path
+
+
+@app.cell
+def _(download_button, download_target, get_refresh, mo, set_refresh, streaming_url):
+    # Handle download button click
+    download_status = None
+
+    if download_button is not None and download_button.value and streaming_url and download_target:
+        import urllib.request
+        import urllib.error
+
+        try:
+            # Show downloading status
+            download_status = mo.callout(
+                mo.md(f"**Downloading...** `{download_target.name}`"),
+                kind="info"
+            )
+
+            # Download the file
+            urllib.request.urlretrieve(streaming_url, download_target)
+
+            # Get file size
+            file_size_mb = download_target.stat().st_size / (1024 * 1024)
+
+            # Trigger refresh to update the audio source
+            set_refresh(get_refresh() + 1)
+
+            download_status = mo.callout(
+                mo.md(f"✅ **Downloaded!** `{download_target.name}` ({file_size_mb:.0f} MB)\n\nRefresh the page to use the local file."),
+                kind="success"
+            )
+        except urllib.error.URLError as e:
+            download_status = mo.callout(
+                mo.md(f"**Download failed:** {e.reason}"),
+                kind="danger"
+            )
+        except Exception as e:
+            download_status = mo.callout(
+                mo.md(f"**Download failed:** {e}"),
+                kind="danger"
+            )
+
+    download_status
+    return (download_status,)
 
 
 @app.cell
