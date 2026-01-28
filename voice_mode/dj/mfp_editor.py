@@ -100,39 +100,52 @@ def _(FAVORITES_FILE, MFP_DIR, Path):
         return None
 
     def get_episodes():
-        """Scan MFP directory for CUE files (that's what we edit)."""
+        """Scan MFP directory for CUE and CUE-draft files (that's what we edit).
+
+        Files with .cue extension are complete (all tracks have timestamps).
+        Files with .cue-draft extension are incomplete (tracks without timestamps).
+        """
         episodes = []
-        seen_cues = set()
+        seen_names = set()
 
-        # Find all .cue files in the directory
-        for cue_file in sorted(MFP_DIR.glob("*.cue")):
-            if cue_file in seen_cues:
-                continue
-            seen_cues.add(cue_file)
+        # Find all .cue and .cue-draft files in the directory
+        for pattern in ["*.cue", "*.cue-draft"]:
+            for cue_file in sorted(MFP_DIR.glob(pattern)):
+                # Handle both .cue and .cue-draft extensions
+                if cue_file.suffix == ".cue-draft":
+                    name = cue_file.name[:-10]  # Remove .cue-draft
+                    is_draft = True
+                else:
+                    name = cue_file.stem  # Remove .cue
+                    is_draft = False
 
-            name = cue_file.stem  # e.g., music_for_programming_49-julien_mier
+                # Skip if we've already processed this episode (prefer .cue over .cue-draft)
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
 
-            # Check completion status
-            cue_content = cue_file.read_text()
-            track_count = cue_content.count("TRACK ")
-            index_count = cue_content.count("INDEX 01")
-            is_completed = track_count > 0 and track_count == index_count
+                # Check completion status
+                cue_content = cue_file.read_text()
+                track_count = cue_content.count("TRACK ")
+                index_count = cue_content.count("INDEX 01")
+                is_completed = track_count > 0 and track_count == index_count
 
-            # Look for matching MP3 (same basename)
-            mp3_file = cue_file.with_suffix(".mp3")
-            has_audio = mp3_file.exists()
+                # Look for matching MP3 (same basename)
+                mp3_file = MFP_DIR / f"{name}.mp3"
+                has_audio = mp3_file.exists()
 
-            # Get streaming URL for fallback
-            streaming_url = get_streaming_url(name)
+                # Get streaming URL for fallback
+                streaming_url = get_streaming_url(name)
 
-            episodes.append({
-                "name": name,
-                "path": str(cue_file),  # Path to CUE file
-                "mp3_path": str(mp3_file) if has_audio else None,
-                "streaming_url": streaming_url,
-                "completed": is_completed,
-                "has_audio": has_audio,
-            })
+                episodes.append({
+                    "name": name,
+                    "path": str(cue_file),  # Path to CUE or CUE-draft file
+                    "mp3_path": str(mp3_file) if has_audio else None,
+                    "streaming_url": streaming_url,
+                    "completed": is_completed,
+                    "is_draft": is_draft,
+                    "has_audio": has_audio,
+                })
 
         return episodes
 
@@ -297,34 +310,45 @@ def _(all_episodes, mo, show_completed_only, show_favorites_only, show_with_audi
         filtered_episodes = [ep for ep in filtered_episodes if ep["has_audio"]]
 
     # Build dropdown options: "49: Julien Mier" -> path
+    # Status indicators: ★ = favorite, ✓ = complete, 📝 = draft
     episode_options = {}
     for _ep in filtered_episodes:
-        # Parse episode number and artist from name like "049_Episode_49_Julien_Mier"
-        _parts = _ep["name"].split("_")
-        if len(_parts) >= 4:
-            _num = _parts[0].lstrip("0") or "0"
-            _artist = "_".join(_parts[3:]).replace("_", " ")
-            # Add indicators for status
-            _status = ""
-            if _ep["favorite"]:
-                _status += "★ "
-            if _ep["completed"]:
-                _status += "✓ "
-            _label = f"{_status}{_num}: {_artist}"
+        # Parse episode number and artist from name like "music_for_programming_49-julien_mier"
+        _name = _ep["name"]
+        if _name.startswith("music_for_programming_"):
+            _rest = _name[len("music_for_programming_"):]
+            _parts = _rest.split("-", 1)
+            _num = _parts[0]
+            _artist = _parts[1].replace("_", " ") if len(_parts) > 1 else "Unknown"
         else:
-            _label = _ep["name"]
+            _num = "?"
+            _artist = _name
+        # Add indicators for status
+        _status = ""
+        if _ep["favorite"]:
+            _status += "★ "
+        if _ep.get("is_draft"):
+            _status += "📝 "  # Draft indicator
+        elif _ep["completed"]:
+            _status += "✓ "
+        _label = f"{_status}{_num}: {_artist}"
         episode_options[_label] = _ep["path"]
 
     # Create dropdown (default to first favorite, or first episode)
     default_ep = None
     for _ep in filtered_episodes:
         if _ep["favorite"]:
-            _parts = _ep["name"].split("_")
-            if len(_parts) >= 4:
-                _num = _parts[0].lstrip("0") or "0"
-                _artist = "_".join(_parts[3:]).replace("_", " ")
-                _status = "★ " + ("✓ " if _ep["completed"] else "")
-                default_ep = f"{_status}{_num}: {_artist}"
+            _name = _ep["name"]
+            if _name.startswith("music_for_programming_"):
+                _rest = _name[len("music_for_programming_"):]
+                _parts = _rest.split("-", 1)
+                _num = _parts[0]
+                _artist = _parts[1].replace("_", " ") if len(_parts) > 1 else "Unknown"
+            else:
+                _num = "?"
+                _artist = _name
+            _status = "★ " + ("📝 " if _ep.get("is_draft") else ("✓ " if _ep["completed"] else ""))
+            default_ep = f"{_status}{_num}: {_artist}"
             break
 
     if not default_ep and episode_options:
@@ -357,9 +381,19 @@ def _(Path, all_episodes, episode_dropdown, sidecar_path_value):
     mp3_path = None
     streaming_url = None
     mfp_dir = None
+    is_draft = False  # Track if this is a .cue-draft file
+    episode_name = None  # Base name for graduation
 
     if cue_path and cue_path.exists():
         mfp_dir = cue_path.parent  # Directory containing the files
+        is_draft = cue_path.name.endswith(".cue-draft")
+
+        # Get base name (without .cue or .cue-draft extension)
+        if is_draft:
+            episode_name = cue_path.name[:-10]  # Remove .cue-draft
+        else:
+            episode_name = cue_path.stem
+
         # Find matching MP3 and streaming URL from episode data
         for ep in all_episodes:
             if ep["path"] == str(cue_path):
@@ -369,11 +403,11 @@ def _(Path, all_episodes, episode_dropdown, sidecar_path_value):
                 break
         # Fallback: check for MP3 with same basename
         if not mp3_path:
-            mp3_path = cue_path.with_suffix(".mp3")
-            if not mp3_path.exists():
-                mp3_path = None
+            mp3_file = mfp_dir / f"{episode_name}.mp3"
+            if mp3_file.exists():
+                mp3_path = mp3_file
 
-    return cue_path, mfp_dir, mp3_path, streaming_url
+    return cue_path, episode_name, is_draft, mfp_dir, mp3_path, streaming_url
 
 
 @app.cell
@@ -406,14 +440,15 @@ def _(cue_path, get_refresh, parse_cue_file):
 
 
 @app.cell
-def _(cue_data, mo):
+def _(cue_data, is_draft, mo):
     # Display header info
     if cue_data:
         _hdr = cue_data['header']
+        _draft_badge = "📝 **DRAFT** - " if is_draft else ""
         header_display = mo.md(f"""
 ## {_hdr.get('title', 'Unknown')}
 
-**Performer:** {_hdr.get('performer', 'Unknown')}
+{_draft_badge}**Performer:** {_hdr.get('performer', 'Unknown')}
 **Audio File:** `{_hdr.get('file', 'Unknown')}`
         """)
     else:
@@ -1314,6 +1349,69 @@ def _(cue_path, get_refresh, mo, new_cue_content, save_button, set_refresh):
 
     save_result
     return (save_result,)
+
+
+@app.cell
+def _(cue_data, cue_path, episode_name, is_draft, mfp_dir, mo):
+    # Graduate button - show when a draft has all tracks with timestamps
+    graduate_button = None
+    graduate_info = None
+
+    if is_draft and cue_data and cue_data.get('tracks'):
+        # Check if all tracks have timestamps
+        all_have_timestamps = all(t.get('has_timestamp', False) for t in cue_data['tracks'])
+
+        if all_have_timestamps:
+            # All tracks have timestamps - ready to graduate
+            new_cue_path = mfp_dir / f"{episode_name}.cue"
+            graduate_button = mo.ui.run_button(
+                label="📋 Graduate to Complete (.cue)",
+                kind="success"
+            )
+            graduate_info = mo.md(f"""
+**Ready to graduate!** All {len(cue_data['tracks'])} tracks have timestamps.
+
+This will rename `{cue_path.name}` → `{episode_name}.cue`
+
+The file will then be usable for chapter navigation during playback.
+            """)
+        else:
+            # Not all tracks have timestamps
+            tracks_with = sum(1 for t in cue_data['tracks'] if t.get('has_timestamp', False))
+            tracks_total = len(cue_data['tracks'])
+            graduate_info = mo.callout(
+                mo.md(f"**Draft:** {tracks_with}/{tracks_total} tracks have timestamps. Add timestamps to all tracks to graduate."),
+                kind="info"
+            )
+
+    if graduate_info:
+        mo.vstack([graduate_info, graduate_button] if graduate_button else [graduate_info])
+    return graduate_button, graduate_info
+
+
+@app.cell
+def _(cue_path, episode_name, get_refresh, graduate_button, is_draft, mfp_dir, mo, set_refresh):
+    # Handle graduate action
+    graduate_result = None
+    if graduate_button is not None and graduate_button.value and is_draft and cue_path and mfp_dir:
+        try:
+            new_cue_path = mfp_dir / f"{episode_name}.cue"
+            # Rename .cue-draft to .cue
+            cue_path.rename(new_cue_path)
+            # Trigger refresh
+            set_refresh(get_refresh() + 1)
+            graduate_result = mo.callout(
+                mo.md(f"✅ Graduated! `{cue_path.name}` → `{new_cue_path.name}`\n\nRefresh the page to see the updated episode."),
+                kind="success"
+            )
+        except Exception as e:
+            graduate_result = mo.callout(
+                mo.md(f"**Error graduating:** {e}"),
+                kind="danger"
+            )
+
+    graduate_result
+    return (graduate_result,)
 
 
 if __name__ == "__main__":
