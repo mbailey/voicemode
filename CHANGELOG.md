@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [8.0.7] - 2026-01-29
+## [8.0.8] - 2026-01-29
+
+### Changed
+
+- **System Audio Converted to MP3**
+  - Converted system message audio files from WAV to MP3
+  - Reduced package size (~200KB to ~36KB for system audio)
 
 ## [8.0.7] - 2026-01-29
 
