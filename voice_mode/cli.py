@@ -3013,3 +3013,256 @@ def favorite():
     click.echo(f"{artist} - {track.title} {status_str} favorites")
 
 
+# ============================================================================
+# Connect Command Group - Remote Control Integration
+# ============================================================================
+
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def connect():
+    """Connect to voicemode.dev for remote voice control.
+
+    Enables remote voice sessions from iOS app or web browser.
+    The listener connects to voicemode.dev and waits for incoming calls,
+    starting Claude Code when someone initiates a voice session.
+
+    Examples:
+        voicemode connect standby
+        voicemode connect status
+    """
+    pass
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--url', default='wss://voicemode.dev/ws',
+              help='WebSocket URL for voicemode.dev')
+@click.option('--token', envvar='VOICEMODE_DEV_TOKEN',
+              help='Authentication token for voicemode.dev (or set VOICEMODE_DEV_TOKEN)')
+@click.option('--claude-command', default='claude --resume',
+              help='Command to run when wake signal received')
+@click.option('--session', default=None,
+              help='Claude Code session name to resume')
+def standby(url: str, token: str | None, claude_command: str, session: str | None):
+    """Wait for incoming voice sessions and start Claude Code.
+
+    Connects to voicemode.dev and listens for wake signals. When someone
+    initiates a voice session (from iOS app or web), this command will
+    start or resume Claude Code with the voicemode MCP server.
+
+    The connection stays alive, waiting for calls. Press Ctrl+C to stop.
+
+    Examples:
+        # Basic usage (requires VOICEMODE_DEV_TOKEN environment variable)
+        voicemode connect standby
+
+        # Specify token directly
+        voicemode connect standby --token your-token-here
+
+        # Custom Claude command
+        voicemode connect standby --claude-command "claude --resume my-session"
+    """
+    import json
+    import time
+    import signal
+    import threading
+
+    # Check for token
+    if not token:
+        click.echo("Error: Authentication token required.", err=True)
+        click.echo()
+        click.echo("Set VOICEMODE_DEV_TOKEN environment variable or use --token option.")
+        click.echo("Get your token from https://voicemode.dev/settings")
+        sys.exit(1)
+
+    # Try to import websockets
+    try:
+        import websockets
+        import websockets.sync.client as ws_sync
+    except ImportError:
+        click.echo("Error: websockets package required.", err=True)
+        click.echo()
+        click.echo("Install with: pip install websockets")
+        sys.exit(1)
+
+    click.echo(f"Connecting to {url}...")
+
+    # State tracking
+    connected = False
+    running = True
+    operator_process = None
+
+    def signal_handler(signum, frame):
+        nonlocal running
+        click.echo("\nShutting down...")
+        running = False
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    def start_operator(wake_msg: dict) -> subprocess.Popen | None:
+        """Start Claude Code when wake signal received."""
+        nonlocal operator_process
+
+        reason = wake_msg.get('reason', 'unknown')
+        caller_id = wake_msg.get('callerId', 'unknown')
+        click.echo(f"\n🔔 Wake signal received! Reason: {reason}, Caller: {caller_id}")
+
+        # Build the command
+        cmd = claude_command
+        if session:
+            cmd = f"claude --resume {session}"
+
+        click.echo(f"Starting operator: {cmd}")
+
+        try:
+            # Start Claude Code in a new terminal/process
+            # On macOS, we might want to open a new Terminal window
+            # For now, just run it as a subprocess
+            operator_process = subprocess.Popen(
+                cmd.split(),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            click.echo(f"✅ Operator started (PID: {operator_process.pid})")
+            return operator_process
+        except Exception as e:
+            click.echo(f"❌ Failed to start operator: {e}", err=True)
+            return None
+
+    def send_status(ws, status: str, error: str | None = None, wake_id: str | None = None):
+        """Send operator status back to server."""
+        msg = {
+            'type': 'operator_status',
+            'status': status,
+            'timestamp': int(time.time() * 1000),
+        }
+        if error:
+            msg['error'] = error
+        if wake_id:
+            msg['id'] = wake_id
+        if operator_process:
+            msg['sessionId'] = str(operator_process.pid)
+
+        ws.send(json.dumps(msg))
+
+    # Main connection loop with reconnection
+    retry_delay = 1
+    max_retry_delay = 60
+
+    while running:
+        try:
+            # Connect with auth token in header
+            headers = {'Authorization': f'Bearer {token}'}
+
+            with ws_sync.connect(url, additional_headers=headers) as ws:
+                connected = True
+                retry_delay = 1  # Reset retry delay on successful connection
+
+                # Wait for connected message
+                raw = ws.recv()
+                msg = json.loads(raw)
+                if msg.get('type') == 'connected':
+                    user_id = msg.get('userId', 'unknown')
+                    session_id = msg.get('sessionId', '')[:12]
+                    click.echo(f"✅ Connected as {user_id} (session: {session_id}...)")
+                else:
+                    click.echo(f"Unexpected message: {msg.get('type')}")
+
+                # Send ready message with canStartOperator capability
+                ready_msg = {
+                    'type': 'ready',
+                    'device': {
+                        'platform': 'python-listener',
+                        'appVersion': __version__,
+                    },
+                    'capabilities': {
+                        'tts': False,
+                        'stt': False,
+                        'canStartOperator': True,
+                    },
+                }
+                ws.send(json.dumps(ready_msg))
+                click.echo("📡 Ready and waiting for voice sessions...")
+                click.echo("   Press Ctrl+C to stop")
+                click.echo()
+
+                # Main message loop
+                while running:
+                    try:
+                        # Use timeout so we can check running flag
+                        ws.socket.settimeout(5.0)
+                        raw = ws.recv()
+                        msg = json.loads(raw)
+
+                        msg_type = msg.get('type')
+
+                        if msg_type == 'wake':
+                            # Start the operator
+                            process = start_operator(msg)
+                            if process:
+                                send_status(ws, 'starting', wake_id=msg.get('id'))
+                                # Give it a moment to start
+                                time.sleep(2)
+                                if process.poll() is None:
+                                    send_status(ws, 'running', wake_id=msg.get('id'))
+                                else:
+                                    send_status(ws, 'error', error='Process exited', wake_id=msg.get('id'))
+                            else:
+                                send_status(ws, 'error', error='Failed to start', wake_id=msg.get('id'))
+
+                        elif msg_type == 'ack':
+                            # Acknowledgment - just log it
+                            if msg.get('status') == 'ok':
+                                pass  # All good
+                            else:
+                                click.echo(f"⚠️ Server error: {msg.get('error')}")
+
+                        elif msg_type == 'heartbeat':
+                            # Respond to heartbeat
+                            ws.send(json.dumps({
+                                'type': 'heartbeat',
+                                'timestamp': int(time.time() * 1000),
+                            }))
+
+                        elif msg_type == 'error':
+                            click.echo(f"❌ Server error: {msg.get('message')} ({msg.get('code')})")
+
+                        else:
+                            click.echo(f"📨 {msg_type}: {msg}")
+
+                    except TimeoutError:
+                        # Just a timeout, continue loop
+                        continue
+                    except Exception as e:
+                        if running:
+                            click.echo(f"Error receiving message: {e}")
+                        break
+
+        except Exception as e:
+            if running:
+                click.echo(f"Connection error: {e}")
+                click.echo(f"Reconnecting in {retry_delay}s...")
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_retry_delay)
+
+    click.echo("Goodbye!")
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def status():
+    """Show connection status.
+
+    Displays current voicemode.dev connection status, including:
+    - Connection state (connected/disconnected)
+    - Authenticated user
+    - Operator status
+    """
+    # For now, just show that the feature exists
+    click.echo("Connect status checking not yet implemented.")
+    click.echo()
+    click.echo("To start listening for voice sessions:")
+    click.echo("  voicemode connect standby")
+
+
