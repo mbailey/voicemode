@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [8.0.4] - 2026-01-29
+## [8.0.5] - 2026-01-29
 
-## [8.0.4] - 2026-01-29
+## [8.0.5] - 2026-01-29
 
 ### Fixed
 
@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `__init__.py` files to data directories for proper Python package structure
   - `importlib.resources.files()` now correctly discovers soundfont files
   - Fixes empty soundfonts directory on fresh installations
+
+## [8.0.4] - 2026-01-29
+
+_Note: This release did not include the fix files - use 8.0.5_
 
 ## [8.0.3] - 2026-01-29
 
