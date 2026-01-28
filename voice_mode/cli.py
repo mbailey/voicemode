@@ -3123,6 +3123,32 @@ def login(no_browser: bool):
 
 @connect.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
+def logout():
+    """Log out from voicemode.dev and clear stored credentials.
+
+    Removes locally stored authentication tokens. You will need to
+    run 'voicemode connect login' again to authenticate.
+
+    Examples:
+        voicemode connect logout
+    """
+    from voice_mode.auth import load_credentials, clear_credentials
+
+    # Try to show who is being logged out
+    credentials = load_credentials()
+
+    if clear_credentials():
+        click.echo("✓ Logged out successfully.")
+        if credentials and credentials.user_info:
+            email = credentials.user_info.get("email")
+            if email:
+                click.echo(f"  Removed credentials for: {email}")
+    else:
+        click.echo("Already logged out (no credentials stored).")
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
 @click.option('--url', default='wss://voicemode.dev/ws',
               help='WebSocket URL for voicemode.dev')
 @click.option('--token', envvar='VOICEMODE_DEV_TOKEN',
