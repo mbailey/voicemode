@@ -14,9 +14,14 @@ Thank you for your interest in contributing to VoiceMode. This guide will help y
 
 ### Getting Started
 
-1. **Clone the repository**
+1. **Fork and clone the repository**
+
+   External contributors need to fork the repository first (you can't push directly to the main repo):
+
+   - Click **Fork** at https://github.com/mbailey/voicemode
+   - Clone your fork:
    ```bash
-   git clone https://github.com/mbailey/voicemode.git
+   git clone https://github.com/YOUR-USERNAME/voicemode.git
    cd voicemode
    ```
 
@@ -91,7 +96,11 @@ python -c "from voice_mode.core import text_to_speech; import asyncio; asyncio.r
 2. Make your changes
 3. Run tests to ensure nothing is broken
 4. Commit with descriptive messages
-5. Push and create a pull request
+5. Push to your fork and create a pull request
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+   Then open a PR from your fork to `mbailey/voicemode`
 
 ## Debugging
 

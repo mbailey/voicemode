@@ -26,9 +26,11 @@ pip install uv
 
 ## Cloning the Repository
 
+**For contributors:** Fork the repo first at https://github.com/mbailey/voicemode, then clone your fork:
+
 ```bash
-# Clone the repository
-git clone https://github.com/mbailey/voicemode
+# Clone your fork (replace YOUR-USERNAME)
+git clone https://github.com/YOUR-USERNAME/voicemode
 cd voicemode
 
 # Install in development mode
