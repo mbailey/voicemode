@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.3] - 2026-01-29
+
+### Changed
+
+- **Soundfonts Directory Renamed** (GH-223, GH-224)
+  - Package-managed soundfonts directory renamed from `default` to `voicemode`
+  - Soundfonts now sync from package on every init (auto-updates with new releases)
+  - Migration from old `default` directory handled automatically
+  - User customizations via `current` symlink are preserved
+
+### Fixed
+
+- **Plugin Hook Path**
+  - Fixed path to hook receiver for PreCompact in claude-plugin
+
 ## [8.0.2] - 2026-01-25
 
 ### Added
