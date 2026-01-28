@@ -7,20 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [8.0.5] - 2026-01-29
+## [8.0.6] - 2026-01-29
+
+## [8.0.6] - 2026-01-29
+
+### Fixed
+
+- **Soundfonts Not in PyPI Package** (GH-223)
+  - Added `artifacts` setting to sdist build target in pyproject.toml
+  - MP3/WAV files were being excluded from sdist due to .gitignore
+  - PyPI wheels built from sdist now include all soundfont audio files
 
 ## [8.0.5] - 2026-01-29
 
 ### Fixed
 
-- **Soundfonts Not Copying on Fresh Install** (GH-223)
-  - Added `__init__.py` files to data directories for proper Python package structure
-  - `importlib.resources.files()` now correctly discovers soundfont files
-  - Fixes empty soundfonts directory on fresh installations
+- **Soundfonts Package Structure** (GH-223)
+  - Added `__init__.py` files to data directories for `importlib.resources` discovery
+
+_Note: Audio files missing from PyPI due to sdist build issue - use 8.0.6_
 
 ## [8.0.4] - 2026-01-29
 
-_Note: This release did not include the fix files - use 8.0.5_
+_Note: Fix files not committed - use 8.0.6_
 
 ## [8.0.3] - 2026-01-29
 
