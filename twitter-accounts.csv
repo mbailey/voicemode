@@ -1,0 +1,50 @@
+handle,display_name,follower_count,bio_focus,engagement_level,dms_open,notable_tweet,content_type,rank_score,notes
+@bcherny,Boris Cherny,unknown,Claude Code creator at Anthropic,very_high,unknown,Viral thread on Claude Code setup - 5 Claudes in parallel workflow,claude_code_creator,99,Creator of Claude Code. Viral thread on workflow garnered millions of views. Most authoritative source.
+@claudeai,Claude (Official),unknown,Official Claude account by Anthropic,very_high,no,Claude Sonnet 4 announcements and community builds,official,98,Official account for Claude announcements and features.
+@AnthropicAI,Anthropic,unknown,Official Anthropic company account,very_high,no,Product launches and research announcements,official,97,Company account - product announcements.
+@karpathy,Andrej Karpathy,1000000+,Former Tesla AI Director - OpenAI founding member,very_high,no,Coined 'vibe coding' - shared detailed Claude Code field notes Jan 2026,ai_thought_leader,96,AI luminary. Vibe coding term originator. Critical but detailed Claude Code analysis.
+@rakyll,Jaana Dogan,unknown,Google Principal Engineer - Gemini API team,very_high,unknown,Viral tweet: Claude Code did in 1 hour what Google team spent a year on - 5.4M views,tech_influencer,95,Google engineer confession went viral Jan 2026. Major credibility signal.
+@lennysan,Lenny Rachitsky,300000+,Product management newsletter author,very_high,unknown,Everyone should use Claude Code more - PMs marketers designers founders,pm_influencer,94,Major PM newsletter. Advocates Claude Code for non-developers.
+@alexalbert__,Alex Albert,unknown,Claude Relations at Anthropic,high,unknown,MCP launch announcements and Claude Code updates,anthropic_team,93,Official Anthropic voice. Announces major features.
+@emollick,Ethan Mollick,200000+,Wharton professor - AI researcher,very_high,unknown,Claude Code and What Comes Next article - 1 hour startup experiment,academic_influencer,92,Academic perspective with viral experiments. High credibility.
+@steipete,Peter Steinberger,unknown,iOS dev legend - PSPDFKit founder - Clawdbot creator,very_high,unknown,Essential Reading for Agentic Engineers series - runs dangerous mode,power_user,91,Agentic engineering expert. steipete.me is required reading. Built VibeTunnel.
+@t3dotgg,Theo,500000+,T3 Stack creator - YouTuber,very_high,unknown,Im addicted to Claude Code (i get it now) video,developer_influencer,90,Honest developer reviews. Large YouTube and X following.
+@swyx,swyx,unknown,Latent Space newsletter - SmolAI founder,high,unknown,Latent Space podcast with Boris Cherny and Cat Wu,ai_community,89,AI engineering thought leader. Coined useful AI frameworks.
+@mckaywrigley,McKay Wrigley,214000,Takeoff AI founder - AI educator,very_high,yes,Claude Code Deep Mastery playlist - 1hr Notes & Research tutorial,educator,88,Comprehensive Claude Code tutorials. Beginner friendly.
+@geoffreyhuntley,Geoffrey Huntley,unknown,Mad scientist of Claude Code - Ralph Wiggum technique inventor,high,unknown,Ran Claude Code in loop for 3 months - created Cursed programming language,experimenter,87,Decompiled Claude Code source. Workshop on building coding agents.
+@trq212,Thariq Shihipar,unknown,MTS at Anthropic on Claude Code,high,unknown,Claude Code is All You Need - uses for all work not just code,anthropic_team,86,Anthropic insider perspective on general agent use.
+@DanielMiessler,Daniel Miessler,100000+,Security researcher and AI enthusiast,very_high,unknown,Running TWO Claude Code Max accounts - viral usage analogy,power_user,85,Heavy user. Viral posts about usage limits.
+@simonw,Simon Willison,100000+,Datasette creator - independent researcher,high,unknown,Discusses coding with AI while walking dog - productivity insights,developer_influencer,84,AI productivity expert. Technical deep dives.
+@paulg,Paul Graham,2000000+,Y Combinator co-founder,very_high,no,AI cuts through bureaucracy response to Jaana Dogan,tech_leader,83,Tech thought leader. High influence commentary.
+@dhh,David Heinemeier Hansson,500000+,Ruby on Rails creator,high,unknown,Criticized Anthropic crackdown as customer hostile,developer_influencer,82,Major developer voice. Critical perspective.
+@amdaskell,Amanda Askell,unknown,Philosopher at Anthropic - wrote Claude soul document,medium,unknown,Claude alignment and character development insights,anthropic_team,81,Deep expertise on Claude character and values.
+@latentspacepod,Latent Space,unknown,AI Engineer podcast by swyx and Alessio,high,no,Claude Code episode with Boris and Cat from Anthropic,podcast,80,Quality AI engineering content. Direct Anthropic interviews.
+@itsolelehmann,Ole Lehmann,unknown,Developer and AI enthusiast,high,unknown,2026 is year of Claude Code wrappers - dev running 7 instances,community,79,Practical usage patterns. Multiple instance workflows.
+@internetvin,internetVin,unknown,Tech observer and developer,high,unknown,2026 is tipping point for how we interact with computers,community,78,Enthusiastic early adopter voice.
+@paoloanzn,4nzn,unknown,Developer experimenting with Claude Code,high,unknown,Fed raw DNA data to Claude Code for health analysis,community,77,Innovative non-coding use cases.
+@daniel_mac8,Dan McAteer,unknown,Tech analyst,medium,unknown,Anthropic personnel signaling Claude Code for all knowledge workers,analyst,76,Industry trend analysis.
+@fireship_dev,Fireship,1500000+,Tech education YouTuber,very_high,no,Claude 3.7 Goes Hard For Programmers video,educator,75,Major tech education channel. Short-form high-quality content.
+@petergyang,Peter Yang,unknown,Creator Economy newsletter author,high,yes,Claude Code Beginner Tutorial - Build Movie App in 15 Minutes,educator,74,Beginner-friendly tutorials and newsletter.
+@vasuman,vas,unknown,Developer and Claude Code advocate,high,unknown,Post recommending Claude Code tutorial garnered 2.2M views,community,73,High engagement recommendations.
+@dani_avila7,Daniel San,unknown,Developer using Claude Code,medium,unknown,New accept with changes feature testing,community,72,Feature testing and feedback.
+@banteg,Artem K,unknown,Yearn Finance developer,medium,unknown,Sympathetic take on Anthropic policies,defi_developer,71,DeFi perspective on Claude Code policies.
+@claude_code,Claude Code Community,unknown,Community account for Claude Code projects,medium,no,Tips like Plan with Opus execute with Sonnet,community,70,Community tips and project sharing. 78+ posts.
+@ykdojo,YK (CS Dojo),1900000+,Programming educator,very_high,unknown,40+ Claude Code tips repo on GitHub,educator,69,Major programming educator. Comprehensive tips repository.
+@theonevittor,Vittor Santos,unknown,Developer sharing Claude Code content,medium,unknown,Claude Code tutorials and tips,community,68,Active community member.
+@wfrng,Warren,unknown,AI coding enthusiast,medium,unknown,Claude Code workflow sharing,community,67,Practical usage tips.
+@transitive_bs,Travis Fisher,unknown,Developer and AI tools enthusiast,medium,unknown,MCP and Claude Code integrations,developer,66,Technical integrations focus.
+@theaievangelist,AI Evangelist,unknown,AI tools promotion and reviews,medium,unknown,Claude Code feature highlights,promoter,65,AI tools coverage.
+@danshipper,Dan Shipper,unknown,Every newsletter - Chain of Thought podcast,high,unknown,Interview with Cat Wu and Boris Cherny founding engineers,media,64,Quality interviews with Anthropic team.
+@gergelyorosz,Gergely Orosz,200000+,Pragmatic Engineer newsletter,high,unknown,How Claude Code is Built technical analysis,newsletter,63,Deep technical analysis. Engineering management focus.
+@zvimowshowitz,Zvi Mowshowitz,unknown,AI analysis newsletter author,high,unknown,Weekly AI analysis including Claude Code coverage,analyst,62,Thoughtful weekly AI analysis.
+@charlieholtz,Charlie Holtz,unknown,AI infrastructure tools developer,medium,unknown,Infrastructure and tooling for AI coding,developer,61,Technical infrastructure focus.
+@shl,Sahil Lavingia,400000+,Gumroad founder,high,unknown,Real-world Claude Code application at scale,founder,60,Founder perspective on AI tools at scale.
+@catalinmpit,Catalin Pit,100000+,Developer content creator,high,unknown,Vibe coding is easy - vibe debugging is hard meme,educator,59,Developer education and memes.
+@jpcaparas,JP Caparas,unknown,Medium author - Who to Follow guide,medium,unknown,Who to Follow If Youre Serious About Claude Code article,media,58,Curated list of Claude Code voices to follow.
+@brycicle77,Brycicle,unknown,Developer,medium,unknown,Vibe coding project concerns - 30+ Python files,community,57,Practical concerns about AI-generated code maintenance.
+@coinaborji,Brian Armstrong,4000000+,Coinbase CEO,high,no,Nearly half of Coinbase code is AI-generated - backlash,ceo,56,High profile but controversial AI coding adoption.
+@minimaxir,Max Woolf,100000+,AI researcher and developer,medium,unknown,AI coding tool analysis,researcher,55,Technical AI analysis.
+@goodside,Riley Goodside,100000+,Prompt engineering expert,high,unknown,AI prompting techniques applicable to Claude Code,prompt_engineer,54,Prompting expertise relevant to Claude Code usage.
+@jxnlco,Jason Liu,unknown,AI engineering advocate,medium,unknown,AI coding agent discussions,developer,53,AI engineering community voice.
+@mattshumer,Matt Shumer,unknown,AI entrepreneur,medium,unknown,AI tools and agents coverage,entrepreneur,52,AI startup perspective.
+@GergelyOrosz,Gergely Orosz (dupe check),200000+,Pragmatic Engineer newsletter,high,unknown,Engineering management and AI tools,newsletter,51,Duplicate - see gergelyorosz above.
