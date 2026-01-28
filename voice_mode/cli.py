@@ -3366,17 +3366,40 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
 @connect.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def status():
-    """Show connection status.
+    """Show authentication status for voicemode.dev.
 
-    Displays current voicemode.dev connection status, including:
-    - Connection state (connected/disconnected)
-    - Authenticated user
-    - Operator status
+    Displays whether you're logged in, your user info, and token expiry.
+
+    Examples:
+        voicemode connect status
     """
-    # For now, just show that the feature exists
-    click.echo("Connect status checking not yet implemented.")
+    from voice_mode.auth import get_valid_credentials, format_expiry
+
+    credentials = get_valid_credentials(auto_refresh=False)
+
+    if credentials is None:
+        click.echo("Not logged in.")
+        click.echo()
+        click.echo("Run 'voicemode connect login' to authenticate.")
+        return
+
+    click.echo("✓ Logged in to voicemode.dev")
     click.echo()
-    click.echo("To start listening for voice sessions:")
-    click.echo("  voicemode connect standby")
+
+    if credentials.user_info:
+        email = credentials.user_info.get("email", "unknown")
+        name = credentials.user_info.get("name", "")
+        if name:
+            click.echo(f"  User: {name} ({email})")
+        else:
+            click.echo(f"  User: {email}")
+    else:
+        click.echo("  User: (no user info available)")
+
+    click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+
+    if credentials.is_expired():
+        click.echo()
+        click.echo("  Note: Token has expired. It will be refreshed automatically on next use.")
 
 
