@@ -2646,7 +2646,8 @@ def mfp():
     Examples:
         voicemode dj mfp list              # List episodes with chapters
         voicemode dj mfp play 49           # Play episode 49
-        voicemode dj mfp sync              # Convert CUE files to chapters
+        voicemode dj mfp sync              # Sync chapter files from package
+        voicemode dj mfp edit              # Open visual chapter editor
     """
     pass
 
@@ -2780,6 +2781,64 @@ def mfp_sync(force: bool):
         click.echo("Chapter sync complete")
 
     click.echo(f"Cache directory: {service.cache_dir}")
+
+
+@mfp.command("edit")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('episode', type=int, required=False)
+def mfp_edit(episode: int | None):
+    """Open the visual chapter editor for MFP episodes.
+
+    Launches a Marimo app with an interactive waveform editor for adjusting
+    chapter timestamps. The editor displays the audio waveform with draggable
+    markers for each chapter boundary.
+
+    Features:
+    - Interactive waveform with WaveSurfer.js
+    - Drag chapter boundaries to adjust timestamps
+    - Add new chapter markers
+    - Auto-saves changes to CUE files
+    - Persists unsaved edits in browser localStorage
+
+    Requires: marimo, pandas, numpy, scipy (installed with `uv run`)
+
+    Examples:
+        voicemode dj mfp edit              # Edit first available episode
+        voicemode dj mfp edit 49           # Edit episode 49
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    # Get the editor module path
+    editor_path = Path(__file__).parent / "dj" / "mfp_editor.py"
+
+    if not editor_path.exists():
+        click.echo(f"Error: Editor module not found at {editor_path}", err=True)
+        sys.exit(1)
+
+    # Build the command - run marimo with the editor script
+    # Use 'uv run' to ensure dependencies are available
+    cmd = ["uv", "run", "marimo", "run", str(editor_path)]
+
+    click.echo("Starting MFP Chapter Editor...")
+    click.echo(f"Opening in browser at http://localhost:2718")
+    click.echo()
+    click.echo("Press Ctrl+C to stop the editor.")
+    click.echo()
+
+    try:
+        # Run marimo, passing through stdin/stdout for interactive use
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as e:
+        click.echo(f"Editor exited with error: {e}", err=True)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        click.echo("\nEditor stopped.")
+    except FileNotFoundError:
+        click.echo("Error: 'uv' not found. Please install uv: https://docs.astral.sh/uv/", err=True)
+        click.echo("Or run directly with: marimo run " + str(editor_path), err=True)
+        sys.exit(1)
 
 
 # Music library search command (top-level under dj for convenience)
