@@ -3027,10 +3027,124 @@ def connect():
     starting Claude Code when someone initiates a voice session.
 
     Examples:
+        voicemode connect login
         voicemode connect standby
         voicemode connect status
     """
     pass
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--no-browser', is_flag=True, help='Print URL instead of opening browser')
+def login(no_browser: bool):
+    """Authenticate with voicemode.dev using your browser.
+
+    Opens your browser to complete authentication via Auth0.
+    After successful login, your credentials are stored locally
+    and used automatically by 'voicemode connect standby'.
+
+    The login process:
+    1. Opens browser to voicemode.dev/Auth0 login page
+    2. You authenticate with your account
+    3. Browser redirects to local callback URL
+    4. Credentials are stored in ~/.voicemode/credentials
+
+    Examples:
+        # Standard login (opens browser automatically)
+        voicemode connect login
+
+        # Print URL instead of opening browser
+        voicemode connect login --no-browser
+    """
+    from voice_mode.auth import login as auth_login, AuthError, format_expiry
+
+    click.echo("Starting authentication with voicemode.dev...")
+
+    def on_browser_open(url: str) -> None:
+        """Called when browser should be opened."""
+        if no_browser:
+            click.echo()
+            click.echo("Open this URL in your browser to authenticate:")
+            click.echo()
+            click.echo(f"  {url}")
+            click.echo()
+        else:
+            click.echo("Opening browser...")
+
+    def on_waiting() -> None:
+        """Called while waiting for user to complete auth."""
+        click.echo()
+        click.echo("Waiting for authentication...")
+        click.echo("Complete the login in your browser, then return here.")
+        click.echo("Press Ctrl+C to cancel.")
+        click.echo()
+
+    try:
+        credentials = auth_login(
+            open_browser=not no_browser,
+            on_browser_open=on_browser_open,
+            on_waiting=on_waiting,
+        )
+
+        # Display success message
+        click.echo("✓ Authentication successful!")
+        click.echo()
+
+        if credentials.user_info:
+            email = credentials.user_info.get("email", "unknown")
+            name = credentials.user_info.get("name", "")
+            if name:
+                click.echo(f"  Logged in as: {name} ({email})")
+            else:
+                click.echo(f"  Logged in as: {email}")
+        else:
+            click.echo("  Logged in successfully")
+
+        click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+        click.echo()
+        click.echo("You can now use 'voicemode connect standby' to receive calls.")
+
+    except KeyboardInterrupt:
+        click.echo()
+        click.echo("Authentication cancelled.")
+        sys.exit(1)
+
+    except AuthError as e:
+        click.echo()
+        click.echo(f"Authentication failed: {e}", err=True)
+        sys.exit(1)
+
+    except Exception as e:
+        click.echo()
+        click.echo(f"Unexpected error during authentication: {e}", err=True)
+        sys.exit(1)
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def logout():
+    """Log out from voicemode.dev and clear stored credentials.
+
+    Removes locally stored authentication tokens. You will need to
+    run 'voicemode connect login' again to authenticate.
+
+    Examples:
+        voicemode connect logout
+    """
+    from voice_mode.auth import load_credentials, clear_credentials
+
+    # Try to show who is being logged out
+    credentials = load_credentials()
+
+    if clear_credentials():
+        click.echo("✓ Logged out successfully.")
+        if credentials and credentials.user_info:
+            email = credentials.user_info.get("email")
+            if email:
+                click.echo(f"  Removed credentials for: {email}")
+    else:
+        click.echo("Already logged out (no credentials stored).")
 
 
 @connect.command()
@@ -3052,11 +3166,15 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
 
     The connection stays alive, waiting for calls. Press Ctrl+C to stop.
 
+    Authentication:
+        Run 'voicemode connect login' first to authenticate, or use --token
+        to provide a token directly.
+
     Examples:
-        # Basic usage (requires VOICEMODE_DEV_TOKEN environment variable)
+        # Basic usage (after running 'voicemode connect login')
         voicemode connect standby
 
-        # Specify token directly
+        # Specify token directly (overrides stored credentials)
         voicemode connect standby --token your-token-here
 
         # Custom Claude command
@@ -3067,13 +3185,30 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
     import signal
     import threading
 
-    # Check for token
+    from voice_mode.auth import get_valid_credentials, AuthError
+
+    # Get authentication token
+    # Priority: --token flag > VOICEMODE_DEV_TOKEN env > stored credentials
     if not token:
-        click.echo("Error: Authentication token required.", err=True)
-        click.echo()
-        click.echo("Set VOICEMODE_DEV_TOKEN environment variable or use --token option.")
-        click.echo("Get your token from https://voicemode.dev/settings")
-        sys.exit(1)
+        # Try to load stored credentials
+        try:
+            credentials = get_valid_credentials(auto_refresh=True)
+            if credentials:
+                token = credentials.access_token
+                user_info = credentials.user_info or {}
+                email = user_info.get("email", "authenticated user")
+                click.echo(f"Using stored credentials for: {email}")
+            else:
+                click.echo("Error: Not logged in.", err=True)
+                click.echo()
+                click.echo("Run 'voicemode connect login' to authenticate.")
+                click.echo("Or use --token to provide a token directly.")
+                sys.exit(1)
+        except AuthError as e:
+            click.echo(f"Error: Authentication failed: {e}", err=True)
+            click.echo()
+            click.echo("Your credentials may have expired. Run 'voicemode connect login' to re-authenticate.")
+            sys.exit(1)
 
     # Try to import websockets
     try:
@@ -3152,10 +3287,15 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
 
     while running:
         try:
-            # Connect with auth token in header
-            headers = {'Authorization': f'Bearer {token}'}
+            # Connect with auth token as query parameter (server expects ?token=...)
+            import urllib.parse
+            ws_url = url
+            if '?' in ws_url:
+                ws_url = f"{ws_url}&token={urllib.parse.quote(token)}"
+            else:
+                ws_url = f"{ws_url}?token={urllib.parse.quote(token)}"
 
-            with ws_sync.connect(url, additional_headers=headers) as ws:
+            with ws_sync.connect(ws_url) as ws:
                 connected = True
                 retry_delay = 1  # Reset retry delay on successful connection
 
@@ -3187,12 +3327,26 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
                 click.echo("   Press Ctrl+C to stop")
                 click.echo()
 
+                # Start heartbeat thread
+                heartbeat_stop = threading.Event()
+                def heartbeat_sender():
+                    while not heartbeat_stop.wait(25):  # Every 25 seconds
+                        try:
+                            ws.send(json.dumps({
+                                'type': 'heartbeat',
+                                'timestamp': int(time.time() * 1000),
+                            }))
+                        except Exception:
+                            break  # Connection likely closed
+
+                heartbeat_thread = threading.Thread(target=heartbeat_sender, daemon=True)
+                heartbeat_thread.start()
+
                 # Main message loop
                 while running:
                     try:
-                        # Use timeout so we can check running flag
-                        ws.socket.settimeout(5.0)
-                        raw = ws.recv()
+                        # Use websockets library timeout (not socket timeout)
+                        raw = ws.recv(timeout=30)
                         msg = json.loads(raw)
 
                         msg_type = msg.get('type')
@@ -3239,6 +3393,9 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
                             click.echo(f"Error receiving message: {e}")
                         break
 
+                # Clean up heartbeat thread
+                heartbeat_stop.set()
+
         except Exception as e:
             if running:
                 click.echo(f"Connection error: {e}")
@@ -3252,17 +3409,40 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
 @connect.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def status():
-    """Show connection status.
+    """Show authentication status for voicemode.dev.
 
-    Displays current voicemode.dev connection status, including:
-    - Connection state (connected/disconnected)
-    - Authenticated user
-    - Operator status
+    Displays whether you're logged in, your user info, and token expiry.
+
+    Examples:
+        voicemode connect status
     """
-    # For now, just show that the feature exists
-    click.echo("Connect status checking not yet implemented.")
+    from voice_mode.auth import get_valid_credentials, format_expiry
+
+    credentials = get_valid_credentials(auto_refresh=False)
+
+    if credentials is None:
+        click.echo("Not logged in.")
+        click.echo()
+        click.echo("Run 'voicemode connect login' to authenticate.")
+        return
+
+    click.echo("✓ Logged in to voicemode.dev")
     click.echo()
-    click.echo("To start listening for voice sessions:")
-    click.echo("  voicemode connect standby")
+
+    if credentials.user_info:
+        email = credentials.user_info.get("email", "unknown")
+        name = credentials.user_info.get("name", "")
+        if name:
+            click.echo(f"  User: {name} ({email})")
+        else:
+            click.echo(f"  User: {email}")
+    else:
+        click.echo("  User: (no user info available)")
+
+    click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+
+    if credentials.is_expired():
+        click.echo()
+        click.echo("  Note: Token has expired. It will be refreshed automatically on next use.")
 
 
