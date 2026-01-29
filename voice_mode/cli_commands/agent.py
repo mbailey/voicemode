@@ -435,3 +435,41 @@ def start(session: str):
         raise SystemExit(1)
 
     click.echo(f"✓ Operator started in tmux session '{session}'")
+
+
+@agent.command('status')
+@click.option('--session', default='voicemode', help='Tmux session name')
+@click.help_option('-h', '--help')
+def status(session: str):
+    """Show operator status.
+
+    Checks the tmux session, window, and Claude Code process status.
+
+    \b
+    Status values:
+      running  - Claude Code is active in the operator window
+      stopped  - Agent is not running (various reasons shown)
+
+    \b
+    Examples:
+      voicemode agent status              # Check default session
+      voicemode agent status --session vm # Check 'vm' session
+    """
+    agent_name = 'operator'
+    window = f'{session}:{agent_name}'
+
+    # Check if session exists
+    if not tmux_session_exists(session):
+        click.echo(f"stopped - no tmux session '{session}'")
+        return
+
+    # Check if window exists
+    if not tmux_window_exists(window):
+        click.echo(f"stopped - no '{agent_name}' window in session '{session}'")
+        return
+
+    # Check if Claude Code is running
+    if is_claude_running_in_pane(window):
+        click.echo("running")
+    else:
+        click.echo("stopped - Claude not running in window")
