@@ -473,3 +473,49 @@ def status(session: str):
         click.echo("running")
     else:
         click.echo("stopped - Claude not running in window")
+
+
+@agent.command('stop')
+@click.option('--session', default='voicemode', help='Tmux session name')
+@click.option('--kill', is_flag=True, help='Kill the tmux window instead of just stopping Claude')
+@click.help_option('-h', '--help')
+def stop(session: str, kill: bool):
+    """Stop the operator agent.
+
+    Sends Ctrl-C to gracefully stop Claude Code. Use --kill to
+    remove the entire tmux window.
+
+    \b
+    Examples:
+      voicemode agent stop              # Send Ctrl-C to stop Claude
+      voicemode agent stop --kill       # Kill the tmux window
+      voicemode agent stop --session vm # Stop agent in 'vm' session
+    """
+    agent_name = 'operator'
+    window = f'{session}:{agent_name}'
+
+    # Check if window exists
+    if not tmux_window_exists(window):
+        click.echo(f"Operator not running (no '{agent_name}' window in session '{session}')")
+        return
+
+    if kill:
+        # Kill the whole window
+        result = subprocess.run(
+            ['tmux', 'kill-window', '-t', window],
+            capture_output=True
+        )
+        if result.returncode != 0:
+            click.echo(f"Error: Failed to kill window '{window}'", err=True)
+            raise SystemExit(1)
+        click.echo(f"✓ Operator window killed")
+    else:
+        # Send Ctrl-C to stop Claude gracefully
+        result = subprocess.run(
+            ['tmux', 'send-keys', '-t', window, 'C-c'],
+            capture_output=True
+        )
+        if result.returncode != 0:
+            click.echo(f"Error: Failed to send stop signal", err=True)
+            raise SystemExit(1)
+        click.echo(f"✓ Sent stop signal to operator")
