@@ -197,6 +197,7 @@ Full documentation: [voice-mode.readthedocs.io](https://voice-mode.readthedocs.i
 - **PyPI**: [pypi.org/project/voice-mode](https://pypi.org/project/voice-mode/)
 - **YouTube**: [@getvoicemode](https://youtube.com/@getvoicemode)
 - **Twitter/X**: [@getvoicemode](https://twitter.com/getvoicemode)
+- **Newsletter**: [![Subscribe](https://img.shields.io/badge/Subscribe-Newsletter-orange?style=flat-square)](https://buttondown.com/voicemode)
 
 ## License
 
