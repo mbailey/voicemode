@@ -617,3 +617,77 @@ def send(ctx, message: str | None, session: str, no_start: bool):
     # Truncate message for display if too long
     display_msg = message[:50] + '...' if len(message) > 50 else message
     click.echo(f"✓ Sent: {display_msg}")
+
+
+def list_agents() -> list[dict]:
+    """List all agent directories and their running status.
+
+    Returns:
+        List of dicts with 'name' and 'status' keys
+    """
+    base = get_agents_base_dir()
+    agents = []
+
+    if not base.exists():
+        return agents
+
+    for item in sorted(base.iterdir()):
+        if item.is_dir() and not item.name.startswith('.'):
+            # Check running status in default session
+            window = f'voicemode:{item.name}'
+            if tmux_window_exists(window) and is_claude_running_in_pane(window):
+                status = 'running'
+            else:
+                status = 'stopped'
+
+            agents.append({'name': item.name, 'status': status})
+
+    return agents
+
+
+@agent.command('list', hidden=True)
+@click.option('--session', default='voicemode', help='Tmux session name to check')
+@click.help_option('-h', '--help')
+def list_cmd(session: str):
+    """List all configured agents (Easter egg).
+
+    Scans ~/.voicemode/agents/ for agent directories and shows
+    their running status.
+
+    This command is hidden from --help.
+
+    \b
+    Examples:
+      voicemode agent list              # List all agents
+      voicemode agent list --session vm # Check status in 'vm' session
+    """
+    base = get_agents_base_dir()
+    agents = []
+
+    if not base.exists():
+        click.echo("No agents configured (run 'voicemode agent start' first)")
+        return
+
+    # Scan for agent directories
+    for item in sorted(base.iterdir()):
+        if item.is_dir() and not item.name.startswith('.'):
+            # Check running status
+            window = f'{session}:{item.name}'
+            if tmux_window_exists(window) and is_claude_running_in_pane(window):
+                status = 'running'
+            else:
+                status = 'stopped'
+
+            agents.append({'name': item.name, 'status': status})
+
+    if not agents:
+        click.echo("No agents configured (run 'voicemode agent start' first)")
+        return
+
+    # Display table
+    click.echo("Agent       Status")
+    click.echo("----------  -------")
+    for agent_info in agents:
+        name = agent_info['name'].ljust(10)
+        status = agent_info['status']
+        click.echo(f"{name}  {status}")
