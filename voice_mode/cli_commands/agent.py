@@ -5,6 +5,8 @@ The default agent is 'operator' - accessible from the iOS app and web interface.
 """
 
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Dict
 
@@ -519,3 +521,99 @@ def stop(session: str, kill: bool):
             click.echo(f"Error: Failed to send stop signal", err=True)
             raise SystemExit(1)
         click.echo(f"✓ Sent stop signal to operator")
+
+
+def escape_for_tmux(message: str) -> str:
+    """Escape a message for safe transmission via tmux send-keys.
+
+    Args:
+        message: The message to escape
+
+    Returns:
+        Escaped message safe for tmux
+    """
+    # tmux send-keys -l (literal) handles most escaping, but we use it
+    # by default. For messages without special characters, no escaping needed.
+    # The -l flag tells tmux to interpret the string literally.
+    return message
+
+
+def is_operator_running(session: str = 'voicemode') -> bool:
+    """Check if the operator agent is running.
+
+    Args:
+        session: Tmux session name
+
+    Returns:
+        True if operator is running in the session
+    """
+    window = f'{session}:operator'
+    return tmux_window_exists(window) and is_claude_running_in_pane(window)
+
+
+@agent.command('send')
+@click.argument('message', required=False)
+@click.option('--session', default='voicemode', help='Tmux session name')
+@click.option('--no-start', is_flag=True, help='Fail if agent not running instead of auto-starting')
+@click.help_option('-h', '--help')
+@click.pass_context
+def send(ctx, message: str | None, session: str, no_start: bool):
+    """Send a message to the operator.
+
+    Sends a message to the operator agent in the tmux session. By default,
+    if the agent is not running, it will be started automatically.
+
+    Use --no-start to fail if the agent is not running instead of
+    auto-starting it.
+
+    \b
+    Examples:
+      voicemode agent send "Hello, how can I help?"
+      voicemode agent send --no-start "Quick question"
+      voicemode agent send  # Prompts for message
+    """
+    agent_name = 'operator'
+    window = f'{session}:{agent_name}'
+
+    # Check if agent is running
+    running = is_operator_running(session)
+
+    if not running:
+        if no_start:
+            click.echo(f"Error: Operator not running (use 'voicemode agent start')", err=True)
+            sys.exit(1)
+        else:
+            # Auto-start the agent
+            click.echo("Starting operator...")
+            ctx.invoke(start, session=session)
+            # Wait for Claude to initialize
+            time.sleep(2)
+
+    # Get message if not provided
+    if not message:
+        message = click.prompt("Message")
+
+    # Send message to the pane using -l for literal interpretation
+    # First send the message, then send Enter
+    result = subprocess.run(
+        ['tmux', 'send-keys', '-t', window, '-l', message],
+        capture_output=True
+    )
+
+    if result.returncode != 0:
+        click.echo("Error: Failed to send message", err=True)
+        sys.exit(1)
+
+    # Send Enter key separately
+    result = subprocess.run(
+        ['tmux', 'send-keys', '-t', window, 'Enter'],
+        capture_output=True
+    )
+
+    if result.returncode != 0:
+        click.echo("Error: Failed to send Enter key", err=True)
+        sys.exit(1)
+
+    # Truncate message for display if too long
+    display_msg = message[:50] + '...' if len(message) > 50 else message
+    click.echo(f"✓ Sent: {display_msg}")
