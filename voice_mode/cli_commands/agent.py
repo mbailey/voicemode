@@ -4,6 +4,7 @@ Agents are Claude Code instances that can be controlled remotely.
 The default agent is 'operator' - accessible from the iOS app and web interface.
 """
 
+import subprocess
 from pathlib import Path
 from typing import Dict
 
@@ -223,6 +224,107 @@ def load_agent_env(name: str) -> Dict[str, str]:
 
 
 # =============================================================================
+# Tmux Helper Functions
+# =============================================================================
+
+def tmux_session_exists(session: str) -> bool:
+    """Check if a tmux session exists.
+
+    Args:
+        session: Name of the tmux session
+
+    Returns:
+        True if session exists, False otherwise
+    """
+    result = subprocess.run(
+        ['tmux', 'has-session', '-t', session],
+        capture_output=True
+    )
+    return result.returncode == 0
+
+
+def tmux_window_exists(window: str) -> bool:
+    """Check if a tmux window exists.
+
+    Args:
+        window: Window identifier in format 'session:window_name'
+
+    Returns:
+        True if window exists, False otherwise
+    """
+    if ':' not in window:
+        return False
+
+    session, name = window.split(':', 1)
+
+    result = subprocess.run(
+        ['tmux', 'list-windows', '-t', session, '-F', '#{window_name}'],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        return False
+
+    return name in result.stdout.splitlines()
+
+
+def is_claude_running_in_pane(window: str) -> bool:
+    """Check if Claude Code appears to be running in a tmux pane.
+
+    Examines the pane content for Claude Code indicators.
+
+    Args:
+        window: Window identifier in format 'session:window_name'
+
+    Returns:
+        True if Claude Code appears to be running, False otherwise
+    """
+    # Capture recent pane content
+    result = subprocess.run(
+        ['tmux', 'capture-pane', '-t', window, '-p', '-S', '-20'],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        return False
+
+    content = result.stdout
+
+    # Look for Claude Code indicators:
+    # - "Claude" in the output (startup message, prompts)
+    # - The prompt pattern "> " or "claude>"
+    # - "claude code" text
+    if 'Claude' in content or 'claude' in content.lower():
+        return True
+
+    # Also check for the prompt pattern with some content
+    if '> ' in content and len(content.strip()) > 10:
+        return True
+
+    return False
+
+
+def build_claude_command(agent_dir: Path, extra_args: str | None = None) -> str:
+    """Build the Claude Code command to run.
+
+    Args:
+        agent_dir: Path to the agent's directory
+        extra_args: Optional extra arguments for Claude
+
+    Returns:
+        Command string to execute
+    """
+    cmd = f"cd {agent_dir} && claude --dangerously-skip-permissions"
+
+    if extra_args:
+        cmd = f"{cmd} {extra_args}"
+
+    return cmd
+
+
+# =============================================================================
 # CLI Command Group
 # =============================================================================
 
@@ -264,3 +366,72 @@ def init_cmd(name: str):
     """
     agent_dir = init_agent_directory(name)
     click.echo(f"✓ Initialized agent '{name}' at {agent_dir}")
+
+
+@agent.command('start')
+@click.option('--session', default='voicemode', help='Tmux session name')
+@click.help_option('-h', '--help')
+def start(session: str):
+    """Start the operator agent.
+
+    Starts a Claude Code instance in a tmux session. The agent runs
+    in the operator directory (~/.voicemode/agents/operator) and
+    loads its CLAUDE.md configuration.
+
+    This command is idempotent - if the agent is already running,
+    it reports success without restarting.
+
+    \b
+    Examples:
+      voicemode agent start              # Start in 'voicemode' session
+      voicemode agent start --session vm # Start in 'vm' session
+    """
+    agent_name = 'operator'
+    window = f'{session}:{agent_name}'
+
+    # 1. Initialize agent directory structure if needed
+    agent_dir = init_agent_directory(agent_name)
+
+    # 2. Load environment (for potential future use)
+    load_agent_env(agent_name)
+
+    # 3. Check/create tmux session
+    if not tmux_session_exists(session):
+        result = subprocess.run(
+            ['tmux', 'new-session', '-d', '-s', session],
+            capture_output=True
+        )
+        if result.returncode != 0:
+            click.echo(f"Error: Failed to create tmux session '{session}'", err=True)
+            raise SystemExit(1)
+        click.echo(f"Created tmux session '{session}'")
+
+    # 4. Check/create window for agent
+    if not tmux_window_exists(window):
+        result = subprocess.run(
+            ['tmux', 'new-window', '-t', session, '-n', agent_name],
+            capture_output=True
+        )
+        if result.returncode != 0:
+            click.echo(f"Error: Failed to create tmux window '{agent_name}'", err=True)
+            raise SystemExit(1)
+        click.echo(f"Created tmux window '{agent_name}'")
+
+    # 5. Check if Claude Code is already running
+    if is_claude_running_in_pane(window):
+        click.echo(f"✓ Operator already running in tmux session '{session}'")
+        return
+
+    # 6. Start Claude Code
+    claude_cmd = build_claude_command(agent_dir)
+
+    result = subprocess.run(
+        ['tmux', 'send-keys', '-t', window, claude_cmd, 'Enter'],
+        capture_output=True
+    )
+
+    if result.returncode != 0:
+        click.echo("Error: Failed to start Claude Code", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"✓ Operator started in tmux session '{session}'")
