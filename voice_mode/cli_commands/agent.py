@@ -6,7 +6,6 @@ The default agent is 'operator' - accessible from the iOS app and web interface.
 
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Dict
 
@@ -309,11 +308,12 @@ def is_agent_running_in_pane(window: str, pane: int = 0) -> bool:
     return bool(current_command)
 
 
-def build_claude_command(agent_dir: Path, extra_args: str | None = None) -> str:
+def build_claude_command(agent_dir: Path, initial_prompt: str | None = None, extra_args: str | None = None) -> str:
     """Build the Claude Code command to run.
 
     Args:
         agent_dir: Path to the agent's directory
+        initial_prompt: Optional initial prompt to send to Claude
         extra_args: Optional extra arguments for Claude
 
     Returns:
@@ -323,6 +323,11 @@ def build_claude_command(agent_dir: Path, extra_args: str | None = None) -> str:
 
     if extra_args:
         cmd = f"{cmd} {extra_args}"
+
+    if initial_prompt:
+        # Escape single quotes in the prompt and wrap in single quotes
+        escaped = initial_prompt.replace("'", "'\"'\"'")
+        cmd = f"{cmd} '{escaped}'"
 
     return cmd
 
@@ -378,9 +383,11 @@ def init_cmd(name: str):
 Examples:
   voicemode agent start              # Start in 'voicemode' session
   voicemode agent start --session vm # Start in 'vm' session
+  voicemode agent start -p "hello"   # Start with initial prompt
 """)
 @click.option('--session', default='voicemode', help='Tmux session name')
-def start(session: str):
+@click.option('-p', '--prompt', help='Initial prompt to send to the agent')
+def start(session: str, prompt: str | None):
     """Start the operator agent.
 
     Starts a Claude Code instance in a tmux session. The agent runs
@@ -427,7 +434,7 @@ def start(session: str):
         return
 
     # 6. Start Claude Code
-    claude_cmd = build_claude_command(agent_dir)
+    claude_cmd = build_claude_command(agent_dir, initial_prompt=prompt)
 
     result = subprocess.run(
         ['tmux', 'send-keys', '-t', window, claude_cmd, 'Enter'],
@@ -580,6 +587,10 @@ def send(ctx, message: str | None, session: str, no_start: bool):
     window = f'{session}:{agent_name}'
     target = f'{window}.0'  # Always target pane 0 where the agent runs
 
+    # Get message first (needed before potential auto-start)
+    if not message:
+        message = click.prompt("Message")
+
     # Check if agent is running
     running = is_operator_running(session)
 
@@ -588,18 +599,18 @@ def send(ctx, message: str | None, session: str, no_start: bool):
             click.echo(f"Error: Operator not running (use 'voicemode agent start')", err=True)
             sys.exit(1)
         else:
-            # Auto-start the agent
-            click.echo("Starting operator...")
-            ctx.invoke(start, session=session)
-            # Wait for Claude to initialize
-            time.sleep(2)
+            # Auto-start the agent with the message as initial prompt
+            # This passes the message directly to claude command, avoiding timing issues
+            click.echo("Starting operator with message...")
+            ctx.invoke(start, session=session, prompt=message)
 
-    # Get message if not provided
-    if not message:
-        message = click.prompt("Message")
+            # Truncate message for display if too long
+            display_msg = message[:50] + '...' if len(message) > 50 else message
+            click.echo(f"✓ Started with: {display_msg}")
+            return
 
+    # Agent is already running - send message via tmux
     # Send message to pane 0 using -l for literal interpretation
-    # First send the message, then send Enter
     result = subprocess.run(
         ['tmux', 'send-keys', '-t', target, '-l', message],
         capture_output=True
