@@ -737,7 +737,7 @@ async def enable_service(service_name: str) -> str:
 
         elif service_name == "connect":
             # Validate OAuth credentials exist before enabling connect service
-            credentials_file = Path.home() / ".voicemode" / "auth" / "credentials.json"
+            credentials_file = Path.home() / ".voicemode" / "credentials"
             if not credentials_file.exists():
                 return "❌ No credentials found. Run 'voicemode connect login' first to authenticate."
 
