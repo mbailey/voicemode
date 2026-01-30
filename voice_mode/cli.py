@@ -1624,6 +1624,7 @@ from voice_mode.cli_commands import exchanges as exchanges_cmd
 from voice_mode.cli_commands import transcribe as transcribe_cmd
 from voice_mode.cli_commands import history as history_cmd
 from voice_mode.cli_commands import status as status_cmd
+from voice_mode.cli_commands import agent as agent_cmd
 
 # Add subcommands to legacy CLI
 cli.add_command(exchanges_cmd.exchanges)
@@ -1635,6 +1636,9 @@ voice_mode_main_cli.add_command(history_cmd.history)
 
 # Add unified status command
 voice_mode_main_cli.add_command(status_cmd.status)
+
+# Add agent management commands
+voice_mode_main_cli.add_command(agent_cmd.agent)
 
 # Note: We'll add these commands after the groups are defined
 # audio group will get transcribe and play commands
@@ -3153,22 +3157,28 @@ def logout():
               help='WebSocket URL for voicemode.dev')
 @click.option('--token', envvar='VOICEMODE_DEV_TOKEN',
               help='Authentication token for voicemode.dev (or set VOICEMODE_DEV_TOKEN)')
-@click.option('--claude-command', default='claude --resume',
-              help='Command to run when wake signal received')
-@click.option('--session', default=None,
-              help='Claude Code session name to resume')
-def standby(url: str, token: str | None, claude_command: str, session: str | None):
-    """Wait for incoming voice sessions and start Claude Code.
+@click.option('--wake-message', envvar='VOICEMODE_WAKE_MESSAGE',
+              help='Custom message to send to operator on wake (default: greeting prompt)')
+def standby(url: str, token: str | None, wake_message: str | None):
+    """Wait for incoming voice sessions and wake the operator agent.
 
     Connects to voicemode.dev and listens for wake signals. When someone
-    initiates a voice session (from iOS app or web), this command will
-    start or resume Claude Code with the voicemode MCP server.
+    initiates a voice session (from iOS app or web), this command uses
+    'voicemode agent send' to wake the operator. If the operator isn't
+    running, it will be started automatically.
 
     The connection stays alive, waiting for calls. Press Ctrl+C to stop.
 
-    Authentication:
-        Run 'voicemode connect login' first to authenticate, or use --token
-        to provide a token directly.
+    \b
+    Prerequisites:
+        1. Run 'voicemode connect login' to authenticate
+        2. The operator agent will be started automatically on first wake
+
+    \b
+    Related Commands:
+        voicemode agent start   - Pre-start the operator
+        voicemode agent status  - Check if operator is running
+        voicemode agent stop    - Stop the operator
 
     Examples:
         # Basic usage (after running 'voicemode connect login')
@@ -3176,9 +3186,6 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
 
         # Specify token directly (overrides stored credentials)
         voicemode connect standby --token your-token-here
-
-        # Custom Claude command
-        voicemode connect standby --claude-command "claude --resume my-session"
     """
     import json
     import time
@@ -3225,7 +3232,6 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
     # State tracking
     connected = False
     running = True
-    operator_process = None
 
     def signal_handler(signum, frame):
         nonlocal running
@@ -3235,35 +3241,54 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    def start_operator(wake_msg: dict) -> subprocess.Popen | None:
-        """Start Claude Code when wake signal received."""
-        nonlocal operator_process
+    def start_operator(wake_msg: dict) -> bool:
+        """Start or wake the operator agent when wake signal received.
 
+        Uses 'voicemode agent send' to deliver the wake message. This command
+        auto-starts the agent if not running, keeping WebSocket listener
+        decoupled from agent management.
+
+        Returns:
+            True if message was sent successfully, False otherwise
+        """
         reason = wake_msg.get('reason', 'unknown')
         caller_id = wake_msg.get('callerId', 'unknown')
         click.echo(f"\n🔔 Wake signal received! Reason: {reason}, Caller: {caller_id}")
 
-        # Build the command
-        cmd = claude_command
-        if session:
-            cmd = f"claude --resume {session}"
+        # Build the wake message for the operator
+        # Use custom message if provided, otherwise default greeting prompt
+        if wake_message:
+            msg_to_send = wake_message
+        else:
+            msg_to_send = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
 
-        click.echo(f"Starting operator: {cmd}")
+        click.echo(f"Waking operator via 'voicemode agent send'...")
 
         try:
-            # Start Claude Code in a new terminal/process
-            # On macOS, we might want to open a new Terminal window
-            # For now, just run it as a subprocess
-            operator_process = subprocess.Popen(
-                cmd.split(),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            # Use 'voicemode agent send' which auto-starts the agent if needed
+            result = subprocess.run(
+                ['voicemode', 'agent', 'send', msg_to_send],
+                capture_output=True,
+                text=True,
+                timeout=30,  # 30 second timeout for agent start + send
             )
-            click.echo(f"✅ Operator started (PID: {operator_process.pid})")
-            return operator_process
+
+            if result.returncode == 0:
+                click.echo(f"✅ Operator woken successfully")
+                return True
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                click.echo(f"❌ Failed to wake operator: {error_msg}", err=True)
+                return False
+        except subprocess.TimeoutExpired:
+            click.echo(f"❌ Timeout waiting for operator to start", err=True)
+            return False
+        except FileNotFoundError:
+            click.echo(f"❌ 'voicemode' command not found in PATH", err=True)
+            return False
         except Exception as e:
-            click.echo(f"❌ Failed to start operator: {e}", err=True)
-            return None
+            click.echo(f"❌ Failed to wake operator: {e}", err=True)
+            return False
 
     def send_status(ws, status: str, error: str | None = None, wake_id: str | None = None):
         """Send operator status back to server."""
@@ -3276,8 +3301,6 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
             msg['error'] = error
         if wake_id:
             msg['id'] = wake_id
-        if operator_process:
-            msg['sessionId'] = str(operator_process.pid)
 
         ws.send(json.dumps(msg))
 
@@ -3352,18 +3375,13 @@ def standby(url: str, token: str | None, claude_command: str, session: str | Non
                         msg_type = msg.get('type')
 
                         if msg_type == 'wake':
-                            # Start the operator
-                            process = start_operator(msg)
-                            if process:
-                                send_status(ws, 'starting', wake_id=msg.get('id'))
-                                # Give it a moment to start
-                                time.sleep(2)
-                                if process.poll() is None:
-                                    send_status(ws, 'running', wake_id=msg.get('id'))
-                                else:
-                                    send_status(ws, 'error', error='Process exited', wake_id=msg.get('id'))
+                            # Wake the operator using 'voicemode agent send'
+                            send_status(ws, 'starting', wake_id=msg.get('id'))
+                            success = start_operator(msg)
+                            if success:
+                                send_status(ws, 'running', wake_id=msg.get('id'))
                             else:
-                                send_status(ws, 'error', error='Failed to start', wake_id=msg.get('id'))
+                                send_status(ws, 'error', error='Failed to wake operator', wake_id=msg.get('id'))
 
                         elif msg_type == 'ack':
                             # Acknowledgment - just log it
