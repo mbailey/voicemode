@@ -127,6 +127,20 @@ Logs are stored in `~/.voicemode/`:
 - `audio/` - Saved TTS/STT audio files
 - `voicemode.env` - User configuration
 
+## VoiceMode Suite
+
+This is the core Python package. VoiceMode is a suite of related projects:
+
+**For a complete overview of all VoiceMode components**, read:
+- **[voicemode-meta/COMPONENTS.md](../voicemode-meta/COMPONENTS.md)** - Full suite documentation
+
+Quick reference:
+- **voicemode** (this repo) - Python MCP server for local voice mode
+- **voicemode-dev** - Cloudflare Workers backend for voicemode.dev
+- **voicemode-ios** - Native iOS app
+- **voicemode-macos** - Native macOS app
+- **voicemode-meta** - Project coordination and operations
+
 ## See Also
 
 - **[skills/voicemode/SKILL.md](skills/voicemode/SKILL.md)** - Voice interaction usage and MCP tools
