@@ -47,7 +47,7 @@ class TestListCommand:
         (base / 'custom').mkdir(parents=True)
 
         with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=False):
-            with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+            with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                 result = runner.invoke(agent, ['list'])
 
         assert result.exit_code == 0
@@ -77,7 +77,7 @@ class TestListCommand:
         (base / 'operator').mkdir(parents=True)
 
         with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-            with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=True):
+            with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=True):
                 result = runner.invoke(agent, ['list'])
 
         assert result.exit_code == 0
@@ -188,7 +188,7 @@ class TestListAgentsHelper:
         (base / 'operator').mkdir(parents=True)
 
         with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-            with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=True):
+            with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=True):
                 result = list_agents()
 
         assert len(result) == 1

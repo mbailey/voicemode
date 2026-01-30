@@ -35,7 +35,7 @@ class TestStatusCommand:
         """Should show 'running' when session, window, and Claude exist."""
         with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
             with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-                with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=True):
+                with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=True):
                     result = runner.invoke(agent, ['status'])
 
         assert result.exit_code == 0
@@ -64,7 +64,7 @@ class TestStatusCommand:
         """Should show 'stopped' when Claude is not running in pane."""
         with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
             with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-                with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+                with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                     result = runner.invoke(agent, ['status'])
 
         assert result.exit_code == 0

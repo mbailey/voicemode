@@ -3157,7 +3157,9 @@ def logout():
               help='WebSocket URL for voicemode.dev')
 @click.option('--token', envvar='VOICEMODE_DEV_TOKEN',
               help='Authentication token for voicemode.dev (or set VOICEMODE_DEV_TOKEN)')
-def standby(url: str, token: str | None):
+@click.option('--wake-message', envvar='VOICEMODE_WAKE_MESSAGE',
+              help='Custom message to send to operator on wake (default: greeting prompt)')
+def standby(url: str, token: str | None, wake_message: str | None):
     """Wait for incoming voice sessions and wake the operator agent.
 
     Connects to voicemode.dev and listens for wake signals. When someone
@@ -3254,14 +3256,18 @@ def standby(url: str, token: str | None):
         click.echo(f"\n🔔 Wake signal received! Reason: {reason}, Caller: {caller_id}")
 
         # Build the wake message for the operator
-        wake_message = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
+        # Use custom message if provided, otherwise default greeting prompt
+        if wake_message:
+            msg_to_send = wake_message
+        else:
+            msg_to_send = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
 
         click.echo(f"Waking operator via 'voicemode agent send'...")
 
         try:
             # Use 'voicemode agent send' which auto-starts the agent if needed
             result = subprocess.run(
-                ['voicemode', 'agent', 'send', wake_message],
+                ['voicemode', 'agent', 'send', msg_to_send],
                 capture_output=True,
                 text=True,
                 timeout=30,  # 30 second timeout for agent start + send

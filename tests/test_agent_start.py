@@ -10,7 +10,7 @@ from click.testing import CliRunner
 from voice_mode.cli_commands.agent import (
     agent,
     build_claude_command,
-    is_claude_running_in_pane,
+    is_agent_running_in_pane,
     tmux_session_exists,
     tmux_window_exists,
 )
@@ -109,42 +109,55 @@ class TestTmuxWindowExists:
         assert result is False
 
 
-class TestIsClaudeRunningInPane:
-    """Tests for is_claude_running_in_pane function."""
+class TestIsAgentRunningInPane:
+    """Tests for is_agent_running_in_pane function."""
 
-    def test_returns_true_when_claude_in_output(self):
-        """Should return True when 'Claude' is in pane content."""
+    def test_returns_true_when_agent_running(self):
+        """Should return True when pane_current_command is not a shell."""
         with patch('voice_mode.cli_commands.agent.subprocess.run') as mock_run:
+            # Claude Code shows version number as pane_current_command
             mock_run.return_value = MagicMock(
                 returncode=0,
-                stdout='Welcome to Claude Code\n> '
+                stdout='2.1.25\n'
             )
 
-            result = is_claude_running_in_pane('voicemode:operator')
+            result = is_agent_running_in_pane('voicemode:operator')
 
             assert result is True
 
-    def test_returns_true_when_claude_lowercase(self):
-        """Should return True when 'claude' is in pane content."""
+    def test_returns_false_when_bash_running(self):
+        """Should return False when pane_current_command is bash."""
         with patch('voice_mode.cli_commands.agent.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
-                stdout='claude --version\nclaude code v1.0\n'
+                stdout='bash\n'
             )
 
-            result = is_claude_running_in_pane('voicemode:operator')
+            result = is_agent_running_in_pane('voicemode:operator')
 
-            assert result is True
+            assert result is False
 
-    def test_returns_false_when_no_claude(self):
-        """Should return False when no Claude indicators."""
+    def test_returns_false_when_zsh_running(self):
+        """Should return False when pane_current_command is zsh."""
         with patch('voice_mode.cli_commands.agent.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0,
-                stdout='$\n'
+                stdout='zsh\n'
             )
 
-            result = is_claude_running_in_pane('voicemode:operator')
+            result = is_agent_running_in_pane('voicemode:operator')
+
+            assert result is False
+
+    def test_returns_false_when_login_shell(self):
+        """Should return False when pane_current_command is -bash (login shell)."""
+        with patch('voice_mode.cli_commands.agent.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout='-bash\n'
+            )
+
+            result = is_agent_running_in_pane('voicemode:operator')
 
             assert result is False
 
@@ -153,7 +166,7 @@ class TestIsClaudeRunningInPane:
         with patch('voice_mode.cli_commands.agent.subprocess.run') as mock_run:
             mock_run.return_value = MagicMock(returncode=1)
 
-            result = is_claude_running_in_pane('voicemode:operator')
+            result = is_agent_running_in_pane('voicemode:operator')
 
             assert result is False
 
@@ -196,7 +209,7 @@ class TestStartCommand:
             # Mock session and window checks to return False (don't exist)
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=False):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=False):
-                    with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+                    with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                         result = runner.invoke(agent, ['start'])
 
             assert result.exit_code == 0
@@ -208,7 +221,7 @@ class TestStartCommand:
         """Should report already running without restarting."""
         with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
             with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-                with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=True):
+                with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=True):
                     result = runner.invoke(agent, ['start'])
 
         assert result.exit_code == 0
@@ -221,7 +234,7 @@ class TestStartCommand:
 
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-                    with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=True):
+                    with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=True):
                         result = runner.invoke(agent, ['start'])
 
         # Check directory was created
@@ -236,7 +249,7 @@ class TestStartCommand:
 
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=False):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=False):
-                    with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+                    with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                         result = runner.invoke(agent, ['start', '--session', 'custom'])
 
             assert result.exit_code == 0
@@ -249,7 +262,7 @@ class TestStartCommand:
 
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=False):
-                    with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+                    with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                         result = runner.invoke(agent, ['start'])
 
             assert result.exit_code == 0
@@ -263,7 +276,7 @@ class TestStartCommand:
 
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-                    with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+                    with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                         result = runner.invoke(agent, ['start'])
 
             assert result.exit_code == 0

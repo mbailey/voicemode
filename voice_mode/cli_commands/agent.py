@@ -271,20 +271,24 @@ def tmux_window_exists(window: str) -> bool:
     return name in result.stdout.splitlines()
 
 
-def is_claude_running_in_pane(window: str) -> bool:
-    """Check if Claude Code appears to be running in a tmux pane.
+def is_agent_running_in_pane(window: str, pane: int = 0) -> bool:
+    """Check if an AI agent is running in a tmux pane.
 
-    Examines the pane content for Claude Code indicators.
+    Uses pane_current_command to detect if something other than a shell
+    is running. This is more reliable than checking pane content.
 
     Args:
         window: Window identifier in format 'session:window_name'
+        pane: Pane index (default: 0)
 
     Returns:
-        True if Claude Code appears to be running, False otherwise
+        True if an agent appears to be running, False otherwise
     """
-    # Capture recent pane content
+    target = f"{window}.{pane}"
+
+    # Get the current command running in the pane
     result = subprocess.run(
-        ['tmux', 'capture-pane', '-t', window, '-p', '-S', '-20'],
+        ['tmux', 'display-message', '-t', target, '-p', '#{pane_current_command}'],
         capture_output=True,
         text=True
     )
@@ -292,20 +296,17 @@ def is_claude_running_in_pane(window: str) -> bool:
     if result.returncode != 0:
         return False
 
-    content = result.stdout
+    current_command = result.stdout.strip()
 
-    # Look for Claude Code indicators:
-    # - "Claude" in the output (startup message, prompts)
-    # - The prompt pattern "> " or "claude>"
-    # - "claude code" text
-    if 'Claude' in content or 'claude' in content.lower():
-        return True
+    # If it's a shell, no agent is running
+    # Common shells: bash, zsh, sh, fish, tcsh, csh, dash
+    shell_names = {'bash', 'zsh', 'sh', 'fish', 'tcsh', 'csh', 'dash', '-bash', '-zsh', '-sh'}
+    if current_command.lower() in shell_names:
+        return False
 
-    # Also check for the prompt pattern with some content
-    if '> ' in content and len(content.strip()) > 10:
-        return True
-
-    return False
+    # If we got here, something other than a shell is running
+    # This could be Claude Code (shows version like "2.1.25"), OpenCode, etc.
+    return bool(current_command)
 
 
 def build_claude_command(agent_dir: Path, extra_args: str | None = None) -> str:
@@ -370,9 +371,15 @@ def init_cmd(name: str):
     click.echo(f"✓ Initialized agent '{name}' at {agent_dir}")
 
 
-@agent.command('start')
+@agent.command('start',
+    context_settings={'help_option_names': ['-h', '--help']},
+    epilog="""
+\b
+Examples:
+  voicemode agent start              # Start in 'voicemode' session
+  voicemode agent start --session vm # Start in 'vm' session
+""")
 @click.option('--session', default='voicemode', help='Tmux session name')
-@click.help_option('-h', '--help')
 def start(session: str):
     """Start the operator agent.
 
@@ -382,11 +389,6 @@ def start(session: str):
 
     This command is idempotent - if the agent is already running,
     it reports success without restarting.
-
-    \b
-    Examples:
-      voicemode agent start              # Start in 'voicemode' session
-      voicemode agent start --session vm # Start in 'vm' session
     """
     agent_name = 'operator'
     window = f'{session}:{agent_name}'
@@ -420,7 +422,7 @@ def start(session: str):
         click.echo(f"Created tmux window '{agent_name}'")
 
     # 5. Check if Claude Code is already running
-    if is_claude_running_in_pane(window):
+    if is_agent_running_in_pane(window):
         click.echo(f"✓ Operator already running in tmux session '{session}'")
         return
 
@@ -439,23 +441,23 @@ def start(session: str):
     click.echo(f"✓ Operator started in tmux session '{session}'")
 
 
-@agent.command('status')
+@agent.command('status',
+    context_settings={'help_option_names': ['-h', '--help']},
+    epilog="""
+\b
+Status values:
+  running  - Claude Code is active in the operator window
+  stopped  - Agent is not running (various reasons shown)
+
+Examples:
+  voicemode agent status              # Check default session
+  voicemode agent status --session vm # Check 'vm' session
+""")
 @click.option('--session', default='voicemode', help='Tmux session name')
-@click.help_option('-h', '--help')
 def status(session: str):
     """Show operator status.
 
     Checks the tmux session, window, and Claude Code process status.
-
-    \b
-    Status values:
-      running  - Claude Code is active in the operator window
-      stopped  - Agent is not running (various reasons shown)
-
-    \b
-    Examples:
-      voicemode agent status              # Check default session
-      voicemode agent status --session vm # Check 'vm' session
     """
     agent_name = 'operator'
     window = f'{session}:{agent_name}'
@@ -471,27 +473,28 @@ def status(session: str):
         return
 
     # Check if Claude Code is running
-    if is_claude_running_in_pane(window):
+    if is_agent_running_in_pane(window):
         click.echo("running")
     else:
         click.echo("stopped - Claude not running in window")
 
 
-@agent.command('stop')
+@agent.command('stop',
+    context_settings={'help_option_names': ['-h', '--help']},
+    epilog="""
+\b
+Examples:
+  voicemode agent stop              # Send Ctrl-C to stop Claude
+  voicemode agent stop --kill       # Kill the tmux window
+  voicemode agent stop --session vm # Stop agent in 'vm' session
+""")
 @click.option('--session', default='voicemode', help='Tmux session name')
 @click.option('--kill', is_flag=True, help='Kill the tmux window instead of just stopping Claude')
-@click.help_option('-h', '--help')
 def stop(session: str, kill: bool):
     """Stop the operator agent.
 
     Sends Ctrl-C to gracefully stop Claude Code. Use --kill to
     remove the entire tmux window.
-
-    \b
-    Examples:
-      voicemode agent stop              # Send Ctrl-C to stop Claude
-      voicemode agent stop --kill       # Kill the tmux window
-      voicemode agent stop --session vm # Stop agent in 'vm' session
     """
     agent_name = 'operator'
     window = f'{session}:{agent_name}'
@@ -548,14 +551,21 @@ def is_operator_running(session: str = 'voicemode') -> bool:
         True if operator is running in the session
     """
     window = f'{session}:operator'
-    return tmux_window_exists(window) and is_claude_running_in_pane(window)
+    return tmux_window_exists(window) and is_agent_running_in_pane(window)
 
 
-@agent.command('send')
+@agent.command('send',
+    context_settings={'help_option_names': ['-h', '--help']},
+    epilog="""
+\b
+Examples:
+  voicemode agent send "Hello, how can I help?"
+  voicemode agent send --no-start "Quick question"
+  voicemode agent send  # Prompts for message
+""")
 @click.argument('message', required=False)
 @click.option('--session', default='voicemode', help='Tmux session name')
 @click.option('--no-start', is_flag=True, help='Fail if agent not running instead of auto-starting')
-@click.help_option('-h', '--help')
 @click.pass_context
 def send(ctx, message: str | None, session: str, no_start: bool):
     """Send a message to the operator.
@@ -565,15 +575,10 @@ def send(ctx, message: str | None, session: str, no_start: bool):
 
     Use --no-start to fail if the agent is not running instead of
     auto-starting it.
-
-    \b
-    Examples:
-      voicemode agent send "Hello, how can I help?"
-      voicemode agent send --no-start "Quick question"
-      voicemode agent send  # Prompts for message
     """
     agent_name = 'operator'
     window = f'{session}:{agent_name}'
+    target = f'{window}.0'  # Always target pane 0 where the agent runs
 
     # Check if agent is running
     running = is_operator_running(session)
@@ -593,10 +598,10 @@ def send(ctx, message: str | None, session: str, no_start: bool):
     if not message:
         message = click.prompt("Message")
 
-    # Send message to the pane using -l for literal interpretation
+    # Send message to pane 0 using -l for literal interpretation
     # First send the message, then send Enter
     result = subprocess.run(
-        ['tmux', 'send-keys', '-t', window, '-l', message],
+        ['tmux', 'send-keys', '-t', target, '-l', message],
         capture_output=True
     )
 
@@ -606,7 +611,7 @@ def send(ctx, message: str | None, session: str, no_start: bool):
 
     # Send Enter key separately
     result = subprocess.run(
-        ['tmux', 'send-keys', '-t', window, 'Enter'],
+        ['tmux', 'send-keys', '-t', target, 'Enter'],
         capture_output=True
     )
 
@@ -635,7 +640,7 @@ def list_agents() -> list[dict]:
         if item.is_dir() and not item.name.startswith('.'):
             # Check running status in default session
             window = f'voicemode:{item.name}'
-            if tmux_window_exists(window) and is_claude_running_in_pane(window):
+            if tmux_window_exists(window) and is_agent_running_in_pane(window):
                 status = 'running'
             else:
                 status = 'stopped'
@@ -645,49 +650,156 @@ def list_agents() -> list[dict]:
     return agents
 
 
-@agent.command('list', hidden=True)
-@click.option('--session', default='voicemode', help='Tmux session name to check')
-@click.help_option('-h', '--help')
-def list_cmd(session: str):
-    """List all configured agents (Easter egg).
+def scan_tmux_for_agents() -> list[dict]:
+    """Scan all tmux panes for running AI agents.
 
-    Scans ~/.voicemode/agents/ for agent directories and shows
-    their running status.
+    Returns a list of dicts with pane info for any pane that appears
+    to be running an AI agent (not a shell).
+
+    Returns:
+        List of dicts with keys: pane_id, session, window, pane_index,
+                                 command, title, path
+    """
+    result = subprocess.run(
+        ['tmux', 'list-panes', '-a', '-F',
+         '#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_index}\t'
+         '#{pane_current_command}\t#{pane_title}\t#{pane_current_path}'],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode != 0:
+        return []
+
+    agents = []
+    shell_names = {'bash', 'zsh', 'sh', 'fish', 'tcsh', 'csh', 'dash',
+                   '-bash', '-zsh', '-sh'}
+
+    for line in result.stdout.strip().splitlines():
+        parts = line.split('\t')
+        if len(parts) >= 7:
+            pane_id, session, window, pane_idx, command, title, path = parts[:7]
+
+            # Skip shells - they're not agents
+            if command.lower() in shell_names:
+                continue
+
+            # Skip common non-agent processes
+            skip_commands = {'nvim', 'vim', 'nano', 'less', 'more', 'man',
+                             'htop', 'top', 'watch', 'tail', 'ssh'}
+            if command.lower() in skip_commands:
+                continue
+
+            agents.append({
+                'pane_id': pane_id,
+                'session': session,
+                'window': window,
+                'pane_index': pane_idx,
+                'command': command,
+                'title': title,
+                'path': path
+            })
+
+    return agents
+
+
+@agent.command('list', hidden=True)
+@click.option('--all', '-a', 'show_all', is_flag=True,
+              help='Show all agent-like processes in tmux')
+@click.help_option('-h', '--help')
+def list_cmd(show_all: bool):
+    """List all agents (Easter egg).
+
+    Without --all: Shows configured VoiceMode agents and their status.
+    With --all: Scans all tmux sessions for running AI agents.
 
     This command is hidden from --help.
 
     \b
     Examples:
-      voicemode agent list              # List all agents
-      voicemode agent list --session vm # Check status in 'vm' session
+      voicemode agent list        # List configured agents
+      voicemode agent list --all  # List all agent-like processes in tmux
     """
+    import sys
+
     base = get_agents_base_dir()
-    agents = []
+    is_tty = sys.stdout.isatty()
 
-    if not base.exists():
-        click.echo("No agents configured (run 'voicemode agent start' first)")
-        return
+    if show_all:
+        # Scan tmux for all agent-like processes
+        running_agents = scan_tmux_for_agents()
 
-    # Scan for agent directories
-    for item in sorted(base.iterdir()):
-        if item.is_dir() and not item.name.startswith('.'):
-            # Check running status
-            window = f'{session}:{item.name}'
-            if tmux_window_exists(window) and is_claude_running_in_pane(window):
-                status = 'running'
-            else:
-                status = 'stopped'
+        if not running_agents:
+            click.echo("No running agents found in tmux")
+            return
 
-            agents.append({'name': item.name, 'status': status})
+        # Get list of managed agent names
+        managed_names = set()
+        if base.exists():
+            for item in base.iterdir():
+                if item.is_dir() and not item.name.startswith('.'):
+                    managed_names.add(item.name)
 
-    if not agents:
-        click.echo("No agents configured (run 'voicemode agent start' first)")
-        return
+        if is_tty:
+            # Calculate column widths dynamically
+            max_id = max(len(a['pane_id']) for a in running_agents)
+            max_loc = max(len(f"{a['session']}:{a['window']}.{a['pane_index']}")
+                          for a in running_agents)
+            max_cmd = max(len(a['command'][:10]) for a in running_agents)
+            max_title = min(30, max(len(a['title'][:30]) for a in running_agents))
 
-    # Display table
-    click.echo("Agent       Status")
-    click.echo("----------  -------")
-    for agent_info in agents:
-        name = agent_info['name'].ljust(10)
-        status = agent_info['status']
-        click.echo(f"{name}  {status}")
+            # Build format string
+            header = (f"{'ID'.rjust(max_id)}  {'Location'.ljust(max_loc)}  "
+                      f"{'Command'.ljust(max_cmd)}  {'Title'.ljust(max_title)}  Managed")
+            separator = (f"{'-' * max_id}  {'-' * max_loc}  "
+                        f"{'-' * max_cmd}  {'-' * max_title}  -------")
+
+            click.echo(header)
+            click.echo(separator)
+            for a in running_agents:
+                pane_id = a['pane_id'].rjust(max_id)
+                location = f"{a['session']}:{a['window']}.{a['pane_index']}".ljust(max_loc)
+                cmd = a['command'][:10].ljust(max_cmd)
+                title = a['title'][:30].ljust(max_title)
+                managed = "yes" if a['window'] in managed_names else "no"
+                click.echo(f"{pane_id}  {location}  {cmd}  {title}  {managed}")
+        else:
+            # Machine-readable: tab-separated values
+            for a in running_agents:
+                managed = "managed" if a['window'] in managed_names else "unmanaged"
+                click.echo(f"{a['pane_id']}\t{a['session']}:{a['window']}.{a['pane_index']}\t"
+                          f"{a['command']}\t{a['title']}\t{managed}")
+    else:
+        # Original behavior: show configured agents
+        if not base.exists():
+            click.echo("No agents configured (run 'voicemode agent start' first)")
+            return
+
+        agents = []
+        for item in sorted(base.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                # Check running status in default voicemode session
+                window = f'voicemode:{item.name}'
+                if tmux_window_exists(window) and is_agent_running_in_pane(window):
+                    status = 'running'
+                else:
+                    status = 'stopped'
+
+                agents.append({'name': item.name, 'status': status})
+
+        if not agents:
+            click.echo("No agents configured (run 'voicemode agent start' first)")
+            return
+
+        if is_tty:
+            # Pretty table format
+            click.echo("Agent       Status")
+            click.echo("----------  -------")
+            for agent_info in agents:
+                name = agent_info['name'].ljust(10)
+                status = agent_info['status']
+                click.echo(f"{name}  {status}")
+        else:
+            # Machine-readable
+            for agent_info in agents:
+                click.echo(f"{agent_info['name']}\t{agent_info['status']}")

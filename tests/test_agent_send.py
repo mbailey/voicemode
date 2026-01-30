@@ -54,19 +54,19 @@ class TestIsOperatorRunning:
     def test_returns_true_when_window_and_claude_exist(self):
         """Should return True when both window exists and Claude is running."""
         with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-            with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=True):
+            with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=True):
                 assert is_operator_running() is True
 
     def test_returns_false_when_window_not_exists(self):
         """Should return False when window doesn't exist."""
         with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=False):
-            with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=True):
+            with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=True):
                 assert is_operator_running() is False
 
     def test_returns_false_when_claude_not_running(self):
         """Should return False when Claude is not running."""
         with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-            with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+            with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                 assert is_operator_running() is False
 
     def test_uses_custom_session_name(self):
@@ -113,7 +113,7 @@ class TestSendCommand:
         with patch('voice_mode.cli_commands.agent.is_operator_running', side_effect=is_running_side_effect):
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-                    with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+                    with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                         with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
                             with patch('voice_mode.cli_commands.agent.time.sleep'):
                                 result = runner.invoke(agent, ['send', 'Hello!'])
@@ -220,7 +220,7 @@ class TestSendCommand:
         with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=False):
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
-                    with patch('voice_mode.cli_commands.agent.is_claude_running_in_pane', return_value=False):
+                    with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                         with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
                             with patch('voice_mode.cli_commands.agent.time.sleep', mock_sleep):
                                 result = runner.invoke(agent, ['send', 'Hello!'])
