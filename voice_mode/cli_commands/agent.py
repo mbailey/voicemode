@@ -591,8 +591,22 @@ def send(ctx, message: str | None, session: str, no_start: bool):
             # Auto-start the agent
             click.echo("Starting operator...")
             ctx.invoke(start, session=session)
-            # Wait for Claude to initialize
-            time.sleep(2)
+
+            # Wait for Claude to actually be ready (poll until pane_current_command changes)
+            max_wait = 15  # seconds
+            poll_interval = 0.5
+            waited = 0
+            click.echo("Waiting for operator to be ready...", nl=False)
+            while waited < max_wait:
+                if is_agent_running_in_pane(window):
+                    click.echo(" ready!")
+                    break
+                time.sleep(poll_interval)
+                waited += poll_interval
+                click.echo(".", nl=False)
+            else:
+                click.echo(" timeout!")
+                click.echo("Warning: Operator may not be ready, sending message anyway", err=True)
 
     # Get message if not provided
     if not message:
