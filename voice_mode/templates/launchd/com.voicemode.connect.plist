@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.voicemode.connect.plist v1.0.0 -->
+<!-- Last updated: 2026-01-30 -->
+<!-- Runs voicemode connect standby on login for remote wake from iOS/web -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicemode.connect</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{START_SCRIPT}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{HOME}/.voicemode/logs/connect/connect.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{HOME}/.voicemode/logs/connect/connect.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>
