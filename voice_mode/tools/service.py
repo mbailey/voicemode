@@ -85,6 +85,14 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "HOME": home,
             "START_SCRIPT": start_script,
         }
+    elif service_name == "connect":
+        # VoiceMode connect service - runs voicemode connect standby for remote wake
+        start_script = os.path.join(voicemode_dir, "services", "connect", "bin", "start-voicemode-connect.sh")
+
+        return {
+            "HOME": home,
+            "START_SCRIPT": start_script,
+        }
     else:
         raise ValueError(f"Unknown service: {service_name}")
 
@@ -129,12 +137,74 @@ async def install_voicemode_start_script() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
+async def install_voicemode_connect_script() -> Dict[str, Any]:
+    """Install the VoiceMode Connect start script to the expected location.
+
+    Similar to install_voicemode_start_script() but for the connect service.
+    This function copies the start script template to the
+    ~/.voicemode/services/connect/bin/ directory.
+
+    Returns:
+        Dict with success status and start_script path
+    """
+    voicemode_dir = os.path.expanduser(os.environ.get("VOICEMODE_BASE_DIR", "~/.voicemode"))
+    bin_dir = os.path.join(voicemode_dir, "services", "connect", "bin")
+    start_script_path = os.path.join(bin_dir, "start-voicemode-connect.sh")
+
+    try:
+        # Create bin directory if it doesn't exist
+        os.makedirs(bin_dir, exist_ok=True)
+
+        # Load template script from package
+        template_path = Path(__file__).parent.parent / "templates" / "scripts" / "start-voicemode-connect.sh"
+        if not template_path.exists():
+            return {"success": False, "error": f"Template not found: {template_path}"}
+
+        template_content = template_path.read_text()
+
+        # Write the start script
+        with open(start_script_path, 'w') as f:
+            f.write(template_content)
+
+        # Make executable
+        os.chmod(start_script_path, 0o755)
+
+        logger.info(f"Installed VoiceMode Connect start script at {start_script_path}")
+        return {"success": True, "start_script": start_script_path}
+
+    except Exception as e:
+        logger.error(f"Error installing VoiceMode Connect start script: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def find_connect_process():
+    """Find the voicemode connect standby process by command line.
+
+    Unlike other services that listen on ports, connect is a WebSocket client.
+    We find it by looking for the voicemode connect standby command.
+
+    Returns:
+        psutil.Process if found, None otherwise
+    """
+    for proc in psutil.process_iter(['pid', 'cmdline']):
+        try:
+            cmdline = proc.info.get('cmdline') or []
+            # Join cmdline to search for the pattern
+            cmdline_str = ' '.join(cmdline).lower()
+            if 'voicemode' in cmdline_str and 'connect' in cmdline_str and 'standby' in cmdline_str:
+                return proc
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return None
+
+
 def load_service_template(service_name: str) -> str:
     """Load service file template from templates."""
     system = platform.system()
     templates_dir = Path(__file__).parent.parent / "templates"
 
     # Map service name to template name (voicemode uses "serve" in template names)
+    # connect uses "connect" directly (no mapping needed)
     template_name = "serve" if service_name == "voicemode" else service_name
 
     if system == "Darwin":
@@ -173,6 +243,7 @@ def create_service_file(service_name: str) -> tuple[Path, str]:
     content = template.format(**config_vars)
 
     # Map service name to file name (voicemode uses "serve" in file names)
+    # connect uses "connect" directly (no mapping needed)
     file_name = "serve" if service_name == "voicemode" else service_name
 
     # Determine destination path
@@ -181,7 +252,7 @@ def create_service_file(service_name: str) -> tuple[Path, str]:
     else:
         dest_path = Path(home) / ".config" / "systemd" / "user" / f"voicemode-{file_name}.service"
 
-    # Ensure log directory exists (voicemode uses 'serve' for logs too)
+    # Ensure log directory exists (voicemode uses 'serve' for logs, connect uses 'connect')
     log_dir = Path(home) / ".voicemode" / "logs" / file_name
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -190,26 +261,35 @@ def create_service_file(service_name: str) -> tuple[Path, str]:
 
 async def status_service(service_name: str) -> str:
     """Get status of a service."""
-    if service_name == "whisper":
-        port = WHISPER_PORT
-    elif service_name == "kokoro":
-        port = KOKORO_PORT
-    elif service_name == "voicemode":
-        port = VOICEMODE_SERVE_PORT
+    # Connect service is special - it's a WebSocket client, not a port listener
+    if service_name == "connect":
+        proc = find_connect_process()
+        if not proc:
+            return "❌ Connect is not available"
+        # Connect has a process, continue to get details below
+        status = "running"
+        port = None  # Connect doesn't use a port
     else:
-        port = 3000
-    
-    status, proc = check_service_status(port)
-    
-    if status == "not_available":
-        # For Kokoro, check if it's in the process of starting up
-        if service_name == "kokoro":
-            startup_status = is_kokoro_starting_up()
-            if startup_status:
-                return f"⏳ Kokoro is {startup_status}"
-        return f"❌ {service_name.capitalize()} is not available"
-    elif status == "forwarded":
-        return f"""🔄 {service_name.capitalize()} is available via port forwarding
+        if service_name == "whisper":
+            port = WHISPER_PORT
+        elif service_name == "kokoro":
+            port = KOKORO_PORT
+        elif service_name == "voicemode":
+            port = VOICEMODE_SERVE_PORT
+        else:
+            port = 3000
+
+        status, proc = check_service_status(port)
+
+        if status == "not_available":
+            # For Kokoro, check if it's in the process of starting up
+            if service_name == "kokoro":
+                startup_status = is_kokoro_starting_up()
+                if startup_status:
+                    return f"⏳ Kokoro is {startup_status}"
+            return f"❌ {service_name.capitalize()} is not available"
+        elif status == "forwarded":
+            return f"""🔄 {service_name.capitalize()} is available via port forwarding
    Port: {port} (forwarded)
    Local process: Not running
    Remote: Accessible"""
@@ -312,14 +392,26 @@ async def status_service(service_name: str) -> str:
                 extra_info_parts.append(f"Version: {__version__}")
             except:
                 pass
-        
+        elif service_name == "connect":
+            # VoiceMode Connect standby info (WebSocket client, no port)
+            extra_info_parts.append("Mode: standby")
+            extra_info_parts.append("Type: WebSocket client")
+            # Try to get version info
+            try:
+                from voice_mode.version import __version__
+                extra_info_parts.append(f"Version: {__version__}")
+            except:
+                pass
+
         extra_info = ""
         if extra_info_parts:
             extra_info = "\n   " + "\n   ".join(extra_info_parts)
-        
+
+        # Build output - connect doesn't have a port
+        port_line = f"\n   Port: {port}" if port is not None else ""
+
         return f"""✅ {service_name.capitalize()} is running locally
-   PID: {proc.pid}
-   Port: {port}
+   PID: {proc.pid}{port_line}
    CPU: {cpu_percent:.1f}%
    Memory: {memory_mb:.1f} MB
    Uptime: {uptime_str}{extra_info}"""
@@ -331,22 +423,34 @@ async def status_service(service_name: str) -> str:
 
 async def start_service(service_name: str) -> str:
     """Start a service."""
-    # Check if already running
-    if service_name == "whisper":
-        port = WHISPER_PORT
-    elif service_name == "kokoro":
-        port = KOKORO_PORT
-    elif service_name == "voicemode":
-        port = VOICEMODE_SERVE_PORT
+    # Check if already running - connect uses process detection, others use port
+    if service_name == "connect":
+        if find_connect_process():
+            return "Connect is already running"
+        port = None
     else:
-        port = 3000
-    if find_process_by_port(port):
-        return f"{service_name.capitalize()} is already running on port {port}"
+        if service_name == "whisper":
+            port = WHISPER_PORT
+        elif service_name == "kokoro":
+            port = KOKORO_PORT
+        elif service_name == "voicemode":
+            port = VOICEMODE_SERVE_PORT
+        else:
+            port = 3000
+        if find_process_by_port(port):
+            return f"{service_name.capitalize()} is already running on port {port}"
 
     system = platform.system()
 
     # Map service name to file name (voicemode uses "serve" in file names)
+    # connect uses "connect" directly
     file_name = "serve" if service_name == "voicemode" else service_name
+
+    # Helper to check if service is running
+    def is_service_running():
+        if service_name == "connect":
+            return find_connect_process() is not None
+        return find_process_by_port(port) is not None
 
     # Check if managed by service manager
     if system == "Darwin":
@@ -360,10 +464,12 @@ async def start_service(service_name: str) -> str:
             )
             if result.returncode == 0:
                 # Wait for service to start
-                for i in range(10):
-                    if find_process_by_port(port):
+                for _ in range(10):
+                    if is_service_running():
                         return f"✅ {service_name.capitalize()} started"
                     await asyncio.sleep(0.5)
+                if service_name == "connect":
+                    return f"⚠️ {service_name.capitalize()} loaded but not yet detected as running"
                 return f"⚠️ {service_name.capitalize()} loaded but not yet listening on port {port}"
             else:
                 error = result.stderr or result.stdout
@@ -372,7 +478,7 @@ async def start_service(service_name: str) -> str:
                     # This can happen if the service crashed
                     subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.voicemode.{file_name}"], capture_output=True)
                     await asyncio.sleep(2)
-                    if find_process_by_port(port):
+                    if is_service_running():
                         return f"✅ {service_name.capitalize()} restarted"
                     return f"⚠️ {service_name.capitalize()} is loaded but failed to start"
                 return f"❌ Failed to start {service_name}: {error}"
@@ -389,10 +495,12 @@ async def start_service(service_name: str) -> str:
             )
             if result.returncode == 0:
                 # Wait for service to start
-                for i in range(10):
-                    if find_process_by_port(port):
+                for _ in range(10):
+                    if is_service_running():
                         return f"✅ {service_name.capitalize()} started"
                     await asyncio.sleep(0.5)
+                if service_name == "connect":
+                    return f"⚠️ {service_name.capitalize()} started but not yet detected as running"
                 return f"⚠️ {service_name.capitalize()} started but not yet listening on port {port}"
             else:
                 error = result.stderr or result.stdout
@@ -454,6 +562,11 @@ async def start_service(service_name: str) -> str:
         import sys
         cmd = [sys.executable, "-m", "voice_mode", "serve", "--port", str(port)]
 
+    elif service_name == "connect":
+        # Start voicemode connect standby directly
+        import sys
+        cmd = [sys.executable, "-m", "voice_mode", "connect", "standby"]
+
     else:
         return f"❌ Unknown service: {service_name}"
 
@@ -469,20 +582,26 @@ async def start_service(service_name: str) -> str:
             stderr=subprocess.PIPE,
             cwd=cwd
         )
-        
+
         # Wait a moment to check if it started
         await asyncio.sleep(2)
-        
+
         if process.poll() is not None:
             # Process exited
             stderr = process.stderr.read().decode() if process.stderr else ""
             return f"❌ {service_name.capitalize()} failed to start: {stderr}"
-        
-        # Verify it's listening
-        if find_process_by_port(port):
-            return f"✅ {service_name.capitalize()} started successfully (PID: {process.pid})"
+
+        # Verify it's running - connect uses process detection, others use port
+        if service_name == "connect":
+            if find_connect_process():
+                return f"✅ {service_name.capitalize()} started successfully (PID: {process.pid})"
+            else:
+                return f"⚠️ {service_name.capitalize()} process started but not yet detected as running"
         else:
-            return f"⚠️ {service_name.capitalize()} process started but not listening on port {port} yet"
+            if find_process_by_port(port):
+                return f"✅ {service_name.capitalize()} started successfully (PID: {process.pid})"
+            else:
+                return f"⚠️ {service_name.capitalize()} process started but not listening on port {port} yet"
             
     except Exception as e:
         logger.error(f"Error starting {service_name}: {e}")
@@ -491,7 +610,10 @@ async def start_service(service_name: str) -> str:
 
 async def stop_service(service_name: str) -> str:
     """Stop a service."""
-    if service_name == "whisper":
+    # Connect uses process detection, others use port
+    if service_name == "connect":
+        port = None
+    elif service_name == "whisper":
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
@@ -502,6 +624,7 @@ async def stop_service(service_name: str) -> str:
     system = platform.system()
 
     # Map service name to file name (voicemode uses "serve" in file names)
+    # connect uses "connect" directly
     file_name = "serve" if service_name == "voicemode" else service_name
 
     # Check if managed by service manager
@@ -538,9 +661,12 @@ async def stop_service(service_name: str) -> str:
             else:
                 error = result.stderr or result.stdout
                 return f"❌ Failed to stop {service_name}: {error}"
-    
-    # Fallback to process termination
-    proc = find_process_by_port(port)
+
+    # Fallback to process termination - connect uses process detection
+    if service_name == "connect":
+        proc = find_connect_process()
+    else:
+        proc = find_process_by_port(port)
     if not proc:
         return f"{service_name.capitalize()} is not running"
     
@@ -608,6 +734,21 @@ async def enable_service(service_name: str) -> str:
                     return f"❌ Failed to install VoiceMode start script: {install_result.get('error', 'Unknown error')}"
                 start_script = install_result.get("start_script", "")
                 logger.info(f"Auto-installed VoiceMode start script at {start_script}")
+
+        elif service_name == "connect":
+            # Validate OAuth credentials exist before enabling connect service
+            credentials_file = Path.home() / ".voicemode" / "credentials"
+            if not credentials_file.exists():
+                return "❌ No credentials found. Run 'voicemode connect login' first to authenticate."
+
+            start_script = config_vars.get("START_SCRIPT", "")
+            if not start_script or not Path(start_script).exists():
+                # Auto-install the start script for connect since it's built-in
+                install_result = await install_voicemode_connect_script()
+                if not install_result.get("success"):
+                    return f"❌ Failed to install VoiceMode Connect start script: {install_result.get('error', 'Unknown error')}"
+                start_script = install_result.get("start_script", "")
+                logger.info(f"Auto-installed VoiceMode Connect start script at {start_script}")
 
         # Create parent directories
         service_path.parent.mkdir(parents=True, exist_ok=True)
@@ -724,12 +865,18 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
     lines = lines or 50
 
     # Map service name to file/log name (voicemode uses "serve" in file names)
+    # connect uses "connect" directly
     log_name = "serve" if service_name == "voicemode" else service_name
 
     try:
         if system == "Darwin":
             # Use log show command
-            process_name = "voicemode-serve" if service_name == "voicemode" else f"{service_name}-server"
+            if service_name == "voicemode":
+                process_name = "voicemode-serve"
+            elif service_name == "connect":
+                process_name = "voicemode"  # connect runs as "voicemode connect standby"
+            else:
+                process_name = f"{service_name}-server"
             cmd = [
                 "log", "show",
                 "--predicate", f'process == "{process_name}" OR process == "kokoro-fastapi"',
@@ -792,16 +939,16 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 
 @mcp.tool()
 async def service(
-    service_name: Literal["whisper", "kokoro", "voicemode"],
+    service_name: Literal["whisper", "kokoro", "voicemode", "connect"],
     action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs"] = "status",
     lines: Optional[Union[int, str]] = None
 ) -> str:
     """Unified service management tool for voice mode services.
 
-    Manage Whisper (STT), Kokoro (TTS), and VoiceMode (HTTP MCP server) services.
+    Manage Whisper (STT), Kokoro (TTS), VoiceMode (HTTP MCP server), and Connect (standby) services.
 
     Args:
-        service_name: The service to manage ("whisper", "kokoro", or "voicemode")
+        service_name: The service to manage ("whisper", "kokoro", "voicemode", or "connect")
         action: The action to perform (default: "status")
             - status: Show if service is running and resource usage
             - start: Start the service
@@ -819,6 +966,7 @@ async def service(
         service("whisper", "status")  # Check if Whisper is running
         service("kokoro", "start")    # Start Kokoro service
         service("voicemode", "start") # Start VoiceMode HTTP MCP server
+        service("connect", "enable")  # Enable Connect standby service for remote wake
         service("whisper", "logs", 100)  # View last 100 lines of Whisper logs
     """
     # Convert lines to integer if provided as string
