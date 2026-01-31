@@ -319,7 +319,7 @@ def build_claude_command(agent_dir: Path, initial_prompt: str | None = None, ext
     Returns:
         Command string to execute
     """
-    cmd = f"cd {agent_dir} && claude --dangerously-skip-permissions"
+    cmd = f"cd {agent_dir} && claude"
 
     if extra_args:
         cmd = f"{cmd} {extra_args}"

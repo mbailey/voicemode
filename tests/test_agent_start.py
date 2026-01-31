@@ -175,13 +175,14 @@ class TestBuildClaudeCommand:
     """Tests for build_claude_command function."""
 
     def test_builds_basic_command(self, tmp_path):
-        """Should build command with cd and --dangerously-skip-permissions."""
+        """Should build command with cd and claude."""
         agent_dir = tmp_path / '.voicemode' / 'agents' / 'operator'
 
         result = build_claude_command(agent_dir)
 
         assert f"cd {agent_dir}" in result
-        assert "claude --dangerously-skip-permissions" in result
+        assert "claude" in result
+        assert "--dangerously-skip-permissions" not in result
 
     def test_builds_command_with_extra_args(self, tmp_path):
         """Should include extra arguments when provided."""
