@@ -522,6 +522,10 @@ STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:20
 TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
 
+# STT prompt for vocabulary biasing (helps with specialized terminology)
+# See: https://platform.openai.com/docs/guides/speech-to-text#prompting
+STT_PROMPT = os.getenv("VOICEMODE_STT_PROMPT", "")
+
 # Voice preferences cache
 _cached_voice_preferences: Optional[list] = None
 _voice_preferences_loaded = False
