@@ -24,7 +24,7 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json`):
   "mcpServers": {
     "voicemode-dev": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://mcp.voicemode.dev/sse"]
+      "args": ["-y", "mcp-remote", "https://voicemode.dev/mcp"]
     }
   }
 }
@@ -36,17 +36,11 @@ When you first use a Connect tool, Claude Code will prompt for OAuth authenticat
 
 ### 3. Connect a Client
 
-Open the iOS app or web app (app.voicemode.dev) and sign in with the same account.
+Open the iOS app or web dashboard (voicemode.dev/dashboard) and sign in with the same account.
 
 ### 4. Start Talking
 
-```python
-# Check connected devices
-voicemode-dev:status()
-
-# Have a conversation
-voicemode-dev:converse("Hello! Can you hear me?")
-```
+Use the `status` tool to see connected devices, then use `converse` to have a voice conversation.
 
 ## MCP Tools
 
