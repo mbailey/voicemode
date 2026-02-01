@@ -396,10 +396,10 @@ def agent():
 
     \b
     Quick Start:
-      voicemode agent start         # Start operator (default)
-      voicemode agent start -a research  # Start research agent
-      voicemode agent list          # See all agents
-      voicemode agent send "hello"  # Send to operator
+      voicemode agent start            # Start operator (default)
+      voicemode agent start research   # Start research agent
+      voicemode agent list             # See all agents
+      voicemode agent send "hello"     # Send to operator
       voicemode agent send -a research "help"  # Send to research
     """
     pass
@@ -426,16 +426,15 @@ def init_cmd(name: str):
     epilog="""
 \b
 Examples:
-  voicemode agent start                # Start operator (default)
-  voicemode agent start --agent research  # Start research agent
-  voicemode agent start -a tesi        # Start tesi agent (short form)
-  voicemode agent start --session vm   # Start in 'vm' session
-  voicemode agent start -p "hello"     # Start with initial prompt
+  voicemode agent start             # Start operator (default)
+  voicemode agent start research    # Start research agent
+  voicemode agent start tesi        # Start tesi agent
+  voicemode agent start -s vm       # Start in 'vm' session
+  voicemode agent start -p "hello"  # Start with initial prompt
 """)
-@click.option('--agent', '-a', 'agent_name', default='operator',
-              shell_complete=agent_name_completion,
-              help='Agent name (default: operator)')
-@click.option('--session', default='voicemode', help='Tmux session name')
+@click.argument('agent_name', default='operator', required=False,
+                shell_complete=agent_name_completion)
+@click.option('-s', '--session', default='voicemode', help='Tmux session name')
 @click.option('-p', '--prompt', help='Initial prompt to send to the agent')
 def start(agent_name: str, session: str, prompt: str | None):
     """Start an agent.
@@ -506,15 +505,13 @@ Status values:
   stopped  - Agent is not running (various reasons shown)
 
 Examples:
-  voicemode agent status                  # Check operator (default)
-  voicemode agent status --agent research # Check research agent
-  voicemode agent status -a tesi          # Check tesi agent
-  voicemode agent status --session vm     # Check 'vm' session
+  voicemode agent status             # Check operator (default)
+  voicemode agent status research    # Check research agent
+  voicemode agent status -s vm       # Check 'vm' session
 """)
-@click.option('--agent', '-a', 'agent_name', default='operator',
-              shell_complete=agent_name_completion,
-              help='Agent name (default: operator)')
-@click.option('--session', default='voicemode', help='Tmux session name')
+@click.argument('agent_name', default='operator', required=False,
+                shell_complete=agent_name_completion)
+@click.option('-s', '--session', default='voicemode', help='Tmux session name')
 def status(agent_name: str, session: str):
     """Show agent status.
 
@@ -544,16 +541,14 @@ def status(agent_name: str, session: str):
     epilog="""
 \b
 Examples:
-  voicemode agent stop                  # Stop operator (default)
-  voicemode agent stop --agent research # Stop research agent
-  voicemode agent stop -a tesi          # Stop tesi agent
-  voicemode agent stop --kill           # Kill the tmux window
-  voicemode agent stop --session vm     # Stop agent in 'vm' session
+  voicemode agent stop             # Stop operator (default)
+  voicemode agent stop research    # Stop research agent
+  voicemode agent stop --kill      # Kill the tmux window
+  voicemode agent stop -s vm       # Stop agent in 'vm' session
 """)
-@click.option('--agent', '-a', 'agent_name', default='operator',
-              shell_complete=agent_name_completion,
-              help='Agent name (default: operator)')
-@click.option('--session', default='voicemode', help='Tmux session name')
+@click.argument('agent_name', default='operator', required=False,
+                shell_complete=agent_name_completion)
+@click.option('-s', '--session', default='voicemode', help='Tmux session name')
 @click.option('--kill', is_flag=True, help='Kill the tmux window instead of just stopping Claude')
 def stop(agent_name: str, session: str, kill: bool):
     """Stop an agent.
@@ -647,7 +642,7 @@ Examples:
 @click.option('--agent', '-a', 'agent_name', default='operator',
               shell_complete=agent_name_completion,
               help='Agent name (default: operator)')
-@click.option('--session', default='voicemode', help='Tmux session name')
+@click.option('-s', '--session', default='voicemode', help='Tmux session name')
 @click.option('--no-start', is_flag=True, help='Fail if agent not running instead of auto-starting')
 @click.pass_context
 def send(ctx, message: str | None, agent_name: str, session: str, no_start: bool):
