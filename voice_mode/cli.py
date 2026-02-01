@@ -3158,14 +3158,17 @@ def logout():
               help='WebSocket URL for voicemode.dev')
 @click.option('--token', envvar='VOICEMODE_DEV_TOKEN',
               help='Authentication token for voicemode.dev (or set VOICEMODE_DEV_TOKEN)')
+@click.option('--agent', '-a', 'agent_name', default='operator',
+              envvar='VOICEMODE_AGENT_NAME',
+              help='Agent to wake on incoming calls (default: operator)')
 @click.option('--wake-message', envvar='VOICEMODE_WAKE_MESSAGE',
-              help='Custom message to send to operator on wake (default: greeting prompt)')
-def standby(url: str, token: str | None, wake_message: str | None):
-    """Wait for incoming voice sessions and wake the operator agent.
+              help='Custom message to send to agent on wake (default: greeting prompt)')
+def standby(url: str, token: str | None, agent_name: str, wake_message: str | None):
+    """Wait for incoming voice sessions and wake an agent.
 
     Connects to voicemode.dev and listens for wake signals. When someone
     initiates a voice session (from iOS app or web), this command uses
-    'voicemode agent send' to wake the operator. If the operator isn't
+    'voicemode agent send' to wake the specified agent. If the agent isn't
     running, it will be started automatically.
 
     The connection stays alive, waiting for calls. Press Ctrl+C to stop.
@@ -3173,17 +3176,22 @@ def standby(url: str, token: str | None, wake_message: str | None):
     \b
     Prerequisites:
         1. Run 'voicemode connect login' to authenticate
-        2. The operator agent will be started automatically on first wake
+        2. The agent will be started automatically on first wake
 
     \b
     Related Commands:
-        voicemode agent start   - Pre-start the operator
-        voicemode agent status  - Check if operator is running
-        voicemode agent stop    - Stop the operator
+        voicemode agent start   - Pre-start an agent
+        voicemode agent status  - Check if agent is running
+        voicemode agent list    - List available agents
+        voicemode agent stop    - Stop an agent
 
     Examples:
-        # Basic usage (after running 'voicemode connect login')
+        # Wake operator (default)
         voicemode connect standby
+
+        # Wake a specific agent
+        voicemode connect standby --agent cora
+        voicemode connect standby -a tesi
 
         # Specify token directly (overrides stored credentials)
         voicemode connect standby --token your-token-here
@@ -3242,12 +3250,12 @@ def standby(url: str, token: str | None, wake_message: str | None):
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    def start_operator(wake_msg: dict) -> bool:
-        """Start or wake the operator agent when wake signal received.
+    def wake_agent(wake_msg: dict) -> bool:
+        """Start or wake the configured agent when wake signal received.
 
-        Uses 'voicemode agent send' to deliver the wake message. This command
-        auto-starts the agent if not running, keeping WebSocket listener
-        decoupled from agent management.
+        Uses 'voicemode agent send -a <agent>' to deliver the wake message.
+        This command auto-starts the agent if not running, keeping WebSocket
+        listener decoupled from agent management.
 
         Returns:
             True if message was sent successfully, False otherwise
@@ -3256,39 +3264,39 @@ def standby(url: str, token: str | None, wake_message: str | None):
         caller_id = wake_msg.get('callerId', 'unknown')
         click.echo(f"\n🔔 Wake signal received! Reason: {reason}, Caller: {caller_id}")
 
-        # Build the wake message for the operator
+        # Build the wake message for the agent
         # Use custom message if provided, otherwise default greeting prompt
         if wake_message:
             msg_to_send = wake_message
         else:
             msg_to_send = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
 
-        click.echo(f"Waking operator via 'voicemode agent send'...")
+        click.echo(f"Waking agent '{agent_name}' via 'voicemode agent send'...")
 
         try:
-            # Use 'voicemode agent send' which auto-starts the agent if needed
+            # Use 'voicemode agent send -a <agent>' which auto-starts if needed
             result = subprocess.run(
-                ['voicemode', 'agent', 'send', msg_to_send],
+                ['voicemode', 'agent', 'send', '-a', agent_name, msg_to_send],
                 capture_output=True,
                 text=True,
                 timeout=30,  # 30 second timeout for agent start + send
             )
 
             if result.returncode == 0:
-                click.echo(f"✅ Operator woken successfully")
+                click.echo(f"✅ Agent '{agent_name}' woken successfully")
                 return True
             else:
                 error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-                click.echo(f"❌ Failed to wake operator: {error_msg}", err=True)
+                click.echo(f"❌ Failed to wake agent '{agent_name}': {error_msg}", err=True)
                 return False
         except subprocess.TimeoutExpired:
-            click.echo(f"❌ Timeout waiting for operator to start", err=True)
+            click.echo(f"❌ Timeout waiting for agent '{agent_name}' to start", err=True)
             return False
         except FileNotFoundError:
             click.echo(f"❌ 'voicemode' command not found in PATH", err=True)
             return False
         except Exception as e:
-            click.echo(f"❌ Failed to wake operator: {e}", err=True)
+            click.echo(f"❌ Failed to wake agent '{agent_name}': {e}", err=True)
             return False
 
     def send_status(ws, status: str, error: str | None = None, wake_id: str | None = None):
@@ -3376,13 +3384,13 @@ def standby(url: str, token: str | None, wake_message: str | None):
                         msg_type = msg.get('type')
 
                         if msg_type == 'wake':
-                            # Wake the operator using 'voicemode agent send'
+                            # Wake the configured agent using 'voicemode agent send'
                             send_status(ws, 'starting', wake_id=msg.get('id'))
-                            success = start_operator(msg)
+                            success = wake_agent(msg)
                             if success:
                                 send_status(ws, 'running', wake_id=msg.get('id'))
                             else:
-                                send_status(ws, 'error', error='Failed to wake operator', wake_id=msg.get('id'))
+                                send_status(ws, 'error', error=f'Failed to wake agent {agent_name}', wake_id=msg.get('id'))
 
                         elif msg_type == 'ack':
                             # Acknowledgment - just log it
