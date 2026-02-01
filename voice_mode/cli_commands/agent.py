@@ -6,6 +6,7 @@ The default agent is 'operator' - accessible from the iOS app and web interface.
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict
 
@@ -91,6 +92,48 @@ VOICEMODE_AGENT_REMOTE=true
 def get_agents_base_dir() -> Path:
     """Get the base directory for all agents."""
     return Path.home() / '.voicemode' / 'agents'
+
+
+def get_agent_names() -> list[str]:
+    """Get list of available agent names for shell completion.
+
+    Discovers agents from ~/.voicemode/agents/ directories.
+    Always includes 'operator' as the default agent.
+
+    Returns:
+        List of agent names (directory names)
+    """
+    base = get_agents_base_dir()
+    agents = ['operator']  # Always include operator
+
+    if base.exists():
+        for item in sorted(base.iterdir()):
+            if item.is_dir() and not item.name.startswith('.'):
+                if item.name not in agents:
+                    agents.append(item.name)
+
+    return agents
+
+
+def get_agent_dir(name: str) -> Path:
+    """Get the home directory for a named agent.
+
+    Args:
+        name: Agent name
+
+    Returns:
+        Path to the agent's directory
+    """
+    return get_agents_base_dir() / name
+
+
+def agent_name_completion(ctx, param, incomplete: str) -> list[str]:
+    """Shell completion callback for agent names.
+
+    Returns agent names that start with the incomplete string.
+    """
+    agents = get_agent_names()
+    return [a for a in agents if a.startswith(incomplete)]
 
 
 def init_agent_directory(name: str = 'operator') -> Path:
@@ -346,16 +389,19 @@ def agent():
 
     \b
     Commands:
-      start   Start the operator agent
-      stop    Stop the operator agent
-      status  Show operator status
-      send    Send a message to the operator
+      start   Start an agent
+      stop    Stop an agent
+      status  Show agent status
+      send    Send a message to an agent
+      list    List all agents and their status
 
     \b
     Quick Start:
-      voicemode agent start     # Start operator in tmux
-      voicemode agent send "hello"  # Send a message
-      voicemode agent stop      # Stop the agent
+      voicemode agent start            # Start operator (default)
+      voicemode agent start research   # Start research agent
+      voicemode agent list             # See all agents
+      voicemode agent send "hello"     # Send to operator
+      voicemode agent send -a research "help"  # Send to research
     """
     pass
 
@@ -381,23 +427,26 @@ def init_cmd(name: str):
     epilog="""
 \b
 Examples:
-  voicemode agent start              # Start in 'voicemode' session
-  voicemode agent start --session vm # Start in 'vm' session
-  voicemode agent start -p "hello"   # Start with initial prompt
+  voicemode agent start             # Start operator (default)
+  voicemode agent start research    # Start research agent
+  voicemode agent start tesi        # Start tesi agent
+  voicemode agent start -s vm       # Start in 'vm' session
+  voicemode agent start -p "hello"  # Start with initial prompt
 """)
-@click.option('--session', default='voicemode', help='Tmux session name')
+@click.argument('agent_name', default='operator', required=False,
+                shell_complete=agent_name_completion)
+@click.option('-s', '--session', default='voicemode', help='Tmux session name')
 @click.option('-p', '--prompt', help='Initial prompt to send to the agent')
-def start(session: str, prompt: str | None):
-    """Start the operator agent.
+def start(agent_name: str, session: str, prompt: str | None):
+    """Start an agent.
 
     Starts a Claude Code instance in a tmux session. The agent runs
-    in the operator directory (~/.voicemode/agents/operator) and
-    loads its CLAUDE.md configuration.
+    in its directory (~/.voicemode/agents/<name>) and loads its
+    CLAUDE.md configuration.
 
     This command is idempotent - if the agent is already running,
     it reports success without restarting.
     """
-    agent_name = 'operator'
     window = f'{session}:{agent_name}'
 
     # 1. Initialize agent directory structure if needed
@@ -430,7 +479,7 @@ def start(session: str, prompt: str | None):
 
     # 5. Check if Claude Code is already running
     if is_agent_running_in_pane(window):
-        click.echo(f"✓ Operator already running in tmux session '{session}'")
+        click.echo(f"✓ Agent '{agent_name}' already running in tmux session '{session}'")
         return
 
     # 6. Start Claude Code
@@ -445,7 +494,7 @@ def start(session: str, prompt: str | None):
         click.echo("Error: Failed to start Claude Code", err=True)
         raise SystemExit(1)
 
-    click.echo(f"✓ Operator started in tmux session '{session}'")
+    click.echo(f"✓ Agent '{agent_name}' started in tmux session '{session}'")
 
 
 @agent.command('status',
@@ -453,20 +502,22 @@ def start(session: str, prompt: str | None):
     epilog="""
 \b
 Status values:
-  running  - Claude Code is active in the operator window
+  running  - Claude Code is active in the agent window
   stopped  - Agent is not running (various reasons shown)
 
 Examples:
-  voicemode agent status              # Check default session
-  voicemode agent status --session vm # Check 'vm' session
+  voicemode agent status             # Check operator (default)
+  voicemode agent status research    # Check research agent
+  voicemode agent status -s vm       # Check 'vm' session
 """)
-@click.option('--session', default='voicemode', help='Tmux session name')
-def status(session: str):
-    """Show operator status.
+@click.argument('agent_name', default='operator', required=False,
+                shell_complete=agent_name_completion)
+@click.option('-s', '--session', default='voicemode', help='Tmux session name')
+def status(agent_name: str, session: str):
+    """Show agent status.
 
     Checks the tmux session, window, and Claude Code process status.
     """
-    agent_name = 'operator'
     window = f'{session}:{agent_name}'
 
     # Check if session exists
@@ -491,24 +542,26 @@ def status(session: str):
     epilog="""
 \b
 Examples:
-  voicemode agent stop              # Send Ctrl-C to stop Claude
-  voicemode agent stop --kill       # Kill the tmux window
-  voicemode agent stop --session vm # Stop agent in 'vm' session
+  voicemode agent stop             # Stop operator (default)
+  voicemode agent stop research    # Stop research agent
+  voicemode agent stop --kill      # Kill the tmux window
+  voicemode agent stop -s vm       # Stop agent in 'vm' session
 """)
-@click.option('--session', default='voicemode', help='Tmux session name')
+@click.argument('agent_name', default='operator', required=False,
+                shell_complete=agent_name_completion)
+@click.option('-s', '--session', default='voicemode', help='Tmux session name')
 @click.option('--kill', is_flag=True, help='Kill the tmux window instead of just stopping Claude')
-def stop(session: str, kill: bool):
-    """Stop the operator agent.
+def stop(agent_name: str, session: str, kill: bool):
+    """Stop an agent.
 
     Sends Ctrl-C to gracefully stop Claude Code. Use --kill to
     remove the entire tmux window.
     """
-    agent_name = 'operator'
     window = f'{session}:{agent_name}'
 
     # Check if window exists
     if not tmux_window_exists(window):
-        click.echo(f"Operator not running (no '{agent_name}' window in session '{session}')")
+        click.echo(f"Agent '{agent_name}' not running (no window in session '{session}')")
         return
 
     if kill:
@@ -520,17 +573,21 @@ def stop(session: str, kill: bool):
         if result.returncode != 0:
             click.echo(f"Error: Failed to kill window '{window}'", err=True)
             raise SystemExit(1)
-        click.echo(f"✓ Operator window killed")
+        click.echo(f"✓ Agent '{agent_name}' window killed")
     else:
-        # Send Ctrl-C to stop Claude gracefully
-        result = subprocess.run(
-            ['tmux', 'send-keys', '-t', window, 'C-c'],
-            capture_output=True
-        )
-        if result.returncode != 0:
-            click.echo(f"Error: Failed to send stop signal", err=True)
-            raise SystemExit(1)
-        click.echo(f"✓ Sent stop signal to operator")
+        # Send multiple Ctrl-C signals to stop Claude gracefully
+        # Claude Code often needs 2-3 Ctrl-C signals to fully stop
+        for i in range(3):
+            result = subprocess.run(
+                ['tmux', 'send-keys', '-t', window, 'C-c'],
+                capture_output=True
+            )
+            if result.returncode != 0:
+                click.echo(f"Error: Failed to send stop signal", err=True)
+                raise SystemExit(1)
+            if i < 2:  # Don't sleep after the last signal
+                time.sleep(0.3)
+        click.echo(f"✓ Sent stop signal to agent '{agent_name}'")
 
 
 def escape_for_tmux(message: str) -> str:
@@ -548,8 +605,23 @@ def escape_for_tmux(message: str) -> str:
     return message
 
 
+def is_agent_running(agent_name: str = 'operator', session: str = 'voicemode') -> bool:
+    """Check if an agent is running.
+
+    Args:
+        agent_name: Name of the agent to check
+        session: Tmux session name
+
+    Returns:
+        True if agent is running in the session
+    """
+    window = f'{session}:{agent_name}'
+    return tmux_window_exists(window) and is_agent_running_in_pane(window)
+
+
+# Keep is_operator_running for backwards compatibility
 def is_operator_running(session: str = 'voicemode') -> bool:
-    """Check if the operator agent is running.
+    """Check if the operator agent is running (backwards compatible).
 
     Args:
         session: Tmux session name
@@ -557,8 +629,7 @@ def is_operator_running(session: str = 'voicemode') -> bool:
     Returns:
         True if operator is running in the session
     """
-    window = f'{session}:operator'
-    return tmux_window_exists(window) and is_agent_running_in_pane(window)
+    return is_agent_running('operator', session)
 
 
 @agent.command('send',
@@ -567,23 +638,27 @@ def is_operator_running(session: str = 'voicemode') -> bool:
 \b
 Examples:
   voicemode agent send "Hello, how can I help?"
+  voicemode agent send --agent research "Help with paper"
+  voicemode agent send -a tesi "Quick question"
   voicemode agent send --no-start "Quick question"
   voicemode agent send  # Prompts for message
 """)
 @click.argument('message', required=False)
-@click.option('--session', default='voicemode', help='Tmux session name')
+@click.option('--agent', '-a', 'agent_name', default='operator',
+              shell_complete=agent_name_completion,
+              help='Agent name (default: operator)')
+@click.option('-s', '--session', default='voicemode', help='Tmux session name')
 @click.option('--no-start', is_flag=True, help='Fail if agent not running instead of auto-starting')
 @click.pass_context
-def send(ctx, message: str | None, session: str, no_start: bool):
-    """Send a message to the operator.
+def send(ctx, message: str | None, agent_name: str, session: str, no_start: bool):
+    """Send a message to an agent.
 
-    Sends a message to the operator agent in the tmux session. By default,
+    Sends a message to the agent in the tmux session. By default,
     if the agent is not running, it will be started automatically.
 
     Use --no-start to fail if the agent is not running instead of
     auto-starting it.
     """
-    agent_name = 'operator'
     window = f'{session}:{agent_name}'
     target = f'{window}.0'  # Always target pane 0 where the agent runs
 
@@ -592,17 +667,17 @@ def send(ctx, message: str | None, session: str, no_start: bool):
         message = click.prompt("Message")
 
     # Check if agent is running
-    running = is_operator_running(session)
+    running = is_agent_running(agent_name, session)
 
     if not running:
         if no_start:
-            click.echo(f"Error: Operator not running (use 'voicemode agent start')", err=True)
+            click.echo(f"Error: Agent '{agent_name}' not running (use 'voicemode agent start --agent {agent_name}')", err=True)
             sys.exit(1)
         else:
             # Auto-start the agent with the message as initial prompt
             # This passes the message directly to claude command, avoiding timing issues
-            click.echo("Starting operator with message...")
-            ctx.invoke(start, session=session, prompt=message)
+            click.echo(f"Starting agent '{agent_name}' with message...")
+            ctx.invoke(start, agent_name=agent_name, session=session, prompt=message)
 
             # Truncate message for display if too long
             display_msg = message[:50] + '...' if len(message) > 50 else message
@@ -632,7 +707,7 @@ def send(ctx, message: str | None, session: str, no_start: bool):
 
     # Truncate message for display if too long
     display_msg = message[:50] + '...' if len(message) > 50 else message
-    click.echo(f"✓ Sent: {display_msg}")
+    click.echo(f"✓ Sent to '{agent_name}': {display_msg}")
 
 
 def list_agents() -> list[dict]:
@@ -714,17 +789,15 @@ def scan_tmux_for_agents() -> list[dict]:
     return agents
 
 
-@agent.command('list', hidden=True)
-@click.option('--all', '-a', 'show_all', is_flag=True,
+@agent.command('list')
+@click.option('--all', 'show_all', is_flag=True,
               help='Show all agent-like processes in tmux')
 @click.help_option('-h', '--help')
 def list_cmd(show_all: bool):
-    """List all agents (Easter egg).
+    """List all agents and their status.
 
     Without --all: Shows configured VoiceMode agents and their status.
     With --all: Scans all tmux sessions for running AI agents.
-
-    This command is hidden from --help.
 
     \b
     Examples:
