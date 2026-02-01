@@ -6,6 +6,7 @@ The default agent is 'operator' - accessible from the iOS app and web interface.
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict
 
@@ -574,14 +575,18 @@ def stop(agent_name: str, session: str, kill: bool):
             raise SystemExit(1)
         click.echo(f"✓ Agent '{agent_name}' window killed")
     else:
-        # Send Ctrl-C to stop Claude gracefully
-        result = subprocess.run(
-            ['tmux', 'send-keys', '-t', window, 'C-c'],
-            capture_output=True
-        )
-        if result.returncode != 0:
-            click.echo(f"Error: Failed to send stop signal", err=True)
-            raise SystemExit(1)
+        # Send multiple Ctrl-C signals to stop Claude gracefully
+        # Claude Code often needs 2-3 Ctrl-C signals to fully stop
+        for i in range(3):
+            result = subprocess.run(
+                ['tmux', 'send-keys', '-t', window, 'C-c'],
+                capture_output=True
+            )
+            if result.returncode != 0:
+                click.echo(f"Error: Failed to send stop signal", err=True)
+                raise SystemExit(1)
+            if i < 2:  # Don't sleep after the last signal
+                time.sleep(0.3)
         click.echo(f"✓ Sent stop signal to agent '{agent_name}'")
 
 
