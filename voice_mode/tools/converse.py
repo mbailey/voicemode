@@ -1356,7 +1356,15 @@ consult the MCP resources listed above.
                 barge_in_monitor = None
                 if BARGE_IN_ENABLED and is_barge_in_available() and wait_for_response and not should_skip_tts:
                     barge_in_monitor = BargeInMonitor()
-                    logger.info("Barge-in monitoring enabled for TTS playback")
+                    logger.info("🎙️ Barge-in monitoring enabled for TTS playback")
+                    logger.debug(f"   VAD aggressiveness: {barge_in_monitor.vad_aggressiveness}, "
+                                f"min speech: {barge_in_monitor.min_speech_ms}ms")
+                    # Log barge-in start event for analytics
+                    if event_logger:
+                        event_logger.log_event(event_logger.BARGE_IN_START, {
+                            "vad_aggressiveness": barge_in_monitor.vad_aggressiveness,
+                            "min_speech_ms": barge_in_monitor.min_speech_ms
+                        })
 
                 if should_skip_tts:
                     # Skip TTS entirely for faster response
@@ -1503,26 +1511,43 @@ consult the MCP resources listed above.
 
                 # Check if TTS was interrupted by barge-in (user spoke during playback)
                 barge_in_occurred = tts_metrics and tts_metrics.get('interrupted', False)
+                barge_in_audio = False  # Track if current audio is from barge-in (for edge case handling)
 
                 if barge_in_occurred:
                     # User interrupted TTS by speaking - use captured audio directly
                     logger.info("⚡ TTS playback was interrupted by user speech (barge-in)")
 
-                    # Log barge-in event for analytics
+                    # Log barge-in event for analytics using proper event constant
                     if event_logger:
-                        event_logger.log_event("BARGE_IN_DETECTED", {
+                        event_logger.log_event(event_logger.BARGE_IN_DETECTED, {
                             "interrupted_at_seconds": tts_metrics.get('interrupted_at'),
-                            "captured_samples": tts_metrics.get('captured_audio_samples', 0)
+                            "captured_samples": tts_metrics.get('captured_audio_samples', 0),
+                            "tts_duration_before_interrupt": tts_metrics.get('interrupted_at', 0)
                         })
 
                     # Get the captured audio from barge-in
                     audio_data = tts_metrics.get('captured_audio')
                     if audio_data is None:
                         # Barge-in triggered but no audio captured (edge case)
-                        logger.warning("Barge-in detected but no audio captured, falling back to normal recording")
+                        logger.warning("⚠️ Barge-in detected but no audio captured, falling back to normal recording")
+                        if event_logger:
+                            event_logger.log_event(event_logger.BARGE_IN_FALSE_POSITIVE, {
+                                "reason": "no_audio_captured",
+                                "captured_samples": 0
+                            })
+                        barge_in_occurred = False
+                    elif len(audio_data) < 100:
+                        # Very short audio - likely a false positive from noise
+                        logger.warning(f"⚠️ Barge-in captured very short audio ({len(audio_data)} samples), falling back to normal recording")
+                        if event_logger:
+                            event_logger.log_event(event_logger.BARGE_IN_FALSE_POSITIVE, {
+                                "reason": "audio_too_short",
+                                "captured_samples": len(audio_data)
+                            })
                         barge_in_occurred = False
                     else:
                         # We have captured audio - set flags for barge-in flow
+                        barge_in_audio = True  # Mark audio as from barge-in for downstream edge case handling
                         speech_detected = True  # We know speech was detected (barge-in triggered)
                         timings['record'] = tts_metrics.get('interrupted_at', 0)  # Recording during TTS
                         timings['barge_in'] = True
@@ -1532,8 +1557,8 @@ consult the MCP resources listed above.
 
                         # Mark the end of "recording" (which was actually during TTS)
                         user_done_time = time.perf_counter()
-                        logger.info(f"Barge-in audio captured at {timings['record']:.1f}s into TTS playback")
-                        logger.info(f"Captured {len(audio_data)} samples of user speech")
+                        logger.info(f"📊 Barge-in audio captured at {timings['record']:.1f}s into TTS playback")
+                        logger.info(f"📊 Captured {len(audio_data)} samples ({len(audio_data) / SAMPLE_RATE:.2f}s) of user speech")
 
                 # Normal flow: user didn't interrupt, record their response
                 if not barge_in_occurred:
@@ -1653,13 +1678,40 @@ consult the MCP resources listed above.
                                 error_msg = "\n".join(error_lines)
                                 logger.error(error_msg)
 
+                                # Log barge-in specific STT error if this was barge-in audio
+                                if barge_in_audio:
+                                    logger.warning("⚠️ STT failed on barge-in captured audio")
+                                    if event_logger:
+                                        event_logger.log_event(event_logger.BARGE_IN_STT_ERROR, {
+                                            "error": "connection_failed",
+                                            "captured_samples": len(audio_data) if audio_data is not None else 0,
+                                            "attempted_endpoints": len(stt_result.get("attempted_endpoints", []))
+                                        })
+
                                 # Return error immediately
                                 return error_msg
 
                             elif stt_result["error_type"] == "no_speech":
-                                # Genuine no speech detected
+                                # Genuine no speech detected - could be a false positive for barge-in
                                 response_text = None
                                 stt_provider = stt_result.get("provider", "unknown")
+
+                                # Handle barge-in false positive: VAD triggered but STT found no speech
+                                if barge_in_audio:
+                                    logger.warning("⚠️ Barge-in false positive: VAD detected speech but STT found none")
+                                    logger.info("This may happen due to background noise or brief non-speech sounds")
+                                    if event_logger:
+                                        event_logger.log_event(event_logger.BARGE_IN_FALSE_POSITIVE, {
+                                            "reason": "stt_no_speech",
+                                            "captured_samples": len(audio_data) if audio_data is not None else 0,
+                                            "stt_provider": stt_provider
+                                        })
+                                    # Save the audio for debugging if configured
+                                    if SAVE_AUDIO and AUDIO_DIR:
+                                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                        audio_path = os.path.join(AUDIO_DIR, f"barge_in_false_positive_{timestamp}.wav")
+                                        write(audio_path, SAMPLE_RATE, audio_data)
+                                        logger.debug(f"Saved barge-in false positive audio to: {audio_path}")
                         else:
                             # Successful transcription
                             response_text = stt_result.get("text")

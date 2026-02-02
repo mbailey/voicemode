@@ -268,8 +268,23 @@ async def text_to_speech(
         if use_streaming:
             # Use streaming playback
             logger.info(f"Using streaming playback for {validated_format}")
+
+            # Edge case: Barge-in not yet supported with streaming TTS
+            # Note: Streaming TTS barge-in support will be added in phase4-streaming
+            if barge_in_monitor is not None:
+                logger.warning("⚠️ Barge-in is not yet supported with streaming TTS - interruption will not work")
+                logger.info("   Consider disabling streaming (VOICEMODE_STREAMING_ENABLED=false) for barge-in support")
+                # Log the edge case for analytics
+                if event_logger:
+                    event_logger.log_event("BARGE_IN_STREAMING_UNSUPPORTED", {
+                        "format": validated_format,
+                        "streaming_enabled": True
+                    })
+                # We don't stop the barge-in monitor here; it just won't be able to interrupt streaming
+                # This allows graceful degradation - TTS plays, barge-in is silently skipped
+
             from .streaming import stream_tts_audio
-            
+
             # Pass the client directly
             success, stream_metrics = await stream_tts_audio(
                 text=text,
@@ -446,7 +461,13 @@ async def text_to_speech(
 
                         # Stop barge-in monitoring if active
                         if barge_in_monitor:
+                            voice_was_detected = barge_in_monitor.voice_detected()
                             barge_in_monitor.stop_monitoring()
+                            # Log barge-in stop event for analytics
+                            if event_logger:
+                                event_logger.log_event(event_logger.BARGE_IN_STOP, {
+                                    "voice_detected": voice_was_detected
+                                })
 
                         playback_end = time.perf_counter()
                         metrics['playback'] = playback_end - playback_start
