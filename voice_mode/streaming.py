@@ -11,8 +11,11 @@ import logging
 import time
 import queue
 import threading
-from typing import Optional, Tuple, AsyncIterator
-from dataclasses import dataclass
+from typing import Optional, Tuple, AsyncIterator, TYPE_CHECKING
+from dataclasses import dataclass, field
+
+if TYPE_CHECKING:
+    from .barge_in import BargeInMonitor
 from pathlib import Path
 import numpy as np
 
@@ -40,6 +43,11 @@ class StreamMetrics:
     chunks_received: int = 0
     chunks_played: int = 0
     audio_path: Optional[str] = None  # Path to saved audio file
+    # Barge-in support
+    interrupted: bool = False  # Whether playback was interrupted by barge-in
+    interrupted_at: float = 0.0  # Time when interrupted (seconds from start)
+    captured_audio: Optional[np.ndarray] = field(default=None, repr=False)  # Captured speech for STT
+    captured_audio_samples: int = 0  # Number of samples captured
 
 
 class AudioStreamPlayer:
@@ -228,17 +236,48 @@ async def stream_pcm_audio(
     debug: bool = False,
     save_audio: bool = False,
     audio_dir: Optional[Path] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    barge_in_monitor: Optional["BargeInMonitor"] = None
 ) -> Tuple[bool, StreamMetrics]:
     """Stream PCM audio with true HTTP streaming for minimal latency.
-    
+
     Uses the OpenAI SDK's streaming response with iter_bytes() for real-time playback.
+    Supports barge-in interruption when a BargeInMonitor is provided.
+
+    Args:
+        text: Text to convert to speech
+        openai_client: OpenAI client instance
+        request_params: Parameters for TTS request
+        debug: Enable debug logging
+        save_audio: Whether to save the audio file
+        audio_dir: Directory to save audio files
+        conversation_id: Optional conversation ID for file naming
+        barge_in_monitor: Optional BargeInMonitor for interrupt detection
+
+    Returns:
+        Tuple of (success, metrics) where metrics includes interrupted state
     """
     metrics = StreamMetrics()
     start_time = time.perf_counter()
     stream = None
     first_chunk_time = None
     save_buffer = io.BytesIO() if save_audio else None
+
+    # Barge-in state
+    interrupt_event = threading.Event()
+
+    def on_interrupt():
+        """Callback when barge-in voice is detected."""
+        logger.info("⚡ Barge-in detected during streaming TTS")
+        interrupt_event.set()
+
+    # Start barge-in monitoring if provided
+    if barge_in_monitor:
+        try:
+            barge_in_monitor.start_monitoring(on_voice_detected=on_interrupt)
+            logger.debug("Started barge-in monitoring for streaming TTS")
+        except Exception as e:
+            logger.warning(f"Failed to start barge-in monitoring: {e}")
     
     try:
         # Setup sounddevice stream for PCM playback
@@ -279,41 +318,63 @@ async def stream_pcm_audio(
             
             # Stream chunks as they arrive
             async for chunk in response.iter_bytes(chunk_size=STREAM_CHUNK_SIZE):
+                # Check for barge-in interrupt before processing chunk
+                if interrupt_event.is_set():
+                    logger.info("⚡ Streaming interrupted by barge-in")
+                    metrics.interrupted = True
+                    metrics.interrupted_at = time.perf_counter() - start_time
+                    break
+
                 if chunk:
                     # Track first chunk received
                     if first_chunk_time is None:
                         first_chunk_time = time.perf_counter()
                         chunk_receive_time = first_chunk_time - start_time
                         logger.info(f"First audio chunk received after {chunk_receive_time:.3f}s")
-                        
+
                         # Log TTS first audio event
                         event_logger = get_event_logger()
                         if event_logger:
                             event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
-                    
+
                     # Convert bytes to numpy array for sounddevice
                     # PCM data is already in the right format
                     audio_array = np.frombuffer(chunk, dtype=np.int16)
-                    
+
                     # Play the chunk immediately
                     stream.write(audio_array)
-                    
+
                     # Save chunk if enabled
                     if save_buffer:
                         save_buffer.write(chunk)
-                    
+
                     chunk_count += 1
                     bytes_received += len(chunk)
                     metrics.chunks_received = chunk_count
                     metrics.chunks_played = chunk_count
-                    
+
                     if debug and chunk_count % 10 == 0:
                         logger.debug(f"Streamed {chunk_count} chunks, {bytes_received} bytes")
-        
-        # Wait for playback to finish
+
+                    # Check for barge-in interrupt after playing chunk
+                    if interrupt_event.is_set():
+                        logger.info("⚡ Streaming interrupted by barge-in after chunk")
+                        metrics.interrupted = True
+                        metrics.interrupted_at = time.perf_counter() - start_time
+                        break
+
+        # Stop playback (immediately if interrupted, otherwise wait for finish)
         stream.stop()
         
         end_time = time.perf_counter()
+
+        # Capture barge-in audio if interrupted
+        if metrics.interrupted and barge_in_monitor:
+            captured_audio = barge_in_monitor.get_captured_audio()
+            if captured_audio is not None:
+                metrics.captured_audio = captured_audio
+                metrics.captured_audio_samples = len(captured_audio)
+                logger.debug(f"Captured {len(captured_audio)} samples of barge-in audio")
 
         # Log TTS playback end with metrics
         if event_logger:
@@ -324,13 +385,14 @@ async def stream_pcm_audio(
                     "bytes_received": bytes_received,
                     "chunks": chunk_count,
                     "format": "pcm",
-                    "sample_rate_hz": SAMPLE_RATE
+                    "sample_rate_hz": SAMPLE_RATE,
+                    "interrupted": metrics.interrupted
                 }
             }
             event_logger.log_event(event_logger.TTS_PLAYBACK_END, tts_event_data)
         metrics.generation_time = first_chunk_time - start_time if first_chunk_time else 0
         metrics.playback_time = end_time - start_time
-        
+
         # Calculate true TTFA based on actual audio playback or chunk receipt
         if debug and audio_start_time:
             # Use actual playback start time when available
@@ -340,10 +402,15 @@ async def stream_pcm_audio(
             # Fall back to first chunk time
             metrics.ttfa = first_chunk_time - start_time
             logger.info(f"TTFA (first chunk): {metrics.ttfa:.3f}s")
-        
-        logger.info(f"Streaming complete - TTFA: {metrics.ttfa:.3f}s, "
-                   f"Total: {metrics.playback_time:.3f}s, "
-                   f"Chunks: {metrics.chunks_received}")
+
+        if metrics.interrupted:
+            logger.info(f"⚡ Streaming interrupted by barge-in - TTFA: {metrics.ttfa:.3f}s, "
+                       f"Interrupted at: {metrics.interrupted_at:.3f}s, "
+                       f"Chunks: {metrics.chunks_received}")
+        else:
+            logger.info(f"Streaming complete - TTFA: {metrics.ttfa:.3f}s, "
+                       f"Total: {metrics.playback_time:.3f}s, "
+                       f"Chunks: {metrics.chunks_received}")
         
         # Save audio if enabled
         if save_audio and save_buffer and audio_dir:
@@ -382,6 +449,14 @@ async def stream_pcm_audio(
         return False, metrics
         
     finally:
+        # Stop barge-in monitoring
+        if barge_in_monitor:
+            try:
+                barge_in_monitor.stop_monitoring()
+                logger.debug("Stopped barge-in monitoring")
+            except Exception as e:
+                logger.warning(f"Error stopping barge-in monitor: {e}")
+
         if stream:
             stream.close()
 
@@ -393,22 +468,27 @@ async def stream_tts_audio(
     debug: bool = False,
     save_audio: bool = False,
     audio_dir: Optional[Path] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    barge_in_monitor: Optional["BargeInMonitor"] = None
 ) -> Tuple[bool, StreamMetrics]:
     """Stream TTS audio with progressive playback.
-    
+
     Args:
         text: Text to convert to speech
         openai_client: OpenAI client instance
         request_params: Parameters for TTS request
         debug: Enable debug logging
-        
+        save_audio: Whether to save the audio file
+        audio_dir: Directory to save audio files
+        conversation_id: Optional conversation ID for file naming
+        barge_in_monitor: Optional BargeInMonitor for interrupt detection
+
     Returns:
-        Tuple of (success, metrics)
+        Tuple of (success, metrics) where metrics includes interrupted state
     """
     format = request_params.get('response_format', 'pcm')
     logger.info(f"Starting streaming TTS with format: {format}")
-    
+
     # PCM is best for streaming (no decoding needed)
     # For other formats, we may need buffering
     if format == 'pcm':
@@ -419,7 +499,8 @@ async def stream_tts_audio(
             debug=debug,
             save_audio=save_audio,
             audio_dir=audio_dir,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            barge_in_monitor=barge_in_monitor
         )
     else:
         # Use buffered streaming for formats that need decoding
@@ -430,7 +511,8 @@ async def stream_tts_audio(
             debug=debug,
             save_audio=save_audio,
             audio_dir=audio_dir,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            barge_in_monitor=barge_in_monitor
         )
 
 
@@ -443,26 +525,58 @@ async def stream_with_buffering(
     debug: bool = False,
     save_audio: bool = False,
     audio_dir: Optional[Path] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    barge_in_monitor: Optional["BargeInMonitor"] = None
 ) -> Tuple[bool, StreamMetrics]:
     """Fallback streaming that buffers enough data to decode reliably.
-    
+
     This is used for formats like MP3, Opus, etc where frame boundaries are critical.
     For Opus, we download the complete audio before playing.
+    Supports barge-in interruption when a BargeInMonitor is provided.
+
+    Args:
+        text: Text to convert to speech
+        openai_client: OpenAI client instance
+        request_params: Parameters for TTS request
+        sample_rate: Audio sample rate
+        debug: Enable debug logging
+        save_audio: Whether to save the audio file
+        audio_dir: Directory to save audio files
+        conversation_id: Optional conversation ID for file naming
+        barge_in_monitor: Optional BargeInMonitor for interrupt detection
+
+    Returns:
+        Tuple of (success, metrics) where metrics includes interrupted state
     """
     format = request_params.get('response_format', 'pcm')
     logger.info(f"Using buffered streaming for format: {format}")
-    
+
     metrics = StreamMetrics()
     start_time = time.perf_counter()
-    
+
+    # Barge-in state
+    interrupt_event = threading.Event()
+
+    def on_interrupt():
+        """Callback when barge-in voice is detected."""
+        logger.info("⚡ Barge-in detected during buffered streaming TTS")
+        interrupt_event.set()
+
+    # Start barge-in monitoring if provided
+    if barge_in_monitor:
+        try:
+            barge_in_monitor.start_monitoring(on_voice_detected=on_interrupt)
+            logger.debug("Started barge-in monitoring for buffered streaming TTS")
+        except Exception as e:
+            logger.warning(f"Failed to start barge-in monitoring: {e}")
+
     # Buffer for accumulating chunks
     buffer = io.BytesIO()
     # Separate buffer for saving complete audio
     save_buffer = io.BytesIO() if save_audio else None
     audio_started = False
     stream = None
-    
+
     try:
         # Setup sounddevice stream
         stream = sd.OutputStream(
@@ -482,20 +596,27 @@ async def stream_with_buffering(
             
             # Stream chunks as they arrive
             async for chunk in response.iter_bytes(chunk_size=STREAM_CHUNK_SIZE):
+                # Check for barge-in interrupt before processing chunk
+                if interrupt_event.is_set():
+                    logger.info("⚡ Buffered streaming interrupted by barge-in")
+                    metrics.interrupted = True
+                    metrics.interrupted_at = time.perf_counter() - start_time
+                    break
+
                 if chunk:
                     # Track first chunk for TTFA
                     if first_chunk_time is None:
                         first_chunk_time = time.perf_counter()
                         metrics.ttfa = first_chunk_time - start_time
                         logger.info(f"First chunk received - TTFA: {metrics.ttfa:.3f}s")
-                    
+
                     buffer.write(chunk)
                     metrics.chunks_received += 1
-                    
+
                     # Also accumulate in save buffer if saving is enabled
                     if save_buffer:
                         save_buffer.write(chunk)
-                    
+
                     # Try to decode when we have enough data (e.g., 32KB)
                     if buffer.tell() > 32768 and not audio_started:
                         buffer.seek(0)
@@ -503,25 +624,40 @@ async def stream_with_buffering(
                             # Attempt to decode what we have
                             audio = AudioSegment.from_file(buffer, format=format)
                             samples = np.array(audio.get_array_of_samples()).astype(np.float32) / 32768.0
-                            
+
                             # Start playback
                             metrics.ttfa = time.perf_counter() - start_time
                             audio_started = True
                             logger.info(f"Buffered streaming started - TTFA: {metrics.ttfa:.3f}s")
-                            
+
                             # Play audio
                             stream.write(samples)
                             metrics.chunks_played += len(samples) // 1024
-                            
+
                             # Reset buffer for next batch
                             buffer = io.BytesIO()
-                            
+
                         except Exception as e:
                             # Not enough valid data yet
                             buffer.seek(0, io.SEEK_END)
-        
-        # Process any remaining data
-        if buffer.tell() > 0:
+
+                    # Check for barge-in interrupt after playback
+                    if interrupt_event.is_set():
+                        logger.info("⚡ Buffered streaming interrupted by barge-in after playback")
+                        metrics.interrupted = True
+                        metrics.interrupted_at = time.perf_counter() - start_time
+                        break
+
+        # Capture barge-in audio if interrupted
+        if metrics.interrupted and barge_in_monitor:
+            captured_audio = barge_in_monitor.get_captured_audio()
+            if captured_audio is not None:
+                metrics.captured_audio = captured_audio
+                metrics.captured_audio_samples = len(captured_audio)
+                logger.debug(f"Captured {len(captured_audio)} samples of barge-in audio")
+
+        # Process any remaining data (skip if interrupted)
+        if buffer.tell() > 0 and not metrics.interrupted:
             buffer.seek(0)
             try:
                 audio = AudioSegment.from_file(buffer, format=format)
@@ -538,7 +674,16 @@ async def stream_with_buffering(
         
         metrics.generation_time = time.perf_counter() - start_time
         metrics.playback_time = metrics.generation_time  # Approximate
-        
+
+        if metrics.interrupted:
+            logger.info(f"⚡ Buffered streaming interrupted by barge-in - TTFA: {metrics.ttfa:.3f}s, "
+                       f"Interrupted at: {metrics.interrupted_at:.3f}s, "
+                       f"Chunks: {metrics.chunks_received}")
+        else:
+            logger.info(f"Buffered streaming complete - TTFA: {metrics.ttfa:.3f}s, "
+                       f"Total: {metrics.playback_time:.3f}s, "
+                       f"Chunks: {metrics.chunks_received}")
+
         # Save audio if enabled
         if save_audio and save_buffer and audio_dir:
             try:
@@ -550,14 +695,22 @@ async def stream_with_buffering(
                     logger.info(f"TTS audio saved to: {audio_path}")
             except Exception as e:
                 logger.error(f"Failed to save TTS audio: {e}")
-        
+
         return True, metrics
-        
+
     except Exception as e:
         logger.error(f"Buffered streaming failed: {e}")
         return False, metrics
-        
+
     finally:
+        # Stop barge-in monitoring
+        if barge_in_monitor:
+            try:
+                barge_in_monitor.stop_monitoring()
+                logger.debug("Stopped barge-in monitoring")
+            except Exception as e:
+                logger.warning(f"Error stopping barge-in monitor: {e}")
+
         if stream:
             stream.stop()
             stream.close()

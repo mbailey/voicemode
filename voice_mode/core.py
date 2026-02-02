@@ -269,23 +269,10 @@ async def text_to_speech(
             # Use streaming playback
             logger.info(f"Using streaming playback for {validated_format}")
 
-            # Edge case: Barge-in not yet supported with streaming TTS
-            # Note: Streaming TTS barge-in support will be added in phase4-streaming
-            if barge_in_monitor is not None:
-                logger.warning("⚠️ Barge-in is not yet supported with streaming TTS - interruption will not work")
-                logger.info("   Consider disabling streaming (VOICEMODE_STREAMING_ENABLED=false) for barge-in support")
-                # Log the edge case for analytics
-                if event_logger:
-                    event_logger.log_event("BARGE_IN_STREAMING_UNSUPPORTED", {
-                        "format": validated_format,
-                        "streaming_enabled": True
-                    })
-                # We don't stop the barge-in monitor here; it just won't be able to interrupt streaming
-                # This allows graceful degradation - TTS plays, barge-in is silently skipped
-
             from .streaming import stream_tts_audio
 
-            # Pass the client directly
+            # Pass the client and barge-in monitor directly
+            # Streaming now supports barge-in interruption
             success, stream_metrics = await stream_tts_audio(
                 text=text,
                 openai_client=openai_clients[client_key],
@@ -293,23 +280,34 @@ async def text_to_speech(
                 debug=debug,
                 save_audio=save_audio,
                 audio_dir=audio_dir,
-                conversation_id=conversation_id
+                conversation_id=conversation_id,
+                barge_in_monitor=barge_in_monitor
             )
             
             if success:
                 metrics['ttfa'] = stream_metrics.ttfa
                 metrics['generation'] = stream_metrics.generation_time
                 metrics['playback'] = stream_metrics.playback_time - stream_metrics.generation_time
-                
+
                 # Pass through audio path if it exists
                 if stream_metrics.audio_path:
                     metrics['audio_path'] = stream_metrics.audio_path
-                
-                logger.info(f"✓ TTS streamed successfully - TTFA: {metrics['ttfa']:.3f}s")
-                
+
+                # Handle barge-in metrics from streaming
+                if stream_metrics.interrupted:
+                    metrics['interrupted'] = True
+                    metrics['interrupted_at'] = stream_metrics.interrupted_at
+                    if stream_metrics.captured_audio is not None:
+                        metrics['captured_audio'] = stream_metrics.captured_audio
+                        metrics['captured_audio_samples'] = stream_metrics.captured_audio_samples
+                    logger.info(f"⚡ TTS streamed with barge-in - TTFA: {metrics['ttfa']:.3f}s, "
+                               f"interrupted at {stream_metrics.interrupted_at:.3f}s")
+                else:
+                    logger.info(f"✓ TTS streamed successfully - TTFA: {metrics['ttfa']:.3f}s")
+
                 # Save debug files if needed (we'd need to capture the full audio)
                 # For now, skip debug saving in streaming mode
-                
+
                 return True, metrics
             else:
                 logger.warning("Streaming failed, falling back to buffered playback")
