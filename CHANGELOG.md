@@ -7,6 +7,388 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.1.0] - 2026-02-02
+
+### Added
+
+- **VoiceMode Connect** (VM-549, VM-561)
+  - Remote voice control via voicemode.dev mobile and web apps
+  - `voicemode connect login` - OAuth authentication with PKCE flow
+  - `voicemode connect logout` - Clear stored credentials
+  - `voicemode connect status` - Check connection and auth status
+  - `voicemode connect standby` - Wait for remote wake commands
+  - Connect service for launchd - run at startup with `voicemode service connect enable`
+  - Heartbeat thread keeps connection alive during standby
+
+- **Agent Management** (VM-559, VM-589)
+  - Multi-agent support with dedicated config directories per agent
+  - `voicemode agent start <name>` - Start a named agent in tmux
+  - `voicemode agent stop <name>` - Gracefully stop an agent
+  - `voicemode agent status <name>` - Check agent state
+  - `voicemode agent send <name> <message>` - Send message with auto-start
+  - `--agent` option for standby to target specific agent on wake
+  - `--wake-message` option for custom initial messages
+
+### Fixed
+
+- **Agent Reliability**
+  - Send multiple Ctrl-C signals to reliably stop Claude Code
+  - Poll for readiness before sending messages
+  - Pass initial message directly to claude command
+
+## [8.0.8] - 2026-01-29
+
+### Changed
+
+- **System Audio Converted to MP3**
+  - Converted system message audio files from WAV to MP3
+  - Reduced package size (~200KB to ~36KB for system audio)
+
+## [8.0.7] - 2026-01-29
+
+### Fixed
+
+- **Soundfonts Not in PyPI Package** (GH-223)
+  - Added `artifacts` setting to sdist build target in pyproject.toml
+  - MP3/WAV files were being excluded from sdist due to .gitignore
+  - PyPI wheels built from sdist now include all soundfont audio files
+
+## [8.0.6] - 2026-01-29
+
+_Note: Fix not committed - use 8.0.7_
+
+## [8.0.5] - 2026-01-29
+
+### Fixed
+
+- **Soundfonts Package Structure** (GH-223)
+  - Added `__init__.py` files to data directories for `importlib.resources` discovery
+
+_Note: Audio files missing from PyPI due to sdist build issue - use 8.0.6_
+
+## [8.0.4] - 2026-01-29
+
+_Note: Fix files not committed - use 8.0.6_
+
+## [8.0.3] - 2026-01-29
+
+### Changed
+
+- **Soundfonts Directory Renamed** (GH-223, GH-224)
+  - Package-managed soundfonts directory renamed from `default` to `voicemode`
+  - Soundfonts now sync from package on every init (auto-updates with new releases)
+  - Migration from old `default` directory handled automatically
+  - User customizations via `current` symlink are preserved
+
+### Fixed
+
+- **Plugin Hook Path**
+  - Fixed path to hook receiver for PreCompact in claude-plugin
+
+## [8.0.2] - 2026-01-25
+
+### Added
+
+- **DJ Status Line Output** (VM-219)
+  - `voicemode dj status --line` (or `-l`) for compact tmux status bar format
+  - Shows track/chapter, position, and remaining time with color warnings
+  - Replaces need for external tmux-mpv-status script
+  - [Documentation](docs/reference/dj/tmux-status.md)
+
+### Fixed
+
+- **DJ Chapter Titles Not Displaying**
+  - Fixed uppercase metadata key handling (mpv returns `TITLE` not `title`)
+  - Chapter titles from FFmetadata files now display correctly in status output
+
+## [8.0.1] - 2026-01-25
+
+### Fixed
+
+- **CLI Import Error** (GH-217)
+  - Fixed broken import in status.py that prevented CLI commands from running
+  - Removed unused LIVEKIT_PORT reference that was leftover from LiveKit removal
+
+## [8.0.0] - 2026-01-25
+
+### Added
+
+- **VoiceMode DJ** (VM-406, VM-457, VM-377)
+  - Background music playback for voice sessions with track-level control
+  - `voicemode dj play/stop/pause/resume/status` for core playback
+  - `voicemode dj next/prev/volume` for navigation and volume control
+  - `voicemode dj find` and `voicemode dj library scan/stats` for music library
+  - Automatic audio ducking during TTS - lowers music volume when speaking
+  - Configurable default volume via `VOICEMODE_DJ_VOLUME` environment variable
+  - Configurable duck amount via `VOICEMODE_DJ_DUCK_AMOUNT` (default: 20%)
+
+- **Music For Programming Playback** (VM-369, VM-386, VM-400, VM-480, VM-481)
+  - [Music For Programming](https://musicforprogramming.net) is a curated series of mixes for coding
+  - `voicemode dj mfp list` shows available episodes with local chapter status
+  - `voicemode dj mfp play <episode>` plays an episode with chapter navigation
+  - `voicemode dj next/prev` skips between tracks within an episode
+  - Chapter files bundled in package with automatic distribution on first play
+  - Three-tier chapter lookup: local cache → bundled package → GitHub repository
+  - `voicemode dj mfp sync` for checksum-based sync (preserves user modifications)
+
+- **Support for All Claude Products** (VM-434, VM-458, VM-462)
+  - VoiceMode now works with Claude.ai, Claude Desktop, Claude Cowork, and Claude Mobile
+  - New `voicemode serve` command exposes VoiceMode as HTTP MCP server
+  - **Transport options:**
+    - `--transport` / `-t` to select protocol: `streamable-http` (default) or `sse`
+    - `streamable-http` uses `/mcp` endpoint (recommended)
+    - `sse` uses `/sse` endpoint (deprecated, shows warning)
+  - **Security options:**
+    - `--allow-anthropic` to allow Anthropic's outbound IP ranges (160.79.104.0/21)
+    - `--allow-tailscale` to allow Tailscale network ranges (100.64.0.0/10)
+    - `--allow-ip` to add custom CIDR ranges to allowlist (repeatable)
+    - `--allow-local/--no-allow-local` to control localhost access (default: true)
+    - `--secret` for URL path authentication (endpoint becomes `/{base}/{secret}`)
+    - `--token` for Bearer token authentication
+    - Defense in depth: IP allowlist and token auth can be combined
+  - **Operational features:**
+    - Access logging with X-Forwarded-For header support for proxy deployments
+    - Environment variable configuration via `voicemode.env`
+    - `VOICEMODE_SERVE_TRANSPORT`, `VOICEMODE_ALLOW_TAILSCALE` env vars
+
+- **Multi-Agent Voice Coordination** (VM-399, VM-404, VM-405)
+  - Conch lock file at `~/.voicemode/conch` signals when voice conversation is active
+  - `wait_for_conch` parameter allows agents to wait for their turn to speak
+  - Sound effect hooks automatically mute during voice exchanges
+  - Atomic try_acquire with stale lock detection for crash recovery
+  - Prevents notification sounds from disrupting voice recordings
+
+- **Auto-Install Voice Services**
+  - Whisper and Kokoro services automatically installed during `voice-mode-install`
+  - New `install.sh` curl|bash script for quick setup
+  - Streamlined first-time setup experience
+
+### Fixed
+
+- **MFP Episode References** (VM-376)
+  - Removed invalid episode 76 reference from documentation
+  - Updated all docs to use episode 49 as the default example
+
+### Removed
+
+- **LiveKit Support** (VM-353)
+  - Removed LiveKit room-based real-time communication feature
+  - Removed web frontend (Next.js app for LiveKit UI)
+  - Removed `livekit` CLI command group and all subcommands
+  - Removed `transport` and `room_name` parameters from converse tool
+  - Removed service templates for LiveKit and frontend services
+  - Local microphone transport remains the default and only transport option
+  - **Impact**: Users who set up LiveKit integration will need to use local microphone instead
+
+## [7.4.1] - 2026-01-17
+
+### Fixed
+
+- **Kokoro Install on Fresh Systems** (VM-411, GH-145, GH-188)
+  - Fixed installation failing on fresh systems (Linux and macOS) due to missing venv
+  - Installer now creates virtual environment automatically before running uv install
+  - Resolves "No virtual environment found" error on PopOS/Ubuntu 24, Arch Linux, and macOS
+
+## [7.4.0] - 2026-01-06
+
+### Changed
+
+- **Soundfonts enabled by default** (VM-329)
+  - Audio feedback during tool calls now works out of the box
+  - Disable with `VOICEMODE_SOUNDFONTS_ENABLED=false` in `~/.voicemode/voicemode.env`
+
+- **Plugin directory structure** (VM-329)
+  - Hook receiver moved to `scripts/` per Claude Code plugin conventions
+  - `hooks/` now contains only configuration files
+
+- **Release automation**
+  - `make release` now updates plugin version to `{version}p0` automatically
+  - Plugin-only changes can bump to p1, p2, etc. without package release
+
+## [7.3.0] - 2026-01-06
+
+### Added
+
+- **Unified Status Command** (VM-304)
+  - New `voicemode status` command shows status of all VoiceMode services at once
+  - Displays Whisper, Kokoro, and LiveKit service states in a single view
+
+- **Kokoro Model Download Progress**
+  - Show startup status when Kokoro is downloading models
+  - Better visibility during first-time service initialization
+
+### Changed
+
+- **Streamlined SKILL.md** (VM-303)
+  - Reduced skill file from 646 lines to under 150 lines
+  - Added First-Time Setup section for new users
+  - Added MCP vs CLI guidance and best practices
+  - More focused and actionable content
+
+- **Plugin Distribution**
+  - Removed marketplace - now use `mbailey/claude-plugins` repository
+  - Updated claude-plugin version
+  - Added script to prepare for reinstall
+
+### Removed
+
+- **Deprecated Install Script** (VM-329)
+  - Use `uvx voice-mode-install` instead
+
+### Documentation
+
+- **MacBook Portable Mode Guide**
+  - Added guide for running VoiceMode with MacBook lid closed
+  - Covers clamshell mode configuration and external display setup
+
+- **Improved Troubleshooting**
+  - Better slash command failure recovery guidance
+
+## [7.2.0] - 2026-01-06
+
+### Fixed
+
+- **STT Timeout Increased to 60s** (VM-325)
+  - Whisper sometimes takes longer than 30s for complex or longer audio
+  - Increased default STT timeout from 30s to 60s to prevent transcription failures
+  - A future release will make this configurable via `voicemode.env`
+
+- **Test Isolation for LaunchAgents** (VM-310)
+  - Tests no longer write plist files to real `~/Library/LaunchAgents` directory
+  - Prevents test pollution of user's system configuration
+
+### Changed
+
+- **CLI Simplification** (VM-305, VM-306)
+  - Removed deprecated `voicemode claude` command group (use Claude Code hooks instead)
+  - Removed deprecated `voicemode audio` command group
+  - Moved `transcribe` command to top-level: `voicemode transcribe` (was `voicemode audio transcribe`)
+
+- **Plugin Structure**
+  - Moved skill file to `skills/voicemode/SKILL.md` for better organization
+  - Updated plugin packaging and configuration
+
+### Added
+
+- **Conversation History Search** (VM-279)
+  - New SQLite FTS5-based search for conversation history
+  - Enables fast full-text search across past voice conversations
+
+- **Installer Testing Improvements** (VM-279)
+  - Added `--gui` flag to test-installer.sh for GUI mode testing
+  - Added `--test-mode` flag for automated testing scenarios
+
+### Documentation
+
+- **Plugin Skill Improvements** (VM-266)
+  - Enhanced VoiceMode plugin skill with installation guidance
+  - Better onboarding experience for new users
+
+## [7.1.2] - 2025-12-27
+
+### Added
+
+- **Claude Code Skill Loading in Voice Conversations** (VM-286)
+  - Added voice_skills_instructions to converse tool to ensure skills are checked during voice interactions
+  - Voice requests arrive as tool results rather than user messages, causing skill triggers to be missed
+  - New BLOCKING REQUIREMENT instructs Claude to check for relevant skills before acting on voice requests
+  - Example: Saying "search for tasks" now properly triggers the taskmaster skill
+
+## [7.1.1] - 2025-12-25
+
+### Fixed
+
+- **Whisper Thread Configuration**
+  - Fixed Whisper decode failures on VMs with fewer than 8 CPU cores
+  - Replace hardcoded 8 threads with dynamic CPU detection (sysctl on macOS, nproc on Linux)
+  - Added `VOICEMODE_WHISPER_THREADS` environment variable for manual override
+  - Added missing `--convert` flag to whisper-server startup for automatic audio format conversion
+
+### Changed
+
+- **Plugin Architecture** (VM-227)
+  - Simplified plugin slash commands structure
+  - Improved hooks.json format
+
+### Documentation
+
+- **Installer Testing Guide** (VM-276)
+  - Added comprehensive guide for testing VoiceMode installer on Tart VMs
+  - Fixed installer test script for local VM testing
+
+## [7.1.0] - 2025-12-25
+
+### Added
+
+- **VoiceMode Plugin for Claude Code** (VM-227)
+  - Install via: `/plugin marketplace add mbailey/voicemode` then `/plugin install voicemode`
+  - Includes MCP server integration, slash commands, skill, and hooks
+  - Commands: `/voicemode:install`, `/voicemode:converse`, `/voicemode:status`, `/voicemode:start`, `/voicemode:stop`
+  - Self-contained hook receiver for soundfont support out of the box
+  - No manual configuration needed - hooks work automatically
+
+- **Non-Interactive Installer Mode** (VM-265)
+  - Added `--yes` / `-y` flag for unattended installation
+  - Added `--no-local-services` flag to skip Whisper/Kokoro installation
+  - Added `--model` flag to specify Whisper model
+  - Auto-detects non-interactive environment and warns if --yes not specified
+  - Auto-installs Homebrew in non-interactive mode if needed
+  - Enables Claude Code automation and CI/CD pipeline installation
+
+- **Fast Hook Receiver with Enhanced Soundfont Support** (VM-258)
+  - New voicemode-hook-receiver script for improved performance
+  - Enhanced soundfont structure support
+  - Optimized hook handling for faster responses
+
+- **Audio Compression Improvements** (VM-240, VM-245)
+  - Compress STT audio uploads to reduce bandwidth usage
+  - Skip audio compression for local STT endpoints (no need for compression on localhost)
+  - Configurable STT save format via `VOICEMODE_STT_SAVE_FORMAT` environment variable
+  - Save full-quality WAV files while using compressed upload for remote endpoints
+
+- **Detailed Timing Metrics** (VM-244)
+  - Added detailed timing metrics for STT/TTS transcode operations
+  - Configurable metrics output levels (minimal, summary, verbose)
+  - Better visibility into performance characteristics
+
+### Fixed
+
+- **Multiline Environment Variable Corruption** (VM-268)
+  - Fixed `voicemode whisper model` command corrupting multiline values in voicemode.env
+  - Preserves VOICEMODE_PRONOUNCE and other multiline quoted variables correctly
+  - Prevents whisper server from falling back to wrong model after config update
+
+- **Benchmark Script** (VM-258)
+  - Use stdin for `claude -p` in benchmark script
+  - Improved benchmark reliability
+
+- **Audio Quality Preservation** (VM-240)
+  - Ensure full-quality WAV files are saved even when using compressed upload
+  - Prevents quality loss in local audio archives
+
+- **Homebrew Tools PATH**
+  - Extended PATH in MCP server startup to include Homebrew bin directories
+  - Fixes FFmpeg not found when running as MCP server
+
+### Removed
+
+- **Benchmark Script** - Removed claude-hooks/benchmark-hooks.sh (development testing only)
+
+### Changed
+
+- **Documentation** (VM-232)
+  - Improved configuration guide clarity
+  - Added Claude Code permissions section to configuration guide
+  - Removed duplicate command reference (clarified /permissions is alias for /allowed-tools)
+
+- **Code Quality**
+  - Normalized indentation in hook receiver
+  - Fixed log file path in hook receiver
+  - Updated skill for batching announcements and Bash commands
+
+- **CI/CD**
+  - Added ffmpeg to test dependencies for better test coverage
+
 ## [7.0.1] - 2025-12-03
 
 ## [7.0.0] - 2025-11-27

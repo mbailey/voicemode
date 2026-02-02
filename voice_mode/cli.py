@@ -20,6 +20,13 @@ from voice_mode.config import (
     DEFAULT_WHISPER_MODEL,
     DEFAULT_LISTEN_DURATION,
     MIN_RECORDING_DURATION,
+    SERVE_ALLOW_LOCAL,
+    SERVE_ALLOW_ANTHROPIC,
+    SERVE_ALLOW_TAILSCALE,
+    SERVE_ALLOWED_IPS,
+    SERVE_SECRET,
+    SERVE_TOKEN,
+    SERVE_TRANSPORT,
 )
 
 
@@ -80,129 +87,395 @@ def voice_mode() -> None:
     voice_mode_main_cli()
 
 
-# Audio group for audio-related commands
+# ============================================================================
+# Unified Service Command Group
+# ============================================================================
+# All service management commands under a single group:
+#   voicemode service start <service>
+#   voicemode service stop <service>
+#   voicemode service status [service]
+# etc.
+
+VALID_SERVICES = ['whisper', 'kokoro', 'voicemode', 'connect']
+
+
 @voice_mode_main_cli.group()
-@click.help_option('-h', '--help', help='Show this message and exit')
-def audio():
-    """Audio transcription and playback commands."""
+@click.help_option('-h', '--help')
+def service():
+    """Manage VoiceMode services.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT) on port 2022
+      kokoro     Local text-to-speech (TTS) on port 8880
+      voicemode  HTTP MCP server for remote access on port 8765
+      connect    Remote wake standby (WebSocket client)
+
+    \b
+    Quick Start:
+      voicemode service status           # Check all services
+      voicemode service start whisper    # Start Whisper STT
+      voicemode service enable connect   # Auto-start remote wake standby
+
+    \b
+    Service Lifecycle:
+      install  Install service software (whisper, kokoro)
+      start    Start a service
+      stop     Stop a service
+      restart  Restart a service
+      status   Show service status
+      enable   Enable auto-start at boot/login
+      disable  Disable auto-start
+      logs     View service logs
+      health   Check if service is responding
+    """
     pass
 
 
-# Service group commands
-@voice_mode_main_cli.group()
+@service.command('start')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_start(service_name):
+    """Start a voice service.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
+    from voice_mode.tools.service import start_service
+    result = asyncio.run(start_service(service_name))
+    click.echo(result)
+
+
+@service.command('stop')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_stop(service_name):
+    """Stop a voice service.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
+    from voice_mode.tools.service import stop_service
+    result = asyncio.run(stop_service(service_name))
+    click.echo(result)
+
+
+@service.command('restart')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_restart(service_name):
+    """Restart a voice service.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
+    from voice_mode.tools.service import restart_service
+    result = asyncio.run(restart_service(service_name))
+    click.echo(result)
+
+
+@service.command('status')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), required=False, metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_status(service_name):
+    """Show service status.
+
+    \b
+    Without arguments, shows status for all services.
+    With a service name, shows detailed status for that service.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+
+    \b
+    Examples:
+      voicemode service status          # Show all services
+      voicemode service status whisper  # Show only Whisper
+      voicemode service status voicemode # Show HTTP server status
+    """
+    from voice_mode.tools.service import status_service
+
+    if service_name:
+        # Show specific service
+        result = asyncio.run(status_service(service_name))
+        click.echo(result)
+    else:
+        # Show all services
+        click.echo("VoiceMode Service Status")
+        click.echo("=" * 50)
+        for svc in VALID_SERVICES:
+            result = asyncio.run(status_service(svc))
+            click.echo(f"\n{svc.upper()}:")
+            click.echo(result)
+
+
+@service.command('enable')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_enable(service_name):
+    """Enable a service to start at boot/login.
+
+    \b
+    On macOS, creates a launchd plist in ~/Library/LaunchAgents/
+    On Linux, creates a systemd user service in ~/.config/systemd/user/
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
+    from voice_mode.tools.service import enable_service
+    result = asyncio.run(enable_service(service_name))
+    click.echo(result)
+
+
+@service.command('disable')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_disable(service_name):
+    """Disable a service from starting at boot/login.
+
+    \b
+    Removes the service from launchd (macOS) or systemd (Linux).
+    The service will stop running and won't start after reboot.
+
+    \b
+    Services:
+      whisper    Local speech-to-text (STT)
+      kokoro     Local text-to-speech (TTS)
+      voicemode  HTTP MCP server for remote access
+    """
+    from voice_mode.tools.service import disable_service
+    result = asyncio.run(disable_service(service_name))
+    click.echo(result)
+
+
+@service.command('logs')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.option('--lines', '-n', default=50, help='Number of log lines to show')
+@click.help_option('-h', '--help')
+def service_logs(service_name, lines):
+    """View service logs.
+
+    \b
+    On macOS, reads from ~/Library/Logs/ or ~/.voicemode/logs/
+    On Linux, uses journalctl for systemd services
+
+    \b
+    Examples:
+      voicemode service logs whisper       # Last 50 lines
+      voicemode service logs voicemode -n 100  # Last 100 lines
+    """
+    from voice_mode.tools.service import view_logs
+    result = asyncio.run(view_logs(service_name, lines))
+    click.echo(result)
+
+
+@service.command('health')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.help_option('-h', '--help')
+def service_health(service_name):
+    """Check the health endpoint of a service.
+
+    \b
+    Checks if the service is responding on its expected port:
+      whisper    Port 2022
+      kokoro     Port 8880
+      voicemode  Port 8765 (configurable via VOICEMODE_SERVE_PORT)
+    """
+    if service_name == 'whisper':
+        port = 2022
+        display_name = 'Whisper'
+    elif service_name == 'kokoro':
+        port = 8880
+        display_name = 'Kokoro'
+    else:
+        click.echo(f"❌ Unknown service: {service_name}")
+        return
+
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["curl", "-s", f"http://127.0.0.1:{port}/health"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            import json
+            try:
+                health_data = json.loads(result.stdout)
+                click.echo(f"✅ {display_name} is responding")
+                click.echo(f"   Status: {health_data.get('status', 'unknown')}")
+                if 'uptime' in health_data:
+                    click.echo(f"   Uptime: {health_data['uptime']}")
+            except json.JSONDecodeError:
+                click.echo(f"✅ {display_name} is responding (non-JSON response)")
+        else:
+            click.echo(f"❌ {display_name} not responding on port {port}")
+    except subprocess.TimeoutExpired:
+        click.echo(f"❌ {display_name} health check timed out")
+    except Exception as e:
+        click.echo(f"❌ Health check failed: {e}")
+
+
+@service.command('install')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
+@click.help_option('-h', '--help')
+def service_install(service_name, force):
+    """Install a voice service.
+
+    \b
+    Downloads and installs the service software:
+      whisper    whisper.cpp speech-to-text server
+      kokoro     Kokoro text-to-speech server
+      voicemode  Already installed (enables the HTTP server)
+
+    \b
+    Examples:
+      voicemode service install whisper
+      voicemode service install kokoro --force
+    """
+    if service_name == 'whisper':
+        from voice_mode.tools.whisper.install import whisper_install
+        result = asyncio.run(whisper_install.fn(force_reinstall=force))
+        # Handle dict result from tool
+        if isinstance(result, dict):
+            if result.get("success"):
+                click.echo(f"✅ Whisper installed successfully")
+                if result.get('install_path'):
+                    click.echo(f"   Install path: {result['install_path']}")
+            else:
+                click.echo(f"❌ Whisper installation failed: {result.get('error', 'Unknown error')}")
+        else:
+            click.echo(result)
+    elif service_name == 'kokoro':
+        from voice_mode.tools.kokoro.install import kokoro_install
+        result = asyncio.run(kokoro_install.fn(force_reinstall=force))
+        if isinstance(result, dict):
+            if result.get("success"):
+                click.echo(f"✅ Kokoro installed successfully")
+                if result.get('install_path'):
+                    click.echo(f"   Install path: {result['install_path']}")
+            else:
+                click.echo(f"❌ Kokoro installation failed: {result.get('error', 'Unknown error')}")
+        else:
+            click.echo(result)
+    elif service_name == 'voicemode':
+        from voice_mode.tools.service import install_voicemode_start_script
+        result = asyncio.run(install_voicemode_start_script())
+        if result.get("success"):
+            click.echo(f"✅ VoiceMode start script installed successfully")
+            if result.get('start_script'):
+                click.echo(f"   Start script: {result['start_script']}")
+        else:
+            click.echo(f"❌ VoiceMode installation failed: {result.get('error', 'Unknown error')}")
+    else:
+        click.echo(f"❌ Unknown service: {service_name}")
+
+
+# ============================================================================
+# Legacy Service Groups (Deprecated)
+# ============================================================================
+# These are hidden from help/tab completion but still functional for backward
+# compatibility. Use 'voicemode service <action> <service>' instead.
+
+@voice_mode_main_cli.group(hidden=True)
 @click.help_option('-h', '--help', help='Show this message and exit')
 def kokoro():
-    """Manage Kokoro TTS service."""
+    """Manage Kokoro TTS service. [DEPRECATED: Use 'voicemode service' instead]"""
     pass
 
 
-@voice_mode_main_cli.group()
+@voice_mode_main_cli.group(hidden=True)
 @click.help_option('-h', '--help', help='Show this message and exit')
 def whisper():
-    """Manage Whisper STT service."""
+    """Manage Whisper STT service. [DEPRECATED: Use 'voicemode service' instead]"""
     pass
-
-
-# Check if LiveKit is available
-try:
-    import livekit
-    LIVEKIT_CLI_AVAILABLE = True
-except ImportError:
-    LIVEKIT_CLI_AVAILABLE = False
-
-
-@voice_mode_main_cli.group()
-@click.help_option('-h', '--help', help='Show this message and exit')
-@click.pass_context
-def livekit(ctx):
-    """Manage LiveKit RTC service (requires: uv tool install voice-mode[livekit])."""
-    # Allow --help to work even without LiveKit installed
-    if ctx.invoked_subcommand is None:
-        return
-
-    # Check if this is a help request
-    import sys
-    if '--help' in sys.argv or '-h' in sys.argv:
-        return
-
-    if not LIVEKIT_CLI_AVAILABLE:
-        click.echo("❌ LiveKit is not installed.")
-        click.echo("   Install with: uv tool install voice-mode[livekit]")
-        click.echo("   Note: LiveKit requires Python 3.10-3.13 (not yet available for Python 3.14)")
-        raise click.Abort()
 
 
 # Service functions are imported lazily in their respective command handlers to improve startup time
 
 
-# Kokoro service commands
-@kokoro.command()
+# Kokoro service commands (deprecated - hidden from help but still functional)
+@kokoro.command(hidden=True)
 def status():
-    """Show Kokoro service status."""
+    """(Deprecated) Show Kokoro service status. Use 'voicemode service status kokoro' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service status kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import status_service
     result = asyncio.run(status_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def start():
-    """Start Kokoro service."""
+    """(Deprecated) Start Kokoro service. Use 'voicemode service start kokoro' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service start kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import start_service
     result = asyncio.run(start_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def stop():
-    """Stop Kokoro service."""
+    """(Deprecated) Stop Kokoro service. Use 'voicemode service stop kokoro' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service stop kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import stop_service
     result = asyncio.run(stop_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def restart():
-    """Restart Kokoro service."""
+    """(Deprecated) Restart Kokoro service. Use 'voicemode service restart kokoro' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service restart kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import restart_service
     result = asyncio.run(restart_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def enable():
-    """Enable Kokoro service to start at boot/login."""
+    """(Deprecated) Enable Kokoro service. Use 'voicemode service enable kokoro' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service enable kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import enable_service
     result = asyncio.run(enable_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 def disable():
-    """Disable Kokoro service from starting at boot/login."""
+    """(Deprecated) Disable Kokoro service. Use 'voicemode service disable kokoro' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service disable kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import disable_service
     result = asyncio.run(disable_service("kokoro"))
     click.echo(result)
 
 
-@kokoro.command()
+@kokoro.command(hidden=True)
 @click.help_option('-h', '--help')
 @click.option('--lines', '-n', default=50, help='Number of log lines to show')
 def logs(lines):
-    """View Kokoro service logs."""
+    """(Deprecated) View Kokoro logs. Use 'voicemode service logs kokoro' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service logs kokoro' instead", fg='yellow', err=True)
     from voice_mode.tools.service import view_logs
     result = asyncio.run(view_logs("kokoro", lines))
     click.echo(result)
 
 
-@kokoro.command("update-service-files")
-def kokoro_update_service_files():
-    """Update Kokoro service files to latest version."""
-    from voice_mode.tools.service import update_service_files
-    result = asyncio.run(update_service_files("kokoro"))
-    click.echo(result)
-
-
-@kokoro.command()
+@kokoro.command(hidden=True)
 def health():
     """Check Kokoro health endpoint."""
     import subprocess
@@ -372,14 +645,6 @@ def whisper_service_logs(lines):
     click.echo(result)
 
 
-@whisper_service.command("update-files")
-def whisper_update_service_files():
-    """Update Whisper service files to latest version."""
-    from voice_mode.tools.service import update_service_files
-    result = asyncio.run(update_service_files("whisper"))
-    click.echo(result)
-
-
 @whisper_service.command("health")
 def whisper_service_health():
     """Check Whisper health endpoint."""
@@ -452,6 +717,14 @@ def whisper_service_install(install_dir, model, use_gpu, force, version, auto_en
             click.echo("\nNext steps:")
             for step in result['next_steps']:
                 click.echo(f"   - {step}")
+
+        # Show warning if model download failed (GH-174)
+        if result.get('model_error'):
+            click.echo()
+            click.secho("⚠️  Model download failed:", fg='yellow', bold=True)
+            click.secho(f"   {result['model_error']}", fg='yellow')
+            click.echo("   Whisper won't work without a model.")
+            click.echo("   Try: voicemode whisper model install")
     else:
         click.echo(f"❌ Installation failed: {result.get('error', 'Unknown error')}")
         if result.get('details'):
@@ -503,40 +776,47 @@ whisper.add_command(whisper_model_unified, name="model")
 
 # Backward compatibility: Add hidden aliases for old direct commands
 # These allow "whisper start" to work as "whisper service start"
+# But show deprecation warnings pointing to the new unified service commands
 @whisper.command("status", hidden=True)
 @click.pass_context
 def whisper_status_alias(ctx):
-    """(Deprecated) Show Whisper service status. Use 'whisper service status' instead."""
+    """(Deprecated) Show Whisper service status. Use 'voicemode service status whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service status whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_status)
 
 @whisper.command("start", hidden=True)
 @click.pass_context
 def whisper_start_alias(ctx):
-    """(Deprecated) Start Whisper service. Use 'whisper service start' instead."""
+    """(Deprecated) Start Whisper service. Use 'voicemode service start whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service start whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_start)
 
 @whisper.command("stop", hidden=True)
 @click.pass_context
 def whisper_stop_alias(ctx):
-    """(Deprecated) Stop Whisper service. Use 'whisper service stop' instead."""
+    """(Deprecated) Stop Whisper service. Use 'voicemode service stop whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service stop whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_stop)
 
 @whisper.command("restart", hidden=True)
 @click.pass_context
 def whisper_restart_alias(ctx):
-    """(Deprecated) Restart Whisper service. Use 'whisper service restart' instead."""
+    """(Deprecated) Restart Whisper service. Use 'voicemode service restart whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service restart whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_restart)
 
 @whisper.command("enable", hidden=True)
 @click.pass_context
 def whisper_enable_alias(ctx):
-    """(Deprecated) Enable Whisper service. Use 'whisper service enable' instead."""
+    """(Deprecated) Enable Whisper service. Use 'voicemode service enable whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service enable whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_enable)
 
 @whisper.command("disable", hidden=True)
 @click.pass_context
 def whisper_disable_alias(ctx):
-    """(Deprecated) Disable Whisper service. Use 'whisper service disable' instead."""
+    """(Deprecated) Disable Whisper service. Use 'voicemode service disable whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service disable whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_disable)
 
 @whisper.command("logs", hidden=True)
@@ -544,13 +824,15 @@ def whisper_disable_alias(ctx):
 @click.option('--lines', '-n', default=50, help='Number of log lines to show')
 @click.pass_context
 def whisper_logs_alias(ctx, lines):
-    """(Deprecated) View Whisper logs. Use 'whisper service logs' instead."""
+    """(Deprecated) View Whisper logs. Use 'voicemode service logs whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service logs whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_logs, lines=lines)
 
 @whisper.command("health", hidden=True)
 @click.pass_context
 def whisper_health_alias(ctx):
-    """(Deprecated) Check Whisper health. Use 'whisper service health' instead."""
+    """(Deprecated) Check Whisper health. Use 'voicemode service health whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service health whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_health)
 
 @whisper.command("install", hidden=True)
@@ -564,7 +846,8 @@ def whisper_health_alias(ctx):
 @click.option('--skip-deps', is_flag=True, help='Skip dependency checks (for advanced users)')
 @click.pass_context
 def whisper_install_alias(ctx, install_dir, model, use_gpu, force, version, auto_enable, skip_deps):
-    """(Deprecated) Install Whisper. Use 'whisper service install' instead."""
+    """(Deprecated) Install Whisper. Use 'voicemode service install whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service install whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_install, install_dir=install_dir, model=model, use_gpu=use_gpu,
                 force=force, version=version, auto_enable=auto_enable, skip_deps=skip_deps)
 
@@ -575,7 +858,8 @@ def whisper_install_alias(ctx, install_dir, model, use_gpu, force, version, auto
 @click.confirmation_option(prompt='Are you sure you want to uninstall Whisper?')
 @click.pass_context
 def whisper_uninstall_alias(ctx, remove_models, remove_all_data):
-    """(Deprecated) Uninstall Whisper. Use 'whisper service uninstall' instead."""
+    """(Deprecated) Uninstall Whisper. Use 'voicemode service uninstall whisper' instead."""
+    click.secho("⚠️  Deprecated: Use 'voicemode service uninstall whisper' instead", fg='yellow', err=True)
     ctx.forward(whisper_service_uninstall, remove_models=remove_models, remove_all_data=remove_all_data)
 
 
@@ -1051,378 +1335,6 @@ def whisper_model_benchmark_cmd(models, sample, runs):
 ''' # End of old model subcommands
 
 
-# LiveKit service commands
-@livekit.command()
-def status():
-    """Show LiveKit service status."""
-    from voice_mode.tools.service import status_service
-    result = asyncio.run(status_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def start():
-    """Start LiveKit service."""
-    from voice_mode.tools.service import start_service
-    result = asyncio.run(start_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def stop():
-    """Stop LiveKit service."""
-    from voice_mode.tools.service import stop_service
-    result = asyncio.run(stop_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def restart():
-    """Restart LiveKit service."""
-    from voice_mode.tools.service import restart_service
-    result = asyncio.run(restart_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def enable():
-    """Enable LiveKit service to start at boot/login."""
-    from voice_mode.tools.service import enable_service
-    result = asyncio.run(enable_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-def disable():
-    """Disable LiveKit service from starting at boot/login."""
-    from voice_mode.tools.service import disable_service
-    result = asyncio.run(disable_service("livekit"))
-    click.echo(result)
-
-
-@livekit.command()
-@click.help_option('-h', '--help')
-@click.option('--lines', '-n', default=50, help='Number of log lines to show')
-def logs(lines):
-    """View LiveKit service logs."""
-    from voice_mode.tools.service import view_logs
-    result = asyncio.run(view_logs("livekit", lines))
-    click.echo(result)
-
-
-@livekit.command()
-def update():
-    """Update LiveKit service files to the latest version."""
-    from voice_mode.tools.service import update_service_files
-    result = asyncio.run(update_service_files("livekit"))
-    
-    if result.get("success"):
-        click.echo("✅ LiveKit service files updated successfully")
-        if result.get("message"):
-            click.echo(f"   {result['message']}")
-    else:
-        click.echo(f"❌ {result.get('message', 'Update failed')}")
-
-
-@livekit.command()
-@click.help_option('-h', '--help')
-@click.option('--install-dir', help='Directory to install LiveKit')
-@click.option('--port', default=7880, help='Port for LiveKit server (default: 7880)')
-@click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
-@click.option('--version', default='latest', help='Version to install (default: latest)')
-@click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
-def install(install_dir, port, force, version, auto_enable):
-    """Install LiveKit server with development configuration."""
-    from voice_mode.tools.livekit.install import livekit_install
-    result = asyncio.run(livekit_install.fn(
-        install_dir=install_dir,
-        port=port,
-        force_reinstall=force,
-        version=version,
-        auto_enable=auto_enable
-    ))
-    
-    if result.get('success'):
-        if result.get('already_installed'):
-            click.echo(f"✅ LiveKit already installed at {result['install_path']}")
-            click.echo(f"   Version: {result.get('version', 'unknown')}")
-        else:
-            click.echo("✅ LiveKit installed successfully!")
-            click.echo(f"   Version: {result.get('version', 'unknown')}")
-            click.echo(f"   Install path: {result['install_path']}")
-            click.echo(f"   Config: {result['config_path']}")
-            click.echo(f"   Port: {result['port']}")
-            click.echo(f"   URL: {result['url']}")
-            click.echo(f"   Dev credentials: {result['dev_key']} / {result['dev_secret']}")
-            
-            if result.get('service_installed'):
-                click.echo("   Service installed")
-                if result.get('service_enabled'):
-                    click.echo("   Service enabled (will start at boot/login)")
-    else:
-        click.echo(f"❌ Installation failed: {result.get('error', 'Unknown error')}")
-        if result.get('details'):
-            click.echo(f"   Details: {result['details']}")
-
-
-@livekit.command()
-@click.help_option('-h', '--help')
-@click.option('--remove-config', is_flag=True, help='Also remove LiveKit configuration files')
-@click.option('--remove-all-data', is_flag=True, help='Remove all LiveKit data including logs')
-@click.confirmation_option(prompt='Are you sure you want to uninstall LiveKit?')
-def uninstall(remove_config, remove_all_data):
-    """Uninstall LiveKit server and optionally remove configuration and data."""
-    from voice_mode.tools.livekit.uninstall import livekit_uninstall
-    result = asyncio.run(livekit_uninstall.fn(
-        remove_config=remove_config,
-        remove_all_data=remove_all_data
-    ))
-    
-    if result.get('success'):
-        click.echo("✅ LiveKit uninstalled successfully!")
-        
-        if result.get('removed_items'):
-            click.echo("\n📦 Removed:")
-            for item in result['removed_items']:
-                click.echo(f"   ✓ {item}")
-                
-        if result.get('warnings'):
-            click.echo("\n⚠️  Warnings:")
-            for warning in result['warnings']:
-                click.echo(f"   - {warning}")
-    else:
-        click.echo(f"❌ Uninstall failed: {result.get('error', 'Unknown error')}")
-
-
-# LiveKit frontend subcommands
-@livekit.group()
-@click.help_option('-h', '--help', help='Show this message and exit')
-def frontend():
-    """Manage LiveKit Voice Assistant Frontend."""
-    pass
-
-
-@frontend.command("install")
-@click.help_option('-h', '--help')
-@click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service after installation (default: from config)')
-def frontend_install(auto_enable):
-    """Install and setup LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.livekit.frontend import livekit_frontend_install
-    result = asyncio.run(livekit_frontend_install.fn(auto_enable=auto_enable))
-    
-    if result.get('success'):
-        click.echo("✅ LiveKit Frontend setup completed!")
-        click.echo(f"   Frontend directory: {result['frontend_dir']}")
-        click.echo(f"   Log directory: {result['log_dir']}")
-        click.echo(f"   Node.js available: {result['node_available']}")
-        if result.get('node_path'):
-            click.echo(f"   Node.js path: {result['node_path']}")
-        click.echo(f"   Service installed: {result['service_installed']}")
-        click.echo(f"   Service enabled: {result['service_enabled']}")
-        click.echo(f"   URL: {result['url']}")
-        click.echo(f"   Password: {result['password']}")
-        
-        if result.get('service_enabled'):
-            click.echo("\n💡 Frontend service is enabled and will start automatically at boot/login")
-        else:
-            click.echo("\n💡 Run 'voicemode livekit frontend enable' to start automatically at boot/login")
-    else:
-        click.echo(f"❌ Frontend installation failed: {result.get('error', 'Unknown error')}")
-
-
-@frontend.command("start")
-@click.help_option('-h', '--help')
-@click.option('--port', default=3000, help='Port to run frontend on (default: 3000)')
-@click.option('--host', default='127.0.0.1', help='Host to bind to (default: 127.0.0.1)')
-def frontend_start(port, host):
-    """Start the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.livekit.frontend import livekit_frontend_start
-    result = asyncio.run(livekit_frontend_start.fn(port=port, host=host))
-    
-    if result.get('success'):
-        click.echo("✅ LiveKit Frontend started successfully!")
-        click.echo(f"   URL: {result['url']}")
-        click.echo(f"   Password: {result['password']}")
-        click.echo(f"   PID: {result['pid']}")
-        click.echo(f"   Directory: {result['directory']}")
-    else:
-        error_msg = result.get('error', 'Unknown error')
-        click.echo(f"❌ Failed to start frontend: {error_msg}")
-        if "Cannot find module" in error_msg or "dependencies" in error_msg.lower():
-            click.echo("")
-            click.echo("💡 Try fixing dependencies with:")
-            click.echo("   ./bin/fix-frontend-deps.sh")
-            click.echo("   or manually: cd vendor/livekit-voice-assistant/voice-assistant-frontend && pnpm install")
-
-
-@frontend.command("stop")
-def frontend_stop():
-    """Stop the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.livekit.frontend import livekit_frontend_stop
-    result = asyncio.run(livekit_frontend_stop.fn())
-    
-    if result.get('success'):
-        click.echo(f"✅ {result['message']}")
-    else:
-        click.echo(f"❌ Failed to stop frontend: {result.get('error', 'Unknown error')}")
-
-
-@frontend.command("status")
-def frontend_status():
-    """Check status of the LiveKit Voice Assistant Frontend."""
-    from voice_mode.tools.livekit.frontend import livekit_frontend_status
-    result = asyncio.run(livekit_frontend_status.fn())
-    
-    if 'error' in result:
-        click.echo(f"❌ Error: {result['error']}")
-        return
-    
-    if result.get('running'):
-        click.echo("✅ Frontend is running")
-        click.echo(f"   PID: {result['pid']}")
-        click.echo(f"   URL: {result['url']}")
-    else:
-        click.echo("❌ Frontend is not running")
-    
-    click.echo(f"   Directory: {result.get('directory', 'Not found')}")
-    
-    if result.get('configuration'):
-        click.echo("   Configuration:")
-        for key, value in result['configuration'].items():
-            click.echo(f"     {key}: {value}")
-
-
-@frontend.command("open")
-def frontend_open():
-    """Open the LiveKit Voice Assistant Frontend in your browser.
-    
-    Starts the frontend if not already running, then opens it in the default browser.
-    """
-    from voice_mode.tools.livekit.frontend import livekit_frontend_open
-    result = asyncio.run(livekit_frontend_open.fn())
-    
-    if result.get('success'):
-        click.echo("✅ Frontend opened in browser!")
-        click.echo(f"   URL: {result['url']}")
-        click.echo(f"   Password: {result['password']}")
-        if result.get('hint'):
-            click.echo(f"   💡 {result['hint']}")
-    else:
-        click.echo(f"❌ Failed to open frontend: {result.get('error', 'Unknown error')}")
-
-
-@frontend.command("logs")
-@click.help_option('-h', '--help')
-@click.option("--lines", "-n", default=50, help="Number of lines to show (default: 50)")
-@click.option("--follow", "-f", is_flag=True, help="Follow log output (tail -f)")
-def frontend_logs(lines, follow):
-    """View LiveKit Voice Assistant Frontend logs.
-    
-    Shows the last N lines of frontend logs. Use --follow to tail the logs.
-    """
-    if follow:
-        # For following, run tail -f directly
-        from voice_mode.tools.livekit.frontend import livekit_frontend_logs
-        result = asyncio.run(livekit_frontend_logs.fn(follow=True))
-        if result.get('success'):
-            click.echo(f"📂 Log file: {result['log_file']}")
-            click.echo("🔄 Following logs (press Ctrl+C to stop)...")
-            try:
-                import subprocess
-                subprocess.run(["tail", "-f", result['log_file']])
-            except KeyboardInterrupt:
-                click.echo("\n✅ Stopped following logs")
-        else:
-            click.echo(f"❌ Error: {result.get('error', 'Unknown error')}")
-    else:
-        # Show last N lines
-        from voice_mode.tools.livekit.frontend import livekit_frontend_logs
-        result = asyncio.run(livekit_frontend_logs.fn(lines=lines, follow=False))
-        if result.get('success'):
-            click.echo(f"📂 Log file: {result['log_file']}")
-            click.echo(f"📄 Showing last {result['lines_shown']} lines:")
-            click.echo("─" * 60)
-            click.echo(result['logs'])
-        else:
-            click.echo(f"❌ Error: {result.get('error', 'Unknown error')}")
-
-
-@frontend.command("enable")
-def frontend_enable():
-    """Enable frontend service to start automatically at boot/login."""
-    from voice_mode.tools.service import enable_service
-    result = asyncio.run(enable_service("frontend"))
-    # enable_service returns a string, not a dict
-    click.echo(result)
-
-
-@frontend.command("disable")
-def frontend_disable():
-    """Disable frontend service from starting automatically."""
-    from voice_mode.tools.service import disable_service
-    result = asyncio.run(disable_service("frontend"))
-    # disable_service returns a string, not a dict
-    click.echo(result)
-
-
-@frontend.command("build")
-@click.help_option('-h', '--help')
-@click.option('--force', '-f', is_flag=True, help='Force rebuild even if build exists')
-def frontend_build(force):
-    """Build frontend for production (requires Node.js)."""
-    import subprocess
-    from pathlib import Path
-    
-    frontend_dir = Path(__file__).parent / "frontend"
-    if not frontend_dir.exists():
-        click.echo("❌ Frontend directory not found")
-        return
-    
-    build_dir = frontend_dir / ".next"
-    if build_dir.exists() and not force:
-        click.echo("✅ Frontend already built. Use --force to rebuild.")
-        click.echo(f"   Build directory: {build_dir}")
-        return
-    
-    click.echo("🔨 Building frontend for production...")
-    
-    # Check Node.js availability
-    try:
-        subprocess.run(["node", "--version"], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        click.echo("❌ Node.js not found. Please install Node.js to build the frontend.")
-        return
-    
-    # Change to frontend directory and build
-    import os
-    original_cwd = os.getcwd()
-    try:
-        os.chdir(frontend_dir)
-        
-        # Install dependencies if needed
-        if not (frontend_dir / "node_modules").exists():
-            click.echo("📦 Installing dependencies...")
-            subprocess.run(["npm", "install"], check=True)
-        
-        # Build with production settings
-        click.echo("🏗️  Building standalone production version...")
-        env = os.environ.copy()
-        env["BUILD_STANDALONE"] = "true"
-        subprocess.run(["npm", "run", "build:standalone"], check=True, env=env)
-        
-        click.echo("✅ Frontend built successfully!")
-        click.echo(f"   Build directory: {build_dir}")
-        click.echo("   Frontend will now start in production mode.")
-        
-    except subprocess.CalledProcessError as e:
-        click.echo(f"❌ Build failed: {e}")
-    except Exception as e:
-        click.echo(f"❌ Unexpected error: {e}")
-    finally:
-        os.chdir(original_cwd)
-
-
-# Configuration management group
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def config():
@@ -1711,32 +1623,33 @@ def cli():
 # Import subcommand groups
 from voice_mode.cli_commands import exchanges as exchanges_cmd
 from voice_mode.cli_commands import transcribe as transcribe_cmd
-from voice_mode.cli_commands import claude
-from voice_mode.cli_commands import hook as hook_cmd
+from voice_mode.cli_commands import history as history_cmd
+from voice_mode.cli_commands import status as status_cmd
+from voice_mode.cli_commands import agent as agent_cmd
 
 # Add subcommands to legacy CLI
 cli.add_command(exchanges_cmd.exchanges)
 cli.add_command(transcribe_cmd.transcribe)
-cli.add_command(claude.claude_group)
 
 # Add exchanges to main CLI
 voice_mode_main_cli.add_command(exchanges_cmd.exchanges)
-voice_mode_main_cli.add_command(claude.claude_group)
+voice_mode_main_cli.add_command(history_cmd.history)
+
+# Add unified status command
+voice_mode_main_cli.add_command(status_cmd.status)
+
+# Add agent management commands
+voice_mode_main_cli.add_command(agent_cmd.agent)
 
 # Note: We'll add these commands after the groups are defined
 # audio group will get transcribe and play commands
-# claude group will get hook command
 
 
 # Now add the subcommands to their respective groups
-# Add transcribe command to audio group
+# Add transcribe as top-level command
 transcribe_audio_cmd = transcribe_cmd.transcribe.commands['audio']
 transcribe_audio_cmd.name = 'transcribe'
-audio.add_command(transcribe_audio_cmd)
-
-# Add hooks command under claude group
-from voice_mode.cli_commands.hook import hooks
-claude.claude_group.add_command(hooks)
+voice_mode_main_cli.add_command(transcribe_audio_cmd)
 
 # Converse command - direct voice conversation from CLI
 @voice_mode_main_cli.command()
@@ -1745,8 +1658,6 @@ claude.claude_group.add_command(hooks)
 @click.option('--wait/--no-wait', default=True, help='Wait for response after speaking')
 @click.option('--duration', '-d', type=float, default=DEFAULT_LISTEN_DURATION, help='Listen duration in seconds')
 @click.option('--min-duration', type=float, default=MIN_RECORDING_DURATION, help='Minimum listen duration before silence detection')
-@click.option('--transport', type=click.Choice(['auto', 'local', 'livekit']), default='auto', help='Transport method')
-@click.option('--room-name', default='', help='LiveKit room name (for livekit transport)')
 @click.option('--voice', help='TTS voice to use (e.g., nova, shimmer, af_sky)')
 @click.option('--tts-provider', type=click.Choice(['openai', 'kokoro']), help='TTS provider')
 @click.option('--tts-model', help='TTS model (e.g., tts-1, tts-1-hd)')
@@ -1758,7 +1669,7 @@ claude.claude_group.add_command(hooks)
 @click.option('--vad-aggressiveness', type=int, help='VAD aggressiveness (0-3)')
 @click.option('--skip-tts/--no-skip-tts', default=None, help='Skip TTS and only show text')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
-def converse(message, wait, duration, min_duration, transport, room_name, voice, tts_provider,
+def converse(message, wait, duration, min_duration, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
             speed, vad_aggressiveness, skip_tts, continuous):
     """Have a voice conversation directly from the command line.
@@ -1813,8 +1724,6 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                     wait_for_response=True,
                     listen_duration_max=duration,
                     listen_duration_min=min_duration,
-                    transport=transport,
-                    room_name=room_name,
                     voice=voice,
                     tts_provider=tts_provider,
                     tts_model=tts_model,
@@ -1838,8 +1747,6 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                         wait_for_response=True,
                         listen_duration_max=duration,
                         listen_duration_min=min_duration,
-                        transport=transport,
-                        room_name=room_name,
                         voice=voice,
                         tts_provider=tts_provider,
                         tts_model=tts_model,
@@ -1876,8 +1783,6 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
                     wait_for_response=wait,
                     listen_duration_max=duration,
                     listen_duration_min=min_duration,
-                    transport=transport,
-                    room_name=room_name,
                     voice=voice,
                     tts_provider=tts_provider,
                     tts_model=tts_model,
@@ -1916,6 +1821,246 @@ def converse(message, wait, duration, min_duration, transport, room_name, voice,
     
     # Run the async function
     asyncio.run(run_conversation())
+
+
+# Serve command - HTTP/SSE server for remote access
+@voice_mode_main_cli.command()
+@click.help_option('-h', '--help')
+@click.option('--host', default='127.0.0.1', help='Host to bind to (use 0.0.0.0 for all interfaces)')
+@click.option('--port', '-p', default=8765, type=int, help='Port to bind to')
+@click.option('--transport', '-t', default=SERVE_TRANSPORT,
+              type=click.Choice(['streamable-http', 'sse']),
+              help='MCP transport protocol (streamable-http is recommended, sse is deprecated)')
+@click.option('--log-level', default='info', type=click.Choice(['debug', 'info', 'warning', 'error']),
+              help='Logging level')
+@click.option('--allow-anthropic/--no-allow-anthropic', default=None,
+              help='Allow connections from Anthropic IP ranges (for Claude Cowork)')
+@click.option('--allow-tailscale/--no-allow-tailscale', default=None,
+              help='Allow connections from Tailscale IP range (100.64.0.0/10)')
+@click.option('--allow-ip', multiple=True,
+              help='Allow connections from custom CIDR ranges (can be specified multiple times)')
+@click.option('--allow-local/--no-allow-local', default=None,
+              help='Allow connections from local/private IP ranges (default: enabled)')
+@click.option('--secret', default=None,
+              help='Require a secret path segment for access (e.g., --secret=my-uuid)')
+@click.option('--token', default=None,
+              help='Require Bearer token authentication via Authorization header')
+def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic: bool | None,
+          allow_tailscale: bool | None, allow_ip: tuple, allow_local: bool | None,
+          secret: str | None, token: str | None):
+    """Start VoiceMode as an HTTP/SSE server for remote access.
+
+    This enables Claude Code, Claude Desktop, Claude Cowork, or other MCP
+    clients to connect to VoiceMode over HTTP instead of stdio. Useful for:
+
+    - Multiple Claude Code projects sharing one VoiceMode instance
+    - Claude Cowork (runs in a sandboxed VM without audio access)
+    - Claude Desktop with mcp-remote
+    - Any MCP client that supports HTTP transport
+
+    The server exposes all VoiceMode MCP tools via the HTTP transport.
+    Audio capture and playback happens on the host machine.
+
+    Examples:
+
+        # Start server on localhost (default)
+        voicemode serve
+
+        # Allow connections from VMs (bind to all interfaces)
+        voicemode serve --host 0.0.0.0
+
+        # Custom port
+        voicemode serve --port 9000
+
+        # Enable Anthropic IP ranges (for Claude Cowork)
+        voicemode serve --host 0.0.0.0 --allow-anthropic
+
+        # Allow all devices on your Tailscale network
+        voicemode serve --allow-tailscale
+
+        # Add custom IP allowlist
+        voicemode serve --allow-ip 10.0.0.0/8 --allow-ip 192.168.1.100/32
+
+        # Use secret path for authentication
+        voicemode serve --secret my-secret-uuid
+
+        # Use Bearer token authentication
+        voicemode serve --token my-secret-token
+
+    Connect from Claude Code:
+
+        claude mcp add --transport http voicemode http://localhost:8765/mcp
+    """
+    import logging
+    from .server import mcp
+    from .config import setup_logging
+    from .serve_middleware import (
+        AccessLogMiddleware,
+        IPAllowlistMiddleware,
+        TokenAuthMiddleware,
+        ANTHROPIC_CIDRS,
+        TAILSCALE_CIDRS,
+        LOCAL_CIDRS,
+    )
+
+    # Warn if SSE transport is used (deprecated in favor of streamable-http)
+    if transport == "sse":
+        click.echo(
+            click.style("Warning: ", fg="yellow", bold=True) +
+            "SSE transport is deprecated. Use --transport streamable-http for the modern protocol.",
+            err=True
+        )
+
+    # Set up logging based on level
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+    logger = setup_logging()
+    logger.setLevel(numeric_level)
+
+    # Apply config defaults when CLI options are not provided
+    # CLI flags always override config file values
+    if allow_local is None:
+        allow_local = SERVE_ALLOW_LOCAL
+    if allow_anthropic is None:
+        allow_anthropic = SERVE_ALLOW_ANTHROPIC
+    if allow_tailscale is None:
+        allow_tailscale = SERVE_ALLOW_TAILSCALE
+    if not allow_ip and SERVE_ALLOWED_IPS:
+        # Parse comma-separated CIDRs from config
+        allow_ip = tuple(cidr.strip() for cidr in SERVE_ALLOWED_IPS.split(',') if cidr.strip())
+    if secret is None and SERVE_SECRET:
+        secret = SERVE_SECRET
+    if token is None and SERVE_TOKEN:
+        token = SERVE_TOKEN
+
+    # Build allowed CIDR list
+    allowed_cidrs: list[str] = []
+    if allow_local:
+        allowed_cidrs.extend(LOCAL_CIDRS)
+    if allow_anthropic:
+        allowed_cidrs.extend(ANTHROPIC_CIDRS)
+    if allow_tailscale:
+        allowed_cidrs.extend(TAILSCALE_CIDRS)
+    if allow_ip:
+        allowed_cidrs.extend(allow_ip)
+
+    # Determine if any security is enabled
+    has_ip_allowlist = bool(allowed_cidrs) and (allow_anthropic or allow_tailscale or allow_ip or not allow_local)
+    has_secret = bool(secret)  # secret is set and non-empty
+    has_token = bool(token)  # token is set and non-empty
+    has_security = has_ip_allowlist or has_secret or has_token
+
+    # Determine base path based on transport
+    if transport == "streamable-http":
+        base_path = "/mcp"
+    else:  # sse
+        base_path = "/sse"
+
+    # Build the endpoint path with optional secret segment
+    endpoint_path = f"{base_path}/{secret}" if has_secret else base_path
+    endpoint_url = f"http://{host}:{port}{endpoint_path}"
+
+    # Helper to mask secrets
+    def mask_secret(s: str, show_chars: int = 4) -> str:
+        if len(s) <= show_chars:
+            return s[:1] + "..."
+        return s[:show_chars] + "..."
+
+    # Log startup info
+    click.echo(f"Starting VoiceMode MCP server on {host}:{port}")
+    click.echo(f"Transport: {transport}")
+    click.echo()
+
+    # Print security configuration if any is enabled
+    if has_security:
+        click.echo("Security configuration:")
+
+        # IP allowlist info
+        if allowed_cidrs:
+            ip_parts = []
+            if allow_local:
+                ip_parts.append("local")
+            if allow_anthropic:
+                ip_parts.append(f"Anthropic ({ANTHROPIC_CIDRS[0]})")
+            if allow_tailscale:
+                ip_parts.append(f"Tailscale ({TAILSCALE_CIDRS[0]})")
+            if allow_ip:
+                ip_parts.append(f"custom ({len(allow_ip)} CIDRs)")
+            click.echo(f"  IP allowlist: {' + '.join(ip_parts)}")
+        else:
+            click.echo("  IP allowlist: disabled (--no-allow-local)")
+
+        # Secret path info
+        if has_secret:
+            click.echo(f"  URL secret: {mask_secret(secret)}")
+
+        # Token auth info
+        if has_token:
+            click.echo(f"  Bearer token: {mask_secret(token)}")
+
+        click.echo()
+
+    click.echo(f"Endpoint: {endpoint_url}")
+    click.echo(f"Log level: {log_level}")
+    click.echo()
+
+    # Show Claude Code connection options
+    click.echo(click.style("Connect from Claude Code:", bold=True))
+    click.echo()
+    click.echo(f"  claude mcp add --transport http voicemode {endpoint_url}")
+    click.echo()
+
+    # Show JSON config for manual setup
+    click.echo(click.style("Manual configuration:", bold=True))
+    click.echo()
+    click.echo('  {')
+    click.echo('    "mcpServers": {')
+    click.echo('      "voicemode": {')
+    click.echo('        "type": "http",')
+    click.echo(f'        "url": "{endpoint_url}"')
+    click.echo('      }')
+    click.echo('    }')
+    click.echo('  }')
+    click.echo()
+
+    click.echo(click.style("Legacy (mcp-remote):", bold=True))
+    click.echo(f"  npx mcp-remote {endpoint_url}")
+    click.echo()
+    click.echo("Press Ctrl+C to stop the server")
+    click.echo()
+
+    # Create the app with the selected transport (fastmcp 2.14+ API)
+    app = mcp.http_app(transport=transport, path=endpoint_path)
+
+    # Note: Middleware is applied in reverse order (last added = first executed)
+    # Add token auth middleware (checked after IP allowlist)
+    if has_token:
+        app.add_middleware(TokenAuthMiddleware, token=token)
+
+    # Add IP allowlist middleware (checked first)
+    if allowed_cidrs:
+        app.add_middleware(IPAllowlistMiddleware, allowed_cidrs=allowed_cidrs)
+
+    # Add access logging middleware (runs first, logs all requests)
+    app.add_middleware(AccessLogMiddleware)
+
+    try:
+        # Run the app with uvicorn directly to use our middleware
+        import uvicorn
+
+        # Disable uvicorn's access logging - we use our own AccessLogMiddleware
+        # which shows X-Forwarded-For headers
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level=log_level.lower(),
+            access_log=False,  # Disable uvicorn access log, use our middleware instead
+        )
+    except KeyboardInterrupt:
+        click.echo("\nServer stopped")
+    except Exception as e:
+        click.echo(f"Error starting server: {e}", err=True)
+        raise click.Abort()
 
 
 # Version command
@@ -2125,69 +2270,6 @@ def update(force):
                 click.echo("Try running: pip install --upgrade voice-mode")
 
 
-# Sound Fonts command
-@audio.command("play")
-@click.help_option('-h', '--help')
-@click.option('-t', '--tool', help='Tool name for direct command-line usage')
-@click.option('-a', '--action', default='start', type=click.Choice(['start', 'end']), help='Action type')
-@click.option('-s', '--subagent', help='Subagent type (for Task tool)')
-def play_sound(tool, action, subagent):
-    """Play sound based on tool events (primarily for Claude Code hooks).
-    
-    This command is designed to be called by Claude Code hooks to play sounds
-    when tools are used. It reads hook data from stdin by default, or can be
-    used directly with command-line options.
-    
-    Examples:
-        echo '{"tool_name":"Task","tool_input":{"subagent_type":"mama-bear"}}' | voicemode play-sound
-        voicemode play-sound --tool Task --action start --subagent mama-bear
-    """
-    import sys
-    from .tools.sound_fonts.player import AudioPlayer
-    from .tools.sound_fonts.hook_handler import (
-        read_hook_data_from_stdin,
-        parse_claude_code_hook
-    )
-    
-    # Try to read hook data from stdin first
-    hook_data = None
-    if not sys.stdin.isatty():
-        hook_data = read_hook_data_from_stdin()
-    
-    if hook_data:
-        # Parse Claude Code hook format
-        parsed_data = parse_claude_code_hook(hook_data)
-        if not parsed_data:
-            sys.exit(1)
-            
-        tool_name = parsed_data["tool_name"]
-        action_type = parsed_data["action"]
-        subagent_type = parsed_data["subagent_type"]
-        metadata = parsed_data["metadata"]
-    else:
-        # Use command-line arguments
-        if not tool:
-            click.echo("Error: --tool is required when not reading from stdin", err=True)
-            sys.exit(1)
-            
-        tool_name = tool
-        action_type = action
-        subagent_type = subagent
-        metadata = {}
-    
-    # Play the sound
-    player = AudioPlayer()
-    success = player.play_sound_for_event(
-        tool_name=tool_name,
-        action=action_type,
-        subagent_type=subagent_type,
-        metadata=metadata
-    )
-    
-    # Silent exit for hooks - don't clutter Claude Code output
-    sys.exit(0 if success else 1)
-
-
 # Completions command
 @voice_mode_main_cli.command()
 @click.help_option('-h', '--help')
@@ -2294,5 +2376,1100 @@ complete -c voicemode -f -a '(__fish_voicemode_complete)'
     else:
         # Output completion script to stdout
         click.echo(completion_script)
+
+
+# DJ (Background Music) command group
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def dj():
+    """Background music playback for voice sessions.
+
+    Control audio playback via mpv for ambient music during conversations.
+    Supports files, URLs, and chapter navigation.
+
+    Examples:
+        voicemode dj play /path/to/ambient.mp3
+        voicemode dj play https://example.com/stream.mp3 --volume 30
+        voicemode dj status
+        voicemode dj pause
+        voicemode dj stop
+    """
+    pass
+
+
+def _format_time(seconds: float) -> str:
+    """Format seconds as MM:SS or HH:MM:SS."""
+    total_seconds = int(seconds)
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    secs = total_seconds % 60
+
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _truncate(text: str, max_len: int) -> str:
+    """Truncate text with ellipsis if too long."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len - 2] + ".."
+
+
+def _print_status_line(status) -> None:
+    """Print compact one-line status for tmux status bar.
+
+    Format: Artist - Title Position (-Remaining) ♪
+    With tmux color codes for remaining time warnings.
+    """
+    # Get chapter info or fall back to track info
+    if status.chapter:
+        # Chapter format is typically "Title - Artist" from ffmeta
+        display = status.chapter
+    elif status.artist and status.title:
+        display = f"{status.artist} - {status.title}"
+    elif status.title:
+        display = status.title
+    else:
+        display = status.path or "Unknown"
+
+    # Truncate display to reasonable length
+    display = _truncate(display, 40)
+
+    # Position
+    pos_str = _format_time(status.position)
+
+    # Remaining time with color coding
+    remaining = int(status.remaining)
+    remaining_str = _format_time(status.remaining)
+
+    if remaining < 10:
+        color = "#[fg=red,bold]"
+        reset = "#[fg=default,nobold]"
+    elif remaining < 30:
+        color = "#[fg=yellow]"
+        reset = "#[fg=default]"
+    else:
+        color = ""
+        reset = ""
+
+    # Paused indicator
+    icon = "⏸" if status.is_paused else "♪"
+
+    click.echo(f"{display} {pos_str} {color}(-{remaining_str}){reset} {icon}")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('source')
+@click.option('--chapters', '-c', help='Path to chapters file (FFmetadata or CUE)')
+@click.option('--volume', '-v', default=50, type=int, help='Initial volume (0-100)')
+def play(source: str, chapters: str | None, volume: int):
+    """Start playing a file or URL.
+
+    SOURCE can be a local file path or a URL.
+
+    Examples:
+        voicemode dj play /path/to/music.mp3
+        voicemode dj play /path/to/album.mp3 --chapters /path/to/chapters.txt
+        voicemode dj play https://stream.example.com/audio --volume 30
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.play(source, chapters_file=chapters, volume=volume):
+        click.echo(f"Playing: {source}")
+        if chapters:
+            click.echo(f"Chapters: {chapters}")
+        click.echo(f"Volume: {volume}%")
+    else:
+        click.echo("Failed to start playback", err=True)
+        click.echo("Make sure mpv is installed: brew install mpv", err=True)
+
+
+@dj.command()
+@click.option('--line', '-l', is_flag=True, help='One-line output for tmux status bar')
+@click.help_option('-h', '--help', help='Show this message and exit')
+def status(line: bool):
+    """Show what's currently playing.
+
+    Displays track information, playback position, volume, and chapter info.
+
+    Use --line for compact tmux status bar output.
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    track_status = controller.status()
+
+    if track_status:
+        if line:
+            # Compact one-line format for tmux status bar
+            _print_status_line(track_status)
+        else:
+            # Full multi-line format
+            # Track info
+            title = track_status.title or track_status.path or "(unknown)"
+            click.echo(f"Track: {title}")
+
+            # Position
+            pos_str = _format_time(track_status.position)
+            dur_str = _format_time(track_status.duration)
+            progress = track_status.progress_percent
+            click.echo(f"Position: {pos_str} / {dur_str} ({progress:.0f}%)")
+
+            # Volume and state
+            state = "Paused" if track_status.is_paused else "Playing"
+            click.echo(f"Volume: {track_status.volume}%")
+            click.echo(f"State: {state}")
+
+            # Chapter info if available
+            if track_status.chapter_count and track_status.chapter_count > 0:
+                chapter_num = (track_status.chapter_index or 0) + 1
+                chapter_name = track_status.chapter or f"Chapter {chapter_num}"
+                click.echo(f"Chapter: {chapter_name} ({chapter_num}/{track_status.chapter_count})")
+    else:
+        if not line:
+            click.echo("DJ is not running")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def stop():
+    """Stop playback and quit the player."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.is_playing():
+        controller.stop()
+        click.echo("Stopped")
+    else:
+        click.echo("DJ is not running")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def pause():
+    """Pause playback."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.pause():
+        click.echo("Paused")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def resume():
+    """Resume playback."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    if controller.resume():
+        click.echo("Resumed")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def next():
+    """Skip to the next chapter."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    status = controller.next()
+    if status:
+        if status.chapter:
+            click.echo(f"Chapter: {status.chapter}")
+        elif status.chapter_index is not None and status.chapter_count:
+            click.echo(f"Chapter: {status.chapter_index + 1}/{status.chapter_count}")
+        else:
+            click.echo("Skipped to next chapter")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def prev():
+    """Go to the previous chapter."""
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    status = controller.prev()
+    if status:
+        if status.chapter:
+            click.echo(f"Chapter: {status.chapter}")
+        elif status.chapter_index is not None and status.chapter_count:
+            click.echo(f"Chapter: {status.chapter_index + 1}/{status.chapter_count}")
+        else:
+            click.echo("Skipped to previous chapter")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('level', required=False, type=int)
+def volume(level: int | None):
+    """Get or set the volume level.
+
+    Without LEVEL: Shows the current volume.
+    With LEVEL: Sets volume to the specified level (0-100).
+
+    Examples:
+        voicemode dj volume        # Show current volume
+        voicemode dj volume 30     # Set volume to 30%
+        voicemode dj volume 100    # Set volume to 100%
+    """
+    from voice_mode.dj import DJController
+
+    controller = DJController()
+    result = controller.volume(level)
+
+    if result is not None:
+        if level is not None:
+            click.echo(f"Volume: {result}%")
+        else:
+            click.echo(f"Volume: {result}%")
+    else:
+        click.echo("DJ is not running", err=True)
+
+
+# MFP (Music For Programming) subcommand group
+@dj.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def mfp():
+    """Music For Programming episodes.
+
+    Play curated ambient mixes designed for coding sessions.
+    Each episode features chapter markers for track navigation.
+
+    Examples:
+        voicemode dj mfp list              # List episodes with chapters
+        voicemode dj mfp play 49           # Play episode 49
+        voicemode dj mfp sync              # Convert CUE files to chapters
+    """
+    pass
+
+
+@mfp.command("list")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--all', '-a', 'show_all', is_flag=True, help='Show all episodes (not just those with chapters)')
+@click.option('--refresh', '-r', is_flag=True, help='Force refresh from RSS feed')
+def mfp_list(show_all: bool, refresh: bool):
+    """List available Music For Programming episodes.
+
+    By default, only shows episodes that have chapter files for track navigation.
+    Use --all to see all episodes from the RSS feed.
+
+    Examples:
+        voicemode dj mfp list              # Episodes with chapters
+        voicemode dj mfp list --all        # All episodes
+        voicemode dj mfp list --refresh    # Refresh from RSS
+    """
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    try:
+        episodes = service.list_episodes(with_chapters_only=not show_all, refresh=refresh)
+    except RuntimeError as e:
+        click.echo(f"Error: {e}", err=True)
+        return
+
+    if not episodes:
+        if show_all:
+            click.echo("No episodes found in RSS feed.")
+        else:
+            click.echo("No episodes with chapter files found.")
+            click.echo("Use --all to see all episodes, or run 'voicemode dj mfp sync' to sync chapters.")
+        return
+
+    title = "All Episodes" if show_all else "Episodes with Chapters"
+    click.echo(f"Music For Programming - {title}")
+    click.echo("=" * (27 + len(title)))
+    click.echo()
+
+    # Header
+    click.echo(f"{'#':>3}  {'Curator':<25}  {'Ch':>3}  {'MP3':>3}")
+    click.echo("-" * 42)
+
+    for ep in episodes:
+        ch_status = "yes" if ep.has_chapters else " - "
+        mp3_status = "yes" if ep.has_local_file else " - "
+        curator = ep.curator[:25] if len(ep.curator) > 25 else ep.curator
+        click.echo(f"{ep.number:3d}  {curator:<25}  {ch_status:>3}  {mp3_status:>3}")
+
+    click.echo()
+    click.echo(f"Total: {len(episodes)} episodes")
+    click.echo()
+    click.echo("Play with: voicemode dj mfp play <number>")
+
+
+@mfp.command("play")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('episode', type=int)
+@click.option('--volume', '-v', default=50, type=int, help='Initial volume (0-100)')
+def mfp_play(episode: int, volume: int):
+    """Play a Music For Programming episode by number.
+
+    Automatically loads chapter files if available for track navigation.
+    Use 'voicemode dj next' and 'voicemode dj prev' to skip between tracks.
+
+    Examples:
+        voicemode dj mfp play 49           # Play episode 49
+        voicemode dj mfp play 76 -v 30     # Play episode 76 at 30% volume
+    """
+    from voice_mode.dj import DJController
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    ep = service.get_episode(episode)
+
+    if not ep:
+        click.echo(f"Episode {episode} not found.", err=True)
+        click.echo("Use 'voicemode dj mfp list --all' to see available episodes.", err=True)
+        return
+
+    # Determine source - prefer local file if available
+    local_path = service.get_local_path(episode)
+    source = str(local_path) if local_path else ep.url
+
+    # Get chapters file if available
+    chapters_path = service.get_chapters_file(episode)
+
+    # Play
+    controller = DJController()
+    if controller.play(source, chapters_file=str(chapters_path) if chapters_path else None, volume=volume):
+        click.echo(f"Playing: MFP {episode} - {ep.curator}")
+        if chapters_path:
+            click.echo(f"Chapters: Loaded ({chapters_path.name})")
+        if local_path:
+            click.echo(f"Source: Local file")
+        else:
+            click.echo(f"Source: Streaming")
+        click.echo(f"Volume: {volume}%")
+    else:
+        click.echo("Failed to start playback", err=True)
+        click.echo("Make sure mpv is installed: brew install mpv", err=True)
+
+
+@mfp.command("sync")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--force', '-f', is_flag=True, help='Overwrite local files even if modified')
+def mfp_sync(force: bool):
+    """Sync chapter files from package to local cache.
+
+    Copies chapter files bundled with VoiceMode to your local cache directory.
+    Compares checksums to identify new and updated files.
+
+    User modifications are preserved unless --force is used, in which case
+    they are backed up with a .user extension.
+
+    Examples:
+        voicemode dj mfp sync              # Sync new chapter files
+        voicemode dj mfp sync --force      # Overwrite local modifications
+    """
+    from voice_mode.dj.mfp import MfpService
+
+    service = MfpService()
+    results = service.sync_chapters(force=force)
+
+    if not results:
+        click.echo("No chapter files found in package.")
+    else:
+        click.echo()
+        click.echo("Chapter sync complete")
+
+    click.echo(f"Cache directory: {service.cache_dir}")
+
+
+# Music library search command (top-level under dj for convenience)
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('query')
+@click.option('--limit', '-l', default=50, type=int, help='Maximum results to show')
+@click.option('--all', '-a', 'include_sidecars', is_flag=True, help='Include sidecars (stems, loops)')
+def find(query: str, limit: int, include_sidecars: bool):
+    """Search music library by artist, album, or title.
+
+    Searches the indexed music library for tracks matching QUERY.
+    Results show track ID, artist, title, and album.
+
+    Examples:
+        voicemode dj find "daft punk"      # Search for Daft Punk tracks
+        voicemode dj find ambient          # Search for ambient music
+        voicemode dj find --limit 10 jazz  # Show top 10 jazz results
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    tracks = library.search(query, limit=limit, include_sidecars=include_sidecars)
+
+    if not tracks:
+        click.echo(f"No tracks found matching '{query}'")
+        click.echo()
+        click.echo("Tip: Make sure you've scanned your library:")
+        click.echo("  voicemode dj library scan --path ~/Audio/music")
+        return
+
+    # Display results in a table format
+    for track in tracks:
+        artist = track.artist or "(unknown)"
+        title = track.title
+        album = track.album or ""
+        fav = "*" if track.is_favorite else ""
+        sidecar = f" [{track.sidecar_type}]" if track.is_sidecar else ""
+        click.echo(f"[{track.id}] {fav}{artist} - {title}{sidecar}")
+        if album:
+            click.echo(f"     Album: {album}")
+
+    click.echo()
+    click.echo(f"Found {len(tracks)} track(s)")
+
+
+# Library subcommand group
+@dj.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def library():
+    """Music library management.
+
+    Commands for scanning, indexing, and managing your local music library.
+
+    Examples:
+        voicemode dj library scan          # Scan default music folder
+        voicemode dj library stats         # Show library statistics
+    """
+    pass
+
+
+@library.command("scan")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--path', '-p', type=click.Path(exists=True), help='Music directory to scan')
+def library_scan(path: str | None):
+    """Scan and index music folder.
+
+    Scans the music directory and indexes all audio files.
+    Metadata is parsed from directory structure: Artist/Year-Album/Track.ext
+
+    Supported formats: mp3, flac, m4a, wav, ogg, opus
+
+    Examples:
+        voicemode dj library scan                    # Scan ~/Audio/music
+        voicemode dj library scan --path ~/Music    # Scan custom path
+    """
+    from pathlib import Path
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    music_path = Path(path) if path else library.music_root
+
+    click.echo(f"Scanning: {music_path}")
+    click.echo()
+
+    count = library.scan(music_path)
+
+    if count > 0:
+        click.echo(f"Indexed {count} file(s)")
+        click.echo()
+        # Show stats
+        stats = library.stats()
+        click.echo(f"Library: {stats.total_tracks} tracks, {stats.total_artists} artists, {stats.total_albums} albums")
+        if stats.total_sidecars > 0:
+            click.echo(f"Sidecars: {stats.total_sidecars} (stems/loops/samples)")
+    else:
+        click.echo("No audio files found.")
+        click.echo()
+        click.echo(f"Make sure {music_path} contains audio files in the format:")
+        click.echo("  Artist/Year-Album/Track.mp3")
+
+
+@library.command("stats")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def library_stats():
+    """Show library statistics.
+
+    Displays summary information about your indexed music library.
+
+    Examples:
+        voicemode dj library stats
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    stats = library.stats()
+
+    if stats.total_tracks == 0:
+        click.echo("Music library is empty.")
+        click.echo()
+        click.echo("Scan your music folder first:")
+        click.echo("  voicemode dj library scan --path ~/Audio/music")
+        return
+
+    click.echo("Music Library Statistics")
+    click.echo("========================")
+    click.echo(f"Total tracks:  {stats.total_tracks}")
+    click.echo(f"Sidecars:      {stats.total_sidecars}")
+    click.echo(f"Favorites:     {stats.total_favorites}")
+    click.echo(f"Artists:       {stats.total_artists}")
+    click.echo(f"Albums:        {stats.total_albums}")
+    click.echo()
+    click.echo(f"Database: {library.db_path}")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--limit', '-l', default=20, type=int, help='Number of entries to show')
+def history(limit: int):
+    """Show recently played tracks.
+
+    Displays the play history with timestamps, most recent first.
+    Only shows tracks that are in the indexed music library.
+
+    Examples:
+        voicemode dj history              # Show last 20 plays
+        voicemode dj history --limit 50   # Show last 50 plays
+    """
+    from voice_mode.dj.library import MusicLibrary
+
+    library = MusicLibrary()
+    entries = library.get_history(limit=limit)
+
+    if not entries:
+        click.echo("No play history yet.")
+        click.echo()
+        click.echo("Play some tracks from your library:")
+        click.echo("  voicemode dj find <search term>")
+        return
+
+    click.echo("Play History")
+    click.echo("============")
+    click.echo()
+
+    for track, played_at in entries:
+        artist = track.artist or "(unknown)"
+        title = track.title
+        fav = "*" if track.is_favorite else ""
+        # Format the timestamp nicely if possible
+        timestamp = played_at[:19] if played_at else ""  # Trim to YYYY-MM-DD HH:MM:SS
+        click.echo(f"[{timestamp}] {fav}{artist} - {title}")
+
+    click.echo()
+    click.echo(f"Showing {len(entries)} play(s)")
+
+
+@dj.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def favorite():
+    """Toggle favorite status of the currently playing track.
+
+    Marks the currently playing track as a favorite (or removes it from favorites
+    if already marked). The track must be in the indexed music library.
+
+    Examples:
+        voicemode dj favorite    # Toggle favorite on current track
+    """
+    from pathlib import Path
+    from voice_mode.dj import DJController
+    from voice_mode.dj.library import MusicLibrary
+
+    controller = DJController()
+    status = controller.status()
+
+    if not status:
+        click.echo("DJ is not running", err=True)
+        return
+
+    if not status.path:
+        click.echo("No track path available", err=True)
+        return
+
+    library = MusicLibrary()
+
+    # Try to find the track in the library
+    # The status.path might be an absolute path, so try to match it
+    track_path = Path(status.path)
+
+    # First, try looking up by the path as-is (might be relative)
+    track = library.get_track_by_path(status.path)
+
+    # If not found and it's an absolute path under music_root, try relative
+    if not track and track_path.is_absolute():
+        try:
+            rel_path = str(track_path.relative_to(library.music_root))
+            track = library.get_track_by_path(rel_path)
+        except ValueError:
+            pass
+
+    if not track:
+        click.echo(f"Track not found in library: {status.path}", err=True)
+        click.echo()
+        click.echo("Make sure the track is indexed:")
+        click.echo("  voicemode dj library scan")
+        return
+
+    is_favorite = library.toggle_favorite(track.id)
+    status_str = "added to" if is_favorite else "removed from"
+
+    artist = track.artist or "(unknown)"
+    click.echo(f"{artist} - {track.title} {status_str} favorites")
+
+
+# ============================================================================
+# Connect Command Group - Remote Control Integration
+# ============================================================================
+
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def connect():
+    """Connect to voicemode.dev for remote voice control.
+
+    Enables remote voice sessions from iOS app or web browser.
+    The listener connects to voicemode.dev and waits for incoming calls,
+    starting Claude Code when someone initiates a voice session.
+
+    Examples:
+        voicemode connect login
+        voicemode connect standby
+        voicemode connect status
+    """
+    pass
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--no-browser', is_flag=True, help='Print URL instead of opening browser')
+def login(no_browser: bool):
+    """Authenticate with voicemode.dev using your browser.
+
+    Opens your browser to complete authentication via Auth0.
+    After successful login, your credentials are stored locally
+    and used automatically by 'voicemode connect standby'.
+
+    The login process:
+    1. Opens browser to voicemode.dev/Auth0 login page
+    2. You authenticate with your account
+    3. Browser redirects to local callback URL
+    4. Credentials are stored in ~/.voicemode/credentials
+
+    Examples:
+        # Standard login (opens browser automatically)
+        voicemode connect login
+
+        # Print URL instead of opening browser
+        voicemode connect login --no-browser
+    """
+    from voice_mode.auth import login as auth_login, AuthError, format_expiry
+
+    click.echo("Starting authentication with voicemode.dev...")
+
+    def on_browser_open(url: str) -> None:
+        """Called when browser should be opened."""
+        if no_browser:
+            click.echo()
+            click.echo("Open this URL in your browser to authenticate:")
+            click.echo()
+            click.echo(f"  {url}")
+            click.echo()
+        else:
+            click.echo("Opening browser...")
+
+    def on_waiting() -> None:
+        """Called while waiting for user to complete auth."""
+        click.echo()
+        click.echo("Waiting for authentication...")
+        click.echo("Complete the login in your browser, then return here.")
+        click.echo("Press Ctrl+C to cancel.")
+        click.echo()
+
+    try:
+        credentials = auth_login(
+            open_browser=not no_browser,
+            on_browser_open=on_browser_open,
+            on_waiting=on_waiting,
+        )
+
+        # Display success message
+        click.echo("✓ Authentication successful!")
+        click.echo()
+
+        if credentials.user_info:
+            email = credentials.user_info.get("email", "unknown")
+            name = credentials.user_info.get("name", "")
+            if name:
+                click.echo(f"  Logged in as: {name} ({email})")
+            else:
+                click.echo(f"  Logged in as: {email}")
+        else:
+            click.echo("  Logged in successfully")
+
+        click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+        click.echo()
+        click.echo("You can now use 'voicemode connect standby' to receive calls.")
+
+    except KeyboardInterrupt:
+        click.echo()
+        click.echo("Authentication cancelled.")
+        sys.exit(1)
+
+    except AuthError as e:
+        click.echo()
+        click.echo(f"Authentication failed: {e}", err=True)
+        sys.exit(1)
+
+    except Exception as e:
+        click.echo()
+        click.echo(f"Unexpected error during authentication: {e}", err=True)
+        sys.exit(1)
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def logout():
+    """Log out from voicemode.dev and clear stored credentials.
+
+    Removes locally stored authentication tokens. You will need to
+    run 'voicemode connect login' again to authenticate.
+
+    Examples:
+        voicemode connect logout
+    """
+    from voice_mode.auth import load_credentials, clear_credentials
+
+    # Try to show who is being logged out
+    credentials = load_credentials()
+
+    if clear_credentials():
+        click.echo("✓ Logged out successfully.")
+        if credentials and credentials.user_info:
+            email = credentials.user_info.get("email")
+            if email:
+                click.echo(f"  Removed credentials for: {email}")
+    else:
+        click.echo("Already logged out (no credentials stored).")
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--url', default='wss://voicemode.dev/ws',
+              help='WebSocket URL for voicemode.dev')
+@click.option('--token', envvar='VOICEMODE_DEV_TOKEN',
+              help='Authentication token for voicemode.dev (or set VOICEMODE_DEV_TOKEN)')
+@click.option('--agent', '-a', 'agent_name', default='operator',
+              envvar='VOICEMODE_AGENT_NAME',
+              help='Agent to wake on incoming calls (default: operator)')
+@click.option('--wake-message', envvar='VOICEMODE_WAKE_MESSAGE',
+              help='Custom message to send to agent on wake (default: greeting prompt)')
+def standby(url: str, token: str | None, agent_name: str, wake_message: str | None):
+    """Wait for incoming voice sessions and wake an agent.
+
+    Connects to voicemode.dev and listens for wake signals. When someone
+    initiates a voice session (from iOS app or web), this command uses
+    'voicemode agent send' to wake the specified agent. If the agent isn't
+    running, it will be started automatically.
+
+    The connection stays alive, waiting for calls. Press Ctrl+C to stop.
+
+    \b
+    Prerequisites:
+        1. Run 'voicemode connect login' to authenticate
+        2. The agent will be started automatically on first wake
+
+    \b
+    Related Commands:
+        voicemode agent start   - Pre-start an agent
+        voicemode agent status  - Check if agent is running
+        voicemode agent list    - List available agents
+        voicemode agent stop    - Stop an agent
+
+    Examples:
+        # Wake operator (default)
+        voicemode connect standby
+
+        # Wake a specific agent
+        voicemode connect standby --agent cora
+        voicemode connect standby -a tesi
+
+        # Specify token directly (overrides stored credentials)
+        voicemode connect standby --token your-token-here
+    """
+    import json
+    import time
+    import signal
+    import threading
+
+    from voice_mode.auth import get_valid_credentials, AuthError
+
+    # Get authentication token
+    # Priority: --token flag > VOICEMODE_DEV_TOKEN env > stored credentials
+    if not token:
+        # Try to load stored credentials
+        try:
+            credentials = get_valid_credentials(auto_refresh=True)
+            if credentials:
+                token = credentials.access_token
+                user_info = credentials.user_info or {}
+                email = user_info.get("email", "authenticated user")
+                click.echo(f"Using stored credentials for: {email}")
+            else:
+                click.echo("Error: Not logged in.", err=True)
+                click.echo()
+                click.echo("Run 'voicemode connect login' to authenticate.")
+                click.echo("Or use --token to provide a token directly.")
+                sys.exit(1)
+        except AuthError as e:
+            click.echo(f"Error: Authentication failed: {e}", err=True)
+            click.echo()
+            click.echo("Your credentials may have expired. Run 'voicemode connect login' to re-authenticate.")
+            sys.exit(1)
+
+    # Try to import websockets
+    try:
+        import websockets
+        import websockets.sync.client as ws_sync
+    except ImportError:
+        click.echo("Error: websockets package required.", err=True)
+        click.echo()
+        click.echo("Install with: pip install websockets")
+        sys.exit(1)
+
+    click.echo(f"Connecting to {url}...")
+
+    # State tracking
+    connected = False
+    running = True
+
+    def signal_handler(signum, frame):
+        nonlocal running
+        click.echo("\nShutting down...")
+        running = False
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    def wake_agent(wake_msg: dict) -> bool:
+        """Start or wake the configured agent when wake signal received.
+
+        Uses 'voicemode agent send -a <agent>' to deliver the wake message.
+        This command auto-starts the agent if not running, keeping WebSocket
+        listener decoupled from agent management.
+
+        Returns:
+            True if message was sent successfully, False otherwise
+        """
+        reason = wake_msg.get('reason', 'unknown')
+        caller_id = wake_msg.get('callerId', 'unknown')
+        click.echo(f"\n🔔 Wake signal received! Reason: {reason}, Caller: {caller_id}")
+
+        # Build the wake message for the agent
+        # Use custom message if provided, otherwise default greeting prompt
+        if wake_message:
+            msg_to_send = wake_message
+        else:
+            msg_to_send = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
+
+        click.echo(f"Waking agent '{agent_name}' via 'voicemode agent send'...")
+
+        try:
+            # Use 'voicemode agent send -a <agent>' which auto-starts if needed
+            result = subprocess.run(
+                ['voicemode', 'agent', 'send', '-a', agent_name, msg_to_send],
+                capture_output=True,
+                text=True,
+                timeout=30,  # 30 second timeout for agent start + send
+            )
+
+            if result.returncode == 0:
+                click.echo(f"✅ Agent '{agent_name}' woken successfully")
+                return True
+            else:
+                error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                click.echo(f"❌ Failed to wake agent '{agent_name}': {error_msg}", err=True)
+                return False
+        except subprocess.TimeoutExpired:
+            click.echo(f"❌ Timeout waiting for agent '{agent_name}' to start", err=True)
+            return False
+        except FileNotFoundError:
+            click.echo(f"❌ 'voicemode' command not found in PATH", err=True)
+            return False
+        except Exception as e:
+            click.echo(f"❌ Failed to wake agent '{agent_name}': {e}", err=True)
+            return False
+
+    def send_status(ws, status: str, error: str | None = None, wake_id: str | None = None):
+        """Send operator status back to server."""
+        msg = {
+            'type': 'operator_status',
+            'status': status,
+            'timestamp': int(time.time() * 1000),
+        }
+        if error:
+            msg['error'] = error
+        if wake_id:
+            msg['id'] = wake_id
+
+        ws.send(json.dumps(msg))
+
+    # Main connection loop with reconnection
+    retry_delay = 1
+    max_retry_delay = 60
+
+    while running:
+        try:
+            # Connect with auth token as query parameter (server expects ?token=...)
+            import urllib.parse
+            ws_url = url
+            if '?' in ws_url:
+                ws_url = f"{ws_url}&token={urllib.parse.quote(token)}"
+            else:
+                ws_url = f"{ws_url}?token={urllib.parse.quote(token)}"
+
+            with ws_sync.connect(ws_url) as ws:
+                connected = True
+                retry_delay = 1  # Reset retry delay on successful connection
+
+                # Wait for connected message
+                raw = ws.recv()
+                msg = json.loads(raw)
+                if msg.get('type') == 'connected':
+                    user_id = msg.get('userId', 'unknown')
+                    session_id = msg.get('sessionId', '')[:12]
+                    click.echo(f"✅ Connected as {user_id} (session: {session_id}...)")
+                else:
+                    click.echo(f"Unexpected message: {msg.get('type')}")
+
+                # Send ready message with canStartOperator capability
+                ready_msg = {
+                    'type': 'ready',
+                    'device': {
+                        'platform': 'python-listener',
+                        'appVersion': __version__,
+                    },
+                    'capabilities': {
+                        'tts': False,
+                        'stt': False,
+                        'canStartOperator': True,
+                    },
+                }
+                ws.send(json.dumps(ready_msg))
+                click.echo("📡 Ready and waiting for voice sessions...")
+                click.echo("   Press Ctrl+C to stop")
+                click.echo()
+
+                # Start heartbeat thread
+                heartbeat_stop = threading.Event()
+                def heartbeat_sender():
+                    while not heartbeat_stop.wait(25):  # Every 25 seconds
+                        try:
+                            ws.send(json.dumps({
+                                'type': 'heartbeat',
+                                'timestamp': int(time.time() * 1000),
+                            }))
+                        except Exception:
+                            break  # Connection likely closed
+
+                heartbeat_thread = threading.Thread(target=heartbeat_sender, daemon=True)
+                heartbeat_thread.start()
+
+                # Main message loop
+                while running:
+                    try:
+                        # Use websockets library timeout (not socket timeout)
+                        raw = ws.recv(timeout=30)
+                        msg = json.loads(raw)
+
+                        msg_type = msg.get('type')
+
+                        if msg_type == 'wake':
+                            # Wake the configured agent using 'voicemode agent send'
+                            send_status(ws, 'starting', wake_id=msg.get('id'))
+                            success = wake_agent(msg)
+                            if success:
+                                send_status(ws, 'running', wake_id=msg.get('id'))
+                            else:
+                                send_status(ws, 'error', error=f'Failed to wake agent {agent_name}', wake_id=msg.get('id'))
+
+                        elif msg_type == 'ack':
+                            # Acknowledgment - just log it
+                            if msg.get('status') == 'ok':
+                                pass  # All good
+                            else:
+                                click.echo(f"⚠️ Server error: {msg.get('error')}")
+
+                        elif msg_type == 'heartbeat':
+                            # Respond to heartbeat
+                            ws.send(json.dumps({
+                                'type': 'heartbeat',
+                                'timestamp': int(time.time() * 1000),
+                            }))
+
+                        elif msg_type == 'error':
+                            click.echo(f"❌ Server error: {msg.get('message')} ({msg.get('code')})")
+
+                        else:
+                            click.echo(f"📨 {msg_type}: {msg}")
+
+                    except TimeoutError:
+                        # Just a timeout, continue loop
+                        continue
+                    except Exception as e:
+                        if running:
+                            click.echo(f"Error receiving message: {e}")
+                        break
+
+                # Clean up heartbeat thread
+                heartbeat_stop.set()
+
+        except Exception as e:
+            if running:
+                click.echo(f"Connection error: {e}")
+                click.echo(f"Reconnecting in {retry_delay}s...")
+                time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, max_retry_delay)
+
+    click.echo("Goodbye!")
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def status():
+    """Show authentication status for voicemode.dev.
+
+    Displays whether you're logged in, your user info, and token expiry.
+
+    Examples:
+        voicemode connect status
+    """
+    from voice_mode.auth import get_valid_credentials, format_expiry
+
+    credentials = get_valid_credentials(auto_refresh=False)
+
+    if credentials is None:
+        click.echo("Not logged in.")
+        click.echo()
+        click.echo("Run 'voicemode connect login' to authenticate.")
+        return
+
+    click.echo("✓ Logged in to voicemode.dev")
+    click.echo()
+
+    if credentials.user_info:
+        email = credentials.user_info.get("email", "unknown")
+        name = credentials.user_info.get("name", "")
+        if name:
+            click.echo(f"  User: {name} ({email})")
+        else:
+            click.echo(f"  User: {email}")
+    else:
+        click.echo("  User: (no user info available)")
+
+    click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+
+    if credentials.is_expired():
+        click.echo()
+        click.echo("  Note: Token has expired. It will be refreshed automatically on next use.")
 
 

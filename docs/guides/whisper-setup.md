@@ -6,22 +6,19 @@ Whisper is a local speech recognition service that converts audio to text for Vo
 
 ```bash
 # Install whisper service with default base model (includes Core ML on Apple Silicon!)
-voice-mode whisper install
+voicemode whisper service install
 
 # Install with a different model
-voice-mode whisper install --model large-v3
-
-# Install without any model
-voice-mode whisper install --no-model
+voicemode whisper service install --model large-v3
 
 # List available models and their status
-voice-mode whisper models
+voicemode whisper model --all
 
-# Download additional models (with Core ML support on Apple Silicon)
-voice-mode whisper model install large-v2
+# Switch to a different model (auto-installs if needed)
+voicemode whisper model large-v2
 
 # Start the service
-voice-mode whisper start
+voicemode whisper service start
 ```
 
 **Apple Silicon Bonus:** On M1/M2/M3/M4 Macs, VoiceMode automatically downloads pre-built Core ML models for 2-3x faster performance. No Xcode or Python dependencies required!
@@ -36,16 +33,10 @@ VoiceMode includes an installation tool that sets up Whisper.cpp automatically:
 
 ```bash
 # Install with default base model (142MB) - good balance of speed and accuracy
-voice-mode whisper install
+voicemode whisper service install
 
 # Install with a specific model
-voice-mode whisper install --model small
-
-# Skip Core ML on Apple Silicon (not recommended)
-voice-mode whisper install --skip-core-ml
-
-# Install without downloading any model
-voice-mode whisper install --no-model
+voicemode whisper service install --model small
 ```
 
 This will:
@@ -102,10 +93,7 @@ On Apple Silicon Macs (M1/M2/M3/M4), VoiceMode automatically downloads pre-built
 - **Pre-built:** Models are pre-compiled and ready to use
 - **Performance:** 2-3x faster than Metal acceleration alone
 
-To skip Core ML (not recommended):
-```bash
-voice-mode whisper model install large-v3 --skip-core-ml
-```
+Core ML models are included automatically when available. The installation process handles this transparently.
 
 ## Model Management
 
@@ -130,24 +118,22 @@ voice-mode whisper model install large-v3 --skip-core-ml
 
 ```bash
 # List all models with installation status
-voice-mode whisper models
+voicemode whisper model --all
 
-# Show/set active model
-voice-mode whisper model active
-voice-mode whisper model active small.en
+# Show current active model
+voicemode whisper model
 
-# Install models
-voice-mode whisper model install                  # Install default (large-v2)
-voice-mode whisper model install medium           # Install specific model
-voice-mode whisper model install all              # Install all models
-voice-mode whisper model install large-v3 --force # Force re-download
+# Switch to a model (auto-installs if not present)
+voicemode whisper model small.en
 
-# Remove models
-voice-mode whisper model remove tiny
-voice-mode whisper model remove tiny.en --force   # Skip confirmation
+# Switch model without auto-installing (fails if model not installed)
+voicemode whisper model medium --no-install
+
+# Switch model without restarting service
+voicemode whisper model large-v2 --no-restart
 ```
 
-Note: After changing the active model, restart the whisper service for changes to take effect.
+Note: After changing the active model with `--no-restart`, restart the whisper service manually for changes to take effect.
 
 ## Service Configuration
 
@@ -158,9 +144,12 @@ Configure in `~/.voicemode/voicemode.env`:
 ```bash
 VOICEMODE_WHISPER_MODEL=large-v2
 VOICEMODE_WHISPER_PORT=2022
+VOICEMODE_WHISPER_THREADS=          # Auto-detected if not set
 VOICEMODE_WHISPER_LANGUAGE=auto
 VOICEMODE_WHISPER_MODEL_PATH=~/.voicemode/models/whisper
 ```
+
+**Thread Configuration**: By default, VoiceMode auto-detects the number of CPU cores and configures threads accordingly. You can override this by setting `VOICEMODE_WHISPER_THREADS` to a specific number.
 
 ### Running the Server
 
@@ -183,10 +172,12 @@ Key options:
 - `--host`: Server host (default: 127.0.0.1)
 - `--port`: Server port (VoiceMode expects 2022)
 - `--inference-path`: OpenAI-compatible endpoint path
-- `--threads`: Number of threads for processing
+- `--threads`: Number of threads for processing (auto-detected by VoiceMode)
 - `--processors`: Number of parallel processors
-- `--convert`: Convert audio to required format automatically
+- `--convert`: Convert audio to required format automatically (required for VoiceMode)
 - `--print-progress`: Show transcription progress
+
+**Note**: When using VoiceMode's managed service, threads are auto-detected based on your CPU cores. The `--convert` flag is required for VoiceMode to work correctly with various audio formats.
 
 ### Service Management
 
@@ -227,17 +218,14 @@ journalctl --user -u whisper -f
 
 CoreML provides 2-3x faster transcription on Apple Silicon Macs:
 
-```bash
-# Install with CoreML support (when available)
-voice-mode whisper model install base.en --skip-core-ml=false
-
+```
 # Performance comparison
 # CPU Only: ~1x baseline
 # Metal: ~3-4x faster
 # CoreML + Metal: ~8-12x faster
 ```
 
-**Note**: CoreML support requires full Xcode installation and may be disabled in some versions due to installation complexity.
+Core ML models are downloaded automatically when installing Whisper on Apple Silicon. No additional configuration needed.
 
 ### GPU Acceleration
 
@@ -263,7 +251,8 @@ export STT_BASE_URL=http://127.0.0.1:2022/v1
 
 Or in MCP configuration:
 ```json
-"voice-mode": {
+"voicemode": {
+  ...
   "env": {
     "STT_BASE_URL": "http://127.0.0.1:2022/v1"
   }
@@ -300,22 +289,19 @@ export TTS_VOICE=af_sky                       # Kokoro voice
 ### Model Installation Issues
 - Verify adequate disk space (models range from 39MB to 3GB)
 - Check network connectivity to Hugging Face
-- Use `--force` flag to re-download corrupted models
+- Delete corrupted model files from `~/.voicemode/models/whisper/` and re-run the model command
 
 ## Performance Monitoring
 
 ```bash
 # Check service status
-voice-mode whisper status
-
-# View performance statistics
-voice-mode statistics
+voicemode whisper service status
 
 # Monitor real-time processing
 tail -f ~/.voicemode/services/whisper/logs/performance.log
 
-# Test model functionality
-voice-mode whisper model test base.en
+# List available models
+voicemode whisper model --all
 ```
 
 ## File Locations

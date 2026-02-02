@@ -17,26 +17,78 @@ LEGACY_CONFIG_PATH = Path.home() / ".voicemode" / ".voicemode.env"
 
 
 def parse_env_file(file_path: Path) -> Dict[str, str]:
-    """Parse an environment file and return a dictionary of key-value pairs."""
+    """Parse an environment file and return a dictionary of key-value pairs.
+
+    Handles multiline quoted values like:
+        VOICEMODE_PRONOUNCE="
+        TTS \\bJSON\\b jason
+        TTS \\bYAML\\b yammel
+        "
+    """
     config = {}
     if not file_path.exists():
         return config
-    
+
     with open(file_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            # Skip empty lines and comments
-            if not line or line.startswith('#'):
-                continue
-            # Parse KEY=VALUE format
-            match = re.match(r'^([A-Z_]+)=(.*)$', line)
-            if match:
-                key, value = match.groups()
-                # Remove quotes if present
-                value = value.strip('"').strip("'")
-                config[key] = value
-    
+        lines = f.readlines()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Skip empty lines and comments
+        if not line or line.startswith('#'):
+            i += 1
+            continue
+
+        # Parse KEY=VALUE format
+        match = re.match(r'^([A-Z_][A-Z0-9_]*)=(.*)$', line)
+        if match:
+            key, value = match.groups()
+
+            # Handle multiline quoted values
+            if value and value[0] in ('"', "'"):
+                quote_char = value[0]
+                # Check if the quote is closed on the same line
+                if len(value) > 1 and value.endswith(quote_char):
+                    # Single line quoted value - strip quotes
+                    value = value[1:-1]
+                else:
+                    # Multiline quoted value - collect lines until closing quote
+                    value_parts = [value[1:]]  # Start after opening quote
+                    i += 1
+                    while i < len(lines):
+                        next_line = lines[i].rstrip('\n')
+                        if next_line.rstrip().endswith(quote_char):
+                            # Found closing quote - strip it and any trailing whitespace before it
+                            closing_line = next_line.rstrip()
+                            value_parts.append(closing_line[:-1])
+                            break
+                        else:
+                            value_parts.append(next_line)
+                        i += 1
+                    value = '\n'.join(value_parts)
+
+            config[key] = value
+
+        i += 1
+
     return config
+
+
+def _format_env_value(value: str) -> str:
+    """Format a value for writing to an env file.
+
+    Quotes values that contain newlines, spaces, or special characters.
+    """
+    if '\n' in value:
+        # Multiline value - use double quotes
+        return f'"{value}\n"'
+    elif ' ' in value or '#' in value or '"' in value or "'" in value:
+        # Value needs quoting - escape any existing quotes
+        escaped = value.replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
 
 
 def write_env_file(file_path: Path, config: Dict[str, str], preserve_comments: bool = True):
@@ -46,6 +98,8 @@ def write_env_file(file_path: Path, config: Dict[str, str], preserve_comments: b
     1. Active config line (KEY=value) - replace with new value if key in config
     2. Commented config line (# KEY=value) - replace with active value if key in config
     3. Regular comments (# some text) - preserve as-is
+
+    Properly handles multiline quoted values by skipping continuation lines.
     """
     # Read existing file to preserve comments and structure
     existing_lines = []
@@ -58,41 +112,83 @@ def write_env_file(file_path: Path, config: Dict[str, str], preserve_comments: b
 
     if file_path.exists() and preserve_comments:
         with open(file_path, 'r') as f:
-            for line in f:
-                stripped = line.strip()
-                if stripped and not stripped.startswith('#'):
-                    # Active config line
-                    match = re.match(r'^([A-Z_]+)=', stripped)
-                    if match:
-                        key = match.group(1)
+            lines = f.readlines()
+
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
+
+            if stripped and not stripped.startswith('#'):
+                # Active config line
+                match = re.match(r'^([A-Z_][A-Z0-9_]*)=(.*)$', stripped)
+                if match:
+                    key = match.group(1)
+                    value_start = match.group(2)
+                    existing_keys.add(key)
+
+                    # Check if this is a multiline quoted value
+                    is_multiline = False
+                    if value_start and value_start[0] in ('"', "'"):
+                        quote_char = value_start[0]
+                        if not (len(value_start) > 1 and value_start.endswith(quote_char)):
+                            # Multiline value - skip until closing quote
+                            is_multiline = True
+                            i += 1
+                            while i < len(lines):
+                                if lines[i].rstrip().endswith(quote_char):
+                                    i += 1
+                                    break
+                                i += 1
+
+                    if key in config:
+                        # Replace with new value (properly formatted)
+                        formatted_value = _format_env_value(config[key])
+                        existing_lines.append(f"{key}={formatted_value}\n")
+                    else:
+                        # Keep existing line(s)
+                        if is_multiline:
+                            # Re-read the multiline value from original position
+                            orig_i = i - 1
+                            while orig_i >= 0:
+                                test_line = lines[orig_i].strip()
+                                if re.match(r'^([A-Z_][A-Z0-9_]*)=', test_line):
+                                    break
+                                orig_i -= 1
+                            # Add all lines of the multiline value
+                            while orig_i < i:
+                                existing_lines.append(lines[orig_i])
+                                orig_i += 1
+                        else:
+                            existing_lines.append(line)
+
+                    if not is_multiline:
+                        i += 1
+                    continue
+                else:
+                    existing_lines.append(line)
+            elif stripped.startswith('#'):
+                # Check if this is a commented-out config line
+                commented_match = commented_config_pattern.match(stripped)
+                if commented_match:
+                    key = commented_match.group(1)
+                    if key in config:
+                        # Replace commented default with active value
+                        formatted_value = _format_env_value(config[key])
+                        existing_lines.append(f"{key}={formatted_value}\n")
                         existing_keys.add(key)
-                        if key in config:
-                            # Replace with new value
-                            existing_lines.append(f"{key}={config[key]}\n")
-                        else:
-                            # Keep existing line
-                            existing_lines.append(line)
+                        commented_keys_replaced.add(key)
                     else:
-                        existing_lines.append(line)
-                elif stripped.startswith('#'):
-                    # Check if this is a commented-out config line
-                    commented_match = commented_config_pattern.match(stripped)
-                    if commented_match:
-                        key = commented_match.group(1)
-                        if key in config:
-                            # Replace commented default with active value
-                            existing_lines.append(f"{key}={config[key]}\n")
-                            existing_keys.add(key)
-                            commented_keys_replaced.add(key)
-                        else:
-                            # Keep the commented default as-is
-                            existing_lines.append(line)
-                    else:
-                        # Regular comment - preserve as-is
+                        # Keep the commented default as-is
                         existing_lines.append(line)
                 else:
-                    # Empty lines
+                    # Regular comment - preserve as-is
                     existing_lines.append(line)
+            else:
+                # Empty lines
+                existing_lines.append(line)
+
+            i += 1
     
     # Add new keys that weren't in the file
     new_keys = set(config.keys()) - existing_keys
@@ -109,24 +205,32 @@ def write_env_file(file_path: Path, config: Dict[str, str], preserve_comments: b
         if whisper_keys:
             existing_lines.append("# Whisper Configuration\n")
             for key in whisper_keys:
-                existing_lines.append(f"{key}={config[key]}\n")
+                formatted_value = _format_env_value(config[key])
+                existing_lines.append(f"{key}={formatted_value}\n")
             existing_lines.append('\n')
-        
+
         if kokoro_keys:
             existing_lines.append("# Kokoro Configuration\n")
             for key in kokoro_keys:
-                existing_lines.append(f"{key}={config[key]}\n")
+                formatted_value = _format_env_value(config[key])
+                existing_lines.append(f"{key}={formatted_value}\n")
             existing_lines.append('\n')
-        
+
         if other_keys:
             existing_lines.append("# Additional Configuration\n")
             for key in other_keys:
-                existing_lines.append(f"{key}={config[key]}\n")
-    
+                formatted_value = _format_env_value(config[key])
+                existing_lines.append(f"{key}={formatted_value}\n")
+
     # Write the file
     file_path.parent.mkdir(parents=True, exist_ok=True)
     with open(file_path, 'w') as f:
-        f.writelines(existing_lines if existing_lines else [f"{k}={v}\n" for k, v in sorted(config.items())])
+        if existing_lines:
+            f.writelines(existing_lines)
+        else:
+            for k, v in sorted(config.items()):
+                formatted_value = _format_env_value(v)
+                f.write(f"{k}={formatted_value}\n")
     
     # Set appropriate permissions (readable/writable by owner only)
     os.chmod(file_path, 0o600)
@@ -223,9 +327,6 @@ async def list_config_keys() -> str:
         ]),
         ("API Keys", [
             ("OPENAI_API_KEY", "OpenAI API key for cloud TTS/STT"),
-            ("LIVEKIT_URL", "LiveKit server URL (default: ws://127.0.0.1:7880)"),
-            ("LIVEKIT_API_KEY", "LiveKit API key"),
-            ("LIVEKIT_API_SECRET", "LiveKit API secret"),
         ]),
     ]
     

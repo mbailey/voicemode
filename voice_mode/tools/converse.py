@@ -24,14 +24,8 @@ except ImportError as e:
     webrtcvad = None
     VAD_AVAILABLE = False
 
-# Optional LiveKit for room-based communication
-try:
-    from livekit import rtc, api
-    LIVEKIT_AVAILABLE = True
-except ImportError:
-    LIVEKIT_AVAILABLE = False
-
 from voice_mode.server import mcp
+from voice_mode.conch import Conch
 from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
     audio_operation_lock,
@@ -43,9 +37,6 @@ from voice_mode.config import (
     SAVE_AUDIO,
     AUDIO_DIR,
     OPENAI_API_KEY,
-    LIVEKIT_URL,
-    LIVEKIT_API_KEY,
-    LIVEKIT_API_SECRET,
     PREFER_LOCAL,
     AUDIO_FEEDBACK_ENABLED,
     service_processes,
@@ -69,7 +60,10 @@ from voice_mode.config import (
     METRICS_LEVEL,
     STT_AUDIO_FORMAT,
     STT_SAVE_FORMAT,
-    MP3_BITRATE
+    MP3_BITRATE,
+    CONCH_ENABLED,
+    CONCH_TIMEOUT,
+    CONCH_CHECK_INTERVAL
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -101,6 +95,104 @@ logger = logging.getLogger("voicemode")
 
 # Log silence detection config at module load time
 logger.info(f"Module loaded with DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}")
+
+
+# DJ Ducking Configuration
+DJ_SOCKET_PATH = "/tmp/voicemode-mpv.sock"
+DJ_VOLUME_DUCK_AMOUNT = int(os.environ.get("VOICEMODE_DJ_DUCK_AMOUNT", "20"))  # Volume reduction during TTS
+
+
+def _dj_command(cmd: str) -> Optional[str]:
+    """Send a command to mpv-dj via IPC socket.
+
+    Args:
+        cmd: JSON command to send (e.g., '{ "command": ["get_property", "volume"] }')
+
+    Returns:
+        Response string from mpv, or None if DJ not running
+    """
+    import subprocess
+    import json
+
+    if not os.path.exists(DJ_SOCKET_PATH):
+        return None
+
+    try:
+        result = subprocess.run(
+            ["socat", "-", DJ_SOCKET_PATH],
+            input=cmd + "\n",
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
+
+
+def get_dj_volume() -> Optional[float]:
+    """Get current DJ volume level.
+
+    Returns:
+        Current volume (0-100) or None if DJ not running
+    """
+    import json
+    response = _dj_command('{ "command": ["get_property", "volume"] }')
+    if response:
+        try:
+            data = json.loads(response)
+            if "data" in data:
+                return float(data["data"])
+        except (json.JSONDecodeError, ValueError, KeyError):
+            pass
+    return None
+
+
+def set_dj_volume(volume: float) -> bool:
+    """Set DJ volume level.
+
+    Args:
+        volume: Volume level (0-100)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    import json
+    volume = max(0, min(100, volume))  # Clamp to valid range
+    response = _dj_command(f'{{ "command": ["set_property", "volume", {volume}] }}')
+    if response:
+        try:
+            data = json.loads(response)
+            return data.get("error") == "success"
+        except json.JSONDecodeError:
+            pass
+    return False
+
+
+class DJDucker:
+    """Context manager for ducking DJ volume during TTS playback."""
+
+    def __init__(self, duck_amount: int = None):
+        self.duck_amount = duck_amount if duck_amount is not None else DJ_VOLUME_DUCK_AMOUNT
+        self.original_volume: Optional[float] = None
+        self.ducked = False
+
+    def __enter__(self):
+        self.original_volume = get_dj_volume()
+        if self.original_volume is not None:
+            ducked_volume = max(0, self.original_volume - self.duck_amount)
+            if set_dj_volume(ducked_volume):
+                self.ducked = True
+                logger.debug(f"DJ ducked: {self.original_volume:.0f}% -> {ducked_volume:.0f}%")
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.ducked and self.original_volume is not None:
+            if set_dj_volume(self.original_volume):
+                logger.debug(f"DJ restored: {self.original_volume:.0f}%")
+        return False  # Don't suppress exceptions
 
 
 def should_repeat(text: str) -> bool:
@@ -485,32 +577,46 @@ async def speech_to_text(
         logger.info(f"STT audio saved to: {save_file_path} (format: {STT_SAVE_FORMAT})")
 
         # Use compressed audio for upload (temporary file)
-        with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:
+        # Windows fix: close temp file before reopening (Issue #135)
+        tmp_file = tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False)
+        tmp_path = tmp_file.name
+        try:
             tmp_file.write(compressed_audio)
             tmp_file.flush()
+            tmp_file.close()  # Close before reopening on Windows
 
-            with open(tmp_file.name, 'rb') as audio_file:
+            with open(tmp_path, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
                     model="whisper-1"
                 )
-
+        finally:
             # Clean up temp file (we keep the WAV)
-            os.unlink(tmp_file.name)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     else:
         # Use temporary file that will be deleted
-        with tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False) as tmp_file:
+        # Windows fix: close temp file before reopening (Issue #135)
+        tmp_file = tempfile.NamedTemporaryFile(suffix=f'.{file_extension}', delete=False)
+        tmp_path = tmp_file.name
+        try:
             tmp_file.write(compressed_audio)
             tmp_file.flush()
+            tmp_file.close()  # Close before reopening on Windows
 
-            with open(tmp_file.name, 'rb') as audio_file:
+            with open(tmp_path, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
                     model="whisper-1"
                 )
-
+        finally:
             # Clean up temp file
-            os.unlink(tmp_file.name)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     return result
 
@@ -962,195 +1068,12 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         # For fallback, assume speech is present since we can't detect
         return (record_audio(max_duration), True)
 
-
-async def check_livekit_available() -> bool:
-    """Check if LiveKit is available and has active rooms"""
-    # First check if LiveKit is installed
-    if not LIVEKIT_AVAILABLE:
-        logger.debug("LiveKit not available (not installed)")
-        return False
-
-    start_time = time.time()
-    logger.debug("Starting LiveKit availability check")
-
-    try:
-        from livekit import api
-
-        api_url = LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
-        lk_api = api.LiveKitAPI(api_url, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-        
-        # Time the API call specifically
-        api_start = time.time()
-        rooms = await lk_api.room.list_rooms(api.ListRoomsRequest())
-        api_duration = time.time() - api_start
-        
-        active_rooms = [r for r in rooms.rooms if r.num_participants > 0]
-        available = len(active_rooms) > 0
-        
-        total_duration = time.time() - start_time
-        logger.info(f"LiveKit availability check: {available} (API: {api_duration:.3f}s, total: {total_duration:.3f}s)")
-        
-        return available
-        
-    except Exception as e:
-        total_duration = time.time() - start_time
-        logger.info(f"LiveKit availability check failed: {e} (total: {total_duration:.3f}s)")
-        logger.debug(f"LiveKit not available: {e}")
-        return False
-
-
-async def livekit_converse(message: str, room_name: str = "", timeout: float = 60.0) -> str:
-    """Have a conversation using LiveKit transport"""
-    if not LIVEKIT_AVAILABLE:
-        return "Error: LiveKit not installed. Install with: uv tool install voice-mode[livekit]"
-
-    try:
-        from livekit import rtc, api
-        from livekit.agents import Agent, AgentSession
-        from livekit.plugins import openai as lk_openai, silero
-        
-        # Auto-discover room if needed
-        if not room_name:
-            api_url = LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
-            lk_api = api.LiveKitAPI(api_url, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-            
-            rooms = await lk_api.room.list_rooms(api.ListRoomsRequest())
-            for room in rooms.rooms:
-                if room.num_participants > 0:
-                    room_name = room.name
-                    break
-            
-            if not room_name:
-                return "No active LiveKit rooms found"
-        
-        # Setup TTS and STT for LiveKit
-        # Get default providers from registry
-        tts_config = await get_tts_config()
-        stt_config = await get_stt_config()
-        
-        # Use dummy API key for local services, real key for OpenAI
-        tts_api_key = OPENAI_API_KEY if tts_config.get('provider_type') == 'openai' else "dummy-key-for-local"
-        stt_api_key = OPENAI_API_KEY if stt_config.get('provider_type') == 'openai' else "dummy-key-for-local"
-        
-        tts_client = lk_openai.TTS(voice=tts_config['voice'], base_url=tts_config['base_url'], model=tts_config['model'], api_key=tts_api_key)
-        stt_client = lk_openai.STT(base_url=stt_config['base_url'], model=stt_config['model'], api_key=stt_api_key)
-        
-        # Create simple agent that speaks and listens
-        class VoiceAgent(Agent):
-            def __init__(self):
-                super().__init__(
-                    instructions="Speak the message and listen for response",
-                    stt=stt_client,
-                    tts=tts_client,
-                    llm=None
-                )
-                self.response = None
-                self.has_spoken = False
-                self.speech_start_time = None
-                self.min_speech_duration = 3.0  # Minimum 3 seconds of speech
-            
-            async def on_enter(self):
-                await asyncio.sleep(0.5)
-                if self.session:
-                    await self.session.say(message, allow_interruptions=True)
-                    self.has_spoken = True
-            
-            async def on_user_speech_started(self):
-                """Track when user starts speaking"""
-                self.speech_start_time = time.time()
-                logger.debug("User started speaking")
-            
-            async def on_user_turn_completed(self, chat_ctx, new_message):
-                if self.has_spoken and not self.response and new_message.content:
-                    content = new_message.content[0]
-                    
-                    # Check if speech duration was long enough
-                    if self.speech_start_time:
-                        speech_duration = time.time() - self.speech_start_time
-                        if speech_duration < self.min_speech_duration:
-                            logger.debug(f"Speech too short ({speech_duration:.1f}s < {self.min_speech_duration}s), ignoring")
-                            return
-                    
-                    # Filter out common ASR hallucinations
-                    content_lower = content.lower().strip()
-                    if content_lower in ['bye', 'bye.', 'goodbye', 'goodbye.', '...', 'um', 'uh', 'hmm', 'hm']:
-                        logger.debug(f"Filtered out ASR hallucination: '{content}'")
-                        return
-                    
-                    # Check if we have actual words (not just punctuation or numbers)
-                    words = content.split()
-                    has_real_words = any(word.isalpha() and len(word) > 1 for word in words)
-                    if not has_real_words:
-                        logger.debug(f"No real words detected in: '{content}'")
-                        return
-                    
-                    # Filter out excessive repetitions (e.g., "45, 45, 45, 45...")
-                    if len(words) > 5:
-                        # Check if last 5 words are all the same
-                        last_words = words[-5:]
-                        if len(set(last_words)) == 1:
-                            # Trim repetitive ending
-                            content = ' '.join(words[:-4])
-                            logger.debug(f"Trimmed repetitive ending from ASR output")
-                    
-                    # Ensure we have meaningful content
-                    if content.strip() and len(content.strip()) > 2:
-                        self.response = content
-                        logger.debug(f"Accepted response: '{content}'")
-        
-        # Connect and run
-        token = api.AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-        token.with_identity("voice-mode-bot").with_name("Voice Mode Bot")
-        token.with_grants(api.VideoGrants(
-            room_join=True, room=room_name,
-            can_publish=True, can_subscribe=True,
-        ))
-        
-        room = rtc.Room()
-        await room.connect(LIVEKIT_URL, token.to_jwt())
-        
-        if not room.remote_participants:
-            await room.disconnect()
-            return "No participants in LiveKit room"
-        
-        agent = VoiceAgent()
-        # Configure Silero VAD with less aggressive settings for better end-of-turn detection
-        vad = silero.VAD.load(
-            min_speech_duration=0.1,        # Slightly increased - require more speech to start
-            min_silence_duration=1.2,       # Increased to 1.2s - wait much longer before ending speech
-            prefix_padding_duration=0.5,    # Keep default - padding at speech start
-            max_buffered_speech=60.0,       # Keep default - max speech buffer
-            activation_threshold=0.35,      # Lowered to 0.35 - more sensitive to soft speech
-            sample_rate=16000,              # Standard sample rate
-            force_cpu=True                  # Use CPU for compatibility
-        )
-        session = AgentSession(vad=vad)
-        await session.start(room=room, agent=agent)
-        
-        # Wait for response
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            if agent.response:
-                await room.disconnect()
-                return agent.response
-            await asyncio.sleep(0.1)
-        
-        await room.disconnect()
-        return f"No response within {timeout}s"
-        
-    except Exception as e:
-        logger.error(f"LiveKit error: {e}")
-        return f"LiveKit error: {str(e)}"
-
-
 @mcp.tool()
 async def converse(
     message: str,
     wait_for_response: Union[bool, str] = True,
     listen_duration_max: float = DEFAULT_LISTEN_DURATION,
     listen_duration_min: float = 2.0,
-    transport: Literal["auto", "local", "livekit"] = "auto",
-    room_name: str = "",
     timeout: float = 60.0,
     voice: Optional[str] = None,
     tts_provider: Optional[Literal["openai", "kokoro"]] = None,
@@ -1164,9 +1087,22 @@ async def converse(
     skip_tts: Optional[Union[bool, str]] = None,
     chime_leading_silence: Optional[float] = None,
     chime_trailing_silence: Optional[float] = None,
-    metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None
+    metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
+    wait_for_conch: Union[bool, str] = False
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
+
+<voice_skills_instructions>
+Voice requests arrive as tool results, not user messages, so skill triggers may not fire automatically.
+
+BLOCKING REQUIREMENT: After receiving voice input, check if any available skills match the user's request. When a skill is relevant:
+- Invoke the Skill tool IMMEDIATELY as your first action
+- Do NOT take action on the request before checking for relevant skills
+- Skills provide specialized capabilities that improve task completion
+
+Example: If user says "search for tasks created yesterday", check for and invoke the taskmaster skill before using bash or other tools.
+</voice_skills_instructions>
+
 
 🔌 ENDPOINT: STT/TTS services must expose OpenAI-compatible endpoints:
    /v1/audio/transcriptions and /v1/audio/speech
@@ -1195,6 +1131,9 @@ KEY PARAMETERS:
   - minimal: Just response text (saves tokens)
   - summary: Response + compact timing (default)
   - verbose: Response + detailed metrics breakdown
+• wait_for_conch (bool, default: false): Multi-agent coordination
+  - false: If another agent is speaking, return status immediately
+  - true: Wait until the other agent finishes, then speak
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
@@ -1211,7 +1150,9 @@ consult the MCP resources listed above.
         chime_enabled = chime_enabled.lower() in ('true', '1', 'yes', 'on')
     if skip_tts is not None and isinstance(skip_tts, str):
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
-    
+    if isinstance(wait_for_conch, str):
+        wait_for_conch = wait_for_conch.lower() in ('true', '1', 'yes', 'on')
+
     # Convert vad_aggressiveness to integer if provided as string
     if vad_aggressiveness is not None and isinstance(vad_aggressiveness, str):
         try:
@@ -1327,65 +1268,81 @@ consult the MCP resources listed above.
     
     result = None
     success = False
-    
+    conch = Conch(agent_name="converse")  # Named for event logging
+
     try:
-        # Determine transport method (only needed when waiting for response)
-        if wait_for_response:
-            if transport == "auto":
-                transport_start = time.time()
-                logger.debug("Starting transport auto-selection")
+        # Try to acquire conch atomically (no race condition)
+        if CONCH_ENABLED:
+            acquired = conch.try_acquire()
 
-                if await check_livekit_available():
-                    transport = "livekit"
-                    transport_duration = time.time() - transport_start
-                    logger.info(f"Auto-selected LiveKit transport (selection took {transport_duration:.3f}s)")
+            if not acquired:
+                # Another agent has the conch
+                holder = Conch.get_holder()
+                holder_agent = holder.get('agent', 'unknown') if holder else 'unknown'
+
+                if event_logger:
+                    event_logger.log_event("CONCH_BLOCKED", {
+                        "pid": os.getpid(),
+                        "holder_pid": holder.get('pid') if holder else None,
+                        "holder_agent": holder_agent,
+                        "wait_for_conch": wait_for_conch
+                    })
+
+                if not wait_for_conch:
+                    # Default: return immediately with status info
+                    return (f"User is currently speaking with {holder_agent}. "
+                            "Use wait_for_conch=true to queue, or try again later.")
+
+                # Wait mode - poll with atomic retry
+                if event_logger:
+                    event_logger.log_event("CONCH_WAIT_START", {
+                        "pid": os.getpid(),
+                        "holder_agent": holder_agent,
+                        "timeout": CONCH_TIMEOUT
+                    })
+
+                waited = 0.0
+                while not conch.try_acquire() and waited < CONCH_TIMEOUT:
+                    await asyncio.sleep(CONCH_CHECK_INTERVAL)
+                    waited += CONCH_CHECK_INTERVAL
+
+                if event_logger:
+                    event_logger.log_event("CONCH_WAIT_END", {
+                        "pid": os.getpid(),
+                        "waited_seconds": waited,
+                        "result": "acquired" if conch._acquired else "timeout"
+                    })
+
+                if not conch._acquired:
+                    return f"Timed out waiting for conch ({CONCH_TIMEOUT}s). {holder_agent} is still speaking."
+
+            # Successfully acquired
+            if event_logger:
+                event_logger.log_event("CONCH_ACQUIRE", {
+                    "pid": os.getpid(),
+                    "agent": "converse"
+                })
+
+        # Local microphone approach with timing
+        transport = "local"
+        timings = {}
+        try:
+            async with audio_operation_lock:
+                # Speak the message
+                tts_start = time.perf_counter()
+                if should_skip_tts:
+                    # Skip TTS entirely for faster response
+                    tts_success = True
+                    tts_metrics = {
+                        'ttfa': 0,
+                        'generation': 0,
+                        'playback': 0,
+                        'total': 0
+                    }
+                    tts_config = {'provider': 'no-op', 'voice': 'none'}
                 else:
-                    transport = "local"
-                    transport_duration = time.time() - transport_start
-                    logger.info(f"Auto-selected local transport (selection took {transport_duration:.3f}s)")
-
-            if transport == "livekit":
-                # For LiveKit, use the existing function but with the message parameter
-                # Use listen_duration_max instead of timeout for consistent behavior
-                livekit_result = await livekit_converse(message, room_name, listen_duration_max)
-
-                # Track LiveKit interaction (simplified since we don't have detailed timing)
-                success = not livekit_result.startswith("Error:") and not livekit_result.startswith("No ")
-                track_voice_interaction(
-                    message=message,
-                    response=livekit_result,
-                    timing_str=None,  # LiveKit doesn't provide detailed timing
-                    transport="livekit",
-                    voice_provider="livekit",  # LiveKit manages its own providers
-                    voice_name=voice,
-                    model=tts_model,
-                    success=success,
-                    error_message=livekit_result if not success else None
-                )
-
-                result = livekit_result
-                success = not livekit_result.startswith("Error:") and not livekit_result.startswith("No ")
-                return result
-
-        # For both speak-only and local conversation modes
-        if not wait_for_response or transport == "local":
-            # Local microphone approach with timing
-            timings = {}
-            try:
-                async with audio_operation_lock:
-                    # Speak the message
-                    tts_start = time.perf_counter()
-                    if should_skip_tts:
-                        # Skip TTS entirely for faster response
-                        tts_success = True
-                        tts_metrics = {
-                            'ttfa': 0,
-                            'generation': 0,
-                            'playback': 0,
-                            'total': 0
-                        }
-                        tts_config = {'provider': 'no-op', 'voice': 'none'}
-                    else:
+                    # Duck DJ volume during TTS playback
+                    with DJDucker():
                         tts_success, tts_metrics, tts_config = await text_to_speech_with_failover(
                             message=message,
                             voice=voice,
@@ -1395,285 +1352,286 @@ consult the MCP resources listed above.
                             initial_provider=tts_provider,
                             speed=speed
                         )
-                    
-                    # Add TTS sub-metrics
-                    if tts_metrics:
-                        timings['ttfa'] = tts_metrics.get('ttfa', 0)
-                        timings['tts_gen'] = tts_metrics.get('generation', 0)
-                        timings['tts_play'] = tts_metrics.get('playback', 0)
-                    timings['tts_total'] = time.perf_counter() - tts_start
-                    
-                    # Log TTS immediately after it completes
-                    if tts_success:
-                        try:
-                            # Format TTS timing
-                            tts_timing_parts = []
-                            if 'ttfa' in timings:
-                                tts_timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
-                            if 'tts_gen' in timings:
-                                tts_timing_parts.append(f"gen {timings['tts_gen']:.1f}s")
-                            if 'tts_play' in timings:
-                                tts_timing_parts.append(f"play {timings['tts_play']:.1f}s")
-                            tts_timing_str = ", ".join(tts_timing_parts) if tts_timing_parts else None
-                            
-                            conversation_logger = get_conversation_logger()
-                            conversation_logger.log_tts(
-                                text=message,
-                                audio_file=os.path.basename(tts_metrics.get('audio_path')) if tts_metrics and tts_metrics.get('audio_path') else None,
-                                model=tts_config.get('model') if tts_config else tts_model,
-                                voice=tts_config.get('voice') if tts_config else voice,
-                                provider=tts_config.get('provider') if tts_config else (tts_provider if tts_provider else 'openai'),
-                                provider_url=tts_config.get('base_url') if tts_config else None,
-                                provider_type=tts_config.get('provider_type') if tts_config else None,
-                                is_fallback=tts_config.get('is_fallback', False) if tts_config else False,
-                                fallback_reason=tts_config.get('fallback_reason') if tts_config else None,
-                                timing=tts_timing_str,
-                                audio_format=audio_format,
-                                transport=transport,
-                                # Add timing metrics
-                                time_to_first_audio=timings.get('ttfa') if timings else None,
-                                generation_time=timings.get('tts_gen') if timings else None,
-                                playback_time=timings.get('tts_play') if timings else None,
-                                total_turnaround_time=timings.get('total') if timings else None
-                            )
-                        except Exception as e:
-                            logger.error(f"Failed to log TTS to JSONL: {e}")
-                    
-                    if not tts_success:
-                        # Check if we have detailed error information
-                        if tts_config and tts_config.get('error_type') == 'all_providers_failed':
-                            error_lines = ["Error: Could not speak message. TTS service connection failed:"]
-                            openai_error_shown = False
-
-                            for attempt in tts_config.get('attempted_endpoints', []):
-                                # Check if we have parsed OpenAI error details
-                                if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
-                                    error_details = attempt['error_details']
-                                    error_lines.append("")
-                                    error_lines.append(error_details.get('title', 'OpenAI Error'))
-                                    error_lines.append(error_details.get('message', ''))
-                                    if error_details.get('suggestion'):
-                                        error_lines.append(f"💡 {error_details['suggestion']}")
-                                    if error_details.get('fallback'):
-                                        error_lines.append(f"ℹ️ {error_details['fallback']}")
-                                    openai_error_shown = True
-                                else:
-                                    # Show raw error for non-OpenAI or if we already showed OpenAI error
-                                    endpoint_or_provider = attempt.get('endpoint', attempt.get('provider', 'unknown'))
-                                    error_lines.append(f"  - {endpoint_or_provider}: {attempt['error']}")
-
-                            result = "\n".join(error_lines)
-                        # Check if we have config info that might indicate why it failed
-                        elif tts_config and 'openai.com' in tts_config.get('base_url', ''):
-                            # Check if API key is missing for OpenAI
-                            from voice_mode.config import OPENAI_API_KEY
-                            if not OPENAI_API_KEY:
-                                result = "Error: Could not speak message. OpenAI API key is not set. Please set OPENAI_API_KEY environment variable or use local services (Kokoro TTS)."
-                            else:
-                                result = "Error: Could not speak message. TTS request to OpenAI failed. Please check your API key and network connection."
-                        else:
-                            result = "Error: Could not speak message. All TTS providers failed. Check that local services are running or set OPENAI_API_KEY for cloud fallback."
-                        return result
-
-                    # If speak-only mode, return success after TTS
-                    if not wait_for_response:
-                        # Format timing info for speak-only mode
-                        timing_info = ""
-                        if tts_success and tts_metrics:
-                            timing_info = f" (gen: {tts_metrics.get('generation', 0):.1f}s, play: {tts_metrics.get('playback', 0):.1f}s)"
-
-                        # Create timing string for statistics
-                        timing_str = ""
-                        if tts_success and timings:
-                            timing_parts = []
-                            if 'ttfa' in timings:
-                                timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
-                            if 'tts_gen' in timings:
-                                timing_parts.append(f"tts_gen {timings['tts_gen']:.1f}s")
-                            if 'tts_play' in timings:
-                                timing_parts.append(f"tts_play {timings['tts_play']:.1f}s")
-                            timing_str = ", ".join(timing_parts)
-
-                        # Track statistics for speak-only interaction
-                        track_voice_interaction(
-                            message=message,
-                            response="[speak-only]",
-                            timing_str=timing_str,
-                            transport="speak-only",
-                            voice_provider=tts_provider,
-                            voice_name=voice,
-                            model=tts_model,
-                            success=tts_success,
-                            error_message=None if tts_success else "TTS failed"
+                
+                # Add TTS sub-metrics
+                if tts_metrics:
+                    timings['ttfa'] = tts_metrics.get('ttfa', 0)
+                    timings['tts_gen'] = tts_metrics.get('generation', 0)
+                    timings['tts_play'] = tts_metrics.get('playback', 0)
+                timings['tts_total'] = time.perf_counter() - tts_start
+                
+                # Log TTS immediately after it completes
+                if tts_success:
+                    try:
+                        # Format TTS timing
+                        tts_timing_parts = []
+                        if 'ttfa' in timings:
+                            tts_timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
+                        if 'tts_gen' in timings:
+                            tts_timing_parts.append(f"gen {timings['tts_gen']:.1f}s")
+                        if 'tts_play' in timings:
+                            tts_timing_parts.append(f"play {timings['tts_play']:.1f}s")
+                        tts_timing_str = ", ".join(tts_timing_parts) if tts_timing_parts else None
+                        
+                        conversation_logger = get_conversation_logger()
+                        conversation_logger.log_tts(
+                            text=message,
+                            audio_file=os.path.basename(tts_metrics.get('audio_path')) if tts_metrics and tts_metrics.get('audio_path') else None,
+                            model=tts_config.get('model') if tts_config else tts_model,
+                            voice=tts_config.get('voice') if tts_config else voice,
+                            provider=tts_config.get('provider') if tts_config else (tts_provider if tts_provider else 'openai'),
+                            provider_url=tts_config.get('base_url') if tts_config else None,
+                            provider_type=tts_config.get('provider_type') if tts_config else None,
+                            is_fallback=tts_config.get('is_fallback', False) if tts_config else False,
+                            fallback_reason=tts_config.get('fallback_reason') if tts_config else None,
+                            timing=tts_timing_str,
+                            audio_format=audio_format,
+                            transport=transport,
+                            # Add timing metrics
+                            time_to_first_audio=timings.get('ttfa') if timings else None,
+                            generation_time=timings.get('tts_gen') if timings else None,
+                            playback_time=timings.get('tts_play') if timings else None,
+                            total_turnaround_time=timings.get('total') if timings else None
                         )
+                    except Exception as e:
+                        logger.error(f"Failed to log TTS to JSONL: {e}")
+                
+                if not tts_success:
+                    # Check if we have detailed error information
+                    if tts_config and tts_config.get('error_type') == 'all_providers_failed':
+                        error_lines = ["Error: Could not speak message. TTS service connection failed:"]
+                        openai_error_shown = False
 
-                        # Format result based on metrics level
-                        if effective_metrics_level == "minimal":
-                            result = "✓ Message spoken successfully"
-                        else:
-                            result = f"✓ Message spoken successfully{timing_info}"
-                        logger.info(f"Speak-only result: {result}")
-                        return result
-
-                    # Brief pause before listening
-                    await asyncio.sleep(0.5)
-                    
-                    # Play "listening" feedback sound
-                    await play_audio_feedback(
-                        "listening",
-                        openai_clients,
-                        chime_enabled,
-                        "whisper",
-                        chime_leading_silence=chime_leading_silence,
-                        chime_trailing_silence=chime_trailing_silence
-                    )
-                    
-                    # Record response
-                    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
-
-                    # Log recording start
-                    if event_logger:
-                        event_logger.log_event(event_logger.RECORDING_START)
-
-                    record_start = time.perf_counter()
-                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                    )
-                    timings['record'] = time.perf_counter() - record_start
-                    
-                    # Log recording end
-                    if event_logger:
-                        event_logger.log_event(event_logger.RECORDING_END, {
-                            "duration": timings['record'],
-                            "samples": len(audio_data)
-                        })
-                    
-                    # Play "finished" feedback sound
-                    await play_audio_feedback(
-                        "finished",
-                        openai_clients,
-                        chime_enabled,
-                        "whisper",
-                        chime_leading_silence=chime_leading_silence,
-                        chime_trailing_silence=chime_trailing_silence
-                    )
-                    
-                    # Mark the end of recording - this is when user expects response to start
-                    user_done_time = time.perf_counter()
-                    logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
-                    
-                    if len(audio_data) == 0:
-                        result = "Error: Could not record audio"
-                        return result
-                    
-                    # Track STT-specific metrics (defined here to be in scope for event logging later)
-                    stt_metrics = None
-
-                    # Check if no speech was detected
-                    if not speech_detected:
-                        logger.info("No speech detected during recording - skipping STT processing")
-                        response_text = None
-                        timings['stt'] = 0.0
-
-                        # Still save the audio if configured
-                        if SAVE_AUDIO and AUDIO_DIR:
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
-                            write(audio_path, SAMPLE_RATE, audio_data)
-                            logger.debug(f"Saved no-speech audio to: {audio_path}")
-                    else:
-                        # Convert to text
-                        # Log STT start
-                        if event_logger:
-                            event_logger.log_event(event_logger.STT_START)
-
-                        stt_start = time.perf_counter()
-                        stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                        timings['stt'] = time.perf_counter() - stt_start
-
-                        # Handle structured STT result
-                        if isinstance(stt_result, dict):
-                            # Extract metrics if present
-                            stt_metrics = stt_result.get("metrics")
-                            if stt_metrics:
-                                # Store in timings for later use
-                                timings['stt_request_ms'] = stt_metrics.get('request_time_ms', 0)
-                                timings['stt_file_size_bytes'] = stt_metrics.get('file_size_bytes', 0)
-                                timings['stt_is_local'] = stt_metrics.get('is_local', False)
-                                logger.debug(f"STT metrics: request={stt_metrics.get('request_time_ms')}ms, "
-                                           f"file_size={stt_metrics.get('file_size_bytes')/1024:.1f}KB, "
-                                           f"is_local={stt_metrics.get('is_local')}")
-
-                            if "error_type" in stt_result:
-                                # Handle connection failures vs no speech
-                                if stt_result["error_type"] == "connection_failed":
-                                    # Build helpful error message
-                                    error_lines = ["STT service connection failed:"]
-                                    openai_error_shown = False
-
-                                    for attempt in stt_result.get("attempted_endpoints", []):
-                                        # Check if we have parsed OpenAI error details
-                                        if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
-                                            error_details = attempt['error_details']
-                                            error_lines.append("")
-                                            error_lines.append(error_details.get('title', 'OpenAI Error'))
-                                            error_lines.append(error_details.get('message', ''))
-                                            if error_details.get('suggestion'):
-                                                error_lines.append(f"💡 {error_details['suggestion']}")
-                                            if error_details.get('fallback'):
-                                                error_lines.append(f"ℹ️ {error_details['fallback']}")
-                                            openai_error_shown = True
-                                        else:
-                                            # Show raw error for non-OpenAI or if we already showed OpenAI error
-                                            error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
-
-                                    error_msg = "\n".join(error_lines)
-                                    logger.error(error_msg)
-
-                                    # Return error immediately
-                                    return error_msg
-
-                                elif stt_result["error_type"] == "no_speech":
-                                    # Genuine no speech detected
-                                    response_text = None
-                                    stt_provider = stt_result.get("provider", "unknown")
+                        for attempt in tts_config.get('attempted_endpoints', []):
+                            # Check if we have parsed OpenAI error details
+                            if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
+                                error_details = attempt['error_details']
+                                error_lines.append("")
+                                error_lines.append(error_details.get('title', 'OpenAI Error'))
+                                error_lines.append(error_details.get('message', ''))
+                                if error_details.get('suggestion'):
+                                    error_lines.append(f"💡 {error_details['suggestion']}")
+                                if error_details.get('fallback'):
+                                    error_lines.append(f"ℹ️ {error_details['fallback']}")
+                                openai_error_shown = True
                             else:
-                                # Successful transcription
-                                response_text = stt_result.get("text")
-                                stt_provider = stt_result.get("provider", "unknown")
-                                if stt_provider != "unknown":
-                                    logger.info(f"📡 STT Provider: {stt_provider}")
+                                # Show raw error for non-OpenAI or if we already showed OpenAI error
+                                endpoint_or_provider = attempt.get('endpoint', attempt.get('provider', 'unknown'))
+                                error_lines.append(f"  - {endpoint_or_provider}: {attempt['error']}")
+
+                        result = "\n".join(error_lines)
+                    # Check if we have config info that might indicate why it failed
+                    elif tts_config and 'openai.com' in tts_config.get('base_url', ''):
+                        # Check if API key is missing for OpenAI
+                        from voice_mode.config import OPENAI_API_KEY
+                        if not OPENAI_API_KEY:
+                            result = "Error: Could not speak message. OpenAI API key is not set. Please set OPENAI_API_KEY environment variable or use local services (Kokoro TTS)."
                         else:
-                            # Should not happen with new code, but handle gracefully
-                            response_text = None
-                            stt_provider = "unknown"
+                            result = "Error: Could not speak message. TTS request to OpenAI failed. Please check your API key and network connection."
+                    else:
+                        result = "Error: Could not speak message. All TTS providers failed. Check that local services are running or set OPENAI_API_KEY for cloud fallback."
+                    return result
 
-                    # Check for repeat phrase - if detected, replay the audio and listen again
-                    if response_text and should_repeat(response_text):
-                        logger.info(f"🔁 Repeat requested: '{response_text}'")
+                # If speak-only mode, return success after TTS
+                if not wait_for_response:
+                    # Format timing info for speak-only mode
+                    timing_info = ""
+                    if tts_success and tts_metrics:
+                        timing_info = f" (gen: {tts_metrics.get('generation', 0):.1f}s, play: {tts_metrics.get('playback', 0):.1f}s)"
 
-                        # Play system message for repeat
-                        await play_system_audio("repeating", fallback_text="Repeating")
+                    # Create timing string for statistics
+                    timing_str = ""
+                    if tts_success and timings:
+                        timing_parts = []
+                        if 'ttfa' in timings:
+                            timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
+                        if 'tts_gen' in timings:
+                            timing_parts.append(f"tts_gen {timings['tts_gen']:.1f}s")
+                        if 'tts_play' in timings:
+                            timing_parts.append(f"tts_play {timings['tts_play']:.1f}s")
+                        timing_str = ", ".join(timing_parts)
 
-                        # Replay the same audio
-                        if transport == "local":
-                            logger.info("Replaying audio...")
+                    # Track statistics for speak-only interaction
+                    track_voice_interaction(
+                        message=message,
+                        response="[speak-only]",
+                        timing_str=timing_str,
+                        transport="speak-only",
+                        voice_provider=tts_provider,
+                        voice_name=voice,
+                        model=tts_model,
+                        success=tts_success,
+                        error_message=None if tts_success else "TTS failed"
+                    )
 
-                            # Play the cached audio if available from tts_metrics
-                            audio_path = tts_metrics.get('audio_path') if 'tts_metrics' in locals() and tts_metrics else None
-                            if audio_path and os.path.exists(audio_path):
-                                try:
-                                    import soundfile as sf
+                    # Format result based on metrics level
+                    if effective_metrics_level == "minimal":
+                        result = "✓ Message spoken successfully"
+                    else:
+                        result = f"✓ Message spoken successfully{timing_info}"
+                    logger.info(f"Speak-only result: {result}")
+                    return result
 
-                                    # Read and play the audio file using non-blocking player
-                                    data, samplerate = sf.read(audio_path)
-                                    player = NonBlockingAudioPlayer()
-                                    player.play(data, samplerate, blocking=True)
-                                    logger.info("Audio replay completed")
-                                except Exception as e:
-                                    logger.warning(f"Failed to replay cached audio: {e}. Regenerating...")
-                                    # Fall back to regenerating TTS
+                # Brief pause before listening
+                await asyncio.sleep(0.5)
+                
+                # Play "listening" feedback sound
+                await play_audio_feedback(
+                    "listening",
+                    openai_clients,
+                    chime_enabled,
+                    "whisper",
+                    chime_leading_silence=chime_leading_silence,
+                    chime_trailing_silence=chime_trailing_silence
+                )
+                
+                # Record response
+                logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+
+                # Log recording start
+                if event_logger:
+                    event_logger.log_event(event_logger.RECORDING_START)
+
+                record_start = time.perf_counter()
+                logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
+                audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                    None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                )
+                timings['record'] = time.perf_counter() - record_start
+                
+                # Log recording end
+                if event_logger:
+                    event_logger.log_event(event_logger.RECORDING_END, {
+                        "duration": timings['record'],
+                        "samples": len(audio_data)
+                    })
+                
+                # Play "finished" feedback sound
+                await play_audio_feedback(
+                    "finished",
+                    openai_clients,
+                    chime_enabled,
+                    "whisper",
+                    chime_leading_silence=chime_leading_silence,
+                    chime_trailing_silence=chime_trailing_silence
+                )
+                
+                # Mark the end of recording - this is when user expects response to start
+                user_done_time = time.perf_counter()
+                logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
+                
+                if len(audio_data) == 0:
+                    result = "Error: Could not record audio"
+                    return result
+                
+                # Track STT-specific metrics (defined here to be in scope for event logging later)
+                stt_metrics = None
+
+                # Check if no speech was detected
+                if not speech_detected:
+                    logger.info("No speech detected during recording - skipping STT processing")
+                    response_text = None
+                    timings['stt'] = 0.0
+
+                    # Still save the audio if configured
+                    if SAVE_AUDIO and AUDIO_DIR:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
+                        write(audio_path, SAMPLE_RATE, audio_data)
+                        logger.debug(f"Saved no-speech audio to: {audio_path}")
+                else:
+                    # Convert to text
+                    # Log STT start
+                    if event_logger:
+                        event_logger.log_event(event_logger.STT_START)
+
+                    stt_start = time.perf_counter()
+                    stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                    timings['stt'] = time.perf_counter() - stt_start
+
+                    # Handle structured STT result
+                    if isinstance(stt_result, dict):
+                        # Extract metrics if present
+                        stt_metrics = stt_result.get("metrics")
+                        if stt_metrics:
+                            # Store in timings for later use
+                            timings['stt_request_ms'] = stt_metrics.get('request_time_ms', 0)
+                            timings['stt_file_size_bytes'] = stt_metrics.get('file_size_bytes', 0)
+                            timings['stt_is_local'] = stt_metrics.get('is_local', False)
+                            logger.debug(f"STT metrics: request={stt_metrics.get('request_time_ms')}ms, "
+                                       f"file_size={stt_metrics.get('file_size_bytes')/1024:.1f}KB, "
+                                       f"is_local={stt_metrics.get('is_local')}")
+
+                        if "error_type" in stt_result:
+                            # Handle connection failures vs no speech
+                            if stt_result["error_type"] == "connection_failed":
+                                # Build helpful error message
+                                error_lines = ["STT service connection failed:"]
+                                openai_error_shown = False
+
+                                for attempt in stt_result.get("attempted_endpoints", []):
+                                    # Check if we have parsed OpenAI error details
+                                    if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
+                                        error_details = attempt['error_details']
+                                        error_lines.append("")
+                                        error_lines.append(error_details.get('title', 'OpenAI Error'))
+                                        error_lines.append(error_details.get('message', ''))
+                                        if error_details.get('suggestion'):
+                                            error_lines.append(f"💡 {error_details['suggestion']}")
+                                        if error_details.get('fallback'):
+                                            error_lines.append(f"ℹ️ {error_details['fallback']}")
+                                        openai_error_shown = True
+                                    else:
+                                        # Show raw error for non-OpenAI or if we already showed OpenAI error
+                                        error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
+
+                                error_msg = "\n".join(error_lines)
+                                logger.error(error_msg)
+
+                                # Return error immediately
+                                return error_msg
+
+                            elif stt_result["error_type"] == "no_speech":
+                                # Genuine no speech detected
+                                response_text = None
+                                stt_provider = stt_result.get("provider", "unknown")
+                        else:
+                            # Successful transcription
+                            response_text = stt_result.get("text")
+                            stt_provider = stt_result.get("provider", "unknown")
+                            if stt_provider != "unknown":
+                                logger.info(f"📡 STT Provider: {stt_provider}")
+                    else:
+                        # Should not happen with new code, but handle gracefully
+                        response_text = None
+                        stt_provider = "unknown"
+
+                # Check for repeat phrase - if detected, replay the audio and listen again
+                if response_text and should_repeat(response_text):
+                    logger.info(f"🔁 Repeat requested: '{response_text}'")
+
+                    # Play system message for repeat
+                    await play_system_audio("repeating", fallback_text="Repeating")
+
+                    # Replay the same audio
+                    if transport == "local":
+                        logger.info("Replaying audio...")
+
+                        # Play the cached audio if available from tts_metrics
+                        audio_path = tts_metrics.get('audio_path') if 'tts_metrics' in locals() and tts_metrics else None
+                        if audio_path and os.path.exists(audio_path):
+                            try:
+                                import soundfile as sf
+
+                                # Read and play the audio file using non-blocking player
+                                data, samplerate = sf.read(audio_path)
+                                player = NonBlockingAudioPlayer()
+                                player.play(data, samplerate, blocking=True)
+                                logger.info("Audio replay completed")
+                            except Exception as e:
+                                logger.warning(f"Failed to replay cached audio: {e}. Regenerating...")
+                                # Fall back to regenerating TTS
+                                with DJDucker():
                                     tts_success, new_tts_metrics, _ = await text_to_speech_with_failover(
                                         message=message,
                                         voice=voice,
@@ -1683,11 +1641,12 @@ consult the MCP resources listed above.
                                         initial_provider=tts_provider,
                                         speed=speed
                                     )
-                                    if not tts_success:
-                                        logger.error("Failed to replay audio via TTS regeneration")
-                            else:
-                                # No cached audio, regenerate TTS
-                                logger.info("No cached audio available, regenerating...")
+                                if not tts_success:
+                                    logger.error("Failed to replay audio via TTS regeneration")
+                        else:
+                            # No cached audio, regenerate TTS
+                            logger.info("No cached audio available, regenerating...")
+                            with DJDucker():
                                 tts_success, new_tts_metrics, _ = await text_to_speech_with_failover(
                                     message=message,
                                     voice=voice,
@@ -1697,286 +1656,282 @@ consult the MCP resources listed above.
                                     initial_provider=tts_provider,
                                     speed=speed
                                 )
-                                if not tts_success:
-                                    logger.error("Failed to replay audio via TTS regeneration")
+                            if not tts_success:
+                                logger.error("Failed to replay audio via TTS regeneration")
 
-                            # Listen again for response - reuse the recording logic
-                            logger.info("Listening for response after repeat...")
+                        # Listen again for response - reuse the recording logic
+                        logger.info("Listening for response after repeat...")
 
-                            # Play "listening" feedback sound
-                            await play_audio_feedback(
-                                "listening",
-                                openai_clients,
-                                chime_enabled,
-                                "whisper",
-                                chime_leading_silence=chime_leading_silence,
-                                chime_trailing_silence=chime_trailing_silence
-                            )
-
-                            # Record audio
-                            record_start = time.perf_counter()
-                            audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                                None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                            )
-                            record_time = time.perf_counter() - record_start
-                            timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
-
-                            # Play "finished" feedback sound
-                            await play_audio_feedback(
-                                "finished",
-                                openai_clients,
-                                chime_enabled,
-                                "whisper",
-                                chime_leading_silence=chime_leading_silence,
-                                chime_trailing_silence=chime_trailing_silence
-                            )
-
-                            if len(audio_data) > 0 and speech_detected:
-                                # Transcribe the audio
-                                stt_start = time.perf_counter()
-                                stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                                stt_time = time.perf_counter() - stt_start
-                                timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
-
-                                # Process result
-                                if isinstance(stt_result, dict) and not stt_result.get("error"):
-                                    response_text = stt_result.get("text")
-                                    stt_provider = stt_result.get("provider", "unknown")
-                                    logger.info(f"New response after repeat: {response_text}")
-
-                    # Check for wait phrase - if detected, pause for configured duration
-                    if response_text and should_wait(response_text):
-                        logger.info(f"⏸️ Wait requested: '{response_text}'. Pausing for {WAIT_DURATION} seconds...")
-
-                        # Play system message for wait
-                        await play_system_audio("waiting-1-minute", fallback_text="Waiting one minute")
-
-                        await asyncio.sleep(WAIT_DURATION)
-
-                        # Play system message when ready to listen again
-                        await play_system_audio("ready-to-listen", fallback_text="Ready to listen")
-
-                        # After waiting, listen again
-                        logger.info("Wait period ended. Listening for response...")
-                        if transport == "local":
-                            # Play "listening" feedback sound
-                            await play_audio_feedback(
-                                "listening",
-                                openai_clients,
-                                chime_enabled,
-                                "whisper",
-                                chime_leading_silence=chime_leading_silence,
-                                chime_trailing_silence=chime_trailing_silence
-                            )
-
-                            # Record audio
-                            record_start = time.perf_counter()
-                            audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                                None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                            )
-                            record_time = time.perf_counter() - record_start
-                            timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
-
-                            # Play "finished" feedback sound
-                            await play_audio_feedback(
-                                "finished",
-                                openai_clients,
-                                chime_enabled,
-                                "whisper",
-                                chime_leading_silence=chime_leading_silence,
-                                chime_trailing_silence=chime_trailing_silence
-                            )
-
-                            if len(audio_data) > 0 and speech_detected:
-                                # Transcribe the audio
-                                stt_start = time.perf_counter()
-                                stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                                stt_time = time.perf_counter() - stt_start
-                                timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
-
-                                # Process result
-                                if isinstance(stt_result, dict) and not stt_result.get("error"):
-                                    response_text = stt_result.get("text")
-                                    stt_provider = stt_result.get("provider", "unknown")
-                                    logger.info(f"New response after wait: {response_text}")
-
-                    # Log STT complete with metrics
-                    if event_logger:
-                        stt_event_data = {}
-                        if response_text:
-                            stt_event_data["text"] = response_text
-                        # Include metrics in event log (debug level data)
-                        if stt_metrics:
-                            stt_event_data["metrics"] = {
-                                "file_size_bytes": stt_metrics.get('file_size_bytes', 0),
-                                "request_time_ms": stt_metrics.get('request_time_ms', 0),
-                                "is_local": stt_metrics.get('is_local', False),
-                                "format": "wav",
-                                "sample_rate_hz": SAMPLE_RATE,
-                                "bitrate_kbps": (SAMPLE_RATE * 16 * CHANNELS) // 1000
-                            }
-                        if response_text:
-                            event_logger.log_event(event_logger.STT_COMPLETE, stt_event_data)
-                        else:
-                            event_logger.log_event(event_logger.STT_NO_SPEECH, stt_event_data)
-                    
-                    # Log STT immediately after it completes (even if no speech detected)
-                    try:
-                        # Format STT timing
-                        stt_timing_parts = []
-                        if 'record' in timings:
-                            stt_timing_parts.append(f"record {timings['record']:.1f}s")
-                        if 'stt' in timings:
-                            stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
-                        stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
-                        
-                        conversation_logger = get_conversation_logger()
-                        # Get STT config for provider info
-                        stt_config = await get_stt_config()
-                        
-                        conversation_logger.log_stt(
-                            text=response_text if response_text else "[no speech detected]",
-                            model=stt_config.get('model', 'whisper-1'),
-                            provider=stt_config.get('provider', 'openai'),
-                            provider_url=stt_config.get('base_url'),
-                            provider_type=stt_config.get('provider_type'),
-                            audio_format='mp3',
-                            transport=transport,
-                            timing=stt_timing_str,
-                            silence_detection={
-                                "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
-                                "vad_aggressiveness": VAD_AGGRESSIVENESS,
-                                "silence_threshold_ms": SILENCE_THRESHOLD_MS
-                            },
-                            # Add timing metrics
-                            transcription_time=timings.get('stt'),
-                            total_turnaround_time=None  # Will be calculated and added later
+                        # Play "listening" feedback sound
+                        await play_audio_feedback(
+                            "listening",
+                            openai_clients,
+                            chime_enabled,
+                            "whisper",
+                            chime_leading_silence=chime_leading_silence,
+                            chime_trailing_silence=chime_trailing_silence
                         )
-                    except Exception as e:
-                        logger.error(f"Failed to log STT to JSONL: {e}")
-                
-                # Calculate total time (use tts_total instead of sub-metrics)
-                main_timings = {k: v for k, v in timings.items() if k in ['tts_total', 'record', 'stt']}
-                total_time = sum(main_timings.values())
-                
-                # Format timing strings separately for TTS and STT
-                tts_timing_parts = []
-                stt_timing_parts = []
-                
-                # TTS timings
-                if 'ttfa' in timings:
-                    tts_timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
-                if 'tts_gen' in timings:
-                    tts_timing_parts.append(f"gen {timings['tts_gen']:.1f}s")
-                if 'tts_play' in timings:
-                    tts_timing_parts.append(f"play {timings['tts_play']:.1f}s")
-                
-                # STT timings
-                if 'record' in timings:
-                    stt_timing_parts.append(f"record {timings['record']:.1f}s")
-                if 'stt' in timings:
-                    stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
-                # Add detailed STT metrics if available
-                if 'stt_file_size_bytes' in timings and timings['stt_file_size_bytes'] > 0:
-                    stt_timing_parts.append(f"audio {timings['stt_file_size_bytes']/1024:.0f}KB")
-                
-                tts_timing_str = ", ".join(tts_timing_parts) if tts_timing_parts else None
-                stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
-                
-                # Keep combined timing for backward compatibility in result message
-                all_timing_parts = []
-                if tts_timing_parts:
-                    all_timing_parts.extend(tts_timing_parts)
-                if stt_timing_parts:
-                    all_timing_parts.extend(stt_timing_parts)
-                timing_str = ", ".join(all_timing_parts) + f", total {total_time:.1f}s"
-                
-                # Track statistics for full conversation interaction
-                actual_response = response_text or "[no speech detected]"
-                track_voice_interaction(
-                    message=message,
-                    response=actual_response,
-                    timing_str=timing_str,
-                    transport=transport,
-                    voice_provider=tts_provider,
-                    voice_name=voice,
-                    model=tts_model,
-                    success=bool(response_text),  # Success if we got a response
-                    error_message=None if response_text else "No speech detected"
-                )
-                
-                # End event logging session
-                if event_logger and session_id:
-                    event_logger.end_session()
-                
-                if response_text:
-                    # Save conversation transcription if enabled
-                    if SAVE_TRANSCRIPTIONS:
-                        conversation_text = f"Assistant: {message}\n\nUser: {response_text}"
-                        metadata = {
-                            "type": "conversation",
-                            "transport": transport,
-                            "voice": voice,
-                            "model": tts_model,
-                            "stt_model": "whisper-1",  # Default STT model
-                            "timing": timing_str,
-                            "timestamp": datetime.now().isoformat()
+
+                        # Record audio
+                        record_start = time.perf_counter()
+                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                        )
+                        record_time = time.perf_counter() - record_start
+                        timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
+
+                        # Play "finished" feedback sound
+                        await play_audio_feedback(
+                            "finished",
+                            openai_clients,
+                            chime_enabled,
+                            "whisper",
+                            chime_leading_silence=chime_leading_silence,
+                            chime_trailing_silence=chime_trailing_silence
+                        )
+
+                        if len(audio_data) > 0 and speech_detected:
+                            # Transcribe the audio
+                            stt_start = time.perf_counter()
+                            stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                            stt_time = time.perf_counter() - stt_start
+                            timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
+
+                            # Process result
+                            if isinstance(stt_result, dict) and not stt_result.get("error"):
+                                response_text = stt_result.get("text")
+                                stt_provider = stt_result.get("provider", "unknown")
+                                logger.info(f"New response after repeat: {response_text}")
+
+                # Check for wait phrase - if detected, pause for configured duration
+                if response_text and should_wait(response_text):
+                    logger.info(f"⏸️ Wait requested: '{response_text}'. Pausing for {WAIT_DURATION} seconds...")
+
+                    # Play system message for wait
+                    await play_system_audio("waiting-1-minute", fallback_text="Waiting one minute")
+
+                    await asyncio.sleep(WAIT_DURATION)
+
+                    # Play system message when ready to listen again
+                    await play_system_audio("ready-to-listen", fallback_text="Ready to listen")
+
+                    # After waiting, listen again
+                    logger.info("Wait period ended. Listening for response...")
+                    if transport == "local":
+                        # Play "listening" feedback sound
+                        await play_audio_feedback(
+                            "listening",
+                            openai_clients,
+                            chime_enabled,
+                            "whisper",
+                            chime_leading_silence=chime_leading_silence,
+                            chime_trailing_silence=chime_trailing_silence
+                        )
+
+                        # Record audio
+                        record_start = time.perf_counter()
+                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                        )
+                        record_time = time.perf_counter() - record_start
+                        timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
+
+                        # Play "finished" feedback sound
+                        await play_audio_feedback(
+                            "finished",
+                            openai_clients,
+                            chime_enabled,
+                            "whisper",
+                            chime_leading_silence=chime_leading_silence,
+                            chime_trailing_silence=chime_trailing_silence
+                        )
+
+                        if len(audio_data) > 0 and speech_detected:
+                            # Transcribe the audio
+                            stt_start = time.perf_counter()
+                            stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                            stt_time = time.perf_counter() - stt_start
+                            timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
+
+                            # Process result
+                            if isinstance(stt_result, dict) and not stt_result.get("error"):
+                                response_text = stt_result.get("text")
+                                stt_provider = stt_result.get("provider", "unknown")
+                                logger.info(f"New response after wait: {response_text}")
+
+                # Log STT complete with metrics
+                if event_logger:
+                    stt_event_data = {}
+                    if response_text:
+                        stt_event_data["text"] = response_text
+                    # Include metrics in event log (debug level data)
+                    if stt_metrics:
+                        stt_event_data["metrics"] = {
+                            "file_size_bytes": stt_metrics.get('file_size_bytes', 0),
+                            "request_time_ms": stt_metrics.get('request_time_ms', 0),
+                            "is_local": stt_metrics.get('is_local', False),
+                            "format": "wav",
+                            "sample_rate_hz": SAMPLE_RATE,
+                            "bitrate_kbps": (SAMPLE_RATE * 16 * CHANNELS) // 1000
                         }
-                        save_transcription(conversation_text, prefix="conversation", metadata=metadata)
-
-                    # Logging already done immediately after TTS and STT complete
-
-                    # Format result based on metrics level
-                    stt_info = f" (STT: {stt_provider})" if 'stt_provider' in locals() and stt_provider != "unknown" else ""
-                    if effective_metrics_level == "minimal":
-                        result = f"Voice response: {response_text}"
-                    elif effective_metrics_level == "verbose":
-                        # Build verbose metrics block
-                        verbose_parts = [f"Voice response: {response_text}{stt_info}"]
-                        verbose_parts.append(f"Timing: {timing_str}")
-                        if 'stt_request_ms' in timings:
-                            verbose_parts.append(f"STT request: {timings['stt_request_ms']:.0f}ms")
-                        if 'stt_file_size_bytes' in timings:
-                            verbose_parts.append(f"STT file: {timings['stt_file_size_bytes']/1024:.0f}KB")
-                        if 'stt_is_local' in timings:
-                            verbose_parts.append(f"STT local: {timings['stt_is_local']}")
-                        result = " | ".join(verbose_parts)
-                    else:  # summary (default)
-                        result = f"Voice response: {response_text}{stt_info} | Timing: {timing_str}"
-                    success = True
-                else:
-                    if effective_metrics_level == "minimal":
-                        result = "No speech detected"
+                    if response_text:
+                        event_logger.log_event(event_logger.STT_COMPLETE, stt_event_data)
                     else:
-                        result = f"No speech detected | Timing: {timing_str}"
-                    success = True  # Not an error, just no speech
-                return result
+                        event_logger.log_event(event_logger.STT_NO_SPEECH, stt_event_data)
+                
+                # Log STT immediately after it completes (even if no speech detected)
+                try:
+                    # Format STT timing
+                    stt_timing_parts = []
+                    if 'record' in timings:
+                        stt_timing_parts.append(f"record {timings['record']:.1f}s")
+                    if 'stt' in timings:
+                        stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
+                    stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
                     
-            except Exception as e:
-                logger.error(f"Local voice error: {e}")
-                if DEBUG:
-                    logger.error(f"Traceback: {traceback.format_exc()}")
-                
-                # Track failed conversation interaction
-                track_voice_interaction(
-                    message=message,
-                    response="[error]",
-                    timing_str=None,
-                    transport=transport,
-                    voice_provider=tts_provider,
-                    voice_name=voice,
-                    model=tts_model,
-                    success=False,
-                    error_message=str(e)
-                )
-                
-                result = f"Error: {str(e)}"
-                return result
+                    conversation_logger = get_conversation_logger()
+                    # Get STT config for provider info
+                    stt_config = await get_stt_config()
+                    
+                    conversation_logger.log_stt(
+                        text=response_text if response_text else "[no speech detected]",
+                        model=stt_config.get('model', 'whisper-1'),
+                        provider=stt_config.get('provider', 'openai'),
+                        provider_url=stt_config.get('base_url'),
+                        provider_type=stt_config.get('provider_type'),
+                        audio_format='mp3',
+                        transport=transport,
+                        timing=stt_timing_str,
+                        silence_detection={
+                            "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
+                            "vad_aggressiveness": VAD_AGGRESSIVENESS,
+                            "silence_threshold_ms": SILENCE_THRESHOLD_MS
+                        },
+                        # Add timing metrics
+                        transcription_time=timings.get('stt'),
+                        total_turnaround_time=None  # Will be calculated and added later
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to log STT to JSONL: {e}")
             
-        else:
-            result = f"Unknown transport: {transport}"
+            # Calculate total time (use tts_total instead of sub-metrics)
+            main_timings = {k: v for k, v in timings.items() if k in ['tts_total', 'record', 'stt']}
+            total_time = sum(main_timings.values())
+            
+            # Format timing strings separately for TTS and STT
+            tts_timing_parts = []
+            stt_timing_parts = []
+            
+            # TTS timings
+            if 'ttfa' in timings:
+                tts_timing_parts.append(f"ttfa {timings['ttfa']:.1f}s")
+            if 'tts_gen' in timings:
+                tts_timing_parts.append(f"gen {timings['tts_gen']:.1f}s")
+            if 'tts_play' in timings:
+                tts_timing_parts.append(f"play {timings['tts_play']:.1f}s")
+            
+            # STT timings
+            if 'record' in timings:
+                stt_timing_parts.append(f"record {timings['record']:.1f}s")
+            if 'stt' in timings:
+                stt_timing_parts.append(f"stt {timings['stt']:.1f}s")
+            # Add detailed STT metrics if available
+            if 'stt_file_size_bytes' in timings and timings['stt_file_size_bytes'] > 0:
+                stt_timing_parts.append(f"audio {timings['stt_file_size_bytes']/1024:.0f}KB")
+            
+            tts_timing_str = ", ".join(tts_timing_parts) if tts_timing_parts else None
+            stt_timing_str = ", ".join(stt_timing_parts) if stt_timing_parts else None
+            
+            # Keep combined timing for backward compatibility in result message
+            all_timing_parts = []
+            if tts_timing_parts:
+                all_timing_parts.extend(tts_timing_parts)
+            if stt_timing_parts:
+                all_timing_parts.extend(stt_timing_parts)
+            timing_str = ", ".join(all_timing_parts) + f", total {total_time:.1f}s"
+            
+            # Track statistics for full conversation interaction
+            actual_response = response_text or "[no speech detected]"
+            track_voice_interaction(
+                message=message,
+                response=actual_response,
+                timing_str=timing_str,
+                transport=transport,
+                voice_provider=tts_provider,
+                voice_name=voice,
+                model=tts_model,
+                success=bool(response_text),  # Success if we got a response
+                error_message=None if response_text else "No speech detected"
+            )
+            
+            # End event logging session
+            if event_logger and session_id:
+                event_logger.end_session()
+            
+            if response_text:
+                # Save conversation transcription if enabled
+                if SAVE_TRANSCRIPTIONS:
+                    conversation_text = f"Assistant: {message}\n\nUser: {response_text}"
+                    metadata = {
+                        "type": "conversation",
+                        "transport": transport,
+                        "voice": voice,
+                        "model": tts_model,
+                        "stt_model": "whisper-1",  # Default STT model
+                        "timing": timing_str,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    save_transcription(conversation_text, prefix="conversation", metadata=metadata)
+
+                # Logging already done immediately after TTS and STT complete
+
+                # Format result based on metrics level
+                stt_info = f" (STT: {stt_provider})" if 'stt_provider' in locals() and stt_provider != "unknown" else ""
+                if effective_metrics_level == "minimal":
+                    result = f"Voice response: {response_text}"
+                elif effective_metrics_level == "verbose":
+                    # Build verbose metrics block
+                    verbose_parts = [f"Voice response: {response_text}{stt_info}"]
+                    verbose_parts.append(f"Timing: {timing_str}")
+                    if 'stt_request_ms' in timings:
+                        verbose_parts.append(f"STT request: {timings['stt_request_ms']:.0f}ms")
+                    if 'stt_file_size_bytes' in timings:
+                        verbose_parts.append(f"STT file: {timings['stt_file_size_bytes']/1024:.0f}KB")
+                    if 'stt_is_local' in timings:
+                        verbose_parts.append(f"STT local: {timings['stt_is_local']}")
+                    result = " | ".join(verbose_parts)
+                else:  # summary (default)
+                    result = f"Voice response: {response_text}{stt_info} | Timing: {timing_str}"
+                success = True
+            else:
+                if effective_metrics_level == "minimal":
+                    result = "No speech detected"
+                else:
+                    result = f"No speech detected | Timing: {timing_str}"
+                success = True  # Not an error, just no speech
             return result
+                
+        except Exception as e:
+            logger.error(f"Local voice error: {e}")
+            if DEBUG:
+                logger.error(f"Traceback: {traceback.format_exc()}")
             
+            # Track failed conversation interaction
+            track_voice_interaction(
+                message=message,
+                response="[error]",
+                timing_str=None,
+                transport=transport,
+                voice_provider=tts_provider,
+                voice_name=voice,
+                model=tts_model,
+                success=False,
+                error_message=str(e)
+            )
+            
+            result = f"Error: {str(e)}"
+            return result
+        
     except Exception as e:
         logger.error(f"Unexpected error in converse: {e}")
         if DEBUG:
@@ -1985,6 +1940,17 @@ consult the MCP resources listed above.
         return result
         
     finally:
+        # Release the conch to signal voice conversation has ended
+        if CONCH_ENABLED and conch._acquired:
+            held_seconds = conch.release()
+            if event_logger:
+                event_logger.log_event("CONCH_RELEASE", {
+                    "pid": os.getpid(),
+                    "held_seconds": held_seconds
+                })
+        else:
+            conch.release()  # Safe to call even if not acquired
+
         # Log tool request end
         if event_logger:
             log_tool_request_end("converse", success=success)

@@ -5,7 +5,7 @@ Complete reference of all environment variables used by VoiceMode.
 ## Variable Precedence
 
 Environment variables are processed in this order (highest to lowest priority):
-1. Command-line environment (`OPENAI_API_KEY=xxx voice-mode`)
+1. Command-line environment (`OPENAI_API_KEY=xxx voicemode`)
 2. MCP host configuration
 3. Shell environment variables
 4. Project `.voicemode.env` file
@@ -19,8 +19,6 @@ Environment variables are processed in this order (highest to lowest priority):
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
 | `OPENAI_API_KEY` | OpenAI API key for cloud TTS/STT | None | `sk-proj-...` |
-| `LIVEKIT_API_KEY` | LiveKit API key | `devkey` | `your-api-key` |
-| `LIVEKIT_API_SECRET` | LiveKit API secret | `secret` | `your-secret` |
 
 ## Voice Services
 
@@ -59,15 +57,6 @@ Environment variables are processed in this order (highest to lowest priority):
 | `VOICEMODE_KOKORO_MODELS_DIR` | Kokoro models directory | `~/Models/kokoro` | `/models/kokoro` |
 | `VOICEMODE_KOKORO_CACHE_DIR` | Kokoro cache directory | `~/.voicemode/cache/kokoro` | `/cache/kokoro` |
 | `VOICEMODE_KOKORO_DEFAULT_VOICE` | Default Kokoro voice | `af_sky` | `am_adam` |
-
-### LiveKit Configuration
-
-| Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
-| `LIVEKIT_URL` | LiveKit WebSocket URL | `ws://127.0.0.1:7880` | `wss://livekit.example.com` |
-| `LIVEKIT_PORT` | LiveKit server port | `7880` | `7881` |
-| `VOICEMODE_LIVEKIT_ROOM_PREFIX` | Room name prefix | `voice-mode` | `my-app` |
-| `VOICEMODE_LIVEKIT_AUTO_CREATE` | Auto-create rooms | `true` | `false` |
 
 ## Audio Configuration
 
@@ -149,6 +138,18 @@ Log levels: `debug`, `info`, `warning`, `error`, `critical`
 | `VOICEMODE_PREFER_LOCAL` | Prefer local services | `true` | `false` |
 | `VOICEMODE_AUTO_START_SERVICES` | Auto-start local services | `false` | `true` |
 
+### Serve Command
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `VOICEMODE_SERVE_TRANSPORT` | MCP transport protocol (`streamable-http` or `sse`) | `sse` | `streamable-http` |
+| `VOICEMODE_SERVE_ALLOW_LOCAL` | Allow localhost connections | `true` | `false` |
+| `VOICEMODE_SERVE_ALLOW_ANTHROPIC` | Allow Anthropic IP ranges | `false` | `true` |
+| `VOICEMODE_SERVE_ALLOW_TAILSCALE` | Allow Tailscale IP range (100.64.0.0/10) | `false` | `true` |
+| `VOICEMODE_SERVE_ALLOWED_IPS` | Custom CIDR allowlist (comma-separated) | None | `192.168.1.0/24,10.0.0.0/8` |
+| `VOICEMODE_SERVE_SECRET` | URL path secret segment | None | `my-secret-uuid` |
+| `VOICEMODE_SERVE_TOKEN` | Bearer token for authentication | None | `my-secret-token` |
+
 ## Legacy Variables
 
 These variables from older versions are still supported:
@@ -186,7 +187,7 @@ When used as an MCP server, environment variables can be set in the host configu
 ```json
 {
   "mcpServers": {
-    "voice-mode": {
+    "voicemode": {
       "command": "uvx",
       "args": ["voice-mode"],
       "env": {
@@ -202,10 +203,10 @@ When used as an MCP server, environment variables can be set in the host configu
 
 To see all active environment variables:
 ```bash
-voice-mode config show --env
+voicemode config show --env
 ```
 
 To test with specific variables:
 ```bash
-VOICEMODE_DEBUG=true VOICEMODE_LOG_LEVEL=debug voice-mode converse
+VOICEMODE_DEBUG=true VOICEMODE_LOG_LEVEL=debug voicemode converse
 ```

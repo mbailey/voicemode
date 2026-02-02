@@ -1,6 +1,7 @@
 """Main CLI for VoiceMode installer."""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -133,25 +134,26 @@ def ensure_homebrew_on_macos(platform_info, dry_run: bool, non_interactive: bool
         return True
 
     if non_interactive:
-        print_error("Homebrew not found and running in non-interactive mode")
-        click.echo("Please install Homebrew manually:")
-        click.echo('  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"')
-        return False
+        # Auto-install Homebrew in non-interactive mode using NONINTERACTIVE=1
+        print_step("Installing Homebrew (non-interactive)...")
+    else:
+        # Prompt user
+        if not click.confirm("Install Homebrew now?", default=True):
+            print_error("Homebrew installation declined")
+            click.echo("Please install Homebrew manually and run the installer again.")
+            return False
+        print_step("Installing Homebrew...")
+        click.echo("This may take a few minutes and will require your password.")
 
-    # Prompt user
-    if not click.confirm("Install Homebrew now?", default=True):
-        print_error("Homebrew installation declined")
-        click.echo("Please install Homebrew manually and run the installer again.")
-        return False
-
-    # Install Homebrew
-    print_step("Installing Homebrew...")
-    click.echo("This may take a few minutes and will require your password.")
     click.echo()
 
     try:
+        # Use NONINTERACTIVE=1 for unattended installation
+        env = os.environ.copy()
+        if non_interactive:
+            env['NONINTERACTIVE'] = '1'
         install_script = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-        result = subprocess.run(install_script, shell=True, check=True)
+        result = subprocess.run(install_script, shell=True, check=True, env=env)
 
         if result.returncode == 0:
             print_success("Homebrew installed successfully")
@@ -181,6 +183,10 @@ Examples:
   # Normal installation
   voice-mode-install
 
+  # Non-interactive installation (auto-accept all prompts)
+  voice-mode-install --yes
+  voice-mode-install -y
+
   # Dry run (see what would be installed)
   voice-mode-install --dry-run
 
@@ -189,6 +195,9 @@ Examples:
 
   # Skip service installation
   voice-mode-install --skip-services
+
+  # Install with specific Whisper model
+  voice-mode-install --yes --model large-v2
 """
 
 
@@ -196,9 +205,11 @@ Examples:
 @click.option('-d', '--dry-run', is_flag=True, help='Show what would be installed without installing')
 @click.option('-v', '--voice-mode-version', default=None, help='Specific VoiceMode version to install')
 @click.option('-s', '--skip-services', is_flag=True, help='Skip local service installation')
-@click.option('-n', '--non-interactive', is_flag=True, help='Run without prompts (assumes yes)')
+@click.option('-y', '--yes', 'non_interactive', is_flag=True, help='Run without prompts (auto-accept all)')
+@click.option('-n', '--non-interactive', is_flag=True, help='Run without prompts (deprecated: use --yes/-y)')
+@click.option('-m', '--model', default='base', help='Whisper model to use (base, small, medium, large-v2)')
 @click.version_option(__version__, '-V', '--version')
-def main(dry_run, voice_mode_version, skip_services, non_interactive):
+def main(dry_run, voice_mode_version, skip_services, non_interactive, model):
     """VoiceMode Installer - Install VoiceMode and its system dependencies.
 
     This installer will:
@@ -217,6 +228,13 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive):
 
       7. Verify the installation
     """
+    # Detect non-interactive environment (no TTY)
+    if not sys.stdin.isatty() and not non_interactive and not dry_run:
+        click.echo("Error: Running in non-interactive environment without --yes flag", err=True)
+        click.echo("Use --yes or -y to enable automatic installation", err=True)
+        click.echo("Example: uvx voice-mode-install --yes", err=True)
+        sys.exit(1)
+
     # Initialize logger
     logger = InstallLogger()
 
@@ -408,14 +426,52 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive):
 
             if hardware.should_recommend_local_services():
                 if non_interactive or click.confirm("Install local voice services now?", default=True):
-                    click.echo("\nLocal services can be installed with:")
-                    click.echo("  voicemode whisper install")
-                    click.echo("  voicemode kokoro install")
-                    click.echo("\nRun these commands after the installer completes.")
+                    model_flag = f" --model {model}" if model != 'base' else ''
+
+                    # Install Whisper
+                    click.echo()
+                    print_step(f"Installing Whisper STT service (model: {model})...")
+                    whisper_cmd = ['voicemode', 'service', 'install', 'whisper']
+                    if model != 'base':
+                        whisper_cmd.extend(['--model', model])
+                    try:
+                        result = subprocess.run(whisper_cmd, check=True)
+                        if result.returncode == 0:
+                            print_success("Whisper STT service installed")
+                            logger.log_install('whisper', ['whisper'], True)
+                        else:
+                            print_warning("Whisper installation may not have completed successfully")
+                            logger.log_install('whisper', ['whisper'], False)
+                    except subprocess.CalledProcessError as e:
+                        print_error(f"Whisper installation failed: {e}")
+                        logger.log_install('whisper', ['whisper'], False)
+                    except FileNotFoundError:
+                        print_error("VoiceMode command not found. Cannot install Whisper.")
+                        logger.log_install('whisper', ['whisper'], False)
+
+                    # Install Kokoro
+                    click.echo()
+                    print_step("Installing Kokoro TTS service...")
+                    kokoro_cmd = ['voicemode', 'service', 'install', 'kokoro']
+                    try:
+                        result = subprocess.run(kokoro_cmd, check=True)
+                        if result.returncode == 0:
+                            print_success("Kokoro TTS service installed")
+                            logger.log_install('kokoro', ['kokoro'], True)
+                        else:
+                            print_warning("Kokoro installation may not have completed successfully")
+                            logger.log_install('kokoro', ['kokoro'], False)
+                    except subprocess.CalledProcessError as e:
+                        print_error(f"Kokoro installation failed: {e}")
+                        logger.log_install('kokoro', ['kokoro'], False)
+                    except FileNotFoundError:
+                        print_error("VoiceMode command not found. Cannot install Kokoro.")
+                        logger.log_install('kokoro', ['kokoro'], False)
             else:
                 click.echo("Cloud services recommended for your system configuration.")
                 click.echo("Local services can still be installed if desired:")
-                click.echo("  voicemode whisper install")
+                model_flag = f" --model {model}" if model != 'base' else ''
+                click.echo(f"  voicemode whisper install{model_flag}")
                 click.echo("  voicemode kokoro install")
 
         # Completion summary

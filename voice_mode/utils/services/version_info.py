@@ -1,4 +1,11 @@
-"""Version information tools for voice services."""
+"""Version information tools for voice services.
+
+These are CLI helper functions, not MCP tools. The @mcp.tool() decorators
+were removed because:
+1. This module is in utils/services/, not tools/, so they weren't auto-loaded
+2. Importing server.py triggers tools/__init__.py which imports converse.py
+   which imports pydub, causing audioop deprecation warnings for simple CLI commands
+"""
 
 import subprocess
 import json
@@ -8,7 +15,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from voice_mode.server import mcp
 from voice_mode.config import BASE_DIR
 from voice_mode.utils.services.whisper_helpers import find_whisper_server
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi
@@ -169,35 +175,34 @@ def get_kokoro_version() -> Dict[str, Any]:
     return info
 
 
-@mcp.tool()
 async def service_version(
     service_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """Get version information for voice services.
-    
+
     Shows detailed version, installation, and runtime information for Whisper and/or Kokoro.
-    
+
     Args:
         service_name: Specific service to check ("whisper" or "kokoro"). If not specified, checks both.
-    
+
     Returns:
         Dictionary with version information for requested service(s)
     """
     result = {}
-    
+
     if service_name is None or service_name == "whisper":
         result["whisper"] = get_whisper_version()
-    
+
     if service_name is None or service_name == "kokoro":
         result["kokoro"] = get_kokoro_version()
-    
+
     # Add voice-mode version info
     result["voice_mode"] = {
         "version": "2.15.0",  # This should ideally come from package metadata
         "config_dir": str(BASE_DIR),
         "service_files_version": get_service_files_version()
     }
-    
+
     return result
 
 
@@ -214,17 +219,16 @@ def get_service_files_version() -> Dict[str, str]:
     return {}
 
 
-@mcp.tool()
 async def check_updates(
     service_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """Check for available updates for voice services.
-    
+
     Checks if newer versions are available for Whisper and/or Kokoro.
-    
+
     Args:
         service_name: Specific service to check ("whisper" or "kokoro"). If not specified, checks both.
-    
+
     Returns:
         Dictionary with update availability information
     """
@@ -301,5 +305,5 @@ async def check_updates(
             kokoro_info["error"] = str(e)
         
         result["kokoro"] = kokoro_info
-    
+
     return result

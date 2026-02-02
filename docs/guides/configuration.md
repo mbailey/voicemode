@@ -16,9 +16,14 @@ export OPENAI_API_KEY="your-api-key"
 
 ### With Local Voice Services
 ```bash
-# Install local services (auto-start on boot)
-voicemode kokoro install
-voicemode whisper install
+# Install local services
+voicemode service install kokoro
+voicemode service install whisper
+
+# Enable auto-start at boot/login
+voicemode service enable kokoro
+voicemode service enable whisper
+
 # VoiceMode auto-detects them!
 ```
 
@@ -174,6 +179,42 @@ LIVEKIT_PORT=7880
 # Room settings
 VOICEMODE_LIVEKIT_ROOM_PREFIX=voicemode
 VOICEMODE_LIVEKIT_AUTO_CREATE=true
+```
+
+### HTTP Server Configuration
+
+When running VoiceMode as a remote HTTP service:
+
+```bash
+# Server settings
+VOICEMODE_SERVE_HOST=127.0.0.1      # Bind address (0.0.0.0 for all interfaces)
+VOICEMODE_SERVE_PORT=8765           # Port number
+VOICEMODE_SERVE_TRANSPORT=streamable-http  # Transport: streamable-http or sse
+
+# Security: Network access control
+VOICEMODE_SERVE_ALLOW_LOCAL=true    # Allow localhost connections
+VOICEMODE_SERVE_ALLOW_ANTHROPIC=false  # Allow Anthropic IP ranges
+VOICEMODE_SERVE_ALLOW_TAILSCALE=false  # Allow Tailscale IP ranges
+VOICEMODE_SERVE_ALLOWED_IPS=        # Custom CIDR ranges (comma-separated)
+
+# Security: Authentication
+VOICEMODE_SERVE_SECRET=             # File path containing shared secret
+VOICEMODE_SERVE_TOKEN=              # Bearer token for authentication
+
+# Logging
+VOICEMODE_SERVE_LOG_LEVEL=info      # Log level: debug, info, warning, error
+```
+
+**Quick Start:**
+```bash
+# Start VoiceMode HTTP server
+voicemode service start voicemode
+
+# Enable auto-start at boot/login
+voicemode service enable voicemode
+
+# Check status
+voicemode service status voicemode
 ```
 
 ### Local Service Paths
@@ -356,8 +397,80 @@ See the [Claude Code Settings documentation](https://code.claude.com/docs/en/set
 
 ## Security Considerations
 
+### General Security
+
 - **Never commit API keys** to version control
 - **Use environment variables** for sensitive data in production
 - **Restrict file permissions**: `chmod 600 ~/.voicemode/voicemode.env`
 - **Rotate keys regularly** if exposed
 - **Use local services** for sensitive audio data
+
+### HTTP Server Security
+
+When running VoiceMode as an HTTP service for remote access, follow these best practices:
+
+#### 1. Bind to Localhost by Default
+
+The safest configuration binds only to localhost:
+
+```bash
+VOICEMODE_SERVE_HOST=127.0.0.1
+```
+
+This prevents network access entirely. Use a secure tunnel (Tailscale, Cloudflare Tunnel) for remote access.
+
+#### 2. Use Network Access Controls
+
+When exposing to a network, restrict access:
+
+```bash
+# Allow only Tailscale connections (100.64.0.0/10)
+VOICEMODE_SERVE_ALLOW_TAILSCALE=true
+VOICEMODE_SERVE_HOST=0.0.0.0
+
+# Or allow specific IP ranges
+VOICEMODE_SERVE_ALLOWED_IPS=192.168.1.0/24,10.0.0.0/8
+```
+
+#### 3. Enable Authentication for Remote Access
+
+Use bearer token authentication when exposing beyond localhost:
+
+```bash
+# Generate a secure token
+openssl rand -hex 32 > ~/.voicemode/serve.token
+
+# Configure VoiceMode to use it
+VOICEMODE_SERVE_TOKEN=$(cat ~/.voicemode/serve.token)
+```
+
+Clients must include `Authorization: Bearer <token>` in requests.
+
+#### 4. Use Secure Tunnels for Internet Access
+
+For internet access, use a secure tunnel instead of direct exposure:
+
+- **Tailscale**: Zero-config VPN for secure remote access
+- **Cloudflare Tunnel**: Secure tunnel without opening ports
+- **ngrok**: Quick tunnels for testing (not recommended for production)
+
+#### 5. Monitor Service Logs
+
+Regularly check logs for unauthorized access attempts:
+
+```bash
+# View service logs
+voicemode service logs voicemode -n 100
+
+# On macOS, also check:
+log show --predicate 'process == "voicemode"' --last 1h
+```
+
+#### Security Mode Summary
+
+| Access Level | Host | Security |
+|--------------|------|----------|
+| Localhost only | `127.0.0.1` | No auth needed |
+| Local network | `0.0.0.0` + ALLOWED_IPS | Token recommended |
+| Tailscale | `0.0.0.0` + ALLOW_TAILSCALE | Token recommended |
+| Internet | Use secure tunnel | Token required |

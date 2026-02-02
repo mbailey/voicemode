@@ -169,12 +169,9 @@ services/
 │   ├── uninstall.py     # whisper_uninstall
 │   ├── model_active.py  # whisper_model_active
 │   └── helpers.py       # Shared utilities (not loaded)
-├── kokoro/
-│   ├── install.py       # kokoro_install
-│   └── uninstall.py     # kokoro_uninstall
-└── livekit/
-    ├── install.py       # livekit_install
-    └── frontend.py      # livekit_frontend
+└── kokoro/
+    ├── install.py       # kokoro_install
+    └── uninstall.py     # kokoro_uninstall
 ```
 
 ### Naming Convention
@@ -182,7 +179,6 @@ services/
 Service tools follow the pattern `{service}_{action}`:
 - `whisper_install` - Install Whisper service
 - `kokoro_status` - Check Kokoro service status
-- `livekit_frontend` - Manage LiveKit frontend
 
 ## Performance Considerations
 

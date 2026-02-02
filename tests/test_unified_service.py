@@ -141,8 +141,6 @@ class TestUnifiedServiceTool:
     async def test_enable_service_macos(self):
         """Test enabling service on macOS"""
         with patch('platform.system', return_value='Darwin'), \
-             patch('voice_mode.tools.service.get_installed_service_version', return_value="1.0.0"), \
-             patch('voice_mode.tools.service.load_service_file_version', return_value="1.0.0"), \
              patch('voice_mode.tools.service.load_service_template', return_value="template content") as mock_template, \
              patch('voice_mode.tools.service.find_whisper_server', return_value="/Users/test/.voicemode/services/whisper/build/bin/whisper-server"), \
              patch('voice_mode.tools.service.find_whisper_model', return_value="/path/to/model.bin"), \
@@ -187,8 +185,6 @@ class TestUnifiedServiceTool:
         mock_template_content = "[Service]\nExecStart={START_SCRIPT}\n"
 
         with patch('platform.system', return_value='Linux'), \
-             patch('voice_mode.tools.service.get_installed_service_version', return_value="1.0.0"), \
-             patch('voice_mode.tools.service.load_service_file_version', return_value="1.0.0"), \
              patch('voice_mode.tools.service.load_service_template', return_value=mock_template_content), \
              patch('voice_mode.tools.service.find_kokoro_fastapi', return_value="/path/to/kokoro"), \
              patch('pathlib.Path.exists', return_value=True), \
@@ -290,8 +286,6 @@ class TestUnifiedServiceTool:
         mock_template_content = "<plist><string>{START_SCRIPT}</string><string>{HOME}</string></plist>"
 
         with patch('platform.system', return_value='Darwin'), \
-             patch('voice_mode.tools.service.get_installed_service_version', return_value="1.0.0"), \
-             patch('voice_mode.tools.service.load_service_file_version', return_value="1.1.0"), \
              patch('voice_mode.tools.service.load_service_template', return_value=mock_template_content), \
              patch('voice_mode.tools.service.find_whisper_server', return_value="/Users/test/.voicemode/services/whisper/build/bin/whisper-server"), \
              patch('voice_mode.tools.service.find_whisper_model', return_value="/path/to/model.bin"), \

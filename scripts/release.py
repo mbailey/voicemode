@@ -101,6 +101,15 @@ def update_version(new_version, packages=None):
         ):
             files_updated.append("installer/pyproject.toml")
 
+    # Update plugin.json with version + p0 suffix
+    plugin_version = f"{new_version}p0"
+    if update_version_in_file(
+        ".claude-plugin/plugin.json",
+        r'"version": "[^"]*"',
+        f'"version": "{plugin_version}"'
+    ):
+        files_updated.append(".claude-plugin/plugin.json")
+
     # Update CHANGELOG for all package updates
     if update_changelog(new_version):
         files_updated.append("CHANGELOG.md")
@@ -129,7 +138,7 @@ def commit_and_tag(version, packages=None):
         package_desc = "voice-mode"
 
     # Stage all changed files
-    files_to_add = ["CHANGELOG.md"]
+    files_to_add = ["CHANGELOG.md", ".claude-plugin/plugin.json"]
     if packages is None or "package" in packages:
         files_to_add.extend(["voice_mode/__version__.py", "server.json"])
     if packages is None or "installer" in packages:

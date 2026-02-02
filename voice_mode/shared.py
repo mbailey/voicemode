@@ -16,7 +16,6 @@ from .config import (
     DEBUG, DEBUG_DIR, SAVE_AUDIO, AUDIO_DIR,
     AUDIO_FEEDBACK_ENABLED,
     OPENAI_API_KEY,
-    LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET,
     AUTO_START_KOKORO, PREFER_LOCAL,
     SAMPLE_RATE, CHANNELS,
     audio_operation_lock, service_processes,

@@ -103,15 +103,55 @@ For complete privacy, you can run voice services locally instead of using OpenAI
 
 ```bash
 # Install local services
-voicemode whisper install   # Speech-to-text
-voicemode kokoro install    # Text-to-speech
+voicemode service install whisper   # Speech-to-text
+voicemode service install kokoro    # Text-to-speech
 
 # Start services
-voicemode whisper start
-voicemode kokoro start
+voicemode service start whisper
+voicemode service start kokoro
+
+# Check status of all services
+voicemode service status
 ```
 
 VoiceMode will automatically detect and use these local services when available.
+
+### Enable Auto-Start (Recommended)
+
+To have services start automatically at login:
+
+```bash
+# Enable services to start at boot/login
+voicemode service enable whisper
+voicemode service enable kokoro
+```
+
+On macOS, this creates launchd agents. On Linux, it creates systemd user services.
+
+### Download Sizes and Requirements
+
+| Service | Download Size | Disk Space | First Start Time |
+|---------|---------------|------------|------------------|
+| Whisper (tiny) | ~75MB | ~150MB | 30 seconds |
+| Whisper (base) | ~150MB | ~300MB | 1-2 minutes |
+| Whisper (small) | ~460MB | ~1GB | 2-3 minutes |
+| Kokoro TTS | ~350MB | ~700MB | 2-3 minutes |
+
+**Recommended**: Whisper base + Kokoro = ~500MB download, ~1GB disk space.
+
+### Waiting for Services
+
+After installation, services download models on first start. Wait for them to be ready:
+
+```bash
+# Wait for Whisper (port 2022)
+while ! nc -z localhost 2022 2>/dev/null; do sleep 2; done
+echo "Whisper ready"
+
+# Wait for Kokoro (port 8880)
+while ! nc -z localhost 8880 2>/dev/null; do sleep 2; done
+echo "Kokoro ready"
+```
 
 Learn more: [Whisper Setup Guide](../guides/whisper-setup.md) | [Kokoro Setup Guide](../guides/kokoro-setup.md)
 
@@ -174,12 +214,36 @@ voicemode converse
 
 ```bash
 # Check service status
-voicemode whisper status
-voicemode kokoro status
+voicemode service status           # All services
+voicemode service status whisper   # Specific service
 
 # View logs
-voicemode logs --tail 50
+voicemode service logs whisper -n 50
+voicemode service logs kokoro -n 50
+
+# Check if service is responding
+voicemode service health whisper
+voicemode service health kokoro
 ```
+
+## Running VoiceMode as a Service (Advanced)
+
+For remote access or persistent operation, run VoiceMode as a background service:
+
+```bash
+# Start the VoiceMode HTTP server
+voicemode service start voicemode
+
+# Enable auto-start at boot/login
+voicemode service enable voicemode
+
+# Check all services
+voicemode service status
+```
+
+The HTTP server enables remote access from other machines on your network or via secure tunnels.
+
+For security best practices when running remotely, see the [Configuration Guide](../guides/configuration.md#http-server-security).
 
 ## Next Steps
 

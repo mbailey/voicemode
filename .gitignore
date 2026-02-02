@@ -1,8 +1,8 @@
 .external/
 !.external/repos.txt
 
-# Claude workspace
-.claude/
+# Claude workspace - track plugin components, ignore local settings
+.claude/settings.local.json
 
 # Environment configuration
 .env.local
@@ -82,9 +82,6 @@ docs/promote/
 # Strategic/Private documents
 docs/voicemode-brand/
 
-# Local configuration
-.claude/settings.local.json
-
 # Node modules (for livekit frontend)
 node_modules/
 .npm/
@@ -118,8 +115,6 @@ models/
 *.mlmodel
 *.mlmodelc/
 
-# Coverage reports
-htmlcov/
-.coverage
-.coverage.*
+# Coverage reports (duplicates removed - already in Python section)
 coverage.xml
+voicemode-install-feedback.md

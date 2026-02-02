@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "mbailey", email = "mbailey@example.com"},
+    {name = "Mike Bailey", email = "mike@failmode.com"},
 ]
 keywords = ["mcp", "voice", "livekit", "speech", "tts", "stt", "ai", "llm"]
 classifiers = [
@@ -18,8 +18,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -31,7 +29,7 @@ classifiers = [
 
 dependencies = [
     "uv>=0.4.0",
-    "fastmcp>=2.0.0",
+    "fastmcp>=2.3.2",  # Requires http_app(transport="sse") API
     "numpy",
     "sounddevice",
     "scipy",
@@ -40,6 +38,7 @@ dependencies = [
     "audioop-lts; python_version >= '3.13'",
     "simpleaudio",
     "httpx",
+    "websockets>=12.0",  # Required for voicemode connect command
     "aiohttp",  # Required for Whisper and Kokoro service installers
     "psutil>=5.9.0",
     "setuptools",  # Required for pkg_resources used by webrtcvad
@@ -64,14 +63,14 @@ coreml = [
 dev = [
     "build>=1.0.0",
     "twine>=4.0.0",
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "pytest-cov>=4.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
     "pytest-mock>=3.10.0",
 ]
 test = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
     "pytest-cov>=4.1.0",
     "pytest-mock>=3.10.0",
     "pytest-xdist>=3.5.0",  # For parallel testing
@@ -97,7 +96,7 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/mbailey/voicemode"
+Homepage = "https://getvoicemode.com/"
 Repository = "https://github.com/mbailey/voicemode"
 Issues = "https://github.com/mbailey/voicemode/issues"
 
@@ -113,6 +112,16 @@ include = [
   "voice_mode/**/*.plist",
   "voice_mode/**/*.service",
   "voice_mode/templates/**/*",
+  "voice_mode/data/**/*.yaml",
+  "voice_mode/data/**/*.json",
+  "voice_mode/data/**/*.cue",
+  "voice_mode/data/**/*.ffmeta",
+  "voice_mode/data/**/*.sha256",
+]
+# artifacts overrides .gitignore for VCS-ignored files that should be packaged
+artifacts = [
+  "voice_mode/data/**/*.mp3",
+  "voice_mode/data/**/*.wav",
 ]
 exclude = [
   "**/__pycache__",
@@ -128,9 +137,6 @@ exclude = [
   "**/.git",
 ]
 
-[tool.hatch.build.hooks.custom]
-path = "build_hooks.py"
-
 [tool.hatch.build.targets.sdist]
 include = [
   "/voice_mode",
@@ -138,7 +144,11 @@ include = [
   "/LICENSE",
   "/pyproject.toml",
   "/CHANGELOG.md",
-  "/build_hooks.py",
+]
+# artifacts overrides .gitignore for VCS-ignored files that should be packaged
+artifacts = [
+  "voice_mode/data/**/*.mp3",
+  "voice_mode/data/**/*.wav",
 ]
 exclude = [
   "**/__pycache__",
@@ -215,10 +225,3 @@ directory = "htmlcov"
 [tool.coverage.xml]
 output = "coverage.xml"
 
-[dependency-groups]
-dev = [
-    "pytest>=8.4.2",
-    "pytest-asyncio>=1.2.0",
-    "pytest-cov>=7.0.0",
-    "pytest-mock>=3.15.0",
-]

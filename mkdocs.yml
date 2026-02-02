@@ -76,40 +76,35 @@ plugins:
 nav:
   - Home: README.md
   - Getting Started:
-    - Installation: README.md
-    - Quick Start: README.md
-    - Configuration: configuration.md
-  - Integration Guides:
-    - integrations/README.md
-    - Claude Code: integrations/claude-code/README.md
-    - Claude Desktop: integrations/claude-desktop/README.md
-    - Gemini CLI: integrations/gemini-cli/README.md
-    - Cursor: integrations/cursor/README.md
-    - VS Code: integrations/vscode/README.md
-    - Cline: integrations/cline/README.md
-    - Continue: integrations/continue/README.md
-    - Windsurf: integrations/windsurf/README.md
-    - Zed: integrations/zed/README.md
-    - Roo Code: integrations/roo-code/README.md
-  - Local Services:
-    - Whisper.cpp: whisper.cpp.md
-    - Kokoro TTS: kokoro.md
-    - LiveKit: livekit/README.md
-  - Development:
-    - Local Development: local-development-uvx.md
-    - Migration Guide: migration-guide.md
-    - Audio Formats: audio-format-migration.md
+    - Installation: tutorials/getting-started.md
+    - Configuration: guides/configuration.md
   - Guides:
+    - Selecting Voices: guides/selecting-voices.md
+    - Pronunciation: guides/pronunciation.md
     - MacBook Portable Mode: guides/macbook-portable.md
+    - Claude Code Plugin: guides/claude-code-plugin.md
+    - Selective Tool Loading: guides/selective-tool-loading.md
+    - Remote Access (serve): guides/serve-configuration.md
+  - VoiceMode Connect:
+    - Overview: connect/README.md
+    - Architecture: connect/architecture.md
+    - Setup:
+      - Claude Code: connect/setup/claude-code.md
+    - Reference:
+      - MCP Tools: connect/reference/mcp-tools.md
+  - Local Services:
+    - Whisper STT: guides/whisper-setup.md
+    - Kokoro TTS: guides/kokoro-setup.md
+  - Reference:
+    - CLI Commands: reference/cli.md
+    - Service Commands: reference/cli/service-commands.md
+    - Converse Parameters: reference/converse-parameters.md
+    - Environment Variables: reference/environment.md
+  - Development:
+    - Local Development: tutorials/development-setup.md
+    - Tool Loading Architecture: reference/tool-loading-architecture.md
   - Troubleshooting:
     - Overview: troubleshooting/index.md
-    - Voice Interaction:
-      - No Speech Detected: troubleshooting/voice-interaction/no-speech-detected.md
-    - Audio Devices:
-      - WSL2 Microphone: troubleshooting/wsl2-microphone-access.md
-  - API Reference:
-    - Tools: api-reference/tools.md
-    - Configuration: api-reference/configuration.md
 
 extra:
   social:
@@ -122,4 +117,4 @@ extra:
     - icon: fontawesome/brands/youtube
       link: https://youtube.com/@getvoicemode
 
-copyright: Copyright &copy; 2024 Voice Mode - A Failmode Project
+copyright: Copyright &copy; 2025 Voice Mode - A Failmode Project

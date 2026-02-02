@@ -8,8 +8,7 @@
         "voicemode"
       ],
       "env": {
-        "VOICEMODE_SAVE_ALL": "true",
-        "XVOICEMODE_DEBUG": "trace"
+        "#VOICEMODE_SAVE_ALL": "true"
       }
     }
   }

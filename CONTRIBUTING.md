@@ -1,6 +1,6 @@
-# Contributing to voice-mode
+# Contributing to VoiceMode
 
-Thank you for your interest in contributing to voice-mode! This guide will help you get started with development.
+Thank you for your interest in contributing to VoiceMode. This guide will help you get started with development.
 
 ## Development Setup
 
@@ -14,25 +14,25 @@ Thank you for your interest in contributing to voice-mode! This guide will help 
 
 ### Getting Started
 
-1. **Clone the repository**
+1. **Fork and clone the repository**
+
+   External contributors need to fork the repository first (you can't push directly to the main repo):
+
+   - Click **Fork** at https://github.com/mbailey/voicemode
+   - Clone your fork:
    ```bash
-   git clone https://github.com/mbailey/voicemode.git
+   git clone https://github.com/YOUR-USERNAME/voicemode.git
    cd voicemode
    ```
 
-2. **Create a virtual environment**
+2. **Install in development mode**
+
    ```bash
-   uv venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+   uv tool install -e .
    ```
 
-3. **Install in development mode**
-   ```bash
-   uv pip install -e .
-   uv pip install -e .[dev,test]
-   ```
+3. **Set up environment variables**
 
-4. **Set up environment variables**
    ```bash
    # Set your API key
    export OPENAI_API_KEY=your-key-here
@@ -63,10 +63,20 @@ pytest tests/test_server_syntax.py
 
 ## Testing Locally
 
+The easiest way to test your changes:
+
+```bash
+uv run voicemode converse
+```
+
+This starts a voice conversation directly, without needing Claude Code or MCP.
+
 ### Testing with MCP
 
-1. Update `.mcp.json` to point to your development version
-2. Run `mcp` to test the connection
+The repo's `.mcp.json` uses `uv run voicemode`, which automatically runs your local development version when Claude Code is started in the repo directory. No configuration changes needed.
+
+1. Start Claude Code from the voicemode repo directory
+2. Your code changes are immediately available via the MCP tools
 3. Use the voice tools to verify functionality
 
 ### Testing Audio
@@ -86,7 +96,11 @@ python -c "from voice_mode.core import text_to_speech; import asyncio; asyncio.r
 2. Make your changes
 3. Run tests to ensure nothing is broken
 4. Commit with descriptive messages
-5. Push and create a pull request
+5. Push to your fork and create a pull request
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+   Then open a PR from your fork to `mbailey/voicemode`
 
 ## Debugging
 
@@ -102,7 +116,6 @@ Debug recordings are saved to `~/.voicemode/audio/`
 - **Update dependencies**: Edit `pyproject.toml` and run `uv pip install -e .`
 - **Build package**: `make build-package`
 - **Run tests**: `make test`
-- **Run linting**: `make lint` (if configured)
 
 ## Questions?
 

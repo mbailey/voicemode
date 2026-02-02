@@ -1,1974 +1,813 @@
-#!/bin/bash
-# VoiceMode Universal Installer
-# Usage: curl -O https://getvoicemode.com/install.sh && bash install.sh
+#!/usr/bin/env bash
+# VoiceMode Installer
+# https://getvoicemode.com/install.sh
+#
+# Usage:
+#   curl -fsSL https://getvoicemode.com/install.sh | bash
+#   curl -fsSL https://getvoicemode.com/install.sh | bash -s -- -y  # non-interactive
+#
+# This script installs VoiceMode and its dependencies.
+# It supports macOS and Linux (Debian/Ubuntu, Fedora).
+
+set -o nounset -o pipefail -o errexit
+
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
+
+VOICEMODE_PACKAGE="voice-mode"
+INTERACTIVE=true
 
 # Parse command line arguments
-NON_INTERACTIVE=false
-CI_MODE=false
-
-show_help() {
-  cat <<EOF
-VoiceMode Universal Installer
-
-Usage: $0 [OPTIONS]
-
-Options:
-  -h, --help           Show this help message
-  -d, --debug          Enable debug output
-  -n, --non-interactive Run without prompts (assumes yes to all)
-  --ci                 CI mode (non-interactive + skip audio/API checks)
-
-Environment variables:
-  VOICEMODE_INSTALL_DEBUG=true    Enable debug output
-  DEBUG=true                      Enable debug output
-  CI=true                         Enables CI mode automatically
-
-Examples:
-  # Normal installation
-  curl -O https://getvoicemode.com/install.sh && bash install.sh
-
-  # Debug mode
-  VOICEMODE_INSTALL_DEBUG=true ./install.sh
-  ./install.sh --debug
-
-  # Non-interactive mode
-  ./install.sh --non-interactive
-
-  # CI mode
-  ./install.sh --ci
-
-EOF
-  exit 0
-}
-
-# Process arguments
 while [[ $# -gt 0 ]]; do
-  case $1 in
-  -h | --help)
-    show_help
-    ;;
-  -d | --debug)
-    export VOICEMODE_INSTALL_DEBUG=true
-    shift
-    ;;
-  -n | --non-interactive)
-    NON_INTERACTIVE=true
-    shift
-    ;;
-  --ci)
-    CI_MODE=true
-    NON_INTERACTIVE=true
-    shift
-    ;;
-  *)
-    echo "Unknown option: $1"
-    echo "Use --help for usage information"
-    exit 1
-    ;;
-  esac
+    case $1 in
+        -y|--yes)
+            INTERACTIVE=false
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
 done
 
-# Support DEBUG=true as well as VOICEMODE_INSTALL_DEBUG=true
-if [[ "${DEBUG:-}" == "true" ]]; then
-  export VOICEMODE_INSTALL_DEBUG=true
-fi
+# -----------------------------------------------------------------------------
+# Color Support
+# -----------------------------------------------------------------------------
 
-# Detect CI environment
-if [[ "${CI:-}" == "true" ]] || [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  CI_MODE=true
-  NON_INTERACTIVE=true
-fi
-
-# Reattach stdin to terminal for interactive prompts when run via curl | bash
-# Only attempt this if /dev/tty exists and is accessible (skip in CI mode)
-if [ ! -t 0 ] && [ -e /dev/tty ] && [ -r /dev/tty ] && [ "$CI_MODE" != "true" ]; then
-  exec </dev/tty 2>/dev/null || true
-fi
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
-ORANGE='\033[38;5;208m' # Claude Code orange
-BOLD='\033[1m'
-DIM='\033[2m'
-NC='\033[0m' # No Color
-
-# Global variables
-OS=""
-ARCH=""
-HOMEBREW_INSTALLED=false
-XCODE_TOOLS_INSTALLED=false
-IS_WSL=false
-
-print_step() {
-  echo -e "${BLUE}🔧 $1${NC}"
+# Respect NO_COLOR environment variable (see https://no-color.org/)
+# Also disable colors when not connected to a terminal
+setup_colors() {
+    if [[ -n "${NO_COLOR:-}" ]] || [[ ! -t 1 ]]; then
+        # No colors
+        RED=""
+        GREEN=""
+        YELLOW=""
+        BLUE=""
+        BOLD=""
+        RESET=""
+    else
+        RED=$'\033[0;31m'
+        GREEN=$'\033[0;32m'
+        YELLOW=$'\033[0;33m'
+        BLUE=$'\033[0;34m'
+        BOLD=$'\033[1m'
+        RESET=$'\033[0m'
+    fi
 }
 
-print_success() {
-  echo -e "${GREEN}✅ $1${NC}"
+# Initialize colors
+setup_colors
+
+# -----------------------------------------------------------------------------
+# Output helpers
+# -----------------------------------------------------------------------------
+
+# Print error message to stderr and exit
+die() {
+    echo "${RED}Error:${RESET} $1" >&2
+    exit 1
 }
 
-print_warning() {
-  echo -e "${YELLOW}⚠️  $1${NC}"
+# Print status message with checkmark
+ok() {
+    echo "${GREEN}✓${RESET} $1"
 }
 
-print_error() {
-  echo -e "${RED}❌ $1${NC}"
-  exit 1
+# Print warning message
+warn() {
+    echo "${YELLOW}⚠${RESET}  $1"
 }
+
+# Print info message (for progress)
+info() {
+    echo "  $1"
+}
+
+# Display VoiceMode logo
+# Compact 3-line version that fits in ~45 columns
+show_logo() {
+    echo ""
+    echo "${BOLD}██╗   ██╗ ██████╗ ██╗ ██████╗███████╗${RESET}"
+    echo "${BOLD}██║   ██║██╔═══██╗██║██╔════╝██╔════╝${RESET}   ${BLUE}MODE${RESET}"
+    echo "${BOLD} ╚████╔╝ ╚██████╔╝██║╚██████╗███████╗${RESET}"
+    echo ""
+}
+
+# Check if a command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Check if /dev/tty is available for interactive input
+# (needed for curl|bash and SSH scenarios)
+tty_available() {
+    # Try to open /dev/tty in a subshell to avoid polluting fd table
+    # and to properly suppress errors
+    (exec </dev/tty) 2>/dev/null
+}
+
+# -----------------------------------------------------------------------------
+# Platform Detection
+# -----------------------------------------------------------------------------
 
 detect_os() {
-  print_step "Detecting operating system..."
-
-  # Check if running in WSL
-  # More robust WSL detection to avoid false positives
-  # Note: WSLInterop-late is used on newer systems with systemd
-  if [[ -n "$WSL_DISTRO_NAME" ]] || [[ -n "$WSL_INTEROP" ]] || [[ -f "/proc/sys/fs/binfmt_misc/WSLInterop" ]] || [[ -f "/proc/sys/fs/binfmt_misc/WSLInterop-late" ]]; then
-    IS_WSL=true
-    print_warning "Running in WSL2 - additional audio setup may be required"
-  elif grep -qi "microsoft.*WSL" /proc/version 2>/dev/null; then
-    # Only match if both "microsoft" AND "WSL" are present (case-insensitive)
-    IS_WSL=true
-    print_warning "Running in WSL2 - additional audio setup may be required"
-  fi
-
-  if [[ "$OSTYPE" == "darwin"* ]]; then
-    OS="macos"
-    ARCH=$(uname -m)
-    local macos_version=$(sw_vers -productVersion)
-    print_success "Detected macOS $macos_version on $ARCH"
-  elif [[ -f /etc/fedora-release ]]; then
-    OS="fedora"
-    ARCH=$(uname -m)
-    local fedora_version=$(cat /etc/fedora-release | grep -oP '\d+' | head -1)
-    print_success "Detected Fedora $fedora_version on $ARCH$([[ "$IS_WSL" == "true" ]] && echo " (WSL2)" || echo "")"
-  elif [[ -f /etc/os-release ]]; then
-    source /etc/os-release
-    if [[ "$ID" == "ubuntu" ]] || [[ "$ID_LIKE" == *"ubuntu"* ]] || [[ "$ID" == "debian" ]] || [[ "$ID_LIKE" == *"debian"* ]]; then
-      OS="debian"  # Use debian for all Debian-based distros (Ubuntu, Debian, etc - they use apt)
-      ARCH=$(uname -m)
-      local distro_name="$NAME"
-      print_success "Detected $distro_name $VERSION_ID on $ARCH$([[ "$IS_WSL" == "true" ]] && echo " (WSL2)" || echo "")"
-    elif [[ "$ID" == "fedora" ]]; then
-      OS="fedora"
-      ARCH=$(uname -m)
-      print_success "Detected Fedora $VERSION_ID on $ARCH$([[ "$IS_WSL" == "true" ]] && echo " (WSL2)" || echo "")"
-    else
-      print_error "Unsupported Linux distribution: $ID. Currently only Ubuntu, Debian and Fedora are supported."
-    fi
-  else
-    print_error "Unsupported operating system: $OSTYPE"
-  fi
-}
-
-check_xcode_tools() {
-  print_step "Checking for Xcode Command Line Tools..."
-
-  if xcode-select -p >/dev/null 2>&1; then
-    XCODE_TOOLS_INSTALLED=true
-    print_success "Xcode Command Line Tools are already installed"
-  else
-    print_warning "Xcode Command Line Tools not found"
-  fi
-}
-
-install_xcode_tools() {
-  if [ "$XCODE_TOOLS_INSTALLED" = false ]; then
-    print_step "Installing Xcode Command Line Tools..."
-    echo "This will open a dialog to install Xcode Command Line Tools."
-    echo "Please follow the prompts and re-run this installer after installation completes."
-
-    xcode-select --install
-
-    print_warning "Please complete the Xcode Command Line Tools installation and re-run this installer."
-    exit 0
-  fi
-}
-
-check_homebrew() {
-  print_step "Checking for Homebrew..."
-
-  if command -v brew >/dev/null 2>&1; then
-    HOMEBREW_INSTALLED=true
-    print_success "Homebrew is already installed"
-  else
-    print_warning "Homebrew not found"
-  fi
-}
-
-collect_system_info() {
-  print_step "Collecting system information..."
-
-  # Initialize global variables for system info
-  SYSTEM_INFO_OS=""
-  SYSTEM_INFO_OS_VERSION=""
-  SYSTEM_INFO_ARCH=""
-  SYSTEM_INFO_SHELL=""
-  SYSTEM_INFO_SHELL_VERSION=""
-  SYSTEM_INFO_SHELL_RC_FILE=""
-  SYSTEM_INFO_NODE_VERSION=""
-  SYSTEM_INFO_NPM_VERSION=""
-  SYSTEM_INFO_PYTHON_VERSION=""
-  SYSTEM_INFO_PIP_VERSION=""
-  SYSTEM_INFO_CURL_VERSION=""
-  SYSTEM_INFO_GIT_VERSION=""
-  SYSTEM_INFO_FFMPEG_INSTALLED=""
-  SYSTEM_INFO_DOCKER_INSTALLED=""
-  SYSTEM_INFO_HOMEBREW_VERSION=""
-  SYSTEM_INFO_APT_INSTALLED=""
-  SYSTEM_INFO_TERMINAL_APP=""
-  SYSTEM_INFO_USER_HOME="$HOME"
-  SYSTEM_INFO_CURRENT_DIR="$(pwd)"
-  SYSTEM_INFO_DISK_AVAILABLE=""
-
-  # OS and Architecture (already detected)
-  SYSTEM_INFO_OS="$OS"
-  SYSTEM_INFO_ARCH="$ARCH"
-
-  # OS Version details
-  if [[ "$OS" == "macos" ]]; then
-    SYSTEM_INFO_OS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
-  elif [[ "$OS" == "linux" ]]; then
-    if [ -f /etc/os-release ]; then
-      . /etc/os-release
-      SYSTEM_INFO_OS_VERSION="${PRETTY_NAME:-${NAME:-unknown}}"
-    else
-      SYSTEM_INFO_OS_VERSION="$(uname -v 2>/dev/null || echo 'unknown')"
-    fi
-  else
-    SYSTEM_INFO_OS_VERSION="$(uname -v 2>/dev/null || echo 'unknown')"
-  fi
-
-  # Default shell and version
-  SYSTEM_INFO_SHELL="${SHELL:-/bin/bash}"
-  if command -v "$SYSTEM_INFO_SHELL" >/dev/null 2>&1; then
-    if [[ "$SYSTEM_INFO_SHELL" == *"zsh"* ]]; then
-      SYSTEM_INFO_SHELL_VERSION="$($SYSTEM_INFO_SHELL --version 2>/dev/null | head -n1 || echo 'unknown')"
-    elif [[ "$SYSTEM_INFO_SHELL" == *"bash"* ]]; then
-      SYSTEM_INFO_SHELL_VERSION="$($SYSTEM_INFO_SHELL --version 2>/dev/null | head -n1 || echo 'unknown')"
-    elif [[ "$SYSTEM_INFO_SHELL" == *"fish"* ]]; then
-      SYSTEM_INFO_SHELL_VERSION="$($SYSTEM_INFO_SHELL --version 2>/dev/null || echo 'unknown')"
-    else
-      SYSTEM_INFO_SHELL_VERSION="unknown"
-    fi
-  fi
-
-  # Determine shell RC file
-  if [[ "$SYSTEM_INFO_SHELL" == *"zsh"* ]]; then
-    SYSTEM_INFO_SHELL_RC_FILE="$HOME/.zshrc"
-  elif [[ "$SYSTEM_INFO_SHELL" == *"bash"* ]]; then
-    if [[ "$OS" == "macos" ]]; then
-      # macOS uses .bash_profile for login shells
-      SYSTEM_INFO_SHELL_RC_FILE="$HOME/.bash_profile"
-    else
-      SYSTEM_INFO_SHELL_RC_FILE="$HOME/.bashrc"
-    fi
-  elif [[ "$SYSTEM_INFO_SHELL" == *"fish"* ]]; then
-    SYSTEM_INFO_SHELL_RC_FILE="$HOME/.config/fish/config.fish"
-  else
-    # Fallback to .profile
-    SYSTEM_INFO_SHELL_RC_FILE="$HOME/.profile"
-  fi
-
-  # Check if RC file exists, if not try alternatives
-  if [[ ! -f "$SYSTEM_INFO_SHELL_RC_FILE" ]]; then
-    if [[ "$SYSTEM_INFO_SHELL" == *"bash"* ]]; then
-      # Try alternative bash files
-      for rcfile in "$HOME/.bash_profile" "$HOME/.bashrc" "$HOME/.profile"; do
-        if [[ -f "$rcfile" ]]; then
-          SYSTEM_INFO_SHELL_RC_FILE="$rcfile"
-          break
-        fi
-      done
-    fi
-  fi
-
-  # Node.js and npm versions
-  if command -v node >/dev/null 2>&1; then
-    SYSTEM_INFO_NODE_VERSION="$(node --version 2>/dev/null || echo 'not installed')"
-  else
-    SYSTEM_INFO_NODE_VERSION="not installed"
-  fi
-
-  if command -v npm >/dev/null 2>&1; then
-    SYSTEM_INFO_NPM_VERSION="$(npm --version 2>/dev/null || echo 'not installed')"
-  else
-    SYSTEM_INFO_NPM_VERSION="not installed"
-  fi
-
-  # Python and pip versions
-  if command -v python3 >/dev/null 2>&1; then
-    SYSTEM_INFO_PYTHON_VERSION="$(python3 --version 2>&1 | cut -d' ' -f2 || echo 'not installed')"
-  elif command -v python >/dev/null 2>&1; then
-    SYSTEM_INFO_PYTHON_VERSION="$(python --version 2>&1 | cut -d' ' -f2 || echo 'not installed')"
-  else
-    SYSTEM_INFO_PYTHON_VERSION="not installed"
-  fi
-
-  if command -v pip3 >/dev/null 2>&1; then
-    SYSTEM_INFO_PIP_VERSION="$(pip3 --version 2>/dev/null | cut -d' ' -f2 || echo 'not installed')"
-  elif command -v pip >/dev/null 2>&1; then
-    SYSTEM_INFO_PIP_VERSION="$(pip --version 2>/dev/null | cut -d' ' -f2 || echo 'not installed')"
-  else
-    SYSTEM_INFO_PIP_VERSION="not installed"
-  fi
-
-  # Curl version
-  if command -v curl >/dev/null 2>&1; then
-    SYSTEM_INFO_CURL_VERSION="$(curl --version 2>/dev/null | head -n1 | cut -d' ' -f2 || echo 'not installed')"
-  else
-    SYSTEM_INFO_CURL_VERSION="not installed"
-  fi
-
-  # Git version
-  if command -v git >/dev/null 2>&1; then
-    SYSTEM_INFO_GIT_VERSION="$(git --version 2>/dev/null | cut -d' ' -f3 || echo 'not installed')"
-  else
-    SYSTEM_INFO_GIT_VERSION="not installed"
-  fi
-
-  # FFmpeg installed
-  if command -v ffmpeg >/dev/null 2>&1; then
-    SYSTEM_INFO_FFMPEG_INSTALLED="yes"
-  else
-    SYSTEM_INFO_FFMPEG_INSTALLED="no"
-  fi
-
-  # Docker installed
-  if command -v docker >/dev/null 2>&1; then
-    SYSTEM_INFO_DOCKER_INSTALLED="yes"
-  else
-    SYSTEM_INFO_DOCKER_INSTALLED="no"
-  fi
-
-  # Package managers
-  if [[ "$OS" == "macos" ]] && command -v brew >/dev/null 2>&1; then
-    SYSTEM_INFO_HOMEBREW_VERSION="$(brew --version 2>/dev/null | head -n1 | cut -d' ' -f2 || echo 'not installed')"
-  else
-    SYSTEM_INFO_HOMEBREW_VERSION="not installed"
-  fi
-
-  if command -v apt >/dev/null 2>&1; then
-    SYSTEM_INFO_APT_INSTALLED="yes"
-  else
-    SYSTEM_INFO_APT_INSTALLED="no"
-  fi
-
-  # Terminal application (if detectable)
-  SYSTEM_INFO_TERMINAL_APP="${TERM_PROGRAM:-${TERMINAL_EMULATOR:-unknown}}"
-
-  # Available disk space (in GB) on home partition
-  if [[ "$OS" == "macos" ]]; then
-    SYSTEM_INFO_DISK_AVAILABLE="$(df -h "$HOME" 2>/dev/null | awk 'NR==2 {print $4}' || echo 'unknown')"
-  else
-    SYSTEM_INFO_DISK_AVAILABLE="$(df -h "$HOME" 2>/dev/null | awk 'NR==2 {print $4}' || echo 'unknown')"
-  fi
-
-  if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
-    echo "System Information:"
-    echo "  OS: $SYSTEM_INFO_OS"
-    echo "  OS Version: $SYSTEM_INFO_OS_VERSION"
-    echo "  Architecture: $SYSTEM_INFO_ARCH"
-    echo "  Shell: $SYSTEM_INFO_SHELL"
-    echo "  Shell Version: $SYSTEM_INFO_SHELL_VERSION"
-    echo "  Shell RC File: $SYSTEM_INFO_SHELL_RC_FILE"
-    echo "  Node Version: $SYSTEM_INFO_NODE_VERSION"
-    echo "  NPM Version: $SYSTEM_INFO_NPM_VERSION"
-    echo "  Python Version: $SYSTEM_INFO_PYTHON_VERSION"
-    echo "  FFmpeg: $SYSTEM_INFO_FFMPEG_INSTALLED"
-    echo "  Terminal: $SYSTEM_INFO_TERMINAL_APP"
-    echo "  Disk Available: $SYSTEM_INFO_DISK_AVAILABLE"
-  fi
-
-  print_success "System information collected"
-}
-
-display_dependency_status() {
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "                    📋 System Dependency Status"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo ""
-
-  # Required dependencies
-  echo -e "${BOLD}Required Dependencies:${NC}"
-  echo ""
-
-  # Node.js
-  if [[ "$SYSTEM_INFO_NODE_VERSION" != "not installed" ]]; then
-    echo -e "  ${GREEN}✅${NC} Node.js     ${DIM}$SYSTEM_INFO_NODE_VERSION${NC}"
-  else
-    echo -e "  ${RED}❌${NC} Node.js     ${DIM}(required for Claude Code)${NC}"
-  fi
-
-  # npm
-  if [[ "$SYSTEM_INFO_NPM_VERSION" != "not installed" ]]; then
-    echo -e "  ${GREEN}✅${NC} npm         ${DIM}v$SYSTEM_INFO_NPM_VERSION${NC}"
-  else
-    echo -e "  ${RED}❌${NC} npm         ${DIM}(required for package management)${NC}"
-  fi
-
-  # Python
-  if [[ "$SYSTEM_INFO_PYTHON_VERSION" != "not installed" ]]; then
-    echo -e "  ${GREEN}✅${NC} Python      ${DIM}$SYSTEM_INFO_PYTHON_VERSION${NC}"
-  else
-    echo -e "  ${RED}❌${NC} Python      ${DIM}(required for VoiceMode)${NC}"
-  fi
-
-  # FFmpeg
-  if [[ "$SYSTEM_INFO_FFMPEG_INSTALLED" == "yes" ]]; then
-    echo -e "  ${GREEN}✅${NC} FFmpeg      ${DIM}(audio processing)${NC}"
-  else
-    echo -e "  ${RED}❌${NC} FFmpeg      ${DIM}(required for audio processing)${NC}"
-  fi
-
-  # Git
-  if [[ "$SYSTEM_INFO_GIT_VERSION" != "not installed" ]]; then
-    echo -e "  ${GREEN}✅${NC} Git         ${DIM}v$SYSTEM_INFO_GIT_VERSION${NC}"
-  else
-    echo -e "  ${YELLOW}⚠️ ${NC} Git         ${DIM}(recommended for development)${NC}"
-  fi
-
-  echo ""
-  echo -e "${BOLD}Package Managers:${NC}"
-  echo ""
-
-  # Platform-specific package managers
-  if [[ "$OS" == "macos" ]]; then
-    if [[ "$SYSTEM_INFO_HOMEBREW_VERSION" != "not installed" ]]; then
-      echo -e "  ${GREEN}✅${NC} Homebrew    ${DIM}v$SYSTEM_INFO_HOMEBREW_VERSION${NC}"
-    else
-      echo -e "  ${RED}❌${NC} Homebrew    ${DIM}(required for macOS dependencies)${NC}"
-    fi
-  elif [[ "$OS" == "linux" ]]; then
-    if [[ "$SYSTEM_INFO_APT_INSTALLED" == "yes" ]]; then
-      echo -e "  ${GREEN}✅${NC} APT         ${DIM}(system package manager)${NC}"
-    else
-      echo -e "  ${YELLOW}⚠️ ${NC} APT         ${DIM}(package manager not detected)${NC}"
-    fi
-  fi
-
-  echo ""
-  echo -e "${BOLD}System Information:${NC}"
-  echo ""
-  echo "  • OS:          $SYSTEM_INFO_OS_VERSION"
-  echo "  • Architecture: $SYSTEM_INFO_ARCH"
-  echo -e "  • Shell:       ${SYSTEM_INFO_SHELL##*/} ${DIM}(${SYSTEM_INFO_SHELL_RC_FILE})${NC}"
-  echo "  • Terminal:    $SYSTEM_INFO_TERMINAL_APP"
-  echo "  • Disk Space:  $SYSTEM_INFO_DISK_AVAILABLE available"
-
-  if [[ "$IS_WSL" == true ]]; then
-    echo ""
-    echo -e "  ${YELLOW}⚠️  WSL2 Detected${NC} - Additional audio setup may be required"
-  fi
-
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo ""
-}
-
-check_missing_dependencies() {
-  # Returns 0 if all required dependencies are met, 1 if any are missing
-  local missing=0
-
-  if [[ "$SYSTEM_INFO_NODE_VERSION" == "not installed" ]]; then
-    missing=1
-  fi
-
-  if [[ "$SYSTEM_INFO_NPM_VERSION" == "not installed" ]]; then
-    missing=1
-  fi
-
-  if [[ "$SYSTEM_INFO_PYTHON_VERSION" == "not installed" ]]; then
-    missing=1
-  fi
-
-  if [[ "$SYSTEM_INFO_FFMPEG_INSTALLED" != "yes" ]]; then
-    missing=1
-  fi
-
-  # Platform-specific requirements
-  if [[ "$OS" == "macos" ]] && [[ "$SYSTEM_INFO_HOMEBREW_VERSION" == "not installed" ]]; then
-    missing=1
-  fi
-
-  return $missing
-}
-
-confirm_action() {
-  local action="$1"
-  local default_yes="${2:-true}" # Default to yes unless specified
-
-  # In non-interactive mode, always return success
-  if [[ "$NON_INTERACTIVE" == "true" ]]; then
-    echo ""
-    if [[ "$action" == *"?"* ]]; then
-      echo "$action"
-    else
-      echo "About to: $action"
-    fi
-    echo "→ Auto-accepting (non-interactive mode)"
-    return 0
-  fi
-
-  echo ""
-
-  # Check if action is already a question (contains "?")
-  if [[ "$action" == *"?"* ]]; then
-    echo "$action"
-  else
-    echo "About to: $action"
-  fi
-
-  if [[ "$default_yes" == "true" ]]; then
-    read -p "Continue? [Y/n]: " choice
-    # Empty response defaults to yes
-    if [[ -z "$choice" ]]; then
-      return 0
-    fi
-  else
-    read -p "Continue? [y/N]: " choice
-    # Empty response defaults to no
-    if [[ -z "$choice" ]]; then
-      echo "Skipping: $action"
-      return 1
-    fi
-  fi
-
-  case $choice in
-  [Yy]*) return 0 ;;
-  *)
-    echo "Skipping..."
-    return 1
-    ;;
-  esac
-}
-
-install_homebrew() {
-  if [ "$HOMEBREW_INSTALLED" = false ]; then
-    if confirm_action "Install Homebrew (this will also install Xcode Command Line Tools)"; then
-      print_step "Installing Homebrew..."
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-      # Add Homebrew to PATH for current session
-      if [[ "$ARCH" == "arm64" ]]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-      else
-        eval "$(/usr/local/bin/brew shellenv)"
-      fi
-
-      print_success "Homebrew installed successfully"
-
-      # Update the status variables since Homebrew installs Xcode tools
-      HOMEBREW_INSTALLED=true
-      XCODE_TOOLS_INSTALLED=true
-    else
-      print_error "Homebrew is required for VoiceMode dependencies. Installation aborted."
-    fi
-  fi
-}
-
-check_system_dependencies() {
-  print_step "Checking system dependencies..."
-
-  if [[ "$OS" == "macos" ]]; then
-    local packages=("node" "portaudio" "ffmpeg")
-    local missing_packages=()
-
-    for package in "${packages[@]}"; do
-      if brew list "$package" >/dev/null 2>&1; then
-        print_success "$package is already installed"
-      else
-        missing_packages+=("$package")
-      fi
-    done
-
-    if [ ${#missing_packages[@]} -eq 0 ]; then
-      print_success "All system dependencies are already installed"
-      return 0
-    else
-      echo "Missing packages: ${missing_packages[*]}"
-      return 1
-    fi
-  elif [[ "$OS" == "fedora" ]]; then
-    local packages=("nodejs" "portaudio-devel" "ffmpeg" "cmake" "python3-devel" "alsa-lib-devel" "gcc")
-    local missing_packages=()
-
-    for package in "${packages[@]}"; do
-      # Special handling for ffmpeg which might be installed from RPM Fusion
-      if [[ "$package" == "ffmpeg" ]]; then
-        if command -v ffmpeg >/dev/null 2>&1; then
-          print_success "$package is already installed"
-        else
-          missing_packages+=("$package")
-        fi
-      elif rpm -q "$package" >/dev/null 2>&1; then
-        print_success "$package is already installed"
-      else
-        missing_packages+=("$package")
-      fi
-    done
-
-    if [ ${#missing_packages[@]} -eq 0 ]; then
-      print_success "All system dependencies are already installed"
-      return 0
-    else
-      echo "Missing packages: ${missing_packages[*]}"
-      return 1
-    fi
-  elif [[ "$OS" == "debian" ]]; then
-    local packages=("nodejs" "npm" "portaudio19-dev" "ffmpeg" "cmake" "python3-dev" "libasound2-dev" "libasound2-plugins")
-    local missing_packages=()
-
-    for package in "${packages[@]}"; do
-      if dpkg -l "$package" 2>/dev/null | grep -q '^ii'; then
-        print_success "$package is already installed"
-      else
-        missing_packages+=("$package")
-      fi
-    done
-
-    if [ ${#missing_packages[@]} -eq 0 ]; then
-      print_success "All system dependencies are already installed"
-      return 0
-    else
-      echo "Missing packages: ${missing_packages[*]}"
-      return 1
-    fi
-  fi
-}
-
-install_system_dependencies() {
-  if ! check_system_dependencies; then
-    if [[ "$OS" == "macos" ]]; then
-      # Build list of what needs to be installed
-      local needs_homebrew=false
-      local needs_deps=false
-      local install_message=""
-
-      if [ "$HOMEBREW_INSTALLED" = false ]; then
-        needs_homebrew=true
-        install_message="• Homebrew (package manager)\n  • Xcode Command Line Tools (automatically installed)\n  "
-      fi
-
-      # Check for missing audio dependencies
-      local missing_packages=()
-      for package in ffmpeg portaudio; do
-        if ! brew list $package &>/dev/null; then
-          missing_packages+=($package)
-          needs_deps=true
-        fi
-      done
-
-      if [ "$needs_homebrew" = true ] || [ "$needs_deps" = true ]; then
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "                    📦 System Dependencies Required"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo "VoiceMode needs to install the following:"
-        if [ "$needs_homebrew" = true ]; then
-          echo -e "$install_message"
-        fi
-        if [ "$needs_deps" = true ]; then
-          echo "• Audio dependencies: ${missing_packages[*]}"
-        fi
-        echo ""
-
-        if confirm_action "Install all required dependencies?"; then
-          # Install Homebrew if needed
-          if [ "$needs_homebrew" = true ]; then
-            install_homebrew
-            if [ "$HOMEBREW_INSTALLED" = false ]; then
-              print_warning "Failed to install Homebrew. Cannot proceed."
-              return 1
-            fi
-          fi
-
-          # Install missing packages
-          if [ "$needs_deps" = true ]; then
-            print_step "Installing audio dependencies..."
-            brew update
-
-            for package in "${missing_packages[@]}"; do
-              print_step "Installing $package..."
-              brew install "$package"
-              print_success "$package installed"
-            done
-          fi
-        else
-          print_warning "Skipping system dependencies. VoiceMode may not work properly without them."
-          return 1
-        fi
-      fi
-    elif [[ "$OS" == "fedora" ]]; then
-      if confirm_action "Install missing system dependencies via DNF"; then
-        print_step "Installing system dependencies..."
-
-        # Update package lists (ignore exit code as dnf check-update returns 100 when updates are available)
-        sudo dnf check-update || true
-
-        # Install required packages
-        local packages=("nodejs" "portaudio-devel" "ffmpeg" "cmake" "python3-devel" "alsa-lib-devel" "gcc")
-
-        print_step "Installing packages: ${packages[*]}"
-        sudo dnf install -y "${packages[@]}"
-        print_success "System dependencies installed"
-      else
-        print_warning "Skipping system dependencies. VoiceMode may not work properly without them."
-      fi
-    elif [[ "$OS" == "debian" ]]; then
-      if confirm_action "Install missing system dependencies via APT"; then
-        print_step "Installing system dependencies..."
-
-        # Update package lists
-        sudo apt update
-
-        # Install required packages
-        local packages=("nodejs" "npm" "portaudio19-dev" "ffmpeg" "cmake" "python3-dev" "libasound2-dev" "libasound2-plugins" "pulseaudio" "pulseaudio-utils")
-
-        # Add WSL-specific packages if detected
-        if [[ "$IS_WSL" == true ]]; then
-          print_warning "WSL2 detected - installing additional audio packages"
-          packages+=("libasound2-plugins" "pulseaudio")
-        fi
-
-        print_step "Installing packages: ${packages[*]}"
-        sudo apt install -y "${packages[@]}"
-        print_success "System dependencies installed"
-
-        # WSL-specific audio setup
-        if [[ "$IS_WSL" == true ]]; then
-          print_step "Setting up WSL2 audio support..."
-
-          # Start PulseAudio if not running
-          if ! pgrep -x "pulseaudio" >/dev/null; then
-            pulseaudio --start 2>/dev/null || true
-            print_success "Started PulseAudio service"
-          fi
-
-          # Check audio devices
-          if command -v pactl >/dev/null 2>&1; then
-            if pactl list sources short 2>/dev/null | grep -q .; then
-              print_success "Audio devices detected in WSL2"
-            else
-              print_warning "No audio devices detected. WSL2 audio setup may require:"
-              echo "  1. Enable Windows microphone permissions for your terminal"
-              echo "  2. Ensure WSL version is 2.3.26.0 or higher (run 'wsl --version')"
-              echo "  3. See: https://github.com/mbailey/voicemode/blob/main/docs/troubleshooting/wsl2-microphone-access.md"
-            fi
-          fi
-        fi
-      else
-        print_warning "Skipping system dependencies. VoiceMode may not work properly without them."
-      fi
-    fi
-  fi
-}
-
-check_python() {
-  print_step "Checking Python installation..."
-
-  if command -v python3 >/dev/null 2>&1; then
-    local python_version=$(python3 --version | cut -d' ' -f2)
-    print_success "Python 3 found: $python_version"
-  else
-    print_warning "Python 3 not found in PATH"
-    echo "  UV will manage Python installation automatically"
-  fi
-}
-
-install_uv() {
-  if ! command -v uv >/dev/null 2>&1; then
-    if confirm_action "Install UV (required for VoiceMode)"; then
-      print_step "Installing UV..."
-
-      # Install UV using the official installer
-      curl -LsSf https://astral.sh/uv/install.sh | sh
-
-      # Add UV to PATH for current session
-      export PATH="$HOME/.local/bin:$PATH"
-
-      # Verify installation immediately
-      if ! command -v uv >/dev/null 2>&1; then
-        print_error "UV installation failed - command not found after installation"
-        return 1
-      fi
-
-      # Test uv actually works
-      if ! uv --version >/dev/null 2>&1; then
-        print_error "UV installation failed - command not working"
-        return 1
-      fi
-
-      # Add to shell profile if not already there
-      local shell_profile="${SYSTEM_INFO_SHELL_RC_FILE:-$HOME/.bashrc}"
-
-      if [ -n "$shell_profile" ] && [ -f "$shell_profile" ]; then
-        if ! grep -q "\.local/bin" "$shell_profile"; then
-          echo 'export PATH="$HOME/.local/bin:$PATH"' >>"$shell_profile"
-          print_success "Added UV to PATH in $shell_profile"
-          # Source the profile to make UV immediately available
-          source "$shell_profile"
-          print_success "Loaded $shell_profile to update PATH"
-        fi
-      fi
-
-      print_success "UV installed and verified successfully"
-    else
-      print_error "UV is required for VoiceMode. Installation aborted."
-      return 1
-    fi
-  else
-    print_success "UV is already installed"
-
-    # Even if already installed, verify it works
-    if ! uv --version >/dev/null 2>&1; then
-      print_error "UV is installed but not working properly"
-      return 1
-    fi
-  fi
-}
-
-install_voicemode() {
-  print_step "Installing VoiceMode..."
-
-  # Install voice-mode package with uv tool install
-  if uv tool install --upgrade --force voice-mode; then
-    print_success "VoiceMode installed successfully"
-
-    # Update shell to ensure PATH includes UV tools
-    print_step "Updating shell PATH configuration..."
-    if uv tool update-shell; then
-      print_success "Shell PATH updated"
-
-      # Export PATH for current session
-      export PATH="$HOME/.local/bin:$PATH"
-
-      # Source shell profile for immediate availability
-      if [[ -n "${SYSTEM_INFO_SHELL_RC_FILE}" ]] && [[ -f "${SYSTEM_INFO_SHELL_RC_FILE}" ]]; then
-        source "${SYSTEM_INFO_SHELL_RC_FILE}" 2>/dev/null || true
-      fi
-    else
-      print_warning "Could not update shell PATH automatically"
-    fi
-
-    # Verify the voicemode command is available
-    if command -v voicemode >/dev/null 2>&1; then
-      print_success "VoiceMode command verified: voicemode"
-      return 0
-    else
-      print_warning "VoiceMode installed but command not immediately available"
-      if [[ -n "${SYSTEM_INFO_SHELL_RC_FILE}" ]]; then
-        echo "  You may need to restart your shell or run: source ${SYSTEM_INFO_SHELL_RC_FILE}"
-      else
-        echo "  You may need to restart your shell"
-      fi
-      return 0
-    fi
-  else
-    print_error "Failed to install VoiceMode"
-    return 1
-  fi
-}
-
-setup_local_npm() {
-  print_step "Setting up local npm configuration..."
-
-  # Set up npm to use local directory (no sudo required)
-  mkdir -p "$HOME/.npm-global"
-  npm config set prefix "$HOME/.npm-global"
-
-  # Add to PATH for current session
-  export PATH="$HOME/.npm-global/bin:$PATH"
-
-  # Add to shell profile if not already there
-  local shell_profile="${SYSTEM_INFO_SHELL_RC_FILE:-$HOME/.bashrc}"
-
-  if [ -n "$shell_profile" ] && [ -f "$shell_profile" ]; then
-    if ! grep -q "\.npm-global/bin" "$shell_profile"; then
-      echo 'export PATH="$HOME/.npm-global/bin:$PATH"' >>"$shell_profile"
-      print_success "Added npm global bin to PATH in $shell_profile"
-      # Source the profile to make npm immediately available
-      source "$shell_profile"
-      print_success "Loaded $shell_profile to update PATH"
-    fi
-  fi
-
-  print_success "Local npm configuration complete"
-}
-
-setup_shell_completion() {
-  # Safe shell completion setup that checks command availability at runtime
-  # This prevents shell startup errors by only enabling completions when the command exists
-
-  # Detect current shell
-  local shell_type=""
-  local shell_rc=""
-
-  if [[ -n "${BASH_VERSION:-}" ]]; then
-    shell_type="bash"
-    shell_rc="$HOME/.bashrc"
-  elif [[ -n "${ZSH_VERSION:-}" ]]; then
-    shell_type="zsh"
-    shell_rc="$HOME/.zshrc"
-  else
-    # Try to detect from SHELL environment variable
-    case "${SHELL:-}" in
-    */bash)
-      shell_type="bash"
-      shell_rc="$HOME/.bashrc"
-      ;;
-    */zsh)
-      shell_type="zsh"
-      shell_rc="$HOME/.zshrc"
-      ;;
-    *)
-      print_warning "Unsupported shell for completion: ${SHELL:-unknown}"
-      echo "  VoiceMode completion supports bash and zsh only"
-      return 1
-      ;;
+    case "$(uname -s)" in
+        Darwin)
+            echo "macos"
+            ;;
+        Linux)
+            echo "linux"
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            echo "windows"
+            ;;
+        *)
+            die "Unsupported operating system: $(uname -s)"
+            ;;
     esac
-  fi
-
-  if [[ -z "$shell_type" ]]; then
-    print_debug "Could not detect shell type for completion setup"
-    return 1
-  fi
-
-  print_step "Setting up shell completion for $shell_type..."
-
-  # Set up completion based on shell type
-  if [[ "$shell_type" == "bash" ]]; then
-    # Check for existing bash-completion support
-    local has_bash_completion=false
-    local user_completions_dir="${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions"
-
-    # Check if bash-completion is installed
-    if [[ -f "/usr/share/bash-completion/bash_completion" ]] ||
-      [[ -f "/etc/bash_completion" ]] ||
-      (command -v brew >/dev/null 2>&1 && brew list bash-completion@2 >/dev/null 2>&1); then
-      has_bash_completion=true
-    fi
-
-    if [[ "$has_bash_completion" == true ]]; then
-      # Install completion file to user directory
-      mkdir -p "$user_completions_dir"
-
-      # Generate and save completion file with bash version compatibility
-      if command -v voicemode >/dev/null 2>&1; then
-        # Check bash version - nosort option is only available in bash 4.4+
-        local bash_version="${BASH_VERSION%%.*}"
-        local bash_minor="${BASH_VERSION#*.}"
-        bash_minor="${bash_minor%%.*}"
-
-        if [[ $bash_version -gt 4 ]] || [[ $bash_version -eq 4 && $bash_minor -ge 4 ]]; then
-          # Bash 4.4+ supports nosort
-          _VOICEMODE_COMPLETE=bash_source voicemode >"$user_completions_dir/voicemode" 2>/dev/null
-        else
-          # Older bash - filter out nosort option to prevent errors
-          _VOICEMODE_COMPLETE=bash_source voicemode 2>/dev/null | sed 's/complete -o nosort/complete/g' >"$user_completions_dir/voicemode"
-        fi
-
-        if [[ -s "$user_completions_dir/voicemode" ]]; then
-          print_success "Installed bash completion to $user_completions_dir/"
-          echo "   Tab completion will be available in new bash sessions"
-        else
-          rm -f "$user_completions_dir/voicemode"
-          # Fallback to shell RC method
-          has_bash_completion=false
-        fi
-      fi
-    fi
-
-    if [[ "$has_bash_completion" == false ]]; then
-      # Fallback: Add to shell RC file with bash version check
-      local completion_line='# VoiceMode shell completion
-if command -v voicemode >/dev/null 2>&1; then
-    # Check bash version for nosort compatibility
-    bash_version="${BASH_VERSION%%.*}"
-    bash_minor="${BASH_VERSION#*.}"
-    bash_minor="${bash_minor%%.*}"
-
-    if [[ $bash_version -gt 4 ]] || [[ $bash_version -eq 4 && $bash_minor -ge 4 ]]; then
-        eval "$(_VOICEMODE_COMPLETE=bash_source voicemode)"
-    else
-        # Filter out nosort for older bash versions
-        eval "$(_VOICEMODE_COMPLETE=bash_source voicemode | sed '\''s/complete -o nosort/complete/g'\'')"
-    fi
-fi'
-
-      if [[ -f "$shell_rc" ]] && grep -q "_VOICEMODE_COMPLETE\|_VOICE_MODE_COMPLETE" "$shell_rc" 2>/dev/null; then
-        print_success "Shell completion already configured in $shell_rc"
-      else
-        echo "" >>"$shell_rc"
-        echo "$completion_line" >>"$shell_rc"
-        print_success "Added shell completion to $shell_rc"
-        echo "   Tab completion will be available in new shell sessions"
-      fi
-    fi
-  elif [[ "$shell_type" == "zsh" ]]; then
-    # Detect best location for zsh completions
-    local completion_dir=""
-    local needs_fpath_update=false
-
-    # Check for Homebrew on macOS
-    if [[ "$OS" == "macos" ]] && command -v brew >/dev/null 2>&1; then
-      local brew_prefix=$(brew --prefix)
-      if [[ -d "$brew_prefix/share/zsh/site-functions" ]]; then
-        completion_dir="$brew_prefix/share/zsh/site-functions"
-        print_debug "Using Homebrew zsh completion directory"
-      fi
-    fi
-
-    # Check standard locations if not found
-    if [[ -z "$completion_dir" ]]; then
-      for dir in \
-        "/usr/local/share/zsh/site-functions" \
-        "/usr/share/zsh/site-functions" \
-        "$HOME/.zsh/completions"; do
-        if [[ -d "$dir" ]] || [[ "$dir" == "$HOME/.zsh/completions" ]]; then
-          completion_dir="$dir"
-          if [[ "$dir" == "$HOME/.zsh/completions" ]]; then
-            needs_fpath_update=true
-          fi
-          break
-        fi
-      done
-    fi
-
-    # Create directory if needed
-    if [[ ! -d "$completion_dir" ]]; then
-      mkdir -p "$completion_dir"
-    fi
-
-    # Generate and install completion file (with underscore prefix)
-    if command -v voicemode >/dev/null 2>&1; then
-      _VOICEMODE_COMPLETE=zsh_source voicemode >"$completion_dir/_voicemode" 2>/dev/null
-      if [[ -s "$completion_dir/_voicemode" ]]; then
-        print_success "Installed zsh completion to $completion_dir/"
-
-        # Update fpath if using custom directory
-        if [[ "$needs_fpath_update" == true ]]; then
-          local fpath_line="fpath=($completion_dir \$fpath)"
-          if [[ -f "$shell_rc" ]] && ! grep -q "$completion_dir" "$shell_rc" 2>/dev/null; then
-            echo "" >>"$shell_rc"
-            echo "# Add VoiceMode completions to fpath" >>"$shell_rc"
-            echo "$fpath_line" >>"$shell_rc"
-            print_success "Added $completion_dir to fpath in $shell_rc"
-          fi
-        fi
-        echo "   Tab completion will be available in new zsh sessions"
-      else
-        # Fallback to shell RC method
-        rm -f "$completion_dir/_voicemode"
-        local completion_line='# VoiceMode shell completion
-if command -v voicemode >/dev/null 2>&1; then
-    eval "$(_VOICEMODE_COMPLETE=zsh_source voicemode)"
-fi'
-
-        if [[ -f "$shell_rc" ]] && grep -q "_VOICEMODE_COMPLETE\|_VOICE_MODE_COMPLETE" "$shell_rc" 2>/dev/null; then
-          print_success "Shell completion already configured in $shell_rc"
-        else
-          echo "" >>"$shell_rc"
-          echo "$completion_line" >>"$shell_rc"
-          print_success "Added shell completion to $shell_rc"
-          echo "   Tab completion will be available in new shell sessions"
-        fi
-      fi
-    fi
-  fi
-
-  return 0
 }
 
-configure_api_key() {
-  # Skip API key configuration in CI mode
-  if [[ "$CI_MODE" == "true" ]]; then
-    print_step "Skipping OpenAI API key configuration (CI mode)"
-    echo "→ API key can be configured later if needed"
-    export VOICEMODE_API_KEY_CONFIGURED=false
-    return 0
-  fi
+detect_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)
+            echo "x86_64"
+            ;;
+        arm64|aarch64)
+            echo "arm64"
+            ;;
+        armv7l)
+            echo "armv7"
+            ;;
+        *)
+            die "Unsupported architecture: $(uname -m)"
+            ;;
+    esac
+}
 
-  print_step "Checking OpenAI API key configuration..."
-
-  # Track if we have an API key configured
-  local api_key_configured=false
-
-  # Check if OPENAI_API_KEY is already set
-  if [ -n "${OPENAI_API_KEY:-}" ]; then
-    print_success "OPENAI_API_KEY is already set in environment"
-    echo ""
-    echo "Your OpenAI API key is configured. VoiceMode will use OpenAI for speech"
-    echo "recognition and text-to-speech, with automatic fallback support."
-    api_key_configured=true
-    # Export a flag for later use
-    export VOICEMODE_API_KEY_CONFIGURED=true
-    return 0
-  fi
-
-  # Check if it's in shell config files
-  for file in ~/.bashrc ~/.zshrc ~/.bash_profile; do
-    if [ -f "$file" ] && grep -q "export OPENAI_API_KEY" "$file" 2>/dev/null; then
-      print_success "OPENAI_API_KEY found in $file"
-      echo ""
-      echo "Your OpenAI API key is configured. VoiceMode will use OpenAI for speech"
-      echo "recognition and text-to-speech, with automatic fallback support."
-      api_key_configured=true
-      # Export a flag for later use
-      export VOICEMODE_API_KEY_CONFIGURED=true
-      return 0
-    fi
-  done
-
-  # API key not found - recommend setting it up
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "                    🎯 Quick Start with OpenAI (Recommended)"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo ""
-  echo "For the best first experience, we recommend using OpenAI's API:"
-  echo "  ✓ Works immediately - no complex setup required"
-  echo "  ✓ High-quality speech recognition and natural voices"
-  echo "  ✓ Automatic fallback when local services are unavailable"
-  echo ""
-  echo "Local services (Whisper/Kokoro) can be added later for:"
-  echo "  • Reduced costs"
-  echo "  • Enhanced privacy"
-  echo "  • Offline capability"
-  echo "  (Claude can help you set these up when you're ready)"
-  echo ""
-
-  if confirm_action "Would you like to set up your OpenAI API key now? (recommended)"; then
-    echo ""
-    echo "To get an API key:"
-    echo "  1. Visit: https://platform.openai.com"
-    echo "  2. Sign in or create an account"
-    echo "  3. Click 'Create new secret key'"
-    echo "  4. Copy the key (it starts with 'sk-')"
-    echo ""
-
-    # Offer to open the page
-    if command -v open >/dev/null 2>&1; then
-      if confirm_action "Would you like to open the OpenAI API keys page in your browser?"; then
-        open "https://platform.openai.com/api-keys"
-        echo ""
-        echo "Waiting for you to create and copy your API key..."
-        sleep 2
-      fi
-    fi
-
-    # Platform-specific paste instructions
-    echo ""
-    if [[ "$OS" == "macos" ]]; then
-      echo "Please paste your OpenAI API key (press Cmd+V to paste, or press Enter to skip):"
-    elif [[ "$IS_WSL" == true ]]; then
-      echo "Please paste your OpenAI API key (right-click to paste, or press Enter to skip):"
+detect_linux_distro() {
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck source=/dev/null
+        . /etc/os-release
+        case "$ID" in
+            ubuntu|debian|pop|linuxmint|elementary)
+                echo "debian"
+                ;;
+            fedora|rhel|centos|rocky|alma)
+                echo "fedora"
+                ;;
+            arch|manjaro)
+                echo "arch"
+                ;;
+            *)
+                # Check for ID_LIKE as fallback
+                case "${ID_LIKE:-}" in
+                    *debian*)
+                        echo "debian"
+                        ;;
+                    *fedora*|*rhel*)
+                        echo "fedora"
+                        ;;
+                    *)
+                        echo "unknown"
+                        ;;
+                esac
+                ;;
+        esac
     else
-      echo "Please paste your OpenAI API key (Ctrl+Shift+V or right-click to paste, or press Enter to skip):"
+        echo "unknown"
     fi
-    echo "(The key will be hidden as you type)"
+}
 
-    # Allow up to 3 attempts for API key entry
-    local attempts=0
-    local max_attempts=3
-    local api_key=""
+# -----------------------------------------------------------------------------
+# Prerequisite Installation
+# -----------------------------------------------------------------------------
 
-    while [[ $attempts -lt $max_attempts ]]; do
-      read -s api_key
-      echo ""
+# Ensure uv package manager is available
+# uv can be installed without sudo
+ensure_uv() {
+    if command_exists uv; then
+        ok "uv found"
+        return 0
+    fi
 
-      if [ -z "$api_key" ]; then
-        # User pressed Enter to skip
-        break
-      fi
+    info "Installing uv package manager..."
+    if command_exists curl; then
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+    elif command_exists wget; then
+        wget -qO- https://astral.sh/uv/install.sh | sh
+    else
+        die "Neither curl nor wget found. Cannot install uv."
+    fi
 
-      # Validate that it looks like an API key
-      if [[ ! "$api_key" =~ ^sk- ]]; then
-        ((attempts++))
-        if [[ $attempts -lt $max_attempts ]]; then
-          print_warning "That doesn't look like an OpenAI API key (should start with 'sk-')"
-          echo "Please try again (attempt $((attempts + 1)) of $max_attempts):"
-          echo "(Make sure to copy the entire key, it should start with 'sk-')"
-        else
-          print_warning "Invalid API key format after $max_attempts attempts"
-          echo "You can add it manually later to your shell configuration"
-          return 1
+    # Add uv to PATH for this session
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+    if command_exists uv; then
+        ok "uv installed"
+    else
+        die "uv installation failed. Please install manually: https://docs.astral.sh/uv/getting-started/installation/"
+    fi
+}
+
+# Ensure Rust is available (for ARM64 Kokoro dependencies)
+# Uses rustup for latest version since distro packages are often too old
+ensure_rust() {
+    # Check if Rust is already installed and recent enough (1.82+)
+    if command_exists rustc; then
+        local rust_version
+        rust_version=$(rustc --version | sed -E 's/rustc ([0-9]+\.[0-9]+).*/\1/')
+        local major minor
+        major=$(echo "$rust_version" | cut -d. -f1)
+        minor=$(echo "$rust_version" | cut -d. -f2)
+        if [[ "$major" -gt 1 ]] || { [[ "$major" -eq 1 ]] && [[ "$minor" -ge 82 ]]; }; then
+            ok "Rust $rust_version found"
+            return 0
         fi
-      else
-        # Validate the API key by making a test request
-        print_step "Validating API key with OpenAI..."
-        local http_code=$(curl -s -o /dev/null -w "%{http_code}" \
-          -H "Authorization: Bearer $api_key" \
-          -H "Content-Type: application/json" \
-          "https://api.openai.com/v1/models" 2>/dev/null)
+        info "Rust $rust_version is too old (need 1.82+), installing via rustup..."
+    else
+        info "Installing Rust via rustup..."
+    fi
 
-        if [[ "$http_code" == "200" ]]; then
-          print_success "API key validated successfully!"
-          break
-        elif [[ "$http_code" == "401" ]]; then
-          ((attempts++))
-          if [[ $attempts -lt $max_attempts ]]; then
-            print_warning "Invalid API key - authentication failed"
-            echo "Please check your key and try again (attempt $((attempts + 1)) of $max_attempts):"
-          else
-            print_error "Invalid API key after $max_attempts attempts"
-            echo "You can add a valid key later to your shell configuration"
+    if command_exists curl; then
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+    elif command_exists wget; then
+        wget -qO- https://sh.rustup.rs | sh -s -- -y --no-modify-path
+    else
+        die "Neither curl nor wget found. Cannot install Rust."
+    fi
+
+    # Add cargo to PATH for this session
+    export PATH="$HOME/.cargo/bin:$PATH"
+
+    if command_exists rustc; then
+        ok "Rust installed via rustup"
+    else
+        die "Rust installation failed. Please install manually: https://rustup.rs/"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# macOS System Dependencies
+# -----------------------------------------------------------------------------
+
+# Install all macOS prerequisites (Homebrew + packages + uv) with single confirmation
+install_macos_prerequisites() {
+    local -a packages=(portaudio ffmpeg)
+    local -a to_install=()
+    local need_homebrew=false
+    local need_uv=false
+    local pkg
+
+    # Check if Homebrew is installed
+    if ! command_exists brew; then
+        need_homebrew=true
+        # If no Homebrew, we'll need all packages too
+        to_install=("${packages[@]}")
+    else
+        ok "Homebrew found"
+        # Check which packages are missing
+        for pkg in "${packages[@]}"; do
+            if ! brew list "$pkg" &>/dev/null; then
+                to_install+=("$pkg")
+            fi
+        done
+    fi
+
+    # Check if uv is installed
+    if ! command_exists uv; then
+        need_uv=true
+    else
+        ok "uv found"
+    fi
+
+    # If nothing to install, we're done
+    if [[ "$need_homebrew" == "false" ]] && [[ ${#to_install[@]} -eq 0 ]] && [[ "$need_uv" == "false" ]]; then
+        ok "All dependencies already installed"
+        return 0
+    fi
+
+    # Show what will be installed
+    info "The following will be installed:"
+    if [[ "$need_homebrew" == "true" ]]; then
+        echo "    - Homebrew (package manager)"
+    fi
+    for pkg in "${to_install[@]}"; do
+        echo "    - $pkg"
+    done
+    if [[ "$need_uv" == "true" ]]; then
+        echo "    - uv (Python package manager)"
+    fi
+
+    # Prompt for confirmation in interactive mode (only if TTY available)
+    if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
+        echo ""
+        read -r -p "Proceed with installation? [Y/n] " response </dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                if [[ "$need_homebrew" == "true" ]]; then
+                    die "Homebrew is required for VoiceMode on macOS"
+                fi
+                warn "Skipping package installation"
+                warn "VoiceMode may not work correctly without these packages"
+                return 0
+                ;;
+        esac
+    elif [[ "$need_homebrew" == "true" ]] && { [[ "$INTERACTIVE" == "false" ]] || ! tty_available; }; then
+        # Non-interactive mode can't install Homebrew (needs sudo)
+        die "Homebrew not found. Install it first, then re-run:
+    /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    fi
+
+    # Install Homebrew if needed
+    if [[ "$need_homebrew" == "true" ]]; then
+        info "Installing Homebrew (may require password)..."
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+        # Add Homebrew to PATH for this session (Apple Silicon uses /opt/homebrew)
+        local brew_path=""
+        if [[ -x /opt/homebrew/bin/brew ]]; then
+            brew_path="/opt/homebrew/bin/brew"
+        elif [[ -x /usr/local/bin/brew ]]; then
+            brew_path="/usr/local/bin/brew"
+        fi
+
+        if [[ -n "$brew_path" ]]; then
+            eval "$($brew_path shellenv)"
+
+            # Persist to shell profile for future sessions
+            local shell_profile=""
+            if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
+                shell_profile="$HOME/.zprofile"
+            else
+                shell_profile="$HOME/.bash_profile"
+            fi
+
+            local shellenv_line="eval \"\$($brew_path shellenv)\""
+            if ! grep -q "brew shellenv" "$shell_profile" 2>/dev/null; then
+                echo "" >> "$shell_profile"
+                echo "# Homebrew" >> "$shell_profile"
+                echo "$shellenv_line" >> "$shell_profile"
+            fi
+        fi
+
+        if command_exists brew; then
+            ok "Homebrew installed"
+        else
+            die "Homebrew installation failed"
+        fi
+    fi
+
+    # Install packages if needed
+    if [[ ${#to_install[@]} -gt 0 ]]; then
+        info "Installing packages..."
+        brew install "${to_install[@]}"
+        ok "Packages installed"
+    fi
+
+    # Install uv if needed
+    if [[ "$need_uv" == "true" ]]; then
+        info "Installing uv..."
+        if command_exists curl; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+        elif command_exists wget; then
+            wget -qO- https://astral.sh/uv/install.sh | sh
+        else
+            die "Neither curl nor wget found. Cannot install uv."
+        fi
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+        if command_exists uv; then
+            ok "uv installed"
+        else
+            die "uv installation failed"
+        fi
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Linux System Dependencies
+# -----------------------------------------------------------------------------
+
+# Check if a package is installed (distro-specific)
+is_package_installed() {
+    local distro="$1"
+    local package="$2"
+
+    case "$distro" in
+        debian)
+            dpkg -s "$package" &>/dev/null
+            ;;
+        fedora)
+            rpm -q "$package" &>/dev/null
+            ;;
+        arch)
+            pacman -Q "$package" &>/dev/null
+            ;;
+        *)
             return 1
-          fi
+            ;;
+    esac
+}
+
+# Install required system packages on Linux (+ uv)
+# These are needed for compiling webrtcvad and simpleaudio
+install_linux_deps() {
+    local distro="$1"
+    local -a all_packages missing_packages
+    local SUDO=""
+    local pkg
+    local need_uv=false
+
+    # Use sudo if not running as root and sudo is available
+    if [[ "$(id -u)" != "0" ]]; then
+        if command_exists sudo; then
+            SUDO="sudo"
         else
-          # Network error or other issue - proceed anyway
-          print_warning "Could not validate API key (network issue?)"
-          echo "Proceeding with configuration anyway..."
-          break
+            die "This script requires root privileges or sudo. Please run as root or install sudo."
         fi
-      fi
+    fi
+
+    # Define packages per distro
+    case "$distro" in
+        debian)
+            all_packages=(python3-dev gcc libasound2-dev libportaudio2 ffmpeg)
+            # ARM64 needs g++ for Kokoro's mojimoji dependency
+            if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+                all_packages+=(g++)
+            fi
+            ;;
+        fedora)
+            all_packages=(python3-devel gcc alsa-lib-devel portaudio ffmpeg)
+            # ARM64 needs g++ for Kokoro's mojimoji dependency
+            if [[ "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+                all_packages+=(gcc-c++)
+            fi
+            ;;
+        arch)
+            all_packages=(python gcc alsa-lib portaudio ffmpeg)
+            # Arch gcc package includes g++, no extras needed
+            ;;
+        *)
+            warn "Unknown Linux distro. Please install build dependencies manually:"
+            echo "  - C compiler (gcc)"
+            echo "  - Python development headers"
+            echo "  - ALSA development libraries"
+            echo "  - PortAudio library"
+            echo "  - FFmpeg"
+            return 0
+            ;;
+    esac
+
+    # Check which packages are missing
+    missing_packages=()
+    for pkg in "${all_packages[@]}"; do
+        if ! is_package_installed "$distro" "$pkg"; then
+            missing_packages+=("$pkg")
+        fi
     done
 
-    if [ -n "$api_key" ] && [[ "$api_key" =~ ^sk- ]]; then
+    # Check if uv is installed
+    if ! command_exists uv; then
+        need_uv=true
+    else
+        ok "uv found"
+    fi
 
-      # Add to shell configuration
-      local shell_profile="${SYSTEM_INFO_SHELL_RC_FILE:-$HOME/.bashrc}"
-
-      if [ -n "$shell_profile" ]; then
-        echo "" >>"$shell_profile"
-        echo "# OpenAI API Key for VoiceMode" >>"$shell_profile"
-        echo "export OPENAI_API_KEY='$api_key'" >>"$shell_profile"
-        print_success "Added OPENAI_API_KEY to $shell_profile"
-
-        # Export for current session
-        export OPENAI_API_KEY="$api_key"
-        export VOICEMODE_API_KEY_CONFIGURED=true
-
-        echo ""
-        print_success "OpenAI API key configured successfully!"
+    # If everything is installed, we're done
+    if [[ ${#missing_packages[@]} -eq 0 ]] && [[ "$need_uv" == "false" ]]; then
+        ok "All dependencies already installed"
         return 0
-      fi
-    else
-      print_warning "Skipping OpenAI API key configuration"
     fi
-  else
-    print_warning "Skipping OpenAI API key configuration"
-    echo ""
-    echo "You can add it later to your shell configuration:"
-    echo "  export OPENAI_API_KEY='your-api-key-here'"
-    echo ""
-    echo "Without an API key, only local services will work (after installation)."
-  fi
 
-  return 1
-}
-
-test_voice_setup() {
-  print_step "Testing voice setup..."
-
-  # Check if voicemode command is available
-  if ! command -v voicemode >/dev/null 2>&1; then
-    print_warning "voicemode command not found in PATH"
-    return 1
-  fi
-
-  # Check for audio devices first
-  print_step "Checking audio devices..."
-  local device_output=$(voicemode diag devices 2>&1)
-
-  if echo "$device_output" | grep -q "Input Devices:"; then
-    # Extract only the input devices section (between "Input Devices:" and next empty line or "Output")
-    local input_section=$(echo "$device_output" | sed -n '/Input Devices:/,/^$/p' | sed -n '/Input Devices:/,/Output Devices:/p')
-    local input_count=$(echo "$input_section" | grep -c "^\s*\[[0-9]\].*channels)")
-
-    if [ "$input_count" -gt 0 ]; then
-      print_success "Found $input_count microphone(s)"
-      # Show the default input device
-      echo "$device_output" | grep "Default Input:" | sed 's/^/  /'
-    else
-      print_warning "No microphones detected"
-      echo "  Voice features require a microphone to be connected"
-      return 1
+    # Show what needs to be installed
+    info "The following will be installed:"
+    for pkg in "${missing_packages[@]}"; do
+        echo "    - $pkg"
+    done
+    if [[ "$need_uv" == "true" ]]; then
+        echo "    - uv (Python package manager)"
     fi
-  else
-    print_warning "Could not detect audio devices"
-  fi
 
-  # Check if we have an API key or local services
-  local has_tts=false
-  if [ -n "${OPENAI_API_KEY:-}" ]; then
-    has_tts=true
-    echo "  OpenAI API key is configured ✓"
-  fi
+    # Prompt for confirmation in interactive mode (only if TTY available)
+    if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
+        echo ""
+        read -r -p "Install these? [Y/n] " response </dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                warn "Skipping dependency installation"
+                warn "VoiceMode may not work correctly without these packages"
+                return 0
+                ;;
+        esac
+    fi
 
-  # Quick check for local services
-  if voicemode whisper status 2>/dev/null | grep -q "running"; then
-    has_tts=true
-    echo "  Whisper (STT) is running ✓"
-  fi
+    # Install missing packages
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        info "Installing packages..."
+        case "$distro" in
+            debian)
+                export DEBIAN_FRONTEND=noninteractive
+                $SUDO apt-get update -qq >/dev/null
+                $SUDO apt-get install -y -qq "${missing_packages[@]}" >/dev/null
+                ;;
+            fedora)
+                $SUDO dnf install -y -q "${missing_packages[@]}" >/dev/null
+                ;;
+            arch)
+                $SUDO pacman -S --noconfirm -q "${missing_packages[@]}" >/dev/null
+                ;;
+        esac
+        ok "Packages installed"
+    fi
 
-  if voicemode kokoro status 2>/dev/null | grep -q "available"; then
-    has_tts=true
-    echo "  Kokoro (TTS) is running ✓"
-  fi
-
-  if [ "$has_tts" = false ]; then
-    print_warning "No TTS/STT services available yet"
-    echo "  You'll need either an OpenAI API key or local services to use voice features"
-    return 1
-  fi
-
-  echo ""
-  if confirm_action "Would you like to test voice mode now?"; then
-    echo ""
-    echo "Starting voice test..."
-    echo "  • Say 'Hello' when you hear the chime"
-    echo "  • The test will confirm your microphone and API are working"
-    echo "  • Press Ctrl+C to exit the test"
-    echo ""
-
-    # Run a voice test
-    echo ""
-    echo "Running voice test..."
-    echo ""
-
-    # Run a single interaction test
-    # This will speak, then listen for a response (default 120 seconds)
-    voicemode converse --message "Hello! Testing voice mode. Say something to test your microphone." 2>&1 || true
-
-    echo ""
-    print_success "Voice test complete!"
-  fi
-
-  return 0
-}
-
-configure_claude_voicemode() {
-  if command -v claude >/dev/null 2>&1; then
-    # Check if voicemode is already configured
-    if claude mcp list 2>/dev/null | grep -q -e "voicemode" -e "voice-mode"; then
-      print_success "VoiceMode is already configured in Claude Code"
-      setup_shell_completion
-      return 0
-    else
-      if confirm_action "Add VoiceMode to Claude Code (adds MCP server)"; then
-        print_step "Adding VoiceMode to Claude Code..."
-
-        # Try with --scope flag first (newer versions)
-        if claude mcp add --scope user voicemode -- uvx --refresh voice-mode 2>/dev/null; then
-          print_success "VoiceMode added to Claude Code"
-          setup_shell_completion
-          return 0
+    # Install uv if needed
+    if [[ "$need_uv" == "true" ]]; then
+        info "Installing uv..."
+        if command_exists curl; then
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+        elif command_exists wget; then
+            wget -qO- https://astral.sh/uv/install.sh | sh
         else
-          print_error "Failed to add VoiceMode to Claude Code"
-          return 1
+            die "Neither curl nor wget found. Cannot install uv."
         fi
-      else
-        print_step "Skipping VoiceMode configuration"
-        echo "You can configure it later with:"
-        echo "  claude mcp add --scope user voicemode -- uvx --refresh voice-mode"
-        return 1
-      fi
-    fi
-  else
-    print_warning "Claude Code not found. Please install it first to use VoiceMode."
-    return 1
-  fi
-}
-
-check_and_suggest_working_directory() {
-  # Check if user is in home directory
-  local current_dir=$(pwd)
-  local home_dir="$HOME"
-
-  if [[ "$current_dir" == "$home_dir" ]]; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "                    📁 Working Directory Setup"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "You're currently in your home directory."
-    echo "Claude Code works best when launched from a project directory."
-    echo ""
-    echo "Where would you like to start Claude from?"
-    echo "  • Press Enter for ~/claude (recommended sandbox)"
-    echo "  • Type a path like ~/projects or ~/code"
-    echo "  • Type 'here' to use your home directory"
-    echo ""
-
-    read -p "Directory [~/claude]: " chosen_dir
-
-    # Handle the user's choice
-    if [[ -z "$chosen_dir" ]]; then
-      # Default to ~/claude
-      chosen_dir="$HOME/claude"
-    elif [[ "$chosen_dir" == "here" ]] || [[ "$chosen_dir" == "." ]]; then
-      # Use current directory (home)
-      chosen_dir="$HOME"
-    else
-      # Expand tilde if present
-      chosen_dir="${chosen_dir/#\~/$HOME}"
-    fi
-
-    # Create directory if it doesn't exist (unless it's home)
-    if [[ "$chosen_dir" != "$HOME" ]]; then
-      if [[ ! -d "$chosen_dir" ]]; then
-        print_step "Creating directory: $chosen_dir"
-        mkdir -p "$chosen_dir"
-        print_success "Created $chosen_dir"
-      else
-        print_success "Using existing directory: $chosen_dir"
-      fi
-
-      # Save for later reference
-      export CLAUDE_SUGGESTED_DIR="$chosen_dir"
-
-      echo ""
-      echo "After installation completes, you can:"
-      echo "  1. cd $chosen_dir"
-      echo "  2. claude converse"
-      echo ""
-    else
-      print_success "Will use home directory"
-      echo ""
-      echo "You can start Claude from your home directory after installation."
-      echo ""
-    fi
-  fi
-}
-
-install_claude_if_needed() {
-  if ! command -v claude >/dev/null 2>&1; then
-    if confirm_action "Install Claude Code (required for VoiceMode)"; then
-      print_step "Installing Claude Code..."
-
-      # Check for npm and install Node.js if missing
-      if ! command -v npm >/dev/null 2>&1; then
-        print_step "npm not found. Installing Node.js..."
-
-        if [[ "$OS" == "macos" ]]; then
-          # Install Node.js via Homebrew on macOS
-          if command -v brew >/dev/null 2>&1; then
-            brew install node
-            print_success "Node.js installed via Homebrew"
-          else
-            print_error "Homebrew not found. Please install Homebrew first."
-            return 1
-          fi
-        elif [[ "$OS" == "linux" ]]; then
-          # Install Node.js on Linux
-          if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y nodejs npm
-            print_success "Node.js installed via apt"
-          elif command -v dnf >/dev/null 2>&1; then
-            sudo dnf install -y nodejs npm
-            print_success "Node.js installed via dnf"
-          else
-            print_error "Unable to install Node.js. Please install it manually."
-            return 1
-          fi
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+        if command_exists uv; then
+            ok "uv installed"
+        else
+            die "uv installation failed"
         fi
+    fi
+}
 
-        # Set up local npm configuration to avoid sudo for global installs
-        setup_local_npm
-      fi
+# -----------------------------------------------------------------------------
+# System Dependencies (orchestration)
+# -----------------------------------------------------------------------------
 
-      # Now install Claude Code
-      if command -v npm >/dev/null 2>&1; then
-        npm install -g @anthropic-ai/claude-code
-        print_success "Claude Code installed"
-      else
-        print_error "Failed to install npm. Please install Node.js manually."
-        return 1
-      fi
+# Install all system dependencies for the detected platform
+install_system_deps() {
+    local os="$1"
+    local arch="$2"
+    local distro
+
+    case "$os" in
+        macos)
+            ok "Platform: macOS ($arch)"
+            install_macos_prerequisites
+            ;;
+        linux)
+            distro=$(detect_linux_distro)
+            ok "Platform: Linux/$distro ($arch)"
+            install_linux_deps "$distro"
+            # ARM64 Linux needs Rust via rustup for Kokoro dependencies
+            if [[ "$arch" == "arm64" ]]; then
+                ensure_rust
+            fi
+            ;;
+        windows)
+            die "Windows is not yet supported. Please use WSL2 instead."
+            ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# Local Voice Services (Whisper & Kokoro)
+# -----------------------------------------------------------------------------
+
+# Check if Whisper STT is installed
+is_whisper_installed() {
+    [[ -d "$HOME/.voicemode/services/whisper" ]]
+}
+
+# Check if Kokoro TTS is installed
+is_kokoro_installed() {
+    [[ -d "$HOME/.voicemode/services/kokoro" ]]
+}
+
+# Assess system capability for local voice services
+# Returns: "excellent", "good", or "limited"
+assess_voice_capability() {
+    local os="$1"
+    local arch="$2"
+    local ram_gb=0
+
+    # Get RAM in GB
+    case "$os" in
+        macos)
+            ram_gb=$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 ))
+            ;;
+        linux)
+            ram_gb=$(( $(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024 / 1024 ))
+            ;;
+    esac
+
+    # Apple Silicon Mac: excellent (unified memory, Neural Engine)
+    # Everything else: depends on RAM
+    if [[ "$os" == "macos" && "$arch" == "arm64" ]]; then
+        echo "excellent"
+    elif [[ $ram_gb -ge 16 ]]; then
+        echo "good"
+    elif [[ $ram_gb -ge 8 ]]; then
+        echo "limited"
     else
-      print_warning "Claude Code is required for VoiceMode. Skipping configuration."
-      return 1
+        echo "limited"
     fi
-  fi
-  return 0
 }
 
-# Service installation functions
-check_voice_mode_cli() {
-  # Check for locally installed voicemode command
-  # This should be available after uv tool install
+# Get human-readable capability message
+get_capability_message() {
+    local capability="$1"
 
-  if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
-    echo "[DEBUG] Checking for voicemode CLI availability..." >&2
-  fi
-
-  # Check if voicemode command is available
-  if command -v voicemode >/dev/null 2>&1; then
-    print_success "VoiceMode CLI is available" >&2
-    echo "voicemode"
-    return 0
-  else
-    print_warning "VoiceMode CLI not found" >&2
-    echo "  Please ensure VoiceMode was installed correctly with 'uv tool install --upgrade --force voice-mode'" >&2
-    echo "  You may need to restart your shell or run: source ~/.bashrc" >&2
-    return 1
-  fi
+    case "$capability" in
+        excellent)
+            echo "Local voice services should run excellently on this system."
+            ;;
+        good)
+            echo "Local voice services should run well on this system."
+            ;;
+        limited)
+            echo "Local voice services may be slow on this system."
+            ;;
+    esac
 }
 
-install_service() {
-  local service_name="$1"
-  local voice_mode_cmd="$2"
-  local description="$3"
-
-  print_step "Installing $description..."
-
-  # Debug mode check
-  if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
-    echo "[DEBUG] Checking service command: $voice_mode_cmd $service_name --help"
-  fi
-
-  # Check if the service subcommand exists first
-  # Redirect stderr to stdout and check for the actual help output
-  # This handles cases where Python warnings are printed to stderr
-  local help_output
-  local help_exit_code
-  help_output=$(timeout 30 $voice_mode_cmd $service_name --help 2>&1 || true)
-  help_exit_code=$?
-
-  if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
-    echo "[DEBUG] Help command exit code: $help_exit_code"
-    echo "[DEBUG] Help output length: ${#help_output} bytes"
-    echo "[DEBUG] First 500 chars of help output:"
-    echo "$help_output" | head -c 500
-    echo ""
-    echo "[DEBUG] Checking for 'Commands:' in output..."
-  fi
-
-  if ! echo "$help_output" | grep -q "Commands:"; then
-    print_warning "$description service command not available"
-    if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
-      echo "[DEBUG] 'Commands:' not found in help output"
-      echo "[DEBUG] Full help output:"
-      echo "$help_output"
-    fi
-    return 1
-  fi
-
-  if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
-    echo "[DEBUG] Service command check passed"
-  fi
-
-  # Install with timeout and capture output
-  local temp_log=$(mktemp)
-  local install_success=false
-
-  print_step "Running: $voice_mode_cmd $service_name install --auto-enable"
-  if timeout 600 $voice_mode_cmd $service_name install --auto-enable 2>&1 | tee "$temp_log"; then
-    install_success=true
-  fi
-  print_step "Running: $voice_mode_cmd $service_name enable"
-  if timeout 600 $voice_mode_cmd $service_name enable 2>&1 | tee "$temp_log"; then
-    install_success=true
-  fi
-
-  # Check for specific success/failure indicators
-  if [[ "$install_success" == true ]] && ! grep -qi "error\|failed\|traceback" "$temp_log"; then
-    print_success "$description installed successfully"
-    rm -f "$temp_log"
-    return 0
-  else
-    print_warning "$description installation may have failed"
-    echo "Last few lines of output:"
-    tail -10 "$temp_log" | sed 's/^/  /'
-    rm -f "$temp_log"
-    return 1
-  fi
-}
-
-install_all_services() {
-  local voice_mode_cmd="$1"
-  local success_count=0
-  local total_count=3
-
-  print_step "Installing all VoiceMode services..."
-
-  # Install each service independently
-  if install_service "whisper" "$voice_mode_cmd" "Whisper (Speech-to-Text)"; then
-    ((success_count++))
-    # CoreML acceleration info for Apple Silicon Macs (now automatic!)
-    setup_coreml_acceleration
-  fi
-
-  if install_service "kokoro" "$voice_mode_cmd" "Kokoro (Text-to-Speech)"; then
-    ((success_count++))
-  fi
-
-  if install_service "livekit" "$voice_mode_cmd" "LiveKit (Real-time Communication)"; then
-    ((success_count++))
-  fi
-
-  # Report results
-  echo ""
-  if [[ $success_count -eq $total_count ]]; then
-    print_success "All voice services installed successfully!"
-  elif [[ $success_count -gt 0 ]]; then
-    print_warning "$success_count of $total_count services installed successfully"
-    echo "   Check error messages above for failed installations"
-  else
-    print_error "No services were installed successfully"
-  fi
-}
-
-install_services_selective() {
-  local voice_mode_cmd="$1"
-
-  if confirm_action "Would you like to install Whisper (Speech-to-Text)?" false; then
-    install_service "whisper" "$voice_mode_cmd" "Whisper"
-    # CoreML acceleration info for Apple Silicon Macs (now automatic!)
-    setup_coreml_acceleration
-  fi
-
-  if confirm_action "Would you like to install Kokoro (Text-to-Speech)?" false; then
-    install_service "kokoro" "$voice_mode_cmd" "Kokoro"
-  fi
-
-  if confirm_action "Would you like to install LiveKit (Real-time Communication)?" false; then
-    install_service "livekit" "$voice_mode_cmd" "LiveKit"
-  fi
-}
-
-verify_voice_mode_after_mcp() {
-  print_step "Verifying VoiceMode CLI availability after MCP configuration..."
-
-  # Give a moment for any caching to settle
-  sleep 2
-
-  # Check voice-mode CLI availability
-  local voice_mode_cmd
-  if ! voice_mode_cmd=$(check_voice_mode_cli); then
-    print_warning "VoiceMode CLI not available yet. This could be due to:"
-    echo "  • PATH not updated in current shell"
-    echo "  • VoiceMode not installed yet"
-    echo "  • Need to restart shell for PATH updates"
-    echo ""
-    echo "You can install services manually later with:"
-    echo "  voicemode whisper install"
-    echo "  voicemode kokoro install"
-    echo "  voicemode livekit install"
-    return 1
-  fi
-
-  print_success "VoiceMode CLI verified: $voice_mode_cmd"
-  return 0
-}
-
+# Prompt user to install local voice services
 install_voice_services() {
-  # Verify voice-mode CLI availability first
-  if ! verify_voice_mode_after_mcp; then
-    return 1
-  fi
+    local os="$1"
+    local arch="$2"
+    local whisper_installed=false
+    local kokoro_installed=false
 
-  # Get the verified command
-  local voice_mode_cmd
-  voice_mode_cmd=$(check_voice_mode_cli)
+    # Check what's already installed
+    if is_whisper_installed; then
+        whisper_installed=true
+        ok "Whisper STT already installed"
+    fi
 
-  echo ""
-  echo -e "${BLUE}🎤 VoiceMode Services${NC}"
-  echo ""
-  echo "VoiceMode can install local services for the best experience:"
-  echo "  • Whisper - Fast local speech-to-text (no cloud required)"
-  echo "  • Kokoro - Natural text-to-speech with multiple voices"
-  echo "  • LiveKit - Real-time voice communication server"
-  echo ""
-  echo "Benefits:"
-  echo "  • Privacy - All processing happens locally"
-  echo "  • Speed - No network latency"
-  echo "  • Reliability - Works offline"
-  echo ""
-  echo "Note: Service installation may take several minutes and requires internet access."
-  echo ""
+    if is_kokoro_installed; then
+        kokoro_installed=true
+        ok "Kokoro TTS already installed"
+    fi
 
-  # Quick mode or selective
-  read -p "Install all recommended services? [Y/n/s]: " choice
-  case $choice in
-  [Ss]*)
-    # Selective mode
-    install_services_selective "$voice_mode_cmd"
-    ;;
-  [Nn]*)
-    print_warning "Skipping service installation. VoiceMode will use cloud services."
-    ;;
-  *)
-    # Default: install all
-    install_all_services "$voice_mode_cmd"
-    ;;
-  esac
+    # If both are installed, nothing to do
+    if [[ "$whisper_installed" == "true" && "$kokoro_installed" == "true" ]]; then
+        return 0
+    fi
+
+    # Assess system capability
+    local capability
+    capability=$(assess_voice_capability "$os" "$arch")
+    local capability_msg
+    capability_msg=$(get_capability_message "$capability")
+
+    # Show info about local voice services
+    echo ""
+    echo "${BOLD}Local Voice Services${RESET}"
+    info "$capability_msg"
+
+    # Build list of what would be installed
+    local services_to_install=""
+    if [[ "$whisper_installed" == "false" ]]; then
+        services_to_install="Whisper (speech-to-text)"
+    fi
+    if [[ "$kokoro_installed" == "false" ]]; then
+        if [[ -n "$services_to_install" ]]; then
+            services_to_install="$services_to_install, Kokoro (text-to-speech)"
+        else
+            services_to_install="Kokoro (text-to-speech)"
+        fi
+    fi
+
+    # Show download size estimate
+    local download_size="~3GB"
+    if [[ "$whisper_installed" == "false" && "$kokoro_installed" == "false" ]]; then
+        download_size="~3GB total"
+    elif [[ "$whisper_installed" == "false" ]]; then
+        download_size="~1.5GB"
+    elif [[ "$kokoro_installed" == "false" ]]; then
+        download_size="~1.5GB"
+    fi
+
+    info "Available: $services_to_install ($download_size download)"
+
+    # Prompt for installation (only if interactive AND TTY available)
+    if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
+        echo ""
+        read -r -p "Install local voice services? [Y/n] " response </dev/tty
+        case "$response" in
+            [nN][oO]|[nN])
+                info "Skipping local voice services"
+                info "You can install them later with: voicemode whisper install && voicemode kokoro install"
+                return 0
+                ;;
+        esac
+    else
+        # Non-interactive: skip voice services by default (they're large downloads)
+        info "Skipping local voice services (non-interactive mode)"
+        info "Install later with: voicemode whisper install && voicemode kokoro install"
+        return 0
+    fi
+
+    # Install Whisper if needed
+    if [[ "$whisper_installed" == "false" ]]; then
+        info "Installing Whisper STT..."
+        if voicemode whisper install; then
+            ok "Whisper STT installed"
+        else
+            warn "Whisper installation failed - you can retry with: voicemode whisper install"
+        fi
+    fi
+
+    # Install Kokoro if needed
+    if [[ "$kokoro_installed" == "false" ]]; then
+        info "Installing Kokoro TTS..."
+        if voicemode kokoro install; then
+            ok "Kokoro TTS installed"
+        else
+            warn "Kokoro installation failed - you can retry with: voicemode kokoro install"
+        fi
+    fi
 }
 
-show_banner() {
-  # Clear screen for clean presentation
-  clear
+# -----------------------------------------------------------------------------
+# VoiceMode Installation
+# -----------------------------------------------------------------------------
 
-  # Display VoiceMode ASCII art
-  echo ""
-  echo -e "${ORANGE}${BOLD}"
-  cat <<'EOF'
-    ╔════════════════════════════════════════════╗
-    ║                                            ║
-    ║   ██╗   ██╗ ██████╗ ██╗ ██████╗███████╗    ║
-    ║   ██║   ██║██╔═══██╗██║██╔════╝██╔════╝    ║
-    ║   ██║   ██║██║   ██║██║██║     █████╗      ║
-    ║   ╚██╗ ██╔╝██║   ██║██║██║     ██╔══╝      ║
-    ║    ╚████╔╝ ╚██████╔╝██║╚██████╗███████╗    ║
-    ║     ╚═══╝   ╚═════╝ ╚═╝ ╚═════╝╚══════╝    ║
-    ║                                            ║
-    ║   ███╗   ███╗ ██████╗ ██████╗ ███████╗     ║
-    ║   ████╗ ████║██╔═══██╗██╔══██╗██╔════╝     ║
-    ║   ██╔████╔██║██║   ██║██║  ██║█████╗       ║
-    ║   ██║╚██╔╝██║██║   ██║██║  ██║██╔══╝       ║
-    ║   ██║ ╚═╝ ██║╚██████╔╝██████╔╝███████╗     ║
-    ║   ╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝     ║
-    ║                                            ║
-    ║     🎙️  VoiceMode for Claude Code  🤖      ║
-    ║                                            ║
-    ╚════════════════════════════════════════════╝
-EOF
-  echo -e "${NC}"
+# Install VoiceMode using uv
+install_voicemode() {
+    info "Installing VoiceMode..."
 
-  echo -e "${BOLD}Talk to Claude like a colleague, not a chatbot.${NC}"
-  echo ""
-  echo -e "${DIM}Transform your AI coding experience with natural voice conversations.${NC}"
-  echo ""
+    local output
+    # Use uv tool install for isolated tool installation
+    # Capture output to check for "already installed" message
+    if output=$(uv tool install "$VOICEMODE_PACKAGE" 2>&1); then
+        if echo "$output" | grep -q "already installed"; then
+            ok "VoiceMode already installed"
+        else
+            ok "VoiceMode installed"
+        fi
+    else
+        # Installation failed
+        if command_exists voicemode; then
+            # Already installed but uv failed (shouldn't happen normally)
+            ok "VoiceMode already installed"
+        else
+            echo "$output" >&2
+            die "VoiceMode installation failed"
+        fi
+    fi
 }
 
-setup_coreml_acceleration() {
-  # Check if we're on Apple Silicon Mac
-  if [[ "$OS" == "macos" ]] && [[ "$ARCH" == "arm64" ]]; then
-    echo ""
-    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo -e "${BLUE}${BOLD}🚀 CoreML Acceleration Included!${NC}"
-    echo ""
-    echo "Your Mac supports CoreML acceleration for Whisper!"
-    echo ""
-    echo -e "${GREEN}Great News:${NC}"
-    echo "  • Pre-built Core ML models download automatically"
-    echo "  • NO Python dependencies (PyTorch) required"
-    echo "  • NO Xcode installation needed"
-    echo "  • NO manual setup or configuration"
-    echo ""
-    echo -e "${GREEN}Benefits:${NC}"
-    echo "  • 2-3x faster transcription than Metal-only"
-    echo "  • Lower CPU usage during speech recognition"
-    echo "  • Better battery life on MacBooks"
-    echo "  • Instant setup - just downloads and works!"
-    echo ""
-    echo -e "${DIM}Core ML models are downloaded automatically when you install${NC}"
-    echo -e "${DIM}Whisper models. No additional steps required!${NC}"
-    echo ""
-    echo -e "${CYAN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  fi
+# Verify VoiceMode installation and show version
+verify_voicemode() {
+    # Refresh PATH to pick up newly installed tools
+    export PATH="$HOME/.local/bin:$PATH"
+
+    if ! command_exists voicemode; then
+        die "VoiceMode command not found after installation.
+Please ensure ~/.local/bin is in your PATH:
+    export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+
+    local version
+    version=$(voicemode --version 2>/dev/null | sed 's/VoiceMode, version //' || echo "unknown")
+    ok "VoiceMode $version ready"
 }
+
+# Display next steps for the user
+show_next_steps() {
+    echo ""
+    echo "Next steps:"
+    echo "  voicemode --help   Show available commands"
+    echo "  voicemode status   Check service status"
+    echo ""
+    echo "Documentation: https://getvoicemode.com/docs"
+}
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
 
 main() {
-  # Show banner first
-  show_banner
+    local os arch distro
 
-  # Check for debug mode
-  if [[ "${VOICEMODE_INSTALL_DEBUG:-}" == "true" ]]; then
-    echo -e "${YELLOW}[DEBUG MODE ENABLED]${NC}"
-    echo ""
-  fi
+    # Detect platform
+    os=$(detect_os)
+    arch=$(detect_arch)
 
-  # Anonymous analytics beacon (privacy-respecting)
-  # Only tracks: install event, OS type, timestamp
-  # No personal data collected
-  {
-    if command -v curl >/dev/null 2>&1; then
-      # Simple beacon to track installs
-      # Uses Goatcounter's pixel tracking endpoint
-      curl -s "https://getvoicemode.goatcounter.com/count?p=/install&t=Install%20Script" \
-        -H "User-Agent: VoiceMode-Installer/${OS:-unknown}" \
-        -H "Referer: https://getvoicemode.com/install.sh" \
-        >/dev/null 2>&1 || true
-    fi
-  } &
+    # Display logo
+    show_logo
 
-  # Pre-flight checks
-  detect_os
+    # Install system dependencies (includes uv)
+    install_system_deps "$os" "$arch"
 
-  # Collect comprehensive system information
-  collect_system_info
+    # Install and verify VoiceMode
+    install_voicemode
+    verify_voicemode
 
-  # Display dependency status
-  display_dependency_status
+    # Offer to install local voice services
+    install_voice_services "$os" "$arch"
 
-  # Check if we have missing dependencies
-  if check_missing_dependencies; then
-    echo "All required dependencies are installed!"
-  else
-    print_warning "Some dependencies are missing and will be installed"
-  fi
-
-  # Early sudo caching for service installation (Linux only)
-  if [[ "$OS" == "linux" ]] && command -v sudo >/dev/null 2>&1; then
-    print_step "Requesting administrator access for system configuration..."
-    if ! sudo -v; then
-      print_warning "Administrator access declined. Some features may not be available."
-    fi
-  fi
-
-  # OS-specific setup
-  if [[ "$OS" == "macos" ]]; then
-    check_homebrew
-    # Don't install Homebrew here - let install_system_dependencies handle it
-  fi
-
-  check_python
-  install_uv
-
-  # Install dependencies (handles Homebrew installation if needed)
-  install_system_dependencies
-
-  # Install VoiceMode package locally
-  install_voicemode
-
-  # Setup npm for non-macOS systems
-  if [[ "$OS" != "macos" ]]; then
-    setup_local_npm
-  fi
-
-  # Configure OpenAI API key for quick start
-  configure_api_key
-
-  # Check if user is in home directory and suggest creating a workspace
-  check_and_suggest_working_directory
-
-  # Install Claude Code if needed, then configure VoiceMode
-  # Skip Claude Code installation in CI mode
-  if [[ "$CI_MODE" == "true" ]]; then
-    print_step "Skipping Claude Code installation (CI mode)"
-    echo ""
-    echo "✅ VoiceMode installation completed successfully!"
-    echo ""
-    echo "VoiceMode has been installed to: $(which voicemode)"
-    echo "Version: $(voicemode --version 2>/dev/null || echo 'unknown')"
-  elif install_claude_if_needed; then
-    if configure_claude_voicemode; then
-      # VoiceMode configured successfully
-      echo ""
-      echo "🎉 VoiceMode is ready!"
-      echo ""
-
-      # Test voice setup if API key is configured (from environment or config file)
-      if [ -n "${OPENAI_API_KEY:-}" ] || [ "${VOICEMODE_API_KEY_CONFIGURED:-}" = "true" ]; then
-        test_voice_setup
-      fi
-
-      echo ""
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo "                    ✨ VoiceMode Installation Complete!"
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo ""
-
-      # Advanced options as a side note
-      echo "📝 Advanced Options (not required):"
-      echo "   Local voice services can reduce latency/costs and improve privacy:"
-      echo "   • voicemode whisper install  # Local speech-to-text"
-      echo "   • voicemode kokoro install   # Local text-to-speech"
-      echo ""
-
-      # Main instructions
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo ""
-      echo "🎯 How to use VoiceMode with Claude:"
-      echo ""
-      echo "1. From terminal: claude converse"
-      echo "2. From Claude Code: Type 'converse' or '/voicemode:converse'"
-      echo ""
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo ""
-
-      # Important note about shell restart
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo ""
-      echo "⚠️  IMPORTANT: Terminal Restart Required"
-      echo ""
-      echo "The 'claude' command won't work until you:"
-      echo "  Option 1: Close and reopen your terminal (recommended)"
-      if [[ -n "${SYSTEM_INFO_SHELL_RC_FILE}" ]]; then
-        echo "  Option 2: Run: source ${SYSTEM_INFO_SHELL_RC_FILE}"
-      else
-        echo "  Option 2: Run: source your shell configuration file"
-      fi
-      echo ""
-      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-      echo ""
-      echo "But we can start a conversation right now without restarting!"
-      echo ""
-
-      # Offer to start Claude immediately
-      if confirm_action "Would you like to start a voice conversation with Claude now? [Y/n]"; then
-        echo ""
-        print_step "Starting Claude with voice mode..."
-        echo "  • Say something when you hear the chime"
-        echo "  • Press Ctrl+C to exit when done"
-        echo ""
-
-        # Use the full path to claude since PATH may not be updated yet
-        if [ -f "$HOME/.npm-global/bin/claude" ]; then
-          "$HOME/.npm-global/bin/claude" converse
-        elif command -v claude >/dev/null 2>&1; then
-          claude converse
-        else
-          print_warning "Claude command not found in expected location."
-          echo "After restarting your terminal, run: claude converse"
-        fi
-      else
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo "🚀 To start using VoiceMode:"
-        echo ""
-        if [[ -n "${SYSTEM_INFO_SHELL_RC_FILE}" ]]; then
-          echo "  1. Restart your terminal (or run: source ${SYSTEM_INFO_SHELL_RC_FILE})"
-        else
-          echo "  1. Restart your terminal"
-        fi
-        if [[ -n "${CLAUDE_SUGGESTED_DIR:-}" ]]; then
-          echo "  2. cd ${CLAUDE_SUGGESTED_DIR}"
-          echo "  3. claude converse"
-        else
-          echo "  2. claude converse  (from your current directory)"
-        fi
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-      fi
-    else
-      print_warning "VoiceMode configuration was skipped or failed."
-      echo ""
-      echo "You can manually configure VoiceMode later with:"
-      echo "  claude mcp add --scope user voicemode -- uvx --refresh voice-mode"
-      echo ""
-      echo "Then install services with:"
-      echo "  voicemode whisper install"
-      echo "  voicemode kokoro install"
-      echo "  voicemode livekit install"
-    fi
-  fi
-
-  # WSL-specific instructions
-  if [[ "$IS_WSL" == true ]]; then
-    echo ""
-    echo -e "${YELLOW}WSL2 Audio Setup:${NC}"
-    echo "VoiceMode requires microphone access in WSL2. If you encounter audio issues:"
-    echo "  1. Enable Windows microphone permissions for your terminal app"
-    echo "  2. Ensure PulseAudio is running: pulseaudio --start"
-    echo "  3. Test audio devices: python3 -m sounddevice"
-    echo "  4. See troubleshooting guide: https://github.com/mbailey/voicemode/blob/main/docs/troubleshooting/wsl2-microphone-access.md"
-  fi
-
-  echo ""
-  echo "For more information, visit: https://github.com/mbailey/voicemode"
+    show_next_steps
 }
 
-# Run main function
 main "$@"

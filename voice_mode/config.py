@@ -116,8 +116,8 @@ def load_voicemode_env():
 # Enable audio feedback chimes (true/false)
 # VOICEMODE_AUDIO_FEEDBACK=true
 
-# Enable sound fonts for tool use hooks (true/false)
-# VOICEMODE_SOUNDFONTS_ENABLED=false
+# Enable sound fonts for tool use hooks (true/false, default: true)
+# VOICEMODE_SOUNDFONTS_ENABLED=true
 
 #############
 # Tool Loading Configuration
@@ -172,6 +172,9 @@ def load_voicemode_env():
 # Whisper server port (default: 2022)
 # VOICEMODE_WHISPER_PORT=2022
 
+# Number of threads for Whisper processing (auto-detected if not set)
+# VOICEMODE_WHISPER_THREADS=
+
 # Language for transcription (auto, en, es, fr, de, it, pt, ru, zh, ja, ko, etc.)
 # VOICEMODE_WHISPER_LANGUAGE=auto
 
@@ -193,19 +196,6 @@ def load_voicemode_env():
 
 # Default Kokoro voice
 # VOICEMODE_KOKORO_DEFAULT_VOICE=af_sky
-
-#############
-# LiveKit Configuration
-#############
-
-# LiveKit server port (default: 7880)
-# VOICEMODE_LIVEKIT_PORT=7880
-
-# Frontend server host (default: 127.0.0.1)
-# VOICEMODE_FRONTEND_HOST=127.0.0.1
-
-# Frontend server port (default: 3000)
-# VOICEMODE_FRONTEND_PORT=3000
 
 #############
 # Recording & Voice Activity Detection
@@ -329,6 +319,37 @@ TTS \\bAPI\\b A P I # API as individual letters
 # VOICEMODE_SERVICE_AUTO_ENABLE=true
 
 #############
+# HTTP Serve Configuration
+#############
+
+# Host/IP address to bind the server to (default: 127.0.0.1)
+# VOICEMODE_SERVE_HOST=127.0.0.1
+
+# Port to bind the server to (default: 8765)
+# VOICEMODE_SERVE_PORT=8765
+
+# Transport protocol: streamable-http or sse (default: streamable-http)
+# VOICEMODE_SERVE_TRANSPORT=streamable-http
+
+# Security: Allow connections from local/private IP ranges (default: true)
+# VOICEMODE_SERVE_ALLOW_LOCAL=true
+
+# Security: Allow connections from Anthropic IP ranges for Claude Cowork (default: false)
+# VOICEMODE_SERVE_ALLOW_ANTHROPIC=false
+
+# Security: Allow connections from Tailscale IP range 100.64.0.0/10 (default: false)
+# VOICEMODE_SERVE_ALLOW_TAILSCALE=false
+
+# Security: Additional allowed CIDR ranges (comma-separated)
+# VOICEMODE_SERVE_ALLOWED_IPS=
+
+# Authentication: URL secret path segment (e.g., /secret-path/mcp)
+# VOICEMODE_SERVE_SECRET=
+
+# Authentication: Bearer token for Authorization header
+# VOICEMODE_SERVE_TOKEN=
+
+#############
 # Advanced Configuration
 #############
 
@@ -341,13 +362,6 @@ TTS \\bAPI\\b A P I # API as individual letters
 
 # OpenAI API key for cloud TTS/STT
 # OPENAI_API_KEY=your-key-here
-
-# LiveKit server URL
-# LIVEKIT_URL=ws://127.0.0.1:7880
-
-# LiveKit API credentials
-# LIVEKIT_API_KEY=devkey
-# LIVEKIT_API_SECRET=secret
 '''
         with open(default_path, 'w') as f:
             f.write(default_config)
@@ -472,6 +486,25 @@ ALWAYS_TRY_LOCAL = os.getenv("VOICEMODE_ALWAYS_TRY_LOCAL", "true").lower() in ("
 # Auto-start configuration
 AUTO_START_KOKORO = os.getenv("VOICEMODE_AUTO_START_KOKORO", "").lower() in ("true", "1", "yes", "on")
 
+# ==================== CONCH CONFIGURATION ====================
+# The conch is a coordination mechanism for multi-agent voice conversations
+# Only the agent holding the conch may speak
+
+# Enable/disable the conch system entirely
+CONCH_ENABLED = os.getenv("VOICEMODE_CONCH_ENABLED", "true").lower() in ("true", "1", "yes", "on")
+
+# Maximum time (seconds) to wait for conch when wait_for_conch=true
+CONCH_TIMEOUT = float(os.getenv("VOICEMODE_CONCH_TIMEOUT", "60"))
+
+# How often (seconds) to check if conch is free when waiting
+CONCH_CHECK_INTERVAL = float(os.getenv("VOICEMODE_CONCH_CHECK_INTERVAL", "0.5"))
+
+# Maximum age (seconds) before a lock is considered stale and can be forcibly released
+# This prevents stuck locks from blocking all voice interactions indefinitely
+# Should be longer than your typical conversation turn (listen + TTS + buffer)
+# Default 300s (5 min) covers 2 min listen + long TTS. Set to 0 to disable.
+CONCH_LOCK_EXPIRY = float(os.getenv("VOICEMODE_CONCH_LOCK_EXPIRY", "300"))
+
 # ==================== SERVICE CONFIGURATION ====================
 
 # OpenAI configuration
@@ -488,6 +521,10 @@ TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:88
 STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
 TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
+
+# STT prompt for vocabulary biasing (helps with specialized terminology)
+# See: https://platform.openai.com/docs/guides/speech-to-text#prompting
+STT_PROMPT = os.getenv("VOICEMODE_STT_PROMPT", "")
 
 # Voice preferences cache
 _cached_voice_preferences: Optional[list] = None
@@ -550,11 +587,6 @@ def reload_configuration():
 # - VOICEMODE_VOICES (comma-separated list)
 # - VOICEMODE_TTS_MODELS (comma-separated list)
 
-# LiveKit configuration
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", "ws://127.0.0.1:7880")
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
-
 # ==================== WHISPER CONFIGURATION ====================
 
 # Default Whisper model for installation and runtime
@@ -574,18 +606,6 @@ KOKORO_MODELS_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_MODELS_DIR", str(BAS
 KOKORO_CACHE_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_CACHE_DIR", str(BASE_DIR / "cache" / "kokoro")))
 KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
 
-# ==================== LIVEKIT CONFIGURATION ====================
-
-# LiveKit-specific configuration
-LIVEKIT_PORT = int(os.getenv("VOICEMODE_LIVEKIT_PORT", "7880"))
-LIVEKIT_URL = os.getenv("LIVEKIT_URL", f"ws://localhost:{LIVEKIT_PORT}")
-LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY", "devkey")
-LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET", "secret")
-
-# LiveKit Frontend configuration
-FRONTEND_HOST = os.getenv("VOICEMODE_FRONTEND_HOST", "127.0.0.1")
-FRONTEND_PORT = int(os.getenv("VOICEMODE_FRONTEND_PORT", "3000"))
-
 # ==================== SERVICE MANAGEMENT CONFIGURATION ====================
 
 # Auto-enable services after installation
@@ -593,8 +613,9 @@ SERVICE_AUTO_ENABLE = env_bool("VOICEMODE_SERVICE_AUTO_ENABLE", True)
 
 # ==================== SOUND FONTS CONFIGURATION ====================
 
-# Sound fonts are disabled by default to avoid annoying users with unexpected sounds
-SOUNDFONTS_ENABLED = env_bool("VOICEMODE_SOUNDFONTS_ENABLED", False)
+# Sound fonts are enabled by default for audio feedback during tool calls
+# Set VOICEMODE_SOUNDFONTS_ENABLED=false to disable
+SOUNDFONTS_ENABLED = env_bool("VOICEMODE_SOUNDFONTS_ENABLED", True)
 
 # ==================== AUDIO CONFIGURATION ====================
 
@@ -823,39 +844,53 @@ def initialize_directories():
 # ==================== SOUND FONTS INITIALIZATION ====================
 
 def initialize_soundfonts():
-    """Install default sound fonts from package data if not present."""
+    """Install package sound fonts and set up soundfonts directory structure.
+
+    Directory structure:
+        ~/.voicemode/soundfonts/
+            voicemode/     - Package-managed soundfonts (always synced from package)
+            current -> voicemode  - Symlink to active soundfont (user can change)
+
+    Users can create custom soundfont directories and point 'current' to them.
+    The 'voicemode' directory is always overwritten on package updates.
+    """
     import shutil
     import importlib.resources
-    
+
     soundfonts_dir = BASE_DIR / "soundfonts"
-    default_soundfont_dir = soundfonts_dir / "default"
+    package_soundfont_dir = soundfonts_dir / "voicemode"
     current_symlink = soundfonts_dir / "current"
-    
-    # Skip if soundfonts already exist (user has customized them)
-    if default_soundfont_dir.exists():
-        # Ensure symlink exists if directory exists
-        if not current_symlink.exists():
-            try:
-                current_symlink.symlink_to(default_soundfont_dir.resolve())
-            except OSError:
-                # Symlinks might not work on all systems
-                pass
-        return
-    
+
+    # Migration: rename old 'default' directory to 'voicemode'
+    old_default_dir = soundfonts_dir / "default"
+    if old_default_dir.exists() and not package_soundfont_dir.exists():
+        try:
+            old_default_dir.rename(package_soundfont_dir)
+            # Update symlink if it pointed to default
+            if current_symlink.is_symlink():
+                target = current_symlink.resolve()
+                if target == old_default_dir.resolve() or "default" in str(current_symlink.readlink()):
+                    current_symlink.unlink()
+                    current_symlink.symlink_to(package_soundfont_dir.resolve())
+        except OSError:
+            pass  # Migration failed, will recreate below
+
     try:
         # Create soundfonts directory
         soundfonts_dir.mkdir(exist_ok=True)
-        
-        # Copy default soundfonts from package data
+
+        # Always sync package soundfonts to 'voicemode' directory
+        # This ensures updates are applied
         try:
             # For Python 3.9+
             from importlib.resources import files
             package_soundfonts = files("voice_mode.data.soundfonts.default")
-            
+
             if package_soundfonts.is_dir():
-                # Create the default directory
-                default_soundfont_dir.mkdir(exist_ok=True)
-                
+                # Remove existing package-managed directory to ensure clean sync
+                if package_soundfont_dir.exists():
+                    shutil.rmtree(package_soundfont_dir)
+
                 # Recursively copy all files from package data
                 def copy_tree(src, dst):
                     """Recursively copy directory tree from package data."""
@@ -866,31 +901,34 @@ def initialize_soundfonts():
                             target.write_bytes(item.read_bytes())
                         elif item.is_dir():
                             copy_tree(item, dst / item.name)
-                
+
                 # Copy entire tree structure
-                copy_tree(package_soundfonts, default_soundfont_dir)
+                copy_tree(package_soundfonts, package_soundfont_dir)
         except ImportError:
             # Fallback for older Python versions
             import pkg_resources
-            
-            # Create the default directory
-            default_soundfont_dir.mkdir(exist_ok=True)
-            
+
+            # Remove existing package-managed directory to ensure clean sync
+            if package_soundfont_dir.exists():
+                shutil.rmtree(package_soundfont_dir)
+            package_soundfont_dir.mkdir(exist_ok=True)
+
             # List all resources in the soundfonts directory
             resource_dir = "data/soundfonts/default"
             if pkg_resources.resource_exists("voice_mode", resource_dir):
                 # This is a bit more complex with pkg_resources
                 # We'll need to manually copy the structure
                 pass
-        
-        # Create symlink to current soundfont (points to default)
-        if default_soundfont_dir.exists() and not current_symlink.exists():
+
+        # Create symlink to current soundfont (points to voicemode)
+        # Only create if it doesn't exist - user may have customized it
+        if package_soundfont_dir.exists() and not current_symlink.exists():
             try:
-                current_symlink.symlink_to(default_soundfont_dir.resolve())
+                current_symlink.symlink_to(package_soundfont_dir.resolve())
             except OSError:
                 # Symlinks might not work on all systems (e.g., Windows without admin)
                 pass
-                
+
     except Exception as e:
         # Don't fail initialization if soundfonts can't be installed
         # They're optional and disabled by default
@@ -1183,6 +1221,35 @@ def get_format_export_params(format: str) -> dict:
         pass
     
     return params
+
+# ==================== SERVE COMMAND CONFIGURATION ====================
+
+# Host/IP address to bind the server to (default: 127.0.0.1)
+SERVE_HOST = os.getenv("VOICEMODE_SERVE_HOST", "127.0.0.1")
+
+# Port to bind the server to (default: 8765)
+SERVE_PORT = int(os.getenv("VOICEMODE_SERVE_PORT", "8765"))
+
+# Allow connections from local/private IP ranges (default: true)
+SERVE_ALLOW_LOCAL = env_bool("VOICEMODE_SERVE_ALLOW_LOCAL", True)
+
+# Allow connections from Anthropic IP ranges for Claude Cowork (default: false)
+SERVE_ALLOW_ANTHROPIC = env_bool("VOICEMODE_SERVE_ALLOW_ANTHROPIC", False)
+
+# Allow connections from Tailscale IP range 100.64.0.0/10 (default: false)
+SERVE_ALLOW_TAILSCALE = env_bool("VOICEMODE_SERVE_ALLOW_TAILSCALE", False)
+
+# Additional allowed CIDR ranges (comma-separated, default: empty)
+SERVE_ALLOWED_IPS = os.getenv("VOICEMODE_SERVE_ALLOWED_IPS", "")
+
+# URL secret path segment for authentication (default: empty/disabled)
+SERVE_SECRET = os.getenv("VOICEMODE_SERVE_SECRET", "")
+
+# Bearer token for authentication (default: empty/disabled)
+SERVE_TOKEN = os.getenv("VOICEMODE_SERVE_TOKEN", "")
+
+# Transport protocol (streamable-http or sse)
+SERVE_TRANSPORT = os.getenv("VOICEMODE_SERVE_TRANSPORT", "streamable-http")
 
 # ==================== THINK OUT LOUD CONFIGURATION ====================
 
