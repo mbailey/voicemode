@@ -245,3 +245,7 @@ See [Call Routing](../../../docs/guides/agents/call-routing/) for comprehensive 
 | Troubleshooting | [Troubleshooting](../../docs/troubleshooting/index.md) |
 | CLI Reference | [CLI Docs](../../docs/reference/cli.md) |
 | DJ Mode | [Background Music](docs/dj-mode/README.md) |
+
+## Related Skills
+
+- **[VoiceMode Connect](../voicemode-connect/SKILL.md)** - Remote voice via mobile/web clients (no local STT/TTS needed)
