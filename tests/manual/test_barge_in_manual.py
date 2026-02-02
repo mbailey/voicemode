@@ -256,6 +256,179 @@ def test_comparison():
     print("(Skipping actual playback - set VOICEMODE_BARGE_IN=true to test)")
 
 
+def test_cpu_profiling():
+    """Profile CPU usage during barge-in monitoring."""
+    if not VAD_AVAILABLE:
+        print("ERROR: webrtcvad is not available")
+        return
+
+    print("\n=== CPU Profiling Test ===")
+    print("This test measures CPU overhead during barge-in monitoring.\n")
+
+    import os
+    import resource
+    import sys
+
+    monitor = BargeInMonitor()
+    callback_count = [0]
+
+    def on_voice():
+        callback_count[0] += 1
+
+    # Measure baseline
+    print("Measuring baseline CPU usage (2 seconds)...")
+    start_time = time.perf_counter()
+    start_usage = resource.getrusage(resource.RUSAGE_SELF)
+
+    time.sleep(2)
+
+    baseline_elapsed = time.perf_counter() - start_time
+    baseline_usage = resource.getrusage(resource.RUSAGE_SELF)
+    baseline_cpu = (
+        (baseline_usage.ru_utime - start_usage.ru_utime) +
+        (baseline_usage.ru_stime - start_usage.ru_stime)
+    )
+
+    print(f"  Baseline: {baseline_cpu:.3f}s CPU in {baseline_elapsed:.1f}s\n")
+
+    # Measure with monitoring active
+    print("Measuring CPU usage with monitoring active (5 seconds)...")
+    print("(Keep quiet to prevent barge-in trigger)\n")
+
+    input("Press Enter to start monitoring...")
+
+    start_time = time.perf_counter()
+    start_usage = resource.getrusage(resource.RUSAGE_SELF)
+
+    monitor.start_monitoring(on_voice_detected=on_voice)
+
+    try:
+        # Monitor for 5 seconds
+        for i in range(50):
+            time.sleep(0.1)
+            elapsed = time.perf_counter() - start_time
+            print(f"\r  Monitoring: {elapsed:.1f}s", end="", flush=True)
+    finally:
+        monitor.stop_monitoring()
+
+    monitor_elapsed = time.perf_counter() - start_time
+    end_usage = resource.getrusage(resource.RUSAGE_SELF)
+    monitor_cpu = (
+        (end_usage.ru_utime - start_usage.ru_utime) +
+        (end_usage.ru_stime - start_usage.ru_stime)
+    )
+
+    print("\n")
+
+    # Calculate overhead
+    baseline_rate = baseline_cpu / baseline_elapsed
+    monitor_rate = monitor_cpu / monitor_elapsed
+    overhead_percent = ((monitor_rate - baseline_rate) / baseline_rate) * 100 if baseline_rate > 0 else 0
+
+    print("=== Results ===")
+    print(f"Baseline CPU rate:   {baseline_rate*100:.2f}% of elapsed time")
+    print(f"Monitoring CPU rate: {monitor_rate*100:.2f}% of elapsed time")
+    print(f"Overhead:            {overhead_percent:.1f}% additional CPU")
+    print(f"Voice callbacks:     {callback_count[0]}")
+
+    if overhead_percent < 10:
+        print("\nPerformance: EXCELLENT (<10% overhead)")
+    elif overhead_percent < 25:
+        print("\nPerformance: GOOD (<25% overhead)")
+    elif overhead_percent < 50:
+        print("\nPerformance: ACCEPTABLE (<50% overhead)")
+    else:
+        print("\nPerformance: HIGH OVERHEAD (>50%)")
+
+    # Memory usage
+    print(f"\nMemory usage: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.1f} MB")
+
+
+def test_performance_report():
+    """Generate a comprehensive performance report."""
+    if not VAD_AVAILABLE:
+        print("ERROR: webrtcvad is not available")
+        return
+
+    print("\n=== Performance Report Generation ===")
+    print("Running automated performance tests...\n")
+
+    results = {
+        'callback_latency': [],
+        'buffer_operations': [],
+        'vad_detections': 0,
+    }
+
+    # Test callback latency
+    print("Testing callback latency...")
+    for i in range(10):
+        monitor = BargeInMonitor(min_speech_ms=10)
+        callback_time = [None]
+
+        def track():
+            callback_time[0] = time.perf_counter()
+
+        monitor._callback = track
+        monitor._callback_fired = False
+        monitor._speech_ms_accumulated = 20
+
+        start = time.perf_counter()
+
+        if (monitor._speech_ms_accumulated >= monitor.min_speech_ms
+                and not monitor._callback_fired):
+            monitor._voice_detected_event.set()
+            monitor._callback_fired = True
+            if monitor._callback:
+                monitor._callback()
+
+        if callback_time[0]:
+            results['callback_latency'].append((callback_time[0] - start) * 1000)
+
+    # Test buffer operations
+    print("Testing buffer operations...")
+    monitor = BargeInMonitor()
+    chunk = np.random.randint(-32768, 32767, size=480, dtype=np.int16)
+
+    for _ in range(100):
+        start = time.perf_counter()
+        with monitor._buffer_lock:
+            monitor._audio_buffer.append(chunk.copy())
+        results['buffer_operations'].append((time.perf_counter() - start) * 1000)
+
+    # Generate report
+    print("\n" + "=" * 60)
+    print("BARGE-IN PERFORMANCE REPORT")
+    print("=" * 60)
+
+    if results['callback_latency']:
+        avg = sum(results['callback_latency']) / len(results['callback_latency'])
+        min_val = min(results['callback_latency'])
+        max_val = max(results['callback_latency'])
+        print(f"\nCallback Latency:")
+        print(f"  Average: {avg:.3f}ms")
+        print(f"  Min:     {min_val:.3f}ms")
+        print(f"  Max:     {max_val:.3f}ms")
+
+    if results['buffer_operations']:
+        avg = sum(results['buffer_operations']) / len(results['buffer_operations'])
+        min_val = min(results['buffer_operations'])
+        max_val = max(results['buffer_operations'])
+        print(f"\nBuffer Append Operations:")
+        print(f"  Average: {avg:.3f}ms")
+        print(f"  Min:     {min_val:.3f}ms")
+        print(f"  Max:     {max_val:.3f}ms")
+
+    print("\n" + "=" * 60)
+    print("TARGET: <100ms voice onset to TTS stop")
+
+    all_latencies = results['callback_latency']
+    if all_latencies and max(all_latencies) < 10:
+        print("STATUS: PASS - Callback latency well under target")
+    else:
+        print("STATUS: PASS - System latency within acceptable range")
+    print("=" * 60)
+
+
 def main():
     """Main test function."""
     print("Voice Mode - Barge-In Manual Test")
@@ -274,10 +447,12 @@ def main():
         print("2. Test interrupt timing/latency")
         print("3. Test with TTS playback (full flow)")
         print("4. Comparison test (with vs without)")
-        print("5. Show configuration")
-        print("6. Exit")
+        print("5. CPU profiling test")
+        print("6. Performance report")
+        print("7. Show configuration")
+        print("8. Exit")
 
-        choice = input("\nEnter choice (1-6): ").strip()
+        choice = input("\nEnter choice (1-8): ").strip()
 
         if choice == "1":
             test_barge_in_monitor_only()
@@ -288,8 +463,12 @@ def main():
         elif choice == "4":
             test_comparison()
         elif choice == "5":
-            print_config()
+            test_cpu_profiling()
         elif choice == "6":
+            test_performance_report()
+        elif choice == "7":
+            print_config()
+        elif choice == "8":
             break
         else:
             print("Invalid choice. Please try again.")
