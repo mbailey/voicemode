@@ -117,6 +117,43 @@ Text → TTS Service → Audio Stream → Format Conversion → Speaker
 3. **Format Conversion**: FFmpeg handles formats
 4. **Playback**: PyAudio for speaker output
 
+### Barge-In (TTS Interruption)
+
+Barge-in enables natural conversation by allowing users to interrupt TTS playback:
+
+```
+TTS Playing ──┬── BargeInMonitor ──→ Voice Detected ──→ Interrupt Player
+              │         │                                      │
+              │   (VAD Analysis)                         (Stop Playback)
+              │         │                                      │
+              └─────────┴──── Captured Audio ──→ STT ──→ Response
+```
+
+**Components:**
+
+1. **BargeInMonitor** (`barge_in.py`): Monitors microphone during TTS
+   - Uses WebRTC VAD for speech detection
+   - Captures audio buffer from voice onset
+   - Fires interrupt callback when speech threshold met
+
+2. **NonBlockingAudioPlayer**: Extended with interrupt support
+   - `interrupt()` method stops playback immediately
+   - `was_interrupted()` indicates barge-in occurred
+   - Clean resource shutdown on interrupt
+
+3. **Conversation Flow Integration**:
+   - Monitor starts when TTS playback begins
+   - On voice detection: TTS stops, captured audio flows to STT
+   - Listening chime skipped (user already speaking)
+   - Normal conversation continues with interrupted speech
+
+**Configuration:**
+- `VOICEMODE_BARGE_IN=true` enables the feature
+- `VOICEMODE_BARGE_IN_VAD` controls detection sensitivity (0-3)
+- `VOICEMODE_BARGE_IN_MIN_MS` sets minimum speech duration threshold
+
+**Performance Target:** <100ms from voice onset to TTS stop
+
 ## Service Architecture
 
 ### Service Lifecycle

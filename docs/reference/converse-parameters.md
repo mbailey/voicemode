@@ -177,6 +177,48 @@ Skip text-to-speech, show text only.
 - When voice isn't needed
 - Text-only mode
 
+## Barge-In (TTS Interruption)
+
+Barge-in allows users to interrupt TTS playback by speaking, enabling more natural conversation flow.
+
+### Enabling Barge-In
+
+Barge-in is controlled by environment variables, not converse parameters:
+
+```bash
+# Enable barge-in (default: false)
+export VOICEMODE_BARGE_IN=true
+
+# VAD aggressiveness (0-3, default: 2)
+export VOICEMODE_BARGE_IN_VAD=2
+
+# Minimum speech duration in ms (default: 150)
+export VOICEMODE_BARGE_IN_MIN_MS=150
+```
+
+### How It Works
+
+1. When TTS playback starts, VoiceMode monitors the microphone
+2. WebRTC VAD analyzes audio for speech activity
+3. When voice is detected and sustained past the threshold:
+   - TTS playback stops immediately
+   - Captured speech (from voice onset) is passed to STT
+   - Listening chime is skipped (user is already speaking)
+   - Conversation continues normally
+
+### Requirements
+
+- `webrtcvad` library (installed automatically)
+- `wait_for_response=true` (default)
+- TTS not skipped via `skip_tts`
+
+### Tuning Tips
+
+- **False positives** (TTS stops randomly): Increase `VOICEMODE_BARGE_IN_VAD` (try 3) or `VOICEMODE_BARGE_IN_MIN_MS` (try 200-300)
+- **Slow response**: Decrease `VOICEMODE_BARGE_IN_MIN_MS` (try 100)
+- **Quiet environment**: Lower VAD (try 1)
+- **Noisy environment**: Higher VAD (try 3)
+
 ## Endpoint Requirements
 
 STT/TTS services must expose OpenAI-compatible endpoints:
