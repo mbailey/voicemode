@@ -7,7 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [8.0.8] - 2026-01-29
+## [8.1.0] - 2026-02-02
+
+### Added
+
+- **VoiceMode Connect** (VM-549, VM-561)
+  - Remote voice control via voicemode.dev mobile and web apps
+  - `voicemode connect login` - OAuth authentication with PKCE flow
+  - `voicemode connect logout` - Clear stored credentials
+  - `voicemode connect status` - Check connection and auth status
+  - `voicemode connect standby` - Wait for remote wake commands
+  - Connect service for launchd - run at startup with `voicemode service connect enable`
+  - Heartbeat thread keeps connection alive during standby
+
+- **Agent Management** (VM-559, VM-589)
+  - Multi-agent support with dedicated config directories per agent
+  - `voicemode agent start <name>` - Start a named agent in tmux
+  - `voicemode agent stop <name>` - Gracefully stop an agent
+  - `voicemode agent status <name>` - Check agent state
+  - `voicemode agent send <name> <message>` - Send message with auto-start
+  - `--agent` option for standby to target specific agent on wake
+  - `--wake-message` option for custom initial messages
+
+### Fixed
+
+- **Agent Reliability**
+  - Send multiple Ctrl-C signals to reliably stop Claude Code
+  - Poll for readiness before sending messages
+  - Pass initial message directly to claude command
 
 ## [8.0.8] - 2026-01-29
 

@@ -1,3 +1,3 @@
 # This file is automatically updated by 'make release'
 # Do not edit manually
-__version__ = "8.0.8"
+__version__ = "8.1.0"
