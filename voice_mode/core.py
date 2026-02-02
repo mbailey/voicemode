@@ -10,6 +10,7 @@ import logging
 import os
 import tempfile
 import gc
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +29,7 @@ from .utils import (
     log_tts_first_audio
 )
 from .audio_player import NonBlockingAudioPlayer
+from .barge_in import BargeInMonitor
 
 logger = logging.getLogger("voicemode")
 
@@ -175,7 +177,8 @@ async def text_to_speech(
     instructions: Optional[str] = None,
     audio_format: Optional[str] = None,
     conversation_id: Optional[str] = None,
-    speed: Optional[float] = None
+    speed: Optional[float] = None,
+    barge_in_monitor: Optional[BargeInMonitor] = None
 ) -> tuple[bool, Optional[dict]]:
     """Convert text to speech and play it.
     
@@ -420,14 +423,70 @@ async def text_to_speech(
                             samples_with_buffer = np.vstack([silence, samples])
 
                         # Use non-blocking audio player for concurrent playback support
-                        player = NonBlockingAudioPlayer()
+                        # Create interrupt callback for barge-in support
+                        interrupt_triggered = threading.Event()
+
+                        def on_barge_in_interrupt():
+                            """Callback when barge-in is detected."""
+                            logger.info("TTS playback interrupted by barge-in")
+                            interrupt_triggered.set()
+
+                        player = NonBlockingAudioPlayer(
+                            on_interrupt=on_barge_in_interrupt if barge_in_monitor else None
+                        )
+
+                        # If barge-in monitoring is enabled, start it and wire up the interrupt
+                        if barge_in_monitor:
+                            barge_in_monitor.start_monitoring(
+                                on_voice_detected=player.interrupt
+                            )
+
                         player.play(samples_with_buffer, audio.frame_rate, blocking=False)
                         player.wait()
-                        
+
+                        # Stop barge-in monitoring if active
+                        if barge_in_monitor:
+                            barge_in_monitor.stop_monitoring()
+
                         playback_end = time.perf_counter()
                         metrics['playback'] = playback_end - playback_start
 
-                        # Log TTS playback end event with metrics
+                        # Check if playback was interrupted by barge-in
+                        was_interrupted = player.was_interrupted()
+                        if was_interrupted:
+                            metrics['interrupted'] = True
+                            metrics['interrupted_at'] = metrics['playback']
+
+                            # Capture the barged-in audio for seamless STT handoff
+                            if barge_in_monitor:
+                                captured_audio = barge_in_monitor.get_captured_audio()
+                                if captured_audio is not None:
+                                    metrics['captured_audio'] = captured_audio
+                                    metrics['captured_audio_samples'] = len(captured_audio)
+                                    logger.debug(
+                                        f"Captured {len(captured_audio)} samples of barge-in audio"
+                                    )
+
+                            # Log TTS interrupted event
+                            if event_logger:
+                                tts_event_data = {
+                                    "metrics": {
+                                        "ttfa_ms": round(metrics.get('ttfa', 0) * 1000, 1),
+                                        "generation_ms": round(metrics.get('generation', 0) * 1000, 1),
+                                        "playback_ms": round(metrics['playback'] * 1000, 1),
+                                        "interrupted": True,
+                                        "file_size_bytes": len(response_content),
+                                        "format": validated_format,
+                                        "sample_rate_hz": audio.frame_rate
+                                    }
+                                }
+                                event_logger.log_event(event_logger.TTS_PLAYBACK_END, tts_event_data)
+
+                            logger.info("⚡ TTS playback interrupted by barge-in")
+                            os.unlink(tmp_file.name)
+                            return True, metrics
+
+                        # Log TTS playback end event with metrics (normal completion)
                         if event_logger:
                             tts_event_data = {
                                 "metrics": {
