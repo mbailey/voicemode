@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from .openai_error_parser import OpenAIErrorParser
 from .provider_discovery import is_local_provider
 
-from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
+from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT
 from .provider_discovery import detect_provider_type
 
 logger = logging.getLogger("voicemode")
@@ -226,11 +226,16 @@ async def simple_stt_failover(
 
             # Try STT with this endpoint - track timing
             request_start = time.perf_counter()
-            transcription = await client.audio.transcriptions.create(
-                model=model,
-                file=audio_file,
-                response_format="text"
-            )
+            # Build transcription kwargs with optional prompt for vocabulary biasing
+            transcription_kwargs = {
+                "model": model,
+                "file": audio_file,
+                "response_format": "text"
+            }
+            if STT_PROMPT:
+                transcription_kwargs["prompt"] = STT_PROMPT
+
+            transcription = await client.audio.transcriptions.create(**transcription_kwargs)
             request_time_ms = (time.perf_counter() - request_start) * 1000
 
             text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
