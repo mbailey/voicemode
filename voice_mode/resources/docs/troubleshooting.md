@@ -219,6 +219,27 @@ converse("Quick update", speed=1.5)
 4. Use better quality microphone
 5. Check STT service configuration
 
+### Specific words consistently misrecognized
+
+**Problem:** Certain words or names are repeatedly transcribed incorrectly, even when spoken clearly.
+
+**Symptoms:**
+- Same word always comes out wrong (e.g., "tmux" → "T-Mux" or "T marks")
+- Names are consistently misspelled (e.g., "Tali" → "Talley" or "Tolly")
+- Technical terms get mangled (e.g., "kubectl" → "cube control")
+
+**Solution:** Use vocabulary biasing with `VOICEMODE_STT_PROMPT`.
+
+Set the environment variable with words you frequently use:
+```bash
+# In ~/.voicemode/voicemode.env
+VOICEMODE_STT_PROMPT="tmux, Tali, kubectl, pytest, VoiceMode"
+```
+
+This "primes" Whisper to recognize these specific terms correctly.
+
+**See:** `voicemode-parameters` → Vocabulary Biasing (STT Prompt) for detailed configuration options.
+
 ## Performance Issues
 
 ### Slow response times
