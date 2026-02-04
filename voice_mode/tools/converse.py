@@ -1138,6 +1138,9 @@ KEY PARAMETERS:
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
 
+RECOGNITION TIP: If specific words are consistently misrecognized, configure
+   VOICEMODE_STT_PROMPT for vocabulary biasing - see voicemode://docs/parameters
+
 For complete parameter list, advanced options, and detailed examples,
 consult the MCP resources listed above.
     """
