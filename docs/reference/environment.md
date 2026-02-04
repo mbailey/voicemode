@@ -39,6 +39,7 @@ Environment variables are processed in this order (highest to lowest priority):
 |----------|-------------|---------|---------|
 | `VOICEMODE_STT_BASE_URLS` | Comma-separated STT service URLs | `https://api.openai.com/v1` | `http://localhost:2022/v1` |
 | `VOICEMODE_STT_MODEL` | STT model | `whisper-1` | `whisper-1` |
+| `VOICEMODE_STT_PROMPT` | Vocabulary biasing for Whisper (names, terms) | None | `tmux, Tali, kubectl` |
 
 ### Whisper Configuration
 
