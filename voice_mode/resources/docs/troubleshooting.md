@@ -238,7 +238,7 @@ VOICEMODE_STT_PROMPT="tmux, Tali, kubectl, pytest, VoiceMode"
 
 This "primes" Whisper to recognize these specific terms correctly.
 
-**See:** `voicemode-parameters` → Vocabulary Biasing (STT Prompt) for detailed configuration options.
+**See:** [Parameters - Vocabulary Biasing](parameters.md#vocabulary-biasing-stt-prompt) for detailed configuration options.
 
 ## Performance Issues
 
@@ -287,6 +287,6 @@ If issues persist:
 4. Add parameters one at a time to isolate issue
 
 ## See Also
-- `voicemode-parameters` - Full parameter reference
-- `voicemode-patterns` - Best practices
-- `voicemode-languages` - Language-specific configuration
+- [Parameters](parameters.md) - Full parameter reference (includes [vocabulary biasing](parameters.md#vocabulary-biasing-stt-prompt))
+- [Patterns](patterns.md) - Best practices
+- [Languages](languages.md) - Language-specific configuration

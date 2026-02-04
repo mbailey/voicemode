@@ -206,7 +206,7 @@ Whisper uses the last 224 tokens of the prompt. In practice, this means:
 
 If a word is still misrecognized after adding it to the prompt, try including it in context: instead of just "Tali", use "my dog Tali" or "Tali is a Rottweiler".
 
-**See also:** [Troubleshooting - Words Misrecognized](troubleshooting.md#words-misrecognized)
+**See also:** [Troubleshooting - Words Misrecognized](troubleshooting.md#specific-words-consistently-misrecognized)
 
 ## Audio Format & Feedback
 
