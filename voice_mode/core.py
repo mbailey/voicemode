@@ -25,7 +25,8 @@ from .config import SAMPLE_RATE
 from .utils import (
     get_event_logger,
     log_tts_start,
-    log_tts_first_audio
+    log_tts_first_audio,
+    update_latest_symlinks
 )
 from .audio_player import NonBlockingAudioPlayer
 
@@ -326,7 +327,9 @@ async def text_to_speech(
                 logger.info(f"TTS audio saved to: {audio_path}")
                 # Store audio path in metrics for the caller
                 metrics['audio_path'] = audio_path
-        
+                # Update latest symlinks for quick access to most recent TTS audio
+                update_latest_symlinks(audio_path, "tts")
+
         # Play audio
         playback_start = time.perf_counter()
         # For buffered playback, TTFA includes both API response time and audio initialization
