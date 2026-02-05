@@ -26,7 +26,7 @@ from .config import (
     SAMPLE_RATE,
     logger
 )
-from .utils import get_event_logger
+from .utils import get_event_logger, update_latest_symlinks
 
 
 
@@ -372,6 +372,8 @@ async def stream_pcm_audio(
                             logger.info(f"TTS audio saved to: {audio_path}")
                             # Store audio path in metrics for the caller
                             metrics.audio_path = audio_path
+                            # Update latest symlinks for quick access to most recent TTS audio
+                            update_latest_symlinks(audio_path, "tts")
             except Exception as e:
                 logger.error(f"Failed to save TTS audio: {e}")
         
@@ -548,9 +550,11 @@ async def stream_with_buffering(
                 audio_path = save_debug_file(audio_data, "tts", format, audio_dir, True, conversation_id)
                 if audio_path:
                     logger.info(f"TTS audio saved to: {audio_path}")
+                    # Update latest symlinks for quick access to most recent TTS audio
+                    update_latest_symlinks(audio_path, "tts")
             except Exception as e:
                 logger.error(f"Failed to save TTS audio: {e}")
-        
+
         return True, metrics
         
     except Exception as e:
