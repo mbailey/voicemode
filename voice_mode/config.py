@@ -848,18 +848,19 @@ def initialize_soundfonts():
 
     Directory structure:
         ~/.voicemode/soundfonts/
-            voicemode/     - Package-managed soundfonts (always synced from package)
-            current -> voicemode  - Symlink to active soundfont (user can change)
+            voicemode/     - Package-managed soundfonts (synced from package)
+            current -> voicemode  - Relative symlink to active soundfont
+            .version       - Package version that last synced soundfonts
 
     Users can create custom soundfont directories and point 'current' to them.
-    The 'voicemode' directory is always overwritten on package updates.
+    The 'voicemode' directory is synced only when the package version changes.
     """
-    import shutil
-    import importlib.resources
+    from voice_mode.__version__ import __version__
 
     soundfonts_dir = BASE_DIR / "soundfonts"
     package_soundfont_dir = soundfonts_dir / "voicemode"
     current_symlink = soundfonts_dir / "current"
+    version_file = soundfonts_dir / ".version"
 
     # Migration: rename old 'default' directory to 'voicemode'
     old_default_dir = soundfonts_dir / "default"
@@ -868,49 +869,99 @@ def initialize_soundfonts():
             old_default_dir.rename(package_soundfont_dir)
             # Update symlink if it pointed to default
             if current_symlink.is_symlink():
-                target = current_symlink.resolve()
-                if target == old_default_dir.resolve() or "default" in str(current_symlink.readlink()):
+                link_target = str(current_symlink.readlink())
+                if "default" in link_target:
                     current_symlink.unlink()
-                    current_symlink.symlink_to(package_soundfont_dir.resolve())
+                    # Use relative symlink
+                    current_symlink.symlink_to("voicemode")
         except OSError:
             pass  # Migration failed, will recreate below
+
+    # Fix absolute symlinks: convert to relative
+    if current_symlink.is_symlink():
+        try:
+            link_target = str(current_symlink.readlink())
+            # If it's an absolute path pointing to voicemode, make it relative
+            if link_target.startswith("/") and link_target.endswith("/voicemode"):
+                current_symlink.unlink()
+                current_symlink.symlink_to("voicemode")
+        except OSError:
+            pass
+
+    # Check if sync is needed (version mismatch or missing)
+    needs_sync = True
+    if version_file.exists():
+        try:
+            installed_version = version_file.read_text().strip()
+            if installed_version == __version__:
+                needs_sync = False
+        except (IOError, OSError):
+            pass  # Can't read version, sync needed
+
+    if not needs_sync:
+        return  # Skip sync, soundfonts already up to date
 
     try:
         # Create soundfonts directory
         soundfonts_dir.mkdir(exist_ok=True)
 
-        # Always sync package soundfonts to 'voicemode' directory
-        # This ensures updates are applied
+        # Sync package soundfonts to 'voicemode' directory incrementally
+        # Only update files that are missing or different
         try:
             # For Python 3.9+
             from importlib.resources import files
             package_soundfonts = files("voice_mode.data.soundfonts.default")
 
             if package_soundfonts.is_dir():
-                # Remove existing package-managed directory to ensure clean sync
-                if package_soundfont_dir.exists():
-                    shutil.rmtree(package_soundfont_dir)
+                # Files/dirs to skip (Python package artifacts)
+                skip_names = {"__init__.py", "__pycache__"}
 
-                # Recursively copy all files from package data
-                def copy_tree(src, dst):
-                    """Recursively copy directory tree from package data."""
+                def sync_tree(src, dst, depth=0):
+                    """Sync directory tree, only updating changed files.
+
+                    Skips __init__.py and __pycache__ (Python package artifacts).
+                    Limits recursion depth to prevent runaway loops.
+                    """
+                    if depth > 10:  # Reasonable max depth for soundfonts
+                        return
                     dst.mkdir(exist_ok=True)
                     for item in src.iterdir():
+                        # Skip Python package artifacts
+                        if item.name in skip_names:
+                            continue
                         if item.is_file():
                             target = dst / item.name
-                            target.write_bytes(item.read_bytes())
+                            # Skip if destination is a symlink (could cause issues)
+                            if target.is_symlink():
+                                continue
+                            new_content = item.read_bytes()
+                            # Only write if file doesn't exist or content differs
+                            if not target.exists():
+                                target.write_bytes(new_content)
+                            else:
+                                try:
+                                    existing_content = target.read_bytes()
+                                    if existing_content != new_content:
+                                        target.write_bytes(new_content)
+                                except (IOError, OSError):
+                                    # Can't read existing, overwrite
+                                    target.write_bytes(new_content)
                         elif item.is_dir():
-                            copy_tree(item, dst / item.name)
+                            target_dir = dst / item.name
+                            # Skip if destination is a symlink (could be cycle)
+                            if target_dir.exists() and target_dir.is_symlink():
+                                continue
+                            sync_tree(item, target_dir, depth + 1)
 
-                # Copy entire tree structure
-                copy_tree(package_soundfonts, package_soundfont_dir)
+                # Sync tree structure incrementally
+                sync_tree(package_soundfonts, package_soundfont_dir)
+
+                # Update version file after successful sync
+                version_file.write_text(__version__)
         except ImportError:
             # Fallback for older Python versions
             import pkg_resources
 
-            # Remove existing package-managed directory to ensure clean sync
-            if package_soundfont_dir.exists():
-                shutil.rmtree(package_soundfont_dir)
             package_soundfont_dir.mkdir(exist_ok=True)
 
             # List all resources in the soundfonts directory
@@ -920,11 +971,12 @@ def initialize_soundfonts():
                 # We'll need to manually copy the structure
                 pass
 
-        # Create symlink to current soundfont (points to voicemode)
+        # Create relative symlink to current soundfont (points to voicemode)
         # Only create if it doesn't exist - user may have customized it
         if package_soundfont_dir.exists() and not current_symlink.exists():
             try:
-                current_symlink.symlink_to(package_soundfont_dir.resolve())
+                # Use relative path, not absolute
+                current_symlink.symlink_to("voicemode")
             except OSError:
                 # Symlinks might not work on all systems (e.g., Windows without admin)
                 pass
