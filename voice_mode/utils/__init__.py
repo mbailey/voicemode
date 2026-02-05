@@ -13,6 +13,7 @@ from .event_logger import (
     log_tool_request_start,
     log_tool_request_end
 )
+from .symlinks import update_latest_symlinks
 
 __all__ = [
     "EventLogger",
@@ -25,5 +26,6 @@ __all__ = [
     "log_stt_start",
     "log_stt_complete",
     "log_tool_request_start",
-    "log_tool_request_end"
+    "log_tool_request_end",
+    "update_latest_symlinks",
 ]
