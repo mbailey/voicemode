@@ -87,7 +87,8 @@ from voice_mode.utils import (
     log_stt_start,
     log_stt_complete,
     log_tool_request_start,
-    log_tool_request_end
+    log_tool_request_end,
+    update_latest_symlinks
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
 
@@ -575,6 +576,9 @@ async def speech_to_text(
                 f.write(saved_audio)
 
         logger.info(f"STT audio saved to: {save_file_path} (format: {STT_SAVE_FORMAT})")
+
+        # Update latest symlinks for quick access to most recent STT audio
+        update_latest_symlinks(save_file_path, "stt")
 
         # Use compressed audio for upload (temporary file)
         # Windows fix: close temp file before reopening (Issue #135)
