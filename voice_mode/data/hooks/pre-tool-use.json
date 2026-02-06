@@ -1,0 +1,15 @@
+{
+  "description": "VoiceMode PreToolUse hook - audio feedback before tool execution",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "description": "VoiceMode PostToolUse hook - audio feedback after tool execution",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ]
+  }
+}
