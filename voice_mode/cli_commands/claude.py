@@ -55,6 +55,30 @@ def hook_name_completion(ctx, param, incomplete):
     return [name for name in available if name.startswith(incomplete)]
 
 
+def install_hook_receiver() -> Path:
+    """Install the bash hook-receiver script to ~/.voicemode/bin/.
+
+    Copies the bundled voicemode-hook-receiver.sh from package data
+    to ~/.voicemode/bin/voicemode-hook-receiver and makes it executable.
+
+    Returns:
+        Path to the installed script.
+    """
+    dest = Path.home() / '.voicemode' / 'bin' / 'voicemode-hook-receiver'
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # Read bundled script from package data
+    hooks_data = files('voice_mode.data.hooks')
+    script_resource = hooks_data.joinpath('voicemode-hook-receiver.sh')
+    script_content = script_resource.read_text()
+
+    # Write and make executable
+    dest.write_text(script_content)
+    dest.chmod(0o755)
+
+    return dest
+
+
 def resolve_hook_command() -> str:
     """Determine the correct command for hook entries."""
     # Check PATH
@@ -64,8 +88,9 @@ def resolve_hook_command() -> str:
     home_bin = Path.home() / '.voicemode' / 'bin' / 'voicemode-hook-receiver'
     if home_bin.exists() and os.access(home_bin, os.X_OK):
         return f'{home_bin} || true'
-    # Fallback to Python CLI
-    return 'voicemode hook-receiver || true'
+    # Not found - install it
+    installed = install_hook_receiver()
+    return f'{installed} || true'
 
 
 def is_voicemode_hook(hook_entry: dict) -> bool:
@@ -230,7 +255,7 @@ def hooks_add(hook_name, scope):
     else:
         hooks_to_add = available_hooks
 
-    # Resolve hook command path
+    # Ensure hook receiver is installed, then resolve command path
     command = resolve_hook_command()
 
     # Read existing settings

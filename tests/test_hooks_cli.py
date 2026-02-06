@@ -1,6 +1,7 @@
 """Tests for Claude Code hooks CLI commands."""
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -10,6 +11,7 @@ from click.testing import CliRunner
 from voice_mode.cli_commands.claude import (
     claude,
     get_available_hooks,
+    install_hook_receiver,
     resolve_hook_command,
     is_voicemode_hook,
     merge_hooks,
@@ -318,12 +320,19 @@ class TestResolveHookCommand:
                     assert str(home_bin) in result
                     assert '|| true' in result
 
-    def test_resolve_hook_command_fallback(self):
-        """Should fallback to Python CLI if binary not found."""
+    def test_resolve_hook_command_installs_when_missing(self, tmp_path):
+        """Should install hook receiver to ~/.voicemode/bin/ if not found."""
+        fake_home = tmp_path / 'home'
+        fake_home.mkdir(exist_ok=True)
+        home_bin = fake_home / '.voicemode' / 'bin' / 'voicemode-hook-receiver'
+
         with patch('shutil.which', return_value=None):
-            with patch.object(Path, 'exists', return_value=False):
+            with patch('voice_mode.cli_commands.claude.Path.home', return_value=fake_home):
                 result = resolve_hook_command()
-                assert result == 'voicemode hook-receiver || true'
+                assert str(home_bin) in result
+                assert '|| true' in result
+                assert home_bin.exists()
+                assert os.access(home_bin, os.X_OK)
 
 
 class TestGetAvailableHooks:
@@ -524,6 +533,40 @@ class TestHooksListCommand:
 
         assert result.exit_code == 0
         assert 'Project' in result.output
+
+
+class TestInstallHookReceiver:
+    """Tests for install_hook_receiver function."""
+
+    def test_install_creates_script(self, tmp_path):
+        """Should install script to ~/.voicemode/bin/."""
+        fake_home = tmp_path / 'home'
+        fake_home.mkdir(exist_ok=True)
+
+        with patch('voice_mode.cli_commands.claude.Path.home', return_value=fake_home):
+            result = install_hook_receiver()
+
+        expected = fake_home / '.voicemode' / 'bin' / 'voicemode-hook-receiver'
+        assert result == expected
+        assert expected.exists()
+        assert os.access(expected, os.X_OK)
+
+        # Verify it's a bash script
+        content = expected.read_text()
+        assert content.startswith('#!/usr/bin/env bash')
+        assert 'voicemode-hook-receiver' in content
+
+    def test_install_idempotent(self, tmp_path):
+        """Should overwrite existing script without error."""
+        fake_home = tmp_path / 'home'
+        fake_home.mkdir(exist_ok=True)
+
+        with patch('voice_mode.cli_commands.claude.Path.home', return_value=fake_home):
+            install_hook_receiver()
+            result = install_hook_receiver()
+
+        assert result.exists()
+        assert os.access(result, os.X_OK)
 
 
 class TestHooksGroupDefault:
