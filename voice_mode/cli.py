@@ -8,6 +8,7 @@ import warnings
 import subprocess
 import shutil
 import click
+from pathlib import Path
 
 # Import version info
 try:
@@ -1609,6 +1610,378 @@ def dependencies():
     else:
         # Fallback for string output
         click.echo(str(result))
+
+
+# ============================================================================
+# Claude Code Integration Group
+# ============================================================================
+
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def claude():
+    """Claude Code integration commands."""
+    pass
+
+
+# Hook name to event name mapping
+HOOK_NAME_TO_EVENT = {
+    'pre-tool-use': 'PreToolUse',
+    'post-tool-use': 'PostToolUse',
+    'notification': 'Notification',
+    'stop': 'Stop',
+    'pre-compact': 'PreCompact',
+    'permission-request': 'PermissionRequest',
+}
+
+# Settings file paths by scope
+SETTINGS_PATHS = {
+    'user': Path.home() / '.claude' / 'settings.json',
+    'project': Path('.claude') / 'settings.json',
+    'local': Path('.claude') / 'settings.local.json',
+}
+
+
+def get_available_hooks() -> dict:
+    """Discover available hook files from package data.
+
+    Returns dict mapping hook name to parsed JSON content.
+    e.g. {'pre-tool-use': {...}, 'post-tool-use': {...}}
+    """
+    import json
+    from importlib.resources import files
+
+    hooks_dir = files('voice_mode.data.hooks')
+    available = {}
+    for resource in hooks_dir.iterdir():
+        if resource.name.endswith('.json'):
+            name = resource.name.removesuffix('.json')
+            content = json.loads(resource.read_text())
+            available[name] = content
+    return available
+
+
+def hook_name_completion(ctx, param, incomplete):
+    """Shell completion for hook names."""
+    available = get_available_hooks()
+    return [name for name in available if name.startswith(incomplete)]
+
+
+def resolve_hook_command() -> str:
+    """Determine the correct command for hook entries."""
+    # Check PATH
+    if shutil.which('voicemode-hook-receiver'):
+        return 'voicemode-hook-receiver || true'
+    # Check ~/.voicemode/bin/
+    home_bin = Path.home() / '.voicemode' / 'bin' / 'voicemode-hook-receiver'
+    if home_bin.exists() and os.access(home_bin, os.X_OK):
+        return f'{home_bin} || true'
+    # Fallback to Python CLI
+    return 'voicemode hook-receiver || true'
+
+
+def is_voicemode_hook(hook_entry: dict) -> bool:
+    """Check if a hook entry belongs to VoiceMode."""
+    for handler in hook_entry.get('hooks', []):
+        cmd = handler.get('command', '')
+        if 'voicemode-hook-receiver' in cmd or 'voicemode hook-receiver' in cmd:
+            return True
+    return False
+
+
+def read_settings(scope: str) -> dict:
+    """Read settings JSON file, returning empty dict if not found."""
+    import json
+    path = SETTINGS_PATHS[scope]
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def write_settings(scope: str, settings: dict) -> None:
+    """Write settings JSON file, creating parent dirs if needed."""
+    import json
+    path = SETTINGS_PATHS[scope]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2) + '\n')
+
+
+def _resolve_command_in_entries(entries: list, command: str) -> list:
+    """Replace the command in hook entries with the resolved path."""
+    import copy
+    resolved = copy.deepcopy(entries)
+    for entry in resolved:
+        for handler in entry.get('hooks', []):
+            if handler.get('type') == 'command':
+                handler['command'] = command
+    return resolved
+
+
+def merge_hooks(existing: dict, new_hooks: dict, command: str) -> tuple[dict, list[str]]:
+    """Deep merge hooks into existing settings, preserving everything.
+
+    Args:
+        existing: Current settings dict
+        new_hooks: Hook definitions from source JSON (with 'hooks' key)
+        command: Resolved command path for hook entries
+
+    Returns:
+        Tuple of (updated settings, list of added event names)
+    """
+    import copy
+    result = copy.deepcopy(existing)
+    added = []
+
+    if 'hooks' not in result:
+        result['hooks'] = {}
+
+    hook_defs = new_hooks.get('hooks', {})
+    for event, entries in hook_defs.items():
+        # Replace command path from source file with resolved path
+        resolved_entries = _resolve_command_in_entries(entries, command)
+
+        if event not in result['hooks']:
+            result['hooks'][event] = resolved_entries
+            added.append(event)
+        else:
+            # Check if VoiceMode hook already present
+            if not any(is_voicemode_hook(e) for e in result['hooks'][event]):
+                result['hooks'][event].extend(resolved_entries)
+                added.append(event)
+
+    return result, added
+
+
+def remove_hooks(existing: dict, event_names: list[str] | None = None) -> tuple[dict, list[str]]:
+    """Remove VoiceMode hooks from settings.
+
+    Args:
+        existing: Current settings dict
+        event_names: Specific events to remove, or None for all
+
+    Returns:
+        Tuple of (updated settings, list of removed event names)
+    """
+    import copy
+    result = copy.deepcopy(existing)
+    removed = []
+
+    if 'hooks' not in result:
+        return result, removed
+
+    events_to_check = event_names or list(result['hooks'].keys())
+
+    for event in events_to_check:
+        if event not in result['hooks']:
+            continue
+        original_count = len(result['hooks'][event])
+        result['hooks'][event] = [
+            e for e in result['hooks'][event] if not is_voicemode_hook(e)
+        ]
+        if len(result['hooks'][event]) < original_count:
+            removed.append(event)
+        # Clean up empty arrays
+        if not result['hooks'][event]:
+            del result['hooks'][event]
+
+    # Clean up empty hooks object
+    if not result.get('hooks'):
+        result.pop('hooks', None)
+
+    return result, removed
+
+
+@claude.group(invoke_without_command=True)
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.pass_context
+def hooks(ctx):
+    """Manage Claude Code hooks for VoiceMode.
+
+    Install, remove, and inspect VoiceMode hooks in Claude Code settings.
+    Hooks enable audio feedback (soundfonts) during Claude Code sessions.
+    """
+    if ctx.invoked_subcommand is None:
+        # Default: show hooks list
+        ctx.invoke(hooks_list)
+
+
+@hooks.command("add", epilog="""
+Examples:
+  voicemode claude hooks add                    # Add all hooks to user settings
+  voicemode claude hooks add pre-tool-use       # Add only PreToolUse hook
+  voicemode claude hooks add -s project         # Add to project settings
+  voicemode claude hooks add --scope local      # Add to local settings
+""")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('hook_name', required=False, default=None, shell_complete=hook_name_completion)
+@click.option('-s', '--scope', type=click.Choice(['user', 'project', 'local']),
+              default='user', show_default=True,
+              help='Settings scope to install hooks into')
+def hooks_add(hook_name, scope):
+    """Add VoiceMode hooks to Claude Code settings.
+
+    Without HOOK_NAME, adds all available hooks. With HOOK_NAME,
+    adds only the specified hook event.
+    """
+    # Get available hooks
+    available_hooks = get_available_hooks()
+
+    # Determine which hooks to add
+    if hook_name:
+        if hook_name not in available_hooks:
+            click.echo(f"❌ Unknown hook: {hook_name}")
+            click.echo(f"\nAvailable hooks: {', '.join(available_hooks.keys())}")
+            sys.exit(1)
+        hooks_to_add = {hook_name: available_hooks[hook_name]}
+    else:
+        hooks_to_add = available_hooks
+
+    # Resolve hook command path
+    command = resolve_hook_command()
+
+    # Read existing settings
+    settings = read_settings(scope)
+
+    # Track what was added
+    all_added = []
+
+    # Add each hook
+    for name, hook_def in hooks_to_add.items():
+        settings, added = merge_hooks(settings, hook_def, command)
+        all_added.extend(added)
+
+    # Write updated settings
+    write_settings(scope, settings)
+
+    # Print summary
+    scope_name = scope.capitalize()
+    settings_path = SETTINGS_PATHS[scope]
+    click.echo(f"Added VoiceMode hooks to {scope} settings ({settings_path}):")
+
+    for name in hooks_to_add.keys():
+        event = HOOK_NAME_TO_EVENT.get(name, name)
+        if event in all_added:
+            click.echo(f"  ✓ {event}")
+        else:
+            click.echo(f"  - {event} (already present)")
+
+    if all_added:
+        click.echo()
+        click.echo("Use --scope project for project-only installation.")
+        click.echo("Restart Claude Code for hooks to take effect.")
+
+
+@hooks.command("remove", epilog="""
+Examples:
+  voicemode claude hooks remove                 # Remove all VoiceMode hooks from user settings
+  voicemode claude hooks remove pre-tool-use    # Remove only PreToolUse hook
+  voicemode claude hooks remove -s project      # Remove from project settings
+""")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.argument('hook_name', required=False, default=None, shell_complete=hook_name_completion)
+@click.option('-s', '--scope', type=click.Choice(['user', 'project', 'local']),
+              default='user', show_default=True,
+              help='Settings scope to remove hooks from')
+def hooks_remove(hook_name, scope):
+    """Remove VoiceMode hooks from Claude Code settings.
+
+    Without HOOK_NAME, removes all VoiceMode hooks. With HOOK_NAME,
+    removes only the specified hook event.
+    """
+    # Validate hook name first (before reading settings)
+    if hook_name:
+        if hook_name not in HOOK_NAME_TO_EVENT:
+            click.echo(f"❌ Unknown hook: {hook_name}")
+            click.echo(f"\nAvailable hooks: {', '.join(HOOK_NAME_TO_EVENT.keys())}")
+            sys.exit(1)
+        event_names = [HOOK_NAME_TO_EVENT[hook_name]]
+    else:
+        event_names = None
+
+    # Read existing settings
+    settings = read_settings(scope)
+
+    if not settings.get('hooks'):
+        click.echo(f"No hooks found in {scope} settings.")
+        return
+
+    # Remove hooks
+    settings, removed = remove_hooks(settings, event_names)
+
+    # Write updated settings
+    write_settings(scope, settings)
+
+    # Print summary
+    settings_path = SETTINGS_PATHS[scope]
+    click.echo(f"Removed VoiceMode hooks from {scope} settings ({settings_path}):")
+
+    # Show all events we checked
+    events_to_show = event_names if event_names else list(HOOK_NAME_TO_EVENT.values())
+    for event in events_to_show:
+        if event in removed:
+            click.echo(f"  ✓ {event} (removed)")
+        else:
+            click.echo(f"  - {event} (not found)")
+
+
+@hooks.command("list", epilog="""
+Examples:
+  voicemode claude hooks list                   # Show hooks in user settings
+  voicemode claude hooks list -s all            # Show hooks across all scopes
+  voicemode claude hooks list -s project        # Show hooks in project settings
+""")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('-s', '--scope', type=click.Choice(['user', 'project', 'local', 'all']),
+              default='user', show_default=True,
+              help='Settings scope to inspect')
+def hooks_list(scope):
+    """Show VoiceMode hook status in Claude Code settings.
+
+    Shows which VoiceMode hooks are installed and in which settings scope.
+    """
+    def check_scope(scope_name):
+        """Check hooks for a single scope."""
+        settings = read_settings(scope_name)
+        hooks_dict = settings.get('hooks', {})
+
+        results = {}
+        for event in HOOK_NAME_TO_EVENT.values():
+            if event not in hooks_dict:
+                results[event] = False
+            else:
+                # Check if VoiceMode hook is present
+                results[event] = any(is_voicemode_hook(e) for e in hooks_dict[event])
+
+        return results
+
+    if scope == 'all':
+        # Show all scopes
+        click.echo("VoiceMode Hooks Status:")
+        click.echo()
+
+        for scope_name in ['user', 'project', 'local']:
+            settings_path = SETTINGS_PATHS[scope_name]
+            click.echo(f"{scope_name.capitalize()} ({settings_path}):")
+
+            results = check_scope(scope_name)
+            any_installed = any(results.values())
+
+            if not any_installed:
+                click.echo("  (no VoiceMode hooks)")
+            else:
+                for event, installed in results.items():
+                    if installed:
+                        click.echo(f"  {event:14} ✓ installed")
+
+            click.echo()
+    else:
+        # Show single scope
+        settings_path = SETTINGS_PATHS[scope]
+        click.echo(f"VoiceMode Hooks - {scope.capitalize()} ({settings_path}):")
+
+        results = check_scope(scope)
+        for event, installed in results.items():
+            status = "✓ installed" if installed else "  not installed"
+            click.echo(f"  {event:14} {status}")
 
 
 # Legacy CLI for voicemode-cli command
