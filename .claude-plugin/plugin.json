@@ -8,56 +8,11 @@
   },
   "commands": "./.claude/commands/",
   "skills": "./.claude/skills/",
-  "hooks": {
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
-          }
-        ]
-      }
-    ]
-  }
+  "hooks": [
+    "./voice_mode/data/hooks/pre-tool-use.json",
+    "./voice_mode/data/hooks/post-tool-use.json",
+    "./voice_mode/data/hooks/notification.json",
+    "./voice_mode/data/hooks/stop.json",
+    "./voice_mode/data/hooks/pre-compact.json"
+  ]
 }

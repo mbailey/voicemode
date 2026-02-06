@@ -8,6 +8,7 @@ import warnings
 import subprocess
 import shutil
 import click
+from pathlib import Path
 
 # Import version info
 try:
@@ -1611,6 +1612,8 @@ def dependencies():
         click.echo(str(result))
 
 
+
+
 # Legacy CLI for voicemode-cli command
 @click.group()
 @click.version_option()
@@ -1626,6 +1629,7 @@ from voice_mode.cli_commands import transcribe as transcribe_cmd
 from voice_mode.cli_commands import history as history_cmd
 from voice_mode.cli_commands import status as status_cmd
 from voice_mode.cli_commands import agent as agent_cmd
+from voice_mode.cli_commands import claude as claude_cmd
 
 # Add subcommands to legacy CLI
 cli.add_command(exchanges_cmd.exchanges)
@@ -1640,6 +1644,9 @@ voice_mode_main_cli.add_command(status_cmd.status)
 
 # Add agent management commands
 voice_mode_main_cli.add_command(agent_cmd.agent)
+
+# Add Claude Code integration commands
+voice_mode_main_cli.add_command(claude_cmd.claude)
 
 # Note: We'll add these commands after the groups are defined
 # audio group will get transcribe and play commands

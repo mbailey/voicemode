@@ -1,0 +1,15 @@
+{
+  "description": "VoiceMode PreCompact hook - audio feedback before context compaction",
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ]
+  }
+}

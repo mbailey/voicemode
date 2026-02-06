@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ]
+  }
+}

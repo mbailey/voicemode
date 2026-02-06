@@ -1,0 +1,15 @@
+{
+  "description": "VoiceMode Stop hook - audio feedback when Claude stops responding",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/.claude/scripts/voicemode-hook-receiver || true"
+          }
+        ]
+      }
+    ]
+  }
+}
