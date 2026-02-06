@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 from click.testing import CliRunner
 
-from voice_mode.cli import (
+from voice_mode.cli_commands.claude import (
     claude,
     get_available_hooks,
     resolve_hook_command,
@@ -30,9 +30,9 @@ def temp_settings_dir(tmp_path, monkeypatch):
     claude_dir = tmp_path / '.claude'
     claude_dir.mkdir()
 
-    # Patch the SETTINGS_PATHS in the CLI module
-    from voice_mode import cli
-    monkeypatch.setattr(cli, 'SETTINGS_PATHS', {
+    # Patch the SETTINGS_PATHS in the claude CLI module
+    from voice_mode.cli_commands import claude as claude_mod
+    monkeypatch.setattr(claude_mod, 'SETTINGS_PATHS', {
         'user': claude_dir / 'settings.json',
         'project': tmp_path / '.claude' / 'settings.json',
         'local': tmp_path / '.claude' / 'settings.local.json',
@@ -368,15 +368,15 @@ class TestHooksAddCommand:
 
     def test_add_all_hooks(self, runner, temp_settings_dir):
         """Should add all hooks to user settings."""
-        with patch('voice_mode.cli.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
+        with patch('voice_mode.cli_commands.claude.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
             result = runner.invoke(claude, ['hooks', 'add'])
 
         assert result.exit_code == 0
-        assert '✓ PreToolUse' in result.output
-        assert '✓ PostToolUse' in result.output
-        assert '✓ Notification' in result.output
-        assert '✓ Stop' in result.output
-        assert '✓ PreCompact' in result.output
+        assert '+ PreToolUse' in result.output
+        assert '+ PostToolUse' in result.output
+        assert '+ Notification' in result.output
+        assert '+ Stop' in result.output
+        assert '+ PreCompact' in result.output
         assert 'Restart Claude Code' in result.output
 
         # Verify file was written
@@ -388,11 +388,11 @@ class TestHooksAddCommand:
 
     def test_add_single_hook(self, runner, temp_settings_dir):
         """Should add only specified hook."""
-        with patch('voice_mode.cli.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
+        with patch('voice_mode.cli_commands.claude.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
             result = runner.invoke(claude, ['hooks', 'add', 'pre-tool-use'])
 
         assert result.exit_code == 0
-        assert '✓ PreToolUse' in result.output
+        assert '+ PreToolUse' in result.output
 
         settings_file = temp_settings_dir / 'settings.json'
         settings = json.loads(settings_file.read_text())
@@ -402,11 +402,11 @@ class TestHooksAddCommand:
 
     def test_add_hooks_idempotent(self, runner, temp_settings_dir):
         """Should not duplicate on repeated adds."""
-        with patch('voice_mode.cli.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
+        with patch('voice_mode.cli_commands.claude.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
             # First add
             result1 = runner.invoke(claude, ['hooks', 'add', 'pre-tool-use'])
             assert result1.exit_code == 0
-            assert '✓ PreToolUse' in result1.output
+            assert '+ PreToolUse' in result1.output
 
             # Second add
             result2 = runner.invoke(claude, ['hooks', 'add', 'pre-tool-use'])
@@ -427,7 +427,7 @@ class TestHooksAddCommand:
 
     def test_add_to_project_scope(self, runner, temp_settings_dir):
         """Should add to project settings with --scope."""
-        with patch('voice_mode.cli.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
+        with patch('voice_mode.cli_commands.claude.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
             result = runner.invoke(claude, ['hooks', 'add', '-s', 'project'])
 
         assert result.exit_code == 0
@@ -440,15 +440,15 @@ class TestHooksRemoveCommand:
     def test_remove_all_hooks(self, runner, temp_settings_dir):
         """Should remove all VoiceMode hooks."""
         # First add hooks
-        with patch('voice_mode.cli.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
+        with patch('voice_mode.cli_commands.claude.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
             runner.invoke(claude, ['hooks', 'add'])
 
         # Then remove
         result = runner.invoke(claude, ['hooks', 'remove'])
 
         assert result.exit_code == 0
-        assert '✓ PreToolUse (removed)' in result.output
-        assert '✓ PostToolUse (removed)' in result.output
+        assert '+ PreToolUse (removed)' in result.output
+        assert '+ PostToolUse (removed)' in result.output
 
         settings_file = temp_settings_dir / 'settings.json'
         settings = json.loads(settings_file.read_text())
@@ -457,14 +457,14 @@ class TestHooksRemoveCommand:
     def test_remove_single_hook(self, runner, temp_settings_dir):
         """Should remove only specified hook."""
         # Add hooks first
-        with patch('voice_mode.cli.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
+        with patch('voice_mode.cli_commands.claude.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
             runner.invoke(claude, ['hooks', 'add'])
 
         # Remove one
         result = runner.invoke(claude, ['hooks', 'remove', 'pre-tool-use'])
 
         assert result.exit_code == 0
-        assert '✓ PreToolUse (removed)' in result.output
+        assert '+ PreToolUse (removed)' in result.output
 
         settings_file = temp_settings_dir / 'settings.json'
         settings = json.loads(settings_file.read_text())
@@ -500,14 +500,14 @@ class TestHooksListCommand:
     def test_list_installed_hooks(self, runner, temp_settings_dir):
         """Should show installed hooks."""
         # Add hooks first
-        with patch('voice_mode.cli.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
+        with patch('voice_mode.cli_commands.claude.resolve_hook_command', return_value='voicemode-hook-receiver || true'):
             runner.invoke(claude, ['hooks', 'add', 'pre-tool-use'])
 
         result = runner.invoke(claude, ['hooks', 'list'])
 
         assert result.exit_code == 0
         assert 'PreToolUse' in result.output
-        assert '✓ installed' in result.output
+        assert '+ installed' in result.output
 
     def test_list_all_scopes(self, runner, temp_settings_dir):
         """Should show all scopes with --scope all."""
