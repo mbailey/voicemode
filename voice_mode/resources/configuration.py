@@ -273,6 +273,8 @@ async def environment_variables() -> str:
         ("VOICEMODE_AUDIO_FORMAT", "Audio format for recording (pcm/mp3/wav/flac/aac/opus)"),
         ("VOICEMODE_TTS_AUDIO_FORMAT", "Audio format for TTS output"),
         ("VOICEMODE_STT_AUDIO_FORMAT", "Audio format for STT input"),
+        # STT Prompt for vocabulary biasing
+        ("VOICEMODE_STT_PROMPT", "Vocabulary hints for Whisper (names, technical terms)"),
         # Whisper Configuration
         ("VOICEMODE_WHISPER_MODEL", "Whisper model to use (e.g., large-v2)"),
         ("VOICEMODE_WHISPER_PORT", "Whisper server port"),

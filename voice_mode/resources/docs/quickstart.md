@@ -46,6 +46,7 @@ converse("Searching for that file now", wait_for_response=False)
 Microphone access required when `wait_for_response=True`. Audio processed via STT service, not stored.
 
 ## See Also
-- `voicemode-parameters` - Full parameter reference
-- `voicemode-patterns` - Advanced conversation patterns
-- `voicemode-languages` - Non-English language support
+- [Parameters](parameters.md) - Full parameter reference
+- [Patterns](patterns.md) - Advanced conversation patterns
+- [Languages](languages.md) - Non-English language support
+- [Troubleshooting](troubleshooting.md) - Common issues and solutions
