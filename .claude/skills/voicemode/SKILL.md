@@ -109,6 +109,10 @@ voicemode:service("kokoro", "start")
 
 # View logs for troubleshooting
 voicemode:service("whisper", "logs", lines=50)
+
+# Wait for service to be ready (useful for scripts)
+voicemode:service("kokoro", "status", wait=True)
+voicemode:service("whisper", "status", wait=True, timeout=120)
 ```
 
 | Service | Port | Purpose |
@@ -118,6 +122,8 @@ voicemode:service("whisper", "logs", lines=50)
 | voicemode | 8765 | HTTP/SSE server |
 
 **Actions:** status, start, stop, restart, logs, enable, disable
+
+**Wait flag:** Use `wait=True` on status action to block until service is ready. Useful for automation workflows that need to ensure a service is fully operational before proceeding. Default timeout is 60 seconds; customize with `timeout=N`.
 
 ## Configuration
 
