@@ -63,7 +63,8 @@ from voice_mode.config import (
     MP3_BITRATE,
     CONCH_ENABLED,
     CONCH_TIMEOUT,
-    CONCH_CHECK_INTERVAL
+    CONCH_CHECK_INTERVAL,
+    BARGE_IN_ENABLED
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -79,6 +80,7 @@ from voice_mode.core import (
     play_system_audio
 )
 from voice_mode.audio_player import NonBlockingAudioPlayer
+from voice_mode.barge_in import BargeInMonitor, is_barge_in_available
 from voice_mode.statistics_tracking import track_voice_interaction
 from voice_mode.utils import (
     get_event_logger,
@@ -389,13 +391,31 @@ async def text_to_speech_with_failover(
     instructions: Optional[str] = None,
     audio_format: Optional[str] = None,
     initial_provider: Optional[str] = None,
-    speed: Optional[float] = None
+    speed: Optional[float] = None,
+    barge_in_monitor: Optional[BargeInMonitor] = None
 ) -> Tuple[bool, Optional[dict], Optional[dict]]:
     """
     Text to speech with automatic failover to next available endpoint.
-    
+
+    Args:
+        message: The text to convert to speech.
+        voice: Optional voice to use.
+        model: Optional model to use.
+        instructions: Optional TTS instructions.
+        audio_format: Optional audio format.
+        initial_provider: Optional initial provider preference.
+        speed: Optional speech speed.
+        barge_in_monitor: Optional barge-in monitor for interruption support.
+            When provided, TTS playback can be interrupted by user speech.
+
     Returns:
         Tuple of (success, tts_metrics, tts_config)
+
+        If barge-in occurred, tts_metrics will contain:
+        - interrupted: True
+        - interrupted_at: Time (seconds) when interruption occurred
+        - captured_audio: numpy array of captured user speech
+        - captured_audio_samples: Number of samples captured
     """
     # Apply pronunciation rules if enabled
     if pronounce_enabled():
@@ -414,7 +434,8 @@ async def text_to_speech_with_failover(
         debug_dir=DEBUG_DIR if DEBUG else None,
         save_audio=SAVE_AUDIO,
         audio_dir=AUDIO_DIR if SAVE_AUDIO else None,
-        speed=speed
+        speed=speed,
+        barge_in_monitor=barge_in_monitor
     )
 
 
@@ -1334,6 +1355,21 @@ consult the MCP resources listed above.
             async with audio_operation_lock:
                 # Speak the message
                 tts_start = time.perf_counter()
+                # Create barge-in monitor if enabled and waiting for response
+                # Barge-in allows user to interrupt TTS mid-playback by speaking
+                barge_in_monitor = None
+                if BARGE_IN_ENABLED and is_barge_in_available() and wait_for_response and not should_skip_tts:
+                    barge_in_monitor = BargeInMonitor()
+                    logger.info("🎙️ Barge-in monitoring enabled for TTS playback")
+                    logger.debug(f"   VAD aggressiveness: {barge_in_monitor.vad_aggressiveness}, "
+                                f"min speech: {barge_in_monitor.min_speech_ms}ms")
+                    # Log barge-in start event for analytics
+                    if event_logger:
+                        event_logger.log_event(event_logger.BARGE_IN_START, {
+                            "vad_aggressiveness": barge_in_monitor.vad_aggressiveness,
+                            "min_speech_ms": barge_in_monitor.min_speech_ms
+                        })
+
                 if should_skip_tts:
                     # Skip TTS entirely for faster response
                     tts_success = True
@@ -1354,7 +1390,8 @@ consult the MCP resources listed above.
                             instructions=tts_instructions,
                             audio_format=audio_format,
                             initial_provider=tts_provider,
-                            speed=speed
+                            speed=speed,
+                            barge_in_monitor=barge_in_monitor
                         )
                 
                 # Add TTS sub-metrics
@@ -1476,53 +1513,106 @@ consult the MCP resources listed above.
                     logger.info(f"Speak-only result: {result}")
                     return result
 
-                # Brief pause before listening
-                await asyncio.sleep(0.5)
-                
-                # Play "listening" feedback sound
-                await play_audio_feedback(
-                    "listening",
-                    openai_clients,
-                    chime_enabled,
-                    "whisper",
-                    chime_leading_silence=chime_leading_silence,
-                    chime_trailing_silence=chime_trailing_silence
-                )
-                
-                # Record response
-                logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+                # Check if TTS was interrupted by barge-in (user spoke during playback)
+                barge_in_occurred = tts_metrics and tts_metrics.get('interrupted', False)
+                barge_in_audio = False  # Track if current audio is from barge-in (for edge case handling)
 
-                # Log recording start
-                if event_logger:
-                    event_logger.log_event(event_logger.RECORDING_START)
+                if barge_in_occurred:
+                    # User interrupted TTS by speaking - use captured audio directly
+                    logger.info("⚡ TTS playback was interrupted by user speech (barge-in)")
 
-                record_start = time.perf_counter()
-                logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                    None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                )
-                timings['record'] = time.perf_counter() - record_start
-                
-                # Log recording end
-                if event_logger:
-                    event_logger.log_event(event_logger.RECORDING_END, {
-                        "duration": timings['record'],
-                        "samples": len(audio_data)
-                    })
-                
-                # Play "finished" feedback sound
-                await play_audio_feedback(
-                    "finished",
-                    openai_clients,
-                    chime_enabled,
-                    "whisper",
-                    chime_leading_silence=chime_leading_silence,
-                    chime_trailing_silence=chime_trailing_silence
-                )
-                
-                # Mark the end of recording - this is when user expects response to start
-                user_done_time = time.perf_counter()
-                logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
+                    # Log barge-in event for analytics using proper event constant
+                    if event_logger:
+                        event_logger.log_event(event_logger.BARGE_IN_DETECTED, {
+                            "interrupted_at_seconds": tts_metrics.get('interrupted_at'),
+                            "captured_samples": tts_metrics.get('captured_audio_samples', 0),
+                            "tts_duration_before_interrupt": tts_metrics.get('interrupted_at', 0)
+                        })
+
+                    # Get the captured audio from barge-in
+                    audio_data = tts_metrics.get('captured_audio')
+                    if audio_data is None:
+                        # Barge-in triggered but no audio captured (edge case)
+                        logger.warning("⚠️ Barge-in detected but no audio captured, falling back to normal recording")
+                        if event_logger:
+                            event_logger.log_event(event_logger.BARGE_IN_FALSE_POSITIVE, {
+                                "reason": "no_audio_captured",
+                                "captured_samples": 0
+                            })
+                        barge_in_occurred = False
+                    elif len(audio_data) < 100:
+                        # Very short audio - likely a false positive from noise
+                        logger.warning(f"⚠️ Barge-in captured very short audio ({len(audio_data)} samples), falling back to normal recording")
+                        if event_logger:
+                            event_logger.log_event(event_logger.BARGE_IN_FALSE_POSITIVE, {
+                                "reason": "audio_too_short",
+                                "captured_samples": len(audio_data)
+                            })
+                        barge_in_occurred = False
+                    else:
+                        # We have captured audio - set flags for barge-in flow
+                        barge_in_audio = True  # Mark audio as from barge-in for downstream edge case handling
+                        speech_detected = True  # We know speech was detected (barge-in triggered)
+                        timings['record'] = tts_metrics.get('interrupted_at', 0)  # Recording during TTS
+                        timings['barge_in'] = True
+
+                        # Skip listening chime since user is already speaking
+                        # Skip pause and normal recording since we have audio
+
+                        # Mark the end of "recording" (which was actually during TTS)
+                        user_done_time = time.perf_counter()
+                        logger.info(f"📊 Barge-in audio captured at {timings['record']:.1f}s into TTS playback")
+                        logger.info(f"📊 Captured {len(audio_data)} samples ({len(audio_data) / SAMPLE_RATE:.2f}s) of user speech")
+
+                # Normal flow: user didn't interrupt, record their response
+                if not barge_in_occurred:
+                    # Brief pause before listening
+                    await asyncio.sleep(0.5)
+
+                    # Play "listening" feedback sound
+                    await play_audio_feedback(
+                        "listening",
+                        openai_clients,
+                        chime_enabled,
+                        "whisper",
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence
+                    )
+
+                    # Record response
+                    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+
+                    # Log recording start
+                    if event_logger:
+                        event_logger.log_event(event_logger.RECORDING_START)
+
+                    record_start = time.perf_counter()
+                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
+                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                    )
+                    timings['record'] = time.perf_counter() - record_start
+
+                    # Log recording end
+                    if event_logger:
+                        event_logger.log_event(event_logger.RECORDING_END, {
+                            "duration": timings['record'],
+                            "samples": len(audio_data)
+                        })
+
+                    # Play "finished" feedback sound
+                    await play_audio_feedback(
+                        "finished",
+                        openai_clients,
+                        chime_enabled,
+                        "whisper",
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence
+                    )
+
+                    # Mark the end of recording - this is when user expects response to start
+                    user_done_time = time.perf_counter()
+                    logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
                 
                 if len(audio_data) == 0:
                     result = "Error: Could not record audio"
@@ -1592,13 +1682,40 @@ consult the MCP resources listed above.
                                 error_msg = "\n".join(error_lines)
                                 logger.error(error_msg)
 
+                                # Log barge-in specific STT error if this was barge-in audio
+                                if barge_in_audio:
+                                    logger.warning("⚠️ STT failed on barge-in captured audio")
+                                    if event_logger:
+                                        event_logger.log_event(event_logger.BARGE_IN_STT_ERROR, {
+                                            "error": "connection_failed",
+                                            "captured_samples": len(audio_data) if audio_data is not None else 0,
+                                            "attempted_endpoints": len(stt_result.get("attempted_endpoints", []))
+                                        })
+
                                 # Return error immediately
                                 return error_msg
 
                             elif stt_result["error_type"] == "no_speech":
-                                # Genuine no speech detected
+                                # Genuine no speech detected - could be a false positive for barge-in
                                 response_text = None
                                 stt_provider = stt_result.get("provider", "unknown")
+
+                                # Handle barge-in false positive: VAD triggered but STT found no speech
+                                if barge_in_audio:
+                                    logger.warning("⚠️ Barge-in false positive: VAD detected speech but STT found none")
+                                    logger.info("This may happen due to background noise or brief non-speech sounds")
+                                    if event_logger:
+                                        event_logger.log_event(event_logger.BARGE_IN_FALSE_POSITIVE, {
+                                            "reason": "stt_no_speech",
+                                            "captured_samples": len(audio_data) if audio_data is not None else 0,
+                                            "stt_provider": stt_provider
+                                        })
+                                    # Save the audio for debugging if configured
+                                    if SAVE_AUDIO and AUDIO_DIR:
+                                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                        audio_path = os.path.join(AUDIO_DIR, f"barge_in_false_positive_{timestamp}.wav")
+                                        write(audio_path, SAMPLE_RATE, audio_data)
+                                        logger.debug(f"Saved barge-in false positive audio to: {audio_path}")
                         else:
                             # Successful transcription
                             response_text = stt_result.get("text")

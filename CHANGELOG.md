@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Barge-In: Interrupt TTS Playback** (VM-606, GH-211)
+  - Users can interrupt TTS playback by speaking, enabling natural conversation flow
+  - `VOICEMODE_BARGE_IN=true` enables the feature (opt-in, default: false)
+  - `VOICEMODE_BARGE_IN_VAD` controls detection sensitivity (0-3, default: 2)
+  - `VOICEMODE_BARGE_IN_MIN_MS` sets minimum speech threshold (default: 150ms)
+  - Captured speech is passed directly to STT for seamless conversation
+  - Works with both buffered and streaming TTS modes
+  - Requires `webrtcvad` library (auto-installed with VoiceMode)
+  - Target latency: <100ms from voice onset to TTS stop
+
 ## [8.1.0] - 2026-02-02
 
 ### Added

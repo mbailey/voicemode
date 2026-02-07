@@ -248,6 +248,36 @@ VOICEMODE_EVENT_LOG=false          # Log all events
 VOICEMODE_CONVERSATION_LOG=false   # Log conversations
 ```
 
+### Barge-In (Interrupt TTS)
+
+Barge-in allows users to interrupt TTS playback by speaking. When enabled, VoiceMode monitors the microphone during TTS and stops playback immediately when voice activity is detected, allowing natural conversational flow.
+
+```bash
+# Enable barge-in feature (default: false, opt-in)
+VOICEMODE_BARGE_IN=true
+
+# VAD aggressiveness for barge-in detection (0-3)
+# 0: Very permissive - triggers easily, may have false positives
+# 1: Permissive - good for quiet environments
+# 2: Moderate - balanced for most environments (default)
+# 3: Aggressive - only triggers on clear speech
+VOICEMODE_BARGE_IN_VAD=2
+
+# Minimum speech duration in milliseconds before triggering (default: 150)
+# Higher values prevent false positives from brief sounds
+VOICEMODE_BARGE_IN_MIN_MS=150
+```
+
+**Requirements:**
+- Requires `webrtcvad` library (installed automatically with VoiceMode)
+- Works with both buffered and streaming TTS modes
+- Captured speech is passed directly to STT for seamless conversation
+
+**Use cases:**
+- Natural conversation flow without waiting for TTS to finish
+- Quick corrections or interjections
+- Time-sensitive interactions
+
 ### Development Settings
 
 ```bash

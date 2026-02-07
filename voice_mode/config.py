@@ -227,6 +227,23 @@ def load_voicemode_env():
 # VOICEMODE_CHIME_TRAILING_SILENCE=0.2
 
 #############
+# Barge-in Configuration
+#############
+
+# Enable barge-in to interrupt TTS playback by speaking (true/false)
+# When enabled, microphone is monitored during TTS and playback stops
+# immediately when voice activity is detected
+# VOICEMODE_BARGE_IN=false
+
+# VAD aggressiveness for barge-in detection 0-3 (default: 2)
+# 0=very permissive, 1=permissive, 2=moderate, 3=aggressive
+# VOICEMODE_BARGE_IN_VAD=2
+
+# Minimum speech duration in ms before triggering barge-in (default: 150)
+# Helps prevent false positives from brief sounds
+# VOICEMODE_BARGE_IN_MIN_MS=150
+
+#############
 # Audio Format Configuration
 #############
 
@@ -653,6 +670,31 @@ WAIT_DURATION = float(os.getenv("VOICEMODE_WAIT_DURATION", "60.0"))  # Default 6
 CHIME_LEADING_SILENCE = float(os.getenv("VOICEMODE_CHIME_LEADING_SILENCE", "0.1"))  # Default 0.1s - minimal delay for Bluetooth
 # Trailing silence after chimes to prevent cutoff
 CHIME_TRAILING_SILENCE = float(os.getenv("VOICEMODE_CHIME_TRAILING_SILENCE", "0.2"))  # Default 0.2s - reduced for responsiveness
+
+# ==================== BARGE-IN CONFIGURATION ====================
+# Barge-in allows users to interrupt TTS playback by speaking.
+# When enabled, the microphone is monitored during TTS playback,
+# and playback stops immediately when voice activity is detected.
+
+# Enable barge-in feature (default: false - opt-in feature)
+# When true, users can interrupt TTS playback by speaking
+BARGE_IN_ENABLED = env_bool("VOICEMODE_BARGE_IN", False)
+
+# VAD aggressiveness for barge-in detection (0-3, higher = more strict)
+# 0: Very permissive - may trigger on background noise
+# 1: Permissive - good for quiet environments
+# 2: Moderate - balanced for most environments (default)
+# 3: Aggressive - only triggers on clear speech
+_barge_in_vad = int(os.getenv("VOICEMODE_BARGE_IN_VAD", "2"))
+# Validate VAD aggressiveness is in valid range (0-3)
+if _barge_in_vad < 0 or _barge_in_vad > 3:
+    _barge_in_vad = 2  # Reset to default if out of range
+BARGE_IN_VAD_AGGRESSIVENESS = _barge_in_vad
+
+# Minimum speech duration in milliseconds before triggering barge-in
+# Helps prevent false positives from brief sounds or noise
+# Default: 150ms - short enough for responsiveness, long enough to filter noise
+BARGE_IN_MIN_SPEECH_MS = int(os.getenv("VOICEMODE_BARGE_IN_MIN_MS", "150"))
 
 # Audio format configuration
 AUDIO_FORMAT = os.getenv("VOICEMODE_AUDIO_FORMAT", "pcm").lower()
