@@ -1,0 +1,19 @@
+# Environment variables
+.env
+
+# Wrangler outputs
+.wrangler/
+worker/
+
+# Node modules (if using local development)
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# MacOS
+.DS_Store
+
+# Logs
+*.log
