@@ -1,66 +1,76 @@
 # Getting Started with VoiceMode
 
-VoiceMode brings voice conversations to AI coding assistants. It works as both an MCP server for Claude Code and as a standalone CLI tool.
+VoiceMode brings voice conversations to Claude Code and other AI coding assistants.
+
+> **Note:** This guide covers using VoiceMode with Claude Code. For other MCP clients (Claude Desktop, Cursor, etc.), see [Other MCP Clients](other-clients.md).
 
 ## What is VoiceMode?
 
 VoiceMode provides:
 
-- **MCP Server**: Adds voice tools to Claude Code - no installation needed
+- **MCP Server**: Adds voice tools to Claude Code
 - **CLI Tool**: Use VoiceMode's tools directly from your terminal
 - **Local Services**: Optional privacy-focused speech processing
 
-## Quick Start: Using with Claude Code
+## Quick Start
 
-The fastest way to get started is using VoiceMode with Claude Code.
+**Requirements:** Computer with microphone and speakers
 
-### Installation
+### Option 1: Claude Code Plugin (Recommended)
 
-Install UV package manager (if not already installed), then run the VoiceMode installer:
+The fastest way for Claude Code users to get started:
 
 ```bash
-# Install UV package manager (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Add the plugin marketplace
+claude plugin marketplace add mbailey/plugins
 
-# Install VoiceMode and configure services
-uvx voice-mode-install
+# Install VoiceMode plugin
+claude plugin install voicemode@mbailey
 
-# Add to Claude Code MCP
+# Install dependencies (CLI, Local Voice Services)
+/voicemode:install
+
+# Start talking!
+/voicemode:converse
+```
+
+The plugin includes commands, skills, and hooks that enhance your Claude Code experience.
+
+### Option 2: Install Script
+
+The install script handles dependencies and setup:
+
+```bash
+# Run the installer
+curl -fsSL https://getvoicemode.com/install.sh | bash
+
+# Add to Claude Code
 claude mcp add --scope user voicemode -- uvx --refresh voice-mode
+
+# Optional: Add OpenAI API key as fallback for local services
+export OPENAI_API_KEY=your-openai-key
+
+# Start a conversation
+claude converse
 ```
 
 The installer will:
 
-- Install missing system dependencies (FFmpeg, PortAudio, etc.)
-- Set up your environment for VoiceMode
+- Install system dependencies (FFmpeg, PortAudio, UV, etc.)
+- Install the VoiceMode Python package
 - Offer to install local voice services (Whisper STT and Kokoro TTS)
 
-**Alternative UV installation methods:**
-- **macOS**: `brew install uv`
-- **With pip**: `pip install uv`
+## Verify Installation
 
-Learn more: [UV Installation Guide](https://docs.astral.sh/uv/getting-started/installation/)
-
-### 2. Configure Your API Key
-
-Set your OpenAI API key as an environment variable:
+Check that VoiceMode is connected:
 
 ```bash
-export OPENAI_API_KEY="sk-your-api-key-here"
-```
-
-Or add it to your shell configuration file (`~/.bashrc`, `~/.zshrc`, etc.)
-
-### 3. Verify Installation
-
-```bash
-# Check that VoiceMode is connected
 claude mcp list
 ```
 
 You should see `voicemode` in the list of connected servers.
 
-### 4. Start Using Voice
+## Start Using Voice
 
 In Claude Code, simply type:
 ```
