@@ -613,7 +613,7 @@ SERVICE_AUTO_ENABLE = env_bool("VOICEMODE_SERVICE_AUTO_ENABLE", True)
 
 # ==================== CONNECT CONFIGURATION ====================
 
-CONNECT_AUTO_ENABLED = env_bool("VOICEMODE_CONNECT_AUTO", True)
+CONNECT_AUTO_ENABLED = env_bool("VOICEMODE_CONNECT_AUTO", False)
 CONNECT_WS_URL = os.getenv("VOICEMODE_CONNECT_WS_URL", "wss://voicemode.dev/ws")
 
 # ==================== SOUND FONTS CONFIGURATION ====================
