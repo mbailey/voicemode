@@ -611,6 +611,11 @@ KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
 # Auto-enable services after installation
 SERVICE_AUTO_ENABLE = env_bool("VOICEMODE_SERVICE_AUTO_ENABLE", True)
 
+# ==================== CONNECT CONFIGURATION ====================
+
+CONNECT_AUTO_ENABLED = env_bool("VOICEMODE_CONNECT_AUTO", True)
+CONNECT_WS_URL = os.getenv("VOICEMODE_CONNECT_WS_URL", "wss://voicemode.dev/ws")
+
 # ==================== SOUND FONTS CONFIGURATION ====================
 
 # Sound fonts are enabled by default for audio feedback during tool calls
