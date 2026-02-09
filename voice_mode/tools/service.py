@@ -263,12 +263,49 @@ async def status_service(service_name: str) -> str:
     """Get status of a service."""
     # Connect service is special - it's a WebSocket client, not a port listener
     if service_name == "connect":
+        parts = []
+
+        # Standalone standby process
         proc = find_connect_process()
-        if not proc:
-            return "❌ Connect is not available"
-        # Connect has a process, continue to get details below
-        status = "running"
-        port = None  # Connect doesn't use a port
+        if proc:
+            # Build process status (reuses the logic below for proc info)
+            try:
+                with proc.oneshot():
+                    cpu_percent = proc.cpu_percent(interval=0.1)
+                    memory_info = proc.memory_info()
+                    memory_mb = memory_info.rss / 1024 / 1024
+                    create_time = proc.create_time()
+
+                uptime_seconds = time.time() - create_time
+                hours = int(uptime_seconds // 3600)
+                minutes = int((uptime_seconds % 3600) // 60)
+                seconds = int(uptime_seconds % 60)
+                if hours > 0:
+                    uptime_str = f"{hours}h {minutes}m {seconds}s"
+                elif minutes > 0:
+                    uptime_str = f"{minutes}m {seconds}s"
+                else:
+                    uptime_str = f"{seconds}s"
+
+                parts.append(f"""✅ Connect standby process is running
+   PID: {proc.pid}
+   CPU: {cpu_percent:.1f}%
+   Memory: {memory_mb:.1f} MB
+   Uptime: {uptime_str}
+   Mode: standby
+   Type: WebSocket client""")
+            except Exception:
+                parts.append(f"Connect standby process is running (PID: {proc.pid}) but could not get details")
+
+        # In-process WebSocket client (voicemode.dev)
+        from voice_mode.connect_registry import connect_registry
+        if not connect_registry._initialized:
+            await connect_registry.initialize()
+        parts.append(connect_registry.get_status_text())
+
+        if not parts:
+            return "❌ Connect is not available (no credentials - run: voicemode connect login)"
+        return "\n\n".join(parts)
     else:
         if service_name == "whisper":
             port = WHISPER_PORT

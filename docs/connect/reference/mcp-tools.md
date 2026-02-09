@@ -19,6 +19,28 @@ Returns information about active connections for your account:
 
 Use this to verify clients are connected before calling `converse`.
 
+### Local service tool
+
+The local VoiceMode MCP server also shows Connect device status via `service("connect", "status")`. This displays:
+
+1. **Standalone standby process** - if `voicemode connect standby` is running
+2. **In-process WebSocket client** - remote devices from voicemode.dev (requires opt-in, see [Configuration](#connect-configuration))
+
+### Connect configuration
+
+The in-process WebSocket client is disabled by default. To enable it:
+
+```bash
+export VOICEMODE_CONNECT_AUTO=true
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VOICEMODE_CONNECT_AUTO` | `false` | Enable in-process WebSocket connection to voicemode.dev |
+| `VOICEMODE_CONNECT_WS_URL` | `wss://voicemode.dev/ws` | WebSocket gateway URL |
+
+VoiceMode respects user privacy and will not connect to external services without explicit opt-in.
+
 ## converse
 
 Have a voice conversation through a connected client.

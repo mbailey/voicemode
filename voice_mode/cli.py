@@ -3479,4 +3479,81 @@ def status():
         click.echo()
         click.echo("  Note: Token has expired. It will be refreshed automatically on next use.")
 
+    # Show remote devices via WebSocket
+    click.echo()
+    _show_remote_devices(credentials)
+
+
+def _show_remote_devices(credentials):
+    """Connect to voicemode.dev briefly to show remote devices."""
+    import json
+    import urllib.parse
+
+    try:
+        import websockets.sync.client as ws_sync
+    except ImportError:
+        click.echo("  Remote Devices: (websockets package not installed)")
+        return
+
+    # Refresh credentials if needed
+    from voice_mode.auth import get_valid_credentials
+    fresh_creds = get_valid_credentials(auto_refresh=True)
+    if not fresh_creds:
+        click.echo("  Remote Devices: (credentials expired)")
+        return
+
+    url = "wss://voicemode.dev/ws"
+    token = urllib.parse.quote(fresh_creds.access_token)
+    ws_url = f"{url}?token={token}"
+
+    try:
+        with ws_sync.connect(ws_url, close_timeout=3) as ws:
+            # Wait for 'connected' message
+            raw = ws.recv(timeout=5)
+            msg = json.loads(raw)
+            if msg.get("type") != "connected":
+                click.echo("  Remote Devices: (unexpected server response)")
+                return
+
+            # Send ready so server sends us the connections list
+            ws.send(json.dumps({
+                "type": "ready",
+                "device": {"platform": "cli-status"},
+                "capabilities": {"tts": False, "stt": False},
+            }))
+
+            # Wait for 'connections' message
+            for _ in range(10):  # Read up to 10 messages looking for connections
+                raw = ws.recv(timeout=5)
+                msg = json.loads(raw)
+                if msg.get("type") == "connections":
+                    connections = msg.get("connections", [])
+                    # Filter out our own cli-status connection
+                    remote = [c for c in connections if c.get("platform") != "cli-status"]
+                    if not remote:
+                        click.echo("  Remote Devices: none")
+                    else:
+                        click.echo("  Remote Devices:")
+                        for c in remote:
+                            name = c.get("name") or c.get("platform", "unknown").capitalize()
+                            platform = c.get("platform", "")
+                            ready = "ready" if c.get("ready") else "not ready"
+                            caps = []
+                            cap_dict = c.get("capabilities", {})
+                            if cap_dict.get("tts"):
+                                caps.append("TTS")
+                            if cap_dict.get("stt"):
+                                caps.append("STT")
+                            if cap_dict.get("canStartOperator"):
+                                caps.append("Wake")
+                            caps_str = "+".join(caps) if caps else "none"
+                            platform_str = f" ({platform})" if platform else ""
+                            click.echo(f"    {name}{platform_str} - {ready}, {caps_str}")
+                    return
+
+            click.echo("  Remote Devices: (no response from server)")
+
+    except Exception as e:
+        click.echo(f"  Remote Devices: (connection failed: {e})")
+
 
