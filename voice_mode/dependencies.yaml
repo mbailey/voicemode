@@ -259,6 +259,12 @@ voicemode:
           required: true
           check_command: pkg-config --exists alsa
 
+        - name: nvidia-cuda-toolkit
+          description: NVIDIA CUDA compiler (for GPU acceleration)
+          required: false
+          check_command: nvcc --version
+          note: Optional - only needed when using --use-gpu on NVIDIA hardware
+
     fedora:
       packages:
         - name: cmake
