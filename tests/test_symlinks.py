@@ -6,6 +6,19 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def patch_audio_dir(isolate_home_directory, monkeypatch):
+    """Ensure AUDIO_DIR points to the current test's home directory.
+
+    AUDIO_DIR is computed at module import time from Path.home(), so it gets
+    baked in from whichever test first triggers the import. This fixture
+    patches it to use the current test's isolated home directory.
+    """
+    correct_audio_dir = isolate_home_directory / ".voicemode" / "audio"
+    monkeypatch.setattr("voice_mode.config.AUDIO_DIR", correct_audio_dir)
+    monkeypatch.setattr("voice_mode.utils.symlinks.AUDIO_DIR", correct_audio_dir)
+
+
 class TestUpdateLatestSymlinks:
     """Tests for update_latest_symlinks function."""
 

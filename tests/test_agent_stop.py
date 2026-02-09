@@ -32,18 +32,19 @@ class TestStopCommand:
     """Tests for the 'voicemode agent stop' command."""
 
     def test_stop_sends_ctrl_c_when_window_exists(self, runner):
-        """Should send Ctrl-C when window exists."""
+        """Should send Ctrl-C 3 times when window exists."""
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
         with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
             with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
-                result = runner.invoke(agent, ['stop'])
+                with patch('voice_mode.cli_commands.agent.time.sleep'):
+                    result = runner.invoke(agent, ['stop'])
 
         assert result.exit_code == 0
         assert "Sent stop signal" in result.output
-        # Verify Ctrl-C was sent
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0][0]
-        assert call_args == ['tmux', 'send-keys', '-t', 'voicemode:operator', 'C-c']
+        # Verify Ctrl-C was sent 3 times (Claude Code needs multiple signals)
+        assert mock_run.call_count == 3
+        for c in mock_run.call_args_list:
+            assert c[0][0] == ['tmux', 'send-keys', '-t', 'voicemode:operator', 'C-c']
 
     def test_stop_reports_not_running_when_no_window(self, runner):
         """Should report not running when window doesn't exist."""
@@ -51,7 +52,7 @@ class TestStopCommand:
             result = runner.invoke(agent, ['stop'])
 
         assert result.exit_code == 0
-        assert "Operator not running" in result.output
+        assert "not running" in result.output
 
     def test_stop_kill_flag_kills_window(self, runner):
         """Should kill window when --kill flag is used."""
@@ -100,7 +101,7 @@ class TestStopCommand:
         result = runner.invoke(agent, ['stop', '-h'])
 
         assert result.exit_code == 0
-        assert "Stop the operator agent" in result.output
+        assert "Stop an agent" in result.output
         assert "--session" in result.output
         assert "--kill" in result.output
 

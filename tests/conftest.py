@@ -43,27 +43,40 @@ def _safe_subprocess_run(original_run):
 
 
 def _safe_subprocess_popen(original_popen):
-    """Wrapper that blocks dangerous system commands during tests."""
-    def wrapper(*args, **kwargs):
-        cmd = args[0] if args else kwargs.get("args", [])
-        if isinstance(cmd, str):
-            cmd_parts = cmd.split()
-        else:
-            cmd_parts = list(cmd) if cmd else []
+    """Wrapper that blocks dangerous system commands during tests.
 
-        if cmd_parts and cmd_parts[0] in BLOCKED_COMMANDS:
-            # Return a mock process instead of running the command
-            mock_proc = MagicMock()
-            mock_proc.pid = 99999
-            mock_proc.poll.return_value = 0
-            mock_proc.returncode = 0
-            mock_proc.communicate.return_value = (b"", b"")
-            mock_proc.stdout = MagicMock()
-            mock_proc.stderr = MagicMock()
-            return mock_proc
+    Returns a callable class (not a function) so that type subscripting like
+    Popen[bytes] works. The mcp library uses this in type annotations and
+    Python 3.10 raises TypeError on subscripted functions.
+    """
+    class SafePopen:
+        """Callable wrapper for subprocess.Popen that blocks dangerous commands."""
 
-        return original_popen(*args, **kwargs)
-    return wrapper
+        def __class_getitem__(cls, params):
+            """Support type subscripting (e.g., Popen[bytes])."""
+            return original_popen[params]
+
+        def __new__(cls, *args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args", [])
+            if isinstance(cmd, str):
+                cmd_parts = cmd.split()
+            else:
+                cmd_parts = list(cmd) if cmd else []
+
+            if cmd_parts and cmd_parts[0] in BLOCKED_COMMANDS:
+                # Return a mock process instead of running the command
+                mock_proc = MagicMock()
+                mock_proc.pid = 99999
+                mock_proc.poll.return_value = 0
+                mock_proc.returncode = 0
+                mock_proc.communicate.return_value = (b"", b"")
+                mock_proc.stdout = MagicMock()
+                mock_proc.stderr = MagicMock()
+                return mock_proc
+
+            return original_popen(*args, **kwargs)
+
+    return SafePopen
 
 
 @pytest.fixture(autouse=True)

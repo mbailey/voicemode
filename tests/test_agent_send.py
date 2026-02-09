@@ -88,38 +88,33 @@ class TestSendCommand:
     def test_send_delivers_message_when_running(self, runner):
         """Should send message to tmux pane when agent is running."""
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=True):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=True):
             with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
                 result = runner.invoke(agent, ['send', 'Hello, world!'])
 
         assert result.exit_code == 0
-        assert "Sent:" in result.output
+        assert "Sent to" in result.output
         # Verify send-keys was called with -l for literal
-        calls = mock_run.call_args_list
-        assert len(calls) == 2  # Message + Enter
-        assert calls[0][0][0] == ['tmux', 'send-keys', '-t', 'voicemode:operator', '-l', 'Hello, world!']
-        assert calls[1][0][0] == ['tmux', 'send-keys', '-t', 'voicemode:operator', 'Enter']
+        # First calls may be tmux list-windows etc., find the send-keys calls
+        send_calls = [c for c in mock_run.call_args_list if 'send-keys' in c[0][0]]
+        assert len(send_calls) == 2  # Message + Enter
+        assert '-l' in send_calls[0][0][0]
+        assert 'Hello, world!' in send_calls[0][0][0]
+        assert 'Enter' in send_calls[1][0][0]
 
     def test_send_auto_starts_when_not_running(self, runner, temp_home):
         """Should auto-start agent if not running (default behavior)."""
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
-        call_count = [0]
 
-        def is_running_side_effect(*args, **kwargs):
-            # First call: not running, subsequent calls: running
-            call_count[0] += 1
-            return call_count[0] > 1
-
-        with patch('voice_mode.cli_commands.agent.is_operator_running', side_effect=is_running_side_effect):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=False):
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
                     with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                         with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
-                            with patch('voice_mode.cli_commands.agent.time.sleep'):
-                                result = runner.invoke(agent, ['send', 'Hello!'])
+                            result = runner.invoke(agent, ['send', 'Hello!'])
 
         assert result.exit_code == 0
-        assert "Starting operator" in result.output
+        assert "Starting agent" in result.output
 
     def test_send_no_start_fails_when_not_running(self, runner):
         """Should fail with --no-start when agent is not running."""
@@ -132,37 +127,39 @@ class TestSendCommand:
     def test_send_prompts_for_message_when_not_provided(self, runner):
         """Should prompt for message when not provided."""
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=True):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=True):
             with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
                 result = runner.invoke(agent, ['send'], input='My message\n')
 
         assert result.exit_code == 0
-        assert "Sent:" in result.output
+        assert "Sent to" in result.output
 
     def test_send_uses_custom_session_name(self, runner):
         """Should use custom session name."""
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=True) as mock_running:
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=True) as mock_running:
             with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
                 result = runner.invoke(agent, ['send', '--session', 'custom', 'Hello!'])
 
-        mock_running.assert_called_once_with('custom')
-        calls = mock_run.call_args_list
-        assert calls[0][0][0][3] == 'custom:operator'
+        mock_running.assert_called_once_with('operator', 'custom')
+        # Find the send-keys call and verify it targets custom:operator
+        send_calls = [c for c in mock_run.call_args_list if 'send-keys' in c[0][0]]
+        assert 'custom:operator' in ' '.join(send_calls[0][0][0])
 
     def test_send_truncates_long_messages_in_output(self, runner):
         """Should truncate long messages in output for readability."""
         long_message = "A" * 100
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=True):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=True):
             with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
                 result = runner.invoke(agent, ['send', long_message])
 
         assert result.exit_code == 0
         assert "..." in result.output
-        # But the full message should be sent
-        calls = mock_run.call_args_list
-        assert long_message in calls[0][0][0]
+        # But the full message should be sent via tmux
+        send_calls = [c for c in mock_run.call_args_list if 'send-keys' in c[0][0] and '-l' in c[0][0]]
+        assert len(send_calls) >= 1
+        assert long_message in send_calls[0][0][0]
 
     def test_send_handles_send_keys_error(self, runner):
         """Should handle errors from tmux send-keys."""
@@ -182,7 +179,7 @@ class TestSendCommand:
                 return MagicMock(returncode=1)
             return MagicMock(returncode=0)
 
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=True):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=True):
             with patch('voice_mode.cli_commands.agent.subprocess.run', side_effect=run_side_effect):
                 result = runner.invoke(agent, ['send', 'Hello!'])
 
@@ -194,7 +191,7 @@ class TestSendCommand:
         result = runner.invoke(agent, ['send', '-h'])
 
         assert result.exit_code == 0
-        assert "Send a message to the operator" in result.output
+        assert "Send a message to an agent" in result.output
         assert "--no-start" in result.output
         assert "--session" in result.output
 
@@ -202,28 +199,27 @@ class TestSendCommand:
         """Should handle messages with special characters."""
         special_msg = 'Hello "world" & $HOME!'
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=True):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=True):
             with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
                 result = runner.invoke(agent, ['send', special_msg])
 
         assert result.exit_code == 0
         # Message should be sent with -l flag for literal interpretation
-        calls = mock_run.call_args_list
-        assert '-l' in calls[0][0][0]
-        assert special_msg in calls[0][0][0]
+        send_calls = [c for c in mock_run.call_args_list if 'send-keys' in c[0][0] and '-l' in c[0][0]]
+        assert len(send_calls) >= 1
+        assert special_msg in send_calls[0][0][0]
 
-    def test_send_waits_after_auto_start(self, runner, temp_home):
-        """Should wait after auto-starting for Claude to initialize."""
+    def test_send_auto_starts_with_message_as_prompt(self, runner, temp_home):
+        """Should auto-start agent with message passed as initial prompt."""
         mock_run = MagicMock(return_value=MagicMock(returncode=0))
-        mock_sleep = MagicMock()
 
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=False):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=False):
             with patch('voice_mode.cli_commands.agent.tmux_session_exists', return_value=True):
                 with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=True):
                     with patch('voice_mode.cli_commands.agent.is_agent_running_in_pane', return_value=False):
                         with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
-                            with patch('voice_mode.cli_commands.agent.time.sleep', mock_sleep):
-                                result = runner.invoke(agent, ['send', 'Hello!'])
+                            result = runner.invoke(agent, ['send', 'Hello!'])
 
-        # Should have called sleep(2) after starting
-        mock_sleep.assert_called_once_with(2)
+        assert result.exit_code == 0
+        # Auto-start passes message as initial prompt to claude command
+        assert "Started with: Hello!" in result.output
