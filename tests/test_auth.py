@@ -1046,14 +1046,13 @@ class TestStandbyCLI:
         runner = CliRunner()
 
         # Mock get_valid_credentials to return credentials
-        # Mock websockets import to raise ImportError (stops early for testing)
-        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials):
-            # We expect it to get past auth and fail on websockets import
+        # Mock websockets.sync.client.connect to raise KeyboardInterrupt (exits the retry loop)
+        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials), \
+             patch("websockets.sync.client.connect", side_effect=KeyboardInterrupt):
             result = runner.invoke(connect, ["standby"])
 
             # Should show that credentials were loaded
             assert "Using stored credentials for: test@example.com" in result.output
-            # Will fail on websockets import (or connection), but that's after auth
             # The key assertion is that we got past the auth check
 
     def test_standby_auth_refresh_failure(self):
