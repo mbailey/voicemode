@@ -38,7 +38,25 @@ graph TD
 
 ### 1. No Speech Detected
 **Symptoms:** Recording completes but no speech is recognized
-**Quick Fix:** `converse("message", min_listen_duration=5.0)`
+
+**Quick Fix:** Adjust minimum listen duration to allow more speaking time:
+```python
+voicemode:converse("message", listen_duration_min=5.0)
+```
+
+**Manual Recovery:** If audio was saved but STT failed, manually transcribe the recording:
+```bash
+# Check if recording exists and transcribe it
+if [ -f ~/.voicemode/audio/latest-STT.wav ]; then
+  whisper-cli ~/.voicemode/audio/latest-STT.wav
+fi
+```
+
+**Prerequisites for manual recovery:**
+- Audio saving must be enabled (`VOICEMODE_SAVE_AUDIO=true`, `VOICEMODE_SAVE_ALL=true`, or `VOICEMODE_DEBUG=true`)
+- Recording file exists at `~/.voicemode/audio/latest-STT.wav` (symlink to most recent)
+
+This recovery technique allows you to retrieve the transcription without asking the user to repeat themselves.
 
 ### 2. API Authentication Failed
 **Symptoms:** "Unauthorized" or "Invalid API key" errors
