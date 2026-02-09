@@ -50,6 +50,30 @@ For voice to work, you also need a client connected:
 
 Once connected, you can use `converse` for voice conversations.
 
+## Local Device Visibility (Optional)
+
+If you have VoiceMode installed locally, you can also see remote devices from the local MCP server's service tool. This is useful for monitoring without switching to the voicemode.dev dashboard.
+
+Enable the in-process WebSocket client:
+
+```bash
+export VOICEMODE_CONNECT_AUTO=true
+```
+
+Then check status:
+
+```
+service("connect", "status")
+```
+
+Or from the CLI:
+
+```bash
+voicemode connect status
+```
+
+The CLI command always shows remote devices when you're logged in, without needing the environment variable (since running the command is an explicit user action).
+
 ## Troubleshooting
 
 **"No connected clients"**

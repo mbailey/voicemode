@@ -37,6 +37,17 @@ Devices that handle the actual voice I/O (microphone/speaker). They connect via 
 - Web app - browser-based dashboard at voicemode.dev
 - Future: macOS menu bar app, browser extension
 
+### Local MCP Server
+
+The local VoiceMode MCP server can also connect to voicemode.dev to monitor remote devices. This provides device visibility without requiring the remote MCP server.
+
+Two connection methods are available:
+
+- **Standalone standby process** (`voicemode connect standby`) - a long-running CLI process that listens for wake signals and starts agents
+- **In-process WebSocket client** - a background connection within the MCP server that tracks connected devices (opt-in via `VOICEMODE_CONNECT_AUTO=true`)
+
+The in-process client is disabled by default. VoiceMode does not connect to external services without explicit user opt-in.
+
 ### Platform
 
 The voicemode.dev backend routes messages between agents and clients.
