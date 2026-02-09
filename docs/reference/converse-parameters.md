@@ -157,6 +157,46 @@ Override audio format.
 
 **Default:** Uses VOICEMODE_TTS_AUDIO_FORMAT env var
 
+## Audio Saving & Debugging
+
+Audio files can be saved for debugging, manual transcription recovery, or archival purposes.
+
+### Configuration
+
+Set in `~/.voicemode/voicemode.env`:
+
+```bash
+# Save all audio files (STT recordings and TTS output)
+VOICEMODE_SAVE_ALL=true
+
+# Or enable individually
+VOICEMODE_SAVE_AUDIO=true         # STT recordings only
+VOICEMODE_SAVE_TRANSCRIPTIONS=true # Transcription JSON files
+
+# Automatically enabled in debug mode
+VOICEMODE_DEBUG=true
+```
+
+### Saved File Locations
+
+```
+~/.voicemode/audio/
+├── latest-STT.wav          # Symlink to most recent STT recording
+├── latest-TTS.mp3          # Symlink to most recent TTS output
+├── 2026-02-09_14-15-23_STT_conv-abc123.wav
+└── 2026-02-09_14-15-28_TTS_conv-abc123.mp3
+```
+
+### Manual STT Recovery
+
+If STT fails but audio was recorded, manually transcribe:
+
+```bash
+whisper-cli ~/.voicemode/audio/latest-STT.wav
+```
+
+See [STT Recovery](../../.claude/skills/voicemode/SKILL.md#stt-recovery---manual-transcription) and [Troubleshooting - No Speech Detected](../../troubleshooting/index.md#1-no-speech-detected) for details.
+
 ### chime_enabled
 **Type:** boolean | string (optional)
 Enable or disable audio feedback chimes.

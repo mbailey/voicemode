@@ -78,6 +78,39 @@ voicemode:converse("Five minutes is up. Ready when you are.")
 
 **Configuration:** The short pause duration is configurable via `VOICEMODE_WAIT_DURATION` (default: 60 seconds).
 
+## STT Recovery - Manual Transcription
+
+If Whisper STT fails but the audio was recorded successfully, you can manually transcribe the saved audio file:
+
+```bash
+# Transcribe the most recent recording
+whisper-cli ~/.voicemode/audio/latest-STT.wav
+
+# Or check if file exists first (safe for inclusion in automation)
+if [ -f ~/.voicemode/audio/latest-STT.wav ]; then
+  whisper-cli ~/.voicemode/audio/latest-STT.wav
+fi
+```
+
+**Requirements:**
+- Audio saving must be enabled via one of:
+  - `VOICEMODE_SAVE_AUDIO=true` in `~/.voicemode/voicemode.env`
+  - `VOICEMODE_SAVE_ALL=true` (saves all audio and transcriptions)
+  - `VOICEMODE_DEBUG=true` (enables debug mode with audio saving)
+
+**How it works:**
+- VoiceMode saves all STT recordings to `~/.voicemode/audio/` with timestamps
+- The `latest-STT.wav` symlink always points to the most recent recording
+- If the STT API fails, the recording is still saved for manual recovery
+- This lets you recover the user's speech without asking them to repeat
+
+**When to use:**
+- STT service timeout or connection failure
+- Transcription returned empty but user definitely spoke
+- Need to verify what was actually said vs. what was transcribed
+
+See also: [Troubleshooting - No Speech Detected](../../docs/troubleshooting/index.md#1-no-speech-detected)
+
 ## Check Status
 
 ```bash
