@@ -93,5 +93,5 @@ class TestStatusCommand:
         result = runner.invoke(agent, ['status', '-h'])
 
         assert result.exit_code == 0
-        assert "Show operator status" in result.output
+        assert "Show agent status" in result.output
         assert "--session" in result.output

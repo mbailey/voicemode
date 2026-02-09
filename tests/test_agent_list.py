@@ -31,13 +31,13 @@ def runner():
 class TestListCommand:
     """Tests for the 'voicemode agent list' command."""
 
-    def test_list_command_hidden_from_help(self, runner):
-        """The list command should be hidden from --help output."""
+    def test_list_command_visible_in_help(self, runner):
+        """The list command should be visible in --help output."""
         result = runner.invoke(agent, ['--help'])
 
         assert result.exit_code == 0
-        # list should NOT appear in the help output
-        assert 'list' not in result.output.lower() or 'list' not in result.output.split()
+        # list should appear in the help output
+        assert 'list' in result.output.lower()
 
     def test_list_command_works_when_called_directly(self, runner, temp_home):
         """The list command should work when called directly despite being hidden."""
@@ -107,16 +107,16 @@ class TestListCommand:
         assert 'operator' in result.output
         assert '.hidden' not in result.output
 
-    def test_list_uses_custom_session(self, runner, temp_home):
-        """Should check status in the specified session."""
+    def test_list_checks_default_session(self, runner, temp_home):
+        """Should check status in the default 'voicemode' session."""
         base = temp_home / '.voicemode' / 'agents'
         (base / 'operator').mkdir(parents=True)
 
         with patch('voice_mode.cli_commands.agent.tmux_window_exists', return_value=False) as mock_window:
-            result = runner.invoke(agent, ['list', '--session', 'custom'])
+            result = runner.invoke(agent, ['list'])
 
         assert result.exit_code == 0
-        mock_window.assert_called_with('custom:operator')
+        mock_window.assert_called_with('voicemode:operator')
 
     def test_list_sorts_agents_alphabetically(self, runner, temp_home):
         """Should sort agents alphabetically."""
@@ -135,8 +135,8 @@ class TestListCommand:
         agent_names = [l.split()[0] for l in agent_lines]
         assert agent_names == ['alpha', 'operator', 'zebra']
 
-    def test_list_shows_table_header(self, runner, temp_home):
-        """Should display a table header."""
+    def test_list_shows_machine_readable_output(self, runner, temp_home):
+        """Should display tab-separated output in non-TTY mode (CliRunner)."""
         base = temp_home / '.voicemode' / 'agents'
         (base / 'operator').mkdir(parents=True)
 
@@ -144,16 +144,15 @@ class TestListCommand:
             result = runner.invoke(agent, ['list'])
 
         assert result.exit_code == 0
-        assert 'Agent' in result.output
-        assert 'Status' in result.output
-        assert '---' in result.output
+        # CliRunner is not a TTY, so output is tab-separated
+        assert 'operator\tstopped' in result.output
 
     def test_list_help_option(self, runner, temp_home):
         """Should display help when -h is passed."""
         result = runner.invoke(agent, ['list', '-h'])
 
         assert result.exit_code == 0
-        assert "List all configured agents" in result.output
+        assert "List all agents and their status" in result.output
 
 
 # =============================================================================

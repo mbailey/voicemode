@@ -216,7 +216,7 @@ class TestStartCommand:
             assert result.exit_code == 0
             assert "Created tmux session" in result.output
             assert "Created tmux window" in result.output
-            assert "Operator started" in result.output
+            assert "Agent 'operator' started" in result.output
 
     def test_start_is_idempotent_when_running(self, temp_home, runner):
         """Should report already running without restarting."""
@@ -283,7 +283,7 @@ class TestStartCommand:
             assert result.exit_code == 0
             assert "Created tmux session" not in result.output
             assert "Created tmux window" not in result.output
-            assert "Operator started" in result.output
+            assert "Agent 'operator' started" in result.output
 
     def test_start_fails_when_session_creation_fails(self, temp_home, runner):
         """Should fail with error when session creation fails."""

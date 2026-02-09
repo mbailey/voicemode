@@ -1087,7 +1087,9 @@ class TestStandbyCLI:
         runner = CliRunner()
 
         # Provide explicit token - should not call get_valid_credentials
-        with patch("voice_mode.auth.get_valid_credentials") as mock_get_creds:
+        # Mock websockets.sync.client.connect to raise KeyboardInterrupt (exits the retry loop)
+        with patch("voice_mode.auth.get_valid_credentials") as mock_get_creds, \
+             patch("websockets.sync.client.connect", side_effect=KeyboardInterrupt):
             result = runner.invoke(connect, ["standby", "--token", "explicit_token"])
 
             # get_valid_credentials should NOT be called when --token is provided
@@ -1103,7 +1105,9 @@ class TestStandbyCLI:
         runner = CliRunner()
 
         # Set environment variable
-        with patch("voice_mode.auth.get_valid_credentials") as mock_get_creds:
+        # Mock websockets.sync.client.connect to raise KeyboardInterrupt (exits the retry loop)
+        with patch("voice_mode.auth.get_valid_credentials") as mock_get_creds, \
+             patch("websockets.sync.client.connect", side_effect=KeyboardInterrupt):
             result = runner.invoke(
                 connect,
                 ["standby"],
