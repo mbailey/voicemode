@@ -78,6 +78,13 @@ class EventLogger:
     CONCH_ACQUIRE = "CONCH_ACQUIRE"        # Successfully acquired conch
     CONCH_RELEASE = "CONCH_RELEASE"        # Released conch
 
+    # Barge-in Events (interrupt TTS with user speech)
+    BARGE_IN_START = "BARGE_IN_START"            # Monitoring started for barge-in
+    BARGE_IN_DETECTED = "BARGE_IN_DETECTED"      # User speech detected, TTS interrupted
+    BARGE_IN_STOP = "BARGE_IN_STOP"              # Monitoring stopped
+    BARGE_IN_FALSE_POSITIVE = "BARGE_IN_FALSE_POSITIVE"  # Barge-in triggered but no speech in STT
+    BARGE_IN_STT_ERROR = "BARGE_IN_STT_ERROR"    # STT failed on barge-in audio
+
     def __init__(self, log_dir: Optional[Path] = None, enabled: bool = True):
         """
         Initialize the event logger.
@@ -381,3 +388,57 @@ def log_tool_request_end(tool_name: str, success: bool = True) -> None:
             "tool_name": tool_name,
             "success": success
         })
+
+
+# Barge-in event convenience functions
+def log_barge_in_start(vad_aggressiveness: int, min_speech_ms: int) -> None:
+    """Log barge-in monitoring start."""
+    logger = get_event_logger()
+    if logger:
+        logger.log_event(EventLogger.BARGE_IN_START, {
+            "vad_aggressiveness": vad_aggressiveness,
+            "min_speech_ms": min_speech_ms
+        })
+
+
+def log_barge_in_detected(
+    interrupted_at_seconds: Optional[float] = None,
+    captured_samples: Optional[int] = None
+) -> None:
+    """Log barge-in detection (user interrupted TTS)."""
+    logger = get_event_logger()
+    if logger:
+        data: Dict[str, Any] = {}
+        if interrupted_at_seconds is not None:
+            data["interrupted_at_seconds"] = interrupted_at_seconds
+        if captured_samples is not None:
+            data["captured_samples"] = captured_samples
+        logger.log_event(EventLogger.BARGE_IN_DETECTED, data)
+
+
+def log_barge_in_stop(voice_detected: bool = False) -> None:
+    """Log barge-in monitoring stop."""
+    logger = get_event_logger()
+    if logger:
+        logger.log_event(EventLogger.BARGE_IN_STOP, {
+            "voice_detected": voice_detected
+        })
+
+
+def log_barge_in_false_positive(captured_samples: int) -> None:
+    """Log barge-in false positive (triggered but no speech in STT)."""
+    logger = get_event_logger()
+    if logger:
+        logger.log_event(EventLogger.BARGE_IN_FALSE_POSITIVE, {
+            "captured_samples": captured_samples
+        })
+
+
+def log_barge_in_stt_error(error: str, captured_samples: Optional[int] = None) -> None:
+    """Log STT error on barge-in captured audio."""
+    logger = get_event_logger()
+    if logger:
+        data: Dict[str, Any] = {"error": error}
+        if captured_samples is not None:
+            data["captured_samples"] = captured_samples
+        logger.log_event(EventLogger.BARGE_IN_STT_ERROR, data)

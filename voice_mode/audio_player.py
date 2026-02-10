@@ -7,7 +7,7 @@ concurrent audio streams without blocking or interference.
 import logging
 import queue
 import threading
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
@@ -29,17 +29,24 @@ class NonBlockingAudioPlayer:
         player.wait()  # Wait for playback to complete
     """
 
-    def __init__(self, buffer_size: int = 2048):
+    def __init__(
+        self,
+        buffer_size: int = 2048,
+        on_interrupt: Optional[Callable[[], None]] = None,
+    ):
         """Initialize the audio player.
 
         Args:
             buffer_size: Size of audio buffer chunks for callback (default: 2048)
+            on_interrupt: Optional callback to invoke when playback is interrupted
         """
         self.buffer_size = buffer_size
         self.audio_queue: Optional[queue.Queue] = None
         self.stream: Optional[sd.OutputStream] = None
         self.playback_complete = threading.Event()
         self.playback_error: Optional[Exception] = None
+        self._on_interrupt = on_interrupt
+        self._interrupted = False
 
     def _audio_callback(self, outdata, frames, time_info, status):
         """Callback function called by sounddevice for each audio buffer.
@@ -105,6 +112,7 @@ class NonBlockingAudioPlayer:
         # Reset state
         self.playback_complete.clear()
         self.playback_error = None
+        self._interrupted = False
 
         # Ensure samples are float32
         if samples.dtype != np.float32:
@@ -184,3 +192,31 @@ class NonBlockingAudioPlayer:
                     self.audio_queue.get_nowait()
                 except queue.Empty:
                     break
+
+    def interrupt(self):
+        """Interrupt playback due to barge-in (user started speaking).
+
+        This method stops playback immediately, sets the interrupted flag,
+        and fires the on_interrupt callback if one was provided.
+
+        This is the preferred method to stop playback when the user has
+        started speaking and wants to interrupt the TTS output.
+        """
+        self._interrupted = True
+        self.stop()
+
+        # Fire the interrupt callback if provided
+        if self._on_interrupt is not None:
+            try:
+                self._on_interrupt()
+            except Exception as e:
+                logger.error(f"Error in on_interrupt callback: {e}")
+
+    def was_interrupted(self) -> bool:
+        """Check if the last playback was interrupted.
+
+        Returns:
+            True if the last playback was interrupted via interrupt(),
+            False otherwise.
+        """
+        return self._interrupted

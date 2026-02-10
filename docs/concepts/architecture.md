@@ -117,6 +117,86 @@ Text → TTS Service → Audio Stream → Format Conversion → Speaker
 3. **Format Conversion**: FFmpeg handles formats
 4. **Playback**: PyAudio for speaker output
 
+### Barge-In (TTS Interruption)
+
+Barge-in enables natural conversation by allowing users to interrupt TTS playback:
+
+```
+TTS Playing ──┬── BargeInMonitor ──→ Voice Detected ──→ Interrupt Player
+              │         │                                      │
+              │   (VAD Analysis)                         (Stop Playback)
+              │         │                                      │
+              └─────────┴──── Captured Audio ──→ STT ──→ Response
+```
+
+**Components:**
+
+1. **BargeInMonitor** (`barge_in.py`): Monitors microphone during TTS
+   - Uses WebRTC VAD for speech detection
+   - Captures audio buffer from voice onset
+   - Fires interrupt callback when speech threshold met
+
+2. **NonBlockingAudioPlayer**: Extended with interrupt support
+   - `interrupt()` method stops playback immediately
+   - `was_interrupted()` indicates barge-in occurred
+   - Clean resource shutdown on interrupt
+
+3. **Conversation Flow Integration**:
+   - Monitor starts when TTS playback begins
+   - On voice detection: TTS stops, captured audio flows to STT
+   - Listening chime skipped (user already speaking)
+   - Normal conversation continues with interrupted speech
+
+**Configuration:**
+- `VOICEMODE_BARGE_IN=true` enables the feature
+- `VOICEMODE_BARGE_IN_VAD` controls detection sensitivity (0-3)
+- `VOICEMODE_BARGE_IN_MIN_MS` sets minimum speech duration threshold
+
+**Performance Target:** <100ms from voice onset to TTS stop
+
+### Barge-In Performance Characteristics
+
+Measured performance characteristics from automated testing:
+
+| Metric | Average | Max | Target |
+|--------|---------|-----|--------|
+| Interrupt callback latency | <5ms | <10ms | <50ms |
+| Voice onset to TTS stop | <20ms | <50ms | <100ms |
+| VAD check per chunk | <5ms | <20ms | - |
+| Buffer append operation | <1ms | <10ms | - |
+| Cross-thread interrupt latency | <20ms | <50ms | - |
+
+**Latency Breakdown:**
+
+The total latency from when the user starts speaking to when TTS stops consists of:
+
+1. **VAD Processing** (~10-20ms): WebRTC VAD analyzes 20ms audio chunks
+2. **Speech Threshold** (configurable, default 150ms): Minimum speech duration to confirm intentional interruption
+3. **Callback Invocation** (<5ms): Signaling from monitor to player
+4. **Player Stop** (<5ms): Stopping audio output stream
+
+Note: The 150ms speech threshold is intentional to prevent false positives and is not considered system latency. Actual system latency (from confirmed speech detection to TTS stop) is typically under 50ms.
+
+**CPU Overhead:**
+
+- BargeInMonitor objects are lightweight (~1KB memory footprint)
+- VAD checking runs at ~50+ checks per second without bottleneck
+- Audio buffer operations are O(1) with lock protection
+- Background thread has minimal impact during idle periods
+
+**Memory Usage:**
+
+- Audio buffer grows linearly with captured speech duration
+- 5 seconds of captured audio at 24kHz, 16-bit: ~240KB
+- Buffers are cleared on silence (when barge-in hasn't triggered)
+- Memory is released when monitor is stopped
+
+**Thread Safety:**
+
+- All buffer operations protected by threading.Lock
+- Events use threading.Event for signal coordination
+- Callback invocation is thread-safe across monitoring and playback threads
+
 ## Service Architecture
 
 ### Service Lifecycle
