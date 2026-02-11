@@ -19,7 +19,7 @@ New subcommands allow direct service control without starting the MCP server:
 ```bash
 voicemode kokoro status           # Show service status and resource usage
 voicemode kokoro start            # Start Kokoro service
-voicemode kokoro stop             # Stop Kokoro service  
+voicemode kokoro stop             # Stop Kokoro service
 voicemode kokoro restart          # Restart Kokoro service
 voicemode kokoro enable           # Enable service at boot/login
 voicemode kokoro disable          # Disable service from boot/login
@@ -28,6 +28,26 @@ voicemode kokoro logs --lines 100 # View last 100 log lines
 voicemode kokoro health           # Check health endpoint
 voicemode kokoro update-service-files # Update service files to latest
 ```
+
+#### Waiting for Services to Start
+
+The `status` command supports `--wait` and `--timeout` flags to block until a service becomes ready:
+
+```bash
+# Wait for service to be ready (default 60s timeout)
+voicemode kokoro status --wait
+
+# Wait with custom timeout
+voicemode whisper status --wait --timeout 120
+```
+
+This is useful for scripts that need to wait for services to be fully operational before proceeding.
+
+**How it works:**
+- Polls the service every second
+- Shows progress dots (`.`) during wait
+- Returns when service is ready or timeout is reached
+- Timeout message uses `⏱️` prefix
 
 #### Whisper STT Service
 ```bash
@@ -62,8 +82,38 @@ $ voicemode kokoro status
 $ voicemode whisper start
 ✅ Whisper started successfully (PID: 54321)
 
-$ voicemode kokoro start  
+$ voicemode kokoro start
 ✅ Kokoro started
+```
+
+### Waiting for Service Readiness
+```bash
+# Start service and wait for it to be ready
+$ voicemode kokoro start && voicemode kokoro status --wait
+✅ Kokoro started
+Waiting for kokoro to become ready... (timeout: 60s)
+................
+✅ Kokoro is running locally
+   PID: 12345
+   Port: 8880
+   CPU: 0.1%
+   Memory: 256.3 MB
+   Uptime: 16s
+
+# Wait with custom timeout
+$ voicemode whisper status --wait --timeout 120
+Waiting for whisper to become ready... (timeout: 120s)
+....
+✅ Whisper is running locally
+   PID: 54321
+   Port: 2022
+   ...
+
+# Timeout example
+$ voicemode kokoro status --wait --timeout 5
+Waiting for kokoro to become ready... (timeout: 5s)
+.....
+⏱️ Timeout: kokoro did not become ready within 5 seconds
 ```
 
 ### Health Checks
