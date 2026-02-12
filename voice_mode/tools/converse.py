@@ -17,12 +17,28 @@ from openai import AsyncOpenAI
 import httpx
 
 # Optional webrtcvad for silence detection
+# webrtcvad uses pkg_resources (removed in setuptools>=81) only for its __version__.
+# Shim pkg_resources before importing webrtcvad to avoid silent VAD failure.
+import sys
+if "pkg_resources" not in sys.modules:
+    try:
+        import pkg_resources  # noqa: F401
+    except ImportError:
+        import types
+        _fake_pkg_resources = types.ModuleType("pkg_resources")
+        _fake_pkg_resources.get_distribution = lambda name: type("Dist", (), {"version": "unknown"})()
+        sys.modules["pkg_resources"] = _fake_pkg_resources
+
 try:
     import webrtcvad
     VAD_AVAILABLE = True
 except ImportError as e:
     webrtcvad = None
     VAD_AVAILABLE = False
+    logging.getLogger("voicemode").warning(
+        f"webrtcvad failed to load: {e}. "
+        "Silence detection will be disabled — recordings will run for the full duration."
+    )
 
 from voice_mode.server import mcp
 from voice_mode.conch import Conch
