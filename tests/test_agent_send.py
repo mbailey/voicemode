@@ -118,7 +118,7 @@ class TestSendCommand:
 
     def test_send_no_start_fails_when_not_running(self, runner):
         """Should fail with --no-start when agent is not running."""
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=False):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=False):
             result = runner.invoke(agent, ['send', '--no-start', 'Hello!'])
 
         assert result.exit_code == 1
@@ -164,7 +164,7 @@ class TestSendCommand:
     def test_send_handles_send_keys_error(self, runner):
         """Should handle errors from tmux send-keys."""
         mock_run = MagicMock(return_value=MagicMock(returncode=1))
-        with patch('voice_mode.cli_commands.agent.is_operator_running', return_value=True):
+        with patch('voice_mode.cli_commands.agent.is_agent_running', return_value=True):
             with patch('voice_mode.cli_commands.agent.subprocess.run', mock_run):
                 result = runner.invoke(agent, ['send', 'Hello!'])
 

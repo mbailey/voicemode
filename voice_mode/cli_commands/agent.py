@@ -280,11 +280,14 @@ def tmux_session_exists(session: str) -> bool:
     Returns:
         True if session exists, False otherwise
     """
-    result = subprocess.run(
-        ['tmux', 'has-session', '-t', session],
-        capture_output=True
-    )
-    return result.returncode == 0
+    try:
+        result = subprocess.run(
+            ['tmux', 'has-session', '-t', session],
+            capture_output=True
+        )
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
 
 
 def tmux_window_exists(window: str) -> bool:
@@ -301,11 +304,14 @@ def tmux_window_exists(window: str) -> bool:
 
     session, name = window.split(':', 1)
 
-    result = subprocess.run(
-        ['tmux', 'list-windows', '-t', session, '-F', '#{window_name}'],
-        capture_output=True,
-        text=True
-    )
+    try:
+        result = subprocess.run(
+            ['tmux', 'list-windows', '-t', session, '-F', '#{window_name}'],
+            capture_output=True,
+            text=True
+        )
+    except FileNotFoundError:
+        return False
 
     if result.returncode != 0:
         return False
@@ -329,11 +335,14 @@ def is_agent_running_in_pane(window: str, pane: int = 0) -> bool:
     target = f"{window}.{pane}"
 
     # Get the current command running in the pane
-    result = subprocess.run(
-        ['tmux', 'display-message', '-t', target, '-p', '#{pane_current_command}'],
-        capture_output=True,
-        text=True
-    )
+    try:
+        result = subprocess.run(
+            ['tmux', 'display-message', '-t', target, '-p', '#{pane_current_command}'],
+            capture_output=True,
+            text=True
+        )
+    except FileNotFoundError:
+        return False
 
     if result.returncode != 0:
         return False
@@ -746,13 +755,16 @@ def scan_tmux_for_agents() -> list[dict]:
         List of dicts with keys: pane_id, session, window, pane_index,
                                  command, title, path
     """
-    result = subprocess.run(
-        ['tmux', 'list-panes', '-a', '-F',
-         '#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_index}\t'
-         '#{pane_current_command}\t#{pane_title}\t#{pane_current_path}'],
-        capture_output=True,
-        text=True
-    )
+    try:
+        result = subprocess.run(
+            ['tmux', 'list-panes', '-a', '-F',
+             '#{pane_id}\t#{session_name}\t#{window_name}\t#{pane_index}\t'
+             '#{pane_current_command}\t#{pane_title}\t#{pane_current_path}'],
+            capture_output=True,
+            text=True
+        )
+    except FileNotFoundError:
+        return []
 
     if result.returncode != 0:
         return []
