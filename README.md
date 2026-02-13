@@ -33,7 +33,7 @@ The fastest way for Claude Code users to get started:
 claude plugin marketplace add mbailey/voicemode
 
 # Install VoiceMode plugin
-claude plugin install voicemode
+claude plugin install voicemode@voicemode
 
 ## Install dependencies (CLI, Local Voice Services)
 
