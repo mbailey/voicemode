@@ -147,6 +147,11 @@ def load_voicemode_env():
 # Comma-separated list of STT endpoints
 # VOICEMODE_STT_BASE_URLS=http://127.0.0.1:2022/v1,https://api.openai.com/v1
 
+# STT prompt for vocabulary biasing - helps Whisper recognize names and technical terms
+# Use when specific words are consistently misrecognized
+# Example: VOICEMODE_STT_PROMPT=tmux, Tali, kubectl, VoiceMode
+# VOICEMODE_STT_PROMPT=
+
 # Comma-separated list of preferred voices
 # VOICEMODE_VOICES=af_sky,alloy
 

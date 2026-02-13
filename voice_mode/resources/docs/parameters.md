@@ -147,6 +147,67 @@ Time to add after audio chime ends.
 
 **Default:** Uses VOICEMODE_CHIME_TRAILING_SILENCE env var (0.2s)
 
+## Vocabulary Biasing (STT Prompt)
+
+### VOICEMODE_STT_PROMPT
+**Type:** environment variable (string, optional)
+
+Bias Whisper's speech recognition toward specific words and names using a prompt hint. This helps improve recognition of technical terms, proper names, and domain-specific vocabulary that Whisper might otherwise mishear.
+
+**How it works:**
+
+Whisper uses a "prompt" field to condition its recognition. By providing words and phrases you frequently use, the model is primed to hear them correctly. This is especially useful for:
+
+- **Names**: People, pets, places (Tali, Mike, Brisbane)
+- **Technical terms**: Command names, tools (tmux, kubectl, pytest)
+- **Project vocabulary**: Your codebase-specific terms
+- **Acronyms**: Common abbreviations in your domain
+
+**Format flexibility:**
+
+All of these formats work equivalently:
+```bash
+# Comma-separated
+export VOICEMODE_STT_PROMPT="tmux, Tali, VoiceMode, kubectl"
+
+# Space-separated
+export VOICEMODE_STT_PROMPT="tmux Tali VoiceMode kubectl"
+
+# Sentence-style (can help with context)
+export VOICEMODE_STT_PROMPT="The user often talks about Tali, tmux sessions, and VoiceMode features."
+```
+
+**Examples:**
+```bash
+# Developer working with Kubernetes and tmux
+export VOICEMODE_STT_PROMPT="kubectl, tmux, pytest, FastAPI, VoiceMode"
+
+# User with a pet named Tali
+export VOICEMODE_STT_PROMPT="Tali, my dog Tali, taking Tali for a walk"
+
+# Mix of technical and personal vocabulary
+export VOICEMODE_STT_PROMPT="tmux, neovim, Tali, Brisbane, taskmaster"
+```
+
+**Token limit:**
+
+Whisper uses the last 224 tokens of the prompt. In practice, this means:
+- Short word lists: No problem (most use cases)
+- Long prompts: Only the end matters, so put important words last
+- Typical vocabulary: 50-100 words fits easily within the limit
+
+**When to use:**
+
+- Whisper consistently mishears specific words
+- You use unusual names or technical jargon
+- Domain-specific vocabulary isn't recognized
+
+**Troubleshooting tip:**
+
+If a word is still misrecognized after adding it to the prompt, try including it in context: instead of just "Tali", use "my dog Tali" or "Tali is a Rottweiler".
+
+**See also:** [Troubleshooting - Words Misrecognized](troubleshooting.md#specific-words-consistently-misrecognized)
+
 ## Audio Format & Feedback
 
 ### audio_format
