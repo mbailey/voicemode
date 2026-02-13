@@ -1,0 +1,24 @@
+{
+  "name": "voicemode",
+  "metadata": {
+    "description": "VoiceMode - voice conversations for Claude Code"
+  },
+  "owner": {
+    "name": "VoiceMode",
+    "email": "hello@voicemode.dev"
+  },
+  "plugins": [
+    {
+      "name": "voicemode",
+      "description": "Voice conversations with Claude Code using local speech-to-text and text-to-speech. Includes support for remote agents via mobile, web and CLI.",
+      "version": "8.1.0p1",
+      "author": {
+        "name": "Mike Bailey",
+        "email": "mike@failmode.com"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://voicemode.dev"
+    }
+  ]
+}
