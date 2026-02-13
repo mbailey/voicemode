@@ -3353,6 +3353,7 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
                     'type': 'ready',
                     'device': {
                         'platform': 'python-listener',
+                        'name': agent_name,  # Display name in dashboard
                         'appVersion': __version__,
                     },
                     'capabilities': {
@@ -3362,7 +3363,7 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
                     },
                 }
                 ws.send(json.dumps(ready_msg))
-                click.echo("📡 Ready and waiting for voice sessions...")
+                click.echo(f"📡 Ready as '{agent_name}', waiting for voice sessions...")
                 click.echo("   Press Ctrl+C to stop")
                 click.echo()
 
