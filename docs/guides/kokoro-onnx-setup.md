@@ -1,0 +1,175 @@
+# Kokoro ONNX Text-to-Speech Setup
+
+Kokoro ONNX is a lightweight alternative to the PyTorch-based Kokoro service. It uses ONNX Runtime for efficient CPU inference with lower memory usage and better multi-core utilisation.
+
+## Why Kokoro ONNX?
+
+| Feature | Kokoro (PyTorch) | Kokoro ONNX |
+|---------|------------------|-------------|
+| Model size | ~310 MB | ~88 MB (int8) |
+| Memory usage | ~2 GB | ~300 MB |
+| CPU utilisation | Single core | All cores |
+| GPU required | Optional | No |
+| Startup time | Slower | Faster |
+
+## Quick Start
+
+```bash
+# Start the service
+voicemode service start kokoro-onnx
+
+# Check status
+voicemode service status kokoro-onnx
+
+# Stop the service
+voicemode service stop kokoro-onnx
+```
+
+Default endpoint: `http://127.0.0.1:8881/v1`
+
+## Installation
+
+### 1. Install Dependencies
+
+```bash
+# Install voice-mode with kokoro-onnx dependencies
+cd /path/to/voicemode
+make install-kokoro-onnx
+
+# Or manually
+pip install kokoro-onnx fastapi uvicorn
+```
+
+### 2. Download Model Files
+
+Download from [kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases):
+
+```bash
+mkdir -p ~/.voicemode/models
+cd ~/.voicemode/models
+
+# Download int8 model (recommended, 88MB)
+curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx
+
+# Download voices file (required, 27MB)
+curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+```
+
+### 3. Start the Service
+
+```bash
+voicemode service start kokoro-onnx
+```
+
+## Configuration
+
+Add to `~/.voicemode/voicemode.env`:
+
+```bash
+# Kokoro ONNX settings
+VOICEMODE_KOKORO_ONNX_PORT=8881
+VOICEMODE_KOKORO_ONNX_MODEL=kokoro-v1.0.int8.onnx
+VOICEMODE_KOKORO_ONNX_VOICES=voices-v1.0.bin
+VOICEMODE_KOKORO_ONNX_MODELS_DIR=~/.voicemode/models
+
+# Use kokoro-onnx as primary TTS (fallback to PyTorch kokoro)
+VOICEMODE_TTS_BASE_URLS=http://127.0.0.1:8881/v1,http://127.0.0.1:8880/v1
+```
+
+For Claude Code, add to `~/.claude/settings.json`:
+
+```json
+{
+  "env": {
+    "VOICEMODE_TTS_BASE_URLS": "http://127.0.0.1:8881/v1"
+  }
+}
+```
+
+## Available Models
+
+| Model | Size | Quality | Speed |
+|-------|------|---------|-------|
+| kokoro-v1.0.onnx | 310 MB | Best | Slower |
+| kokoro-v1.0.fp16.onnx | 169 MB | High | Medium |
+| kokoro-v1.0.int8.onnx | 88 MB | Good | Fast |
+
+The int8 model is recommended for most use cases.
+
+## API Endpoints
+
+The server exposes OpenAI-compatible endpoints:
+
+### Health Check
+```bash
+curl http://localhost:8881/health
+```
+
+### List Voices
+```bash
+curl http://localhost:8881/v1/voices
+```
+
+### Generate Speech
+```bash
+curl -X POST http://localhost:8881/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Hello world", "voice": "af_heart"}' \
+  -o output.pcm
+
+# Play PCM audio (24kHz, 16-bit, mono)
+ffplay -f s16le -ar 24000 -ac 1 output.pcm
+```
+
+### Available Formats
+
+- `pcm` - Raw PCM audio (default)
+- `wav` - WAV format
+- `mp3` - MP3 format (requires pydub)
+
+## Troubleshooting
+
+### Model not found
+
+Ensure model files are in the correct location:
+
+```bash
+ls ~/.voicemode/models/
+# Should show: kokoro-v1.0.int8.onnx  voices-v1.0.bin
+```
+
+### Service won't start
+
+Check if port 8881 is in use:
+
+```bash
+lsof -i :8881
+```
+
+### Wrong TTS service being used
+
+Verify the TTS URL configuration:
+
+```bash
+grep TTS_BASE_URL ~/.voicemode/voicemode.env
+```
+
+Ensure kokoro-onnx (8881) comes before kokoro (8880) in the URL list.
+
+## Running Manually
+
+For development or debugging:
+
+```bash
+cd ~/code/voicemode
+VOICEMODE_KOKORO_ONNX_MODEL=kokoro-v1.0.int8.onnx \
+VOICEMODE_KOKORO_ONNX_VOICES=voices-v1.0.bin \
+uv run python -m uvicorn voice_mode.services.kokoro_onnx.server:app \
+  --host 0.0.0.0 --port 8881
+```
+
+## See Also
+
+- [Kokoro Setup](kokoro-setup.md) - PyTorch-based Kokoro service
+- [Configuration Guide](configuration.md) - VoiceMode configuration
+- [Selecting Voices](selecting-voices.md) - Voice selection guide
