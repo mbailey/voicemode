@@ -37,8 +37,7 @@ from voice_mode.config import (
 if not os.environ.get('VOICEMODE_DEBUG', '').lower() in ('true', '1', 'yes'):
     # Suppress audioop deprecation warning from pydub
     warnings.filterwarnings('ignore', message='.*audioop.*deprecated.*', category=DeprecationWarning)
-    # Suppress pkg_resources deprecation warning from webrtcvad
-    warnings.filterwarnings('ignore', message='.*pkg_resources.*deprecated.*', category=UserWarning)
+    # webrtcvad-wheels uses importlib.metadata, no pkg_resources warning to suppress
     # Suppress psutil connections() deprecation warning
     warnings.filterwarnings('ignore', message='.*connections.*deprecated.*', category=DeprecationWarning)
     

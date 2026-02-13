@@ -41,8 +41,7 @@ dependencies = [
     "websockets>=12.0",  # Required for voicemode connect command
     "aiohttp",  # Required for Whisper and Kokoro service installers
     "psutil>=5.9.0",
-    "setuptools",  # Required for pkg_resources used by webrtcvad
-    "webrtcvad>=2.0.10",
+    "webrtcvad-wheels>=2.0.14",  # Maintained fork with importlib.metadata (no pkg_resources)
     "click>=8.0.0",
     "pyyaml>=6.0.0",
 ]
