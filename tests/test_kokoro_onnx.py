@@ -1,6 +1,7 @@
 """Tests for the kokoro-onnx TTS service."""
 
 import pytest
+import pytest_asyncio
 from unittest.mock import Mock, patch, MagicMock
 import numpy as np
 
@@ -194,6 +195,33 @@ class TestKokoroOnnxServer:
         assert response.headers["content-type"] == "audio/wav"
         # WAV files start with RIFF header
         assert response.content[:4] == b"RIFF"
+
+
+class TestKokoroOnnxInstaller:
+    """Test kokoro-onnx installer."""
+
+    def test_installer_module_imports(self):
+        """Test that installer module can be imported."""
+        from voice_mode.services.kokoro_onnx import installer
+        assert hasattr(installer, "kokoro_onnx_install")
+        assert hasattr(installer, "check_python_deps")
+        assert hasattr(installer, "MODEL_URLS")
+
+    def test_model_urls_defined(self):
+        """Test that model download URLs are defined."""
+        from voice_mode.services.kokoro_onnx.installer import MODEL_URLS
+        assert "kokoro-v1.0.int8.onnx" in MODEL_URLS
+        assert "voices-v1.0.bin" in MODEL_URLS
+
+    @pytest.mark.asyncio
+    async def test_check_python_deps(self):
+        """Test check_python_deps returns dict of booleans."""
+        from voice_mode.services.kokoro_onnx.installer import check_python_deps
+        deps = await check_python_deps()
+        assert isinstance(deps, dict)
+        assert "kokoro_onnx" in deps
+        assert "fastapi" in deps
+        assert "uvicorn" in deps
 
 
 class TestKokoroOnnxStartScript:
