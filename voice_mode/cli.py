@@ -96,7 +96,7 @@ def voice_mode() -> None:
 #   voicemode service status [service]
 # etc.
 
-VALID_SERVICES = ['whisper', 'kokoro', 'voicemode', 'connect']
+VALID_SERVICES = ['whisper', 'kokoro', 'kokoro-onnx', 'voicemode', 'connect']
 
 
 @voice_mode_main_cli.group()
@@ -106,10 +106,11 @@ def service():
 
     \b
     Services:
-      whisper    Local speech-to-text (STT) on port 2022
-      kokoro     Local text-to-speech (TTS) on port 8880
-      voicemode  HTTP MCP server for remote access on port 8765
-      connect    Remote wake standby (WebSocket client)
+      whisper      Local speech-to-text (STT) on port 2022
+      kokoro       Local text-to-speech (TTS/PyTorch) on port 8880
+      kokoro-onnx  Local text-to-speech (TTS/ONNX) on port 8881
+      voicemode    HTTP MCP server for remote access on port 8765
+      connect      Remote wake standby (WebSocket client)
 
     \b
     Quick Start:

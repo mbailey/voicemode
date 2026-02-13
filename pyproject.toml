@@ -59,6 +59,11 @@ coreml = [
     "transformers",
     "ane-transformers",
 ]
+kokoro-onnx = [
+    "kokoro-onnx>=0.4.0",
+    "fastapi>=0.100.0",
+    "uvicorn>=0.23.0",
+]
 dev = [
     "build>=1.0.0",
     "twine>=4.0.0",
