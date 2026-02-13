@@ -228,7 +228,8 @@ async def stream_pcm_audio(
     debug: bool = False,
     save_audio: bool = False,
     audio_dir: Optional[Path] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    skip_playback: bool = False
 ) -> Tuple[bool, StreamMetrics]:
     """Stream PCM audio with true HTTP streaming for minimal latency.
     
@@ -252,19 +253,20 @@ async def stream_pcm_audio(
             if not audio_started and frames > 0:
                 audio_started = True
                 audio_start_time = time.perf_counter()
-        
-        stream = sd.OutputStream(
-            samplerate=SAMPLE_RATE,  # Standard TTS sample rate (24kHz)
-            channels=1,
-            dtype='int16'  # PCM is 16-bit integers
-            # Note: Can't use callback and write() together
-        )
-        stream.start()
-        
-        # Log TTS playback start when we start the stream
-        event_logger = get_event_logger()
-        if event_logger:
-            event_logger.log_event(event_logger.TTS_PLAYBACK_START)
+
+        if not skip_playback:
+            stream = sd.OutputStream(
+                samplerate=SAMPLE_RATE,  # Standard TTS sample rate (24kHz)
+                channels=1,
+                dtype='int16'  # PCM is 16-bit integers
+                # Note: Can't use callback and write() together
+            )
+            stream.start()
+
+            # Log TTS playback start when we start the stream
+            event_logger = get_event_logger()
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_START)
         
         # Don't add stream parameter - Kokoro defaults to true, OpenAI doesn't support it
         
@@ -294,9 +296,10 @@ async def stream_pcm_audio(
                     # Convert bytes to numpy array for sounddevice
                     # PCM data is already in the right format
                     audio_array = np.frombuffer(chunk, dtype=np.int16)
-                    
+
                     # Play the chunk immediately
-                    stream.write(audio_array)
+                    if stream:
+                        stream.write(audio_array)
                     
                     # Save chunk if enabled
                     if save_buffer:
@@ -309,9 +312,10 @@ async def stream_pcm_audio(
                     
                     if debug and chunk_count % 10 == 0:
                         logger.debug(f"Streamed {chunk_count} chunks, {bytes_received} bytes")
-        
+
         # Wait for playback to finish
-        stream.stop()
+        if stream:
+            stream.stop()
         
         end_time = time.perf_counter()
 
@@ -395,7 +399,8 @@ async def stream_tts_audio(
     debug: bool = False,
     save_audio: bool = False,
     audio_dir: Optional[Path] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    skip_playback: bool = False
 ) -> Tuple[bool, StreamMetrics]:
     """Stream TTS audio with progressive playback.
     
@@ -421,7 +426,8 @@ async def stream_tts_audio(
             debug=debug,
             save_audio=save_audio,
             audio_dir=audio_dir,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            skip_playback=skip_playback
         )
     else:
         # Use buffered streaming for formats that need decoding
@@ -432,7 +438,8 @@ async def stream_tts_audio(
             debug=debug,
             save_audio=save_audio,
             audio_dir=audio_dir,
-            conversation_id=conversation_id
+            conversation_id=conversation_id,
+            skip_playback=skip_playback
         )
 
 
@@ -445,7 +452,8 @@ async def stream_with_buffering(
     debug: bool = False,
     save_audio: bool = False,
     audio_dir: Optional[Path] = None,
-    conversation_id: Optional[str] = None
+    conversation_id: Optional[str] = None,
+    skip_playback: bool = False
 ) -> Tuple[bool, StreamMetrics]:
     """Fallback streaming that buffers enough data to decode reliably.
     
@@ -464,15 +472,16 @@ async def stream_with_buffering(
     save_buffer = io.BytesIO() if save_audio else None
     audio_started = False
     stream = None
-    
+
     try:
         # Setup sounddevice stream
-        stream = sd.OutputStream(
-            samplerate=sample_rate,
-            channels=1,
-            dtype='float32'
-        )
-        stream.start()
+        if not skip_playback:
+            stream = sd.OutputStream(
+                samplerate=sample_rate,
+                channels=1,
+                dtype='float32'
+            )
+            stream.start()
         
         # Don't add stream parameter - Kokoro defaults to true, OpenAI doesn't support it
         
@@ -510,9 +519,10 @@ async def stream_with_buffering(
                             metrics.ttfa = time.perf_counter() - start_time
                             audio_started = True
                             logger.info(f"Buffered streaming started - TTFA: {metrics.ttfa:.3f}s")
-                            
+
                             # Play audio
-                            stream.write(samples)
+                            if stream:
+                                stream.write(samples)
                             metrics.chunks_played += len(samples) // 1024
                             
                             # Reset buffer for next batch
@@ -531,8 +541,9 @@ async def stream_with_buffering(
                 
                 if not audio_started:
                     metrics.ttfa = time.perf_counter() - start_time
-                    
-                stream.write(samples)
+
+                if stream:
+                    stream.write(samples)
                 metrics.chunks_played += len(samples) // 1024
                 
             except Exception as e:
@@ -550,6 +561,8 @@ async def stream_with_buffering(
                 audio_path = save_debug_file(audio_data, "tts", format, audio_dir, True, conversation_id)
                 if audio_path:
                     logger.info(f"TTS audio saved to: {audio_path}")
+                    # Store audio path in metrics for the caller
+                    metrics.audio_path = audio_path
                     # Update latest symlinks for quick access to most recent TTS audio
                     update_latest_symlinks(audio_path, "tts")
             except Exception as e:

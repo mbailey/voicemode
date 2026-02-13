@@ -449,6 +449,10 @@ LOGS_DIR = BASE_DIR / "logs"
 # CONFIG_DIR = BASE_DIR / "config"  # Removed - config stored in .voicemode.env file instead
 MODELS_DIR = expand_path(os.getenv("VOICEMODE_MODELS_DIR", str(BASE_DIR / "models")))
 
+# Barge-in configuration
+BARGE_IN_ENERGY_THRESHOLD = float(os.getenv("VOICEMODE_BARGE_IN_THRESHOLD", "300"))
+BARGE_IN_MIN_SPEECH_MS = int(os.getenv("VOICEMODE_BARGE_IN_MIN_SPEECH", "20"))
+
 # Debug configuration
 DEBUG = os.getenv("VOICEMODE_DEBUG", "").lower() in ("true", "1", "yes", "on")
 TRACE_DEBUG = os.getenv("VOICEMODE_DEBUG", "").lower() == "trace"

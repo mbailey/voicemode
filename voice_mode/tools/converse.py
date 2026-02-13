@@ -3,8 +3,10 @@
 import asyncio
 import logging
 import os
+import threading
 import time
 import traceback
+from collections import deque
 from typing import Optional, Literal, Tuple, Dict, Union
 from pathlib import Path
 from datetime import datetime
@@ -63,7 +65,10 @@ from voice_mode.config import (
     MP3_BITRATE,
     CONCH_ENABLED,
     CONCH_TIMEOUT,
-    CONCH_CHECK_INTERVAL
+    CONCH_CHECK_INTERVAL,
+    # Barge-in configuration
+    BARGE_IN_ENERGY_THRESHOLD,
+    BARGE_IN_MIN_SPEECH_MS,
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -389,7 +394,9 @@ async def text_to_speech_with_failover(
     instructions: Optional[str] = None,
     audio_format: Optional[str] = None,
     initial_provider: Optional[str] = None,
-    speed: Optional[float] = None
+    speed: Optional[float] = None,
+    force_save_audio: bool = False,
+    skip_playback: bool = False
 ) -> Tuple[bool, Optional[dict], Optional[dict]]:
     """
     Text to speech with automatic failover to next available endpoint.
@@ -404,6 +411,7 @@ async def text_to_speech_with_failover(
 
     # Always use simple failover (the only mode now)
     from voice_mode.simple_failover import simple_tts_failover
+    should_save = SAVE_AUDIO or force_save_audio
     return await simple_tts_failover(
         text=message,
         voice=voice or TTS_VOICES[0],
@@ -412,9 +420,10 @@ async def text_to_speech_with_failover(
         audio_format=audio_format,
         debug=DEBUG,
         debug_dir=DEBUG_DIR if DEBUG else None,
-        save_audio=SAVE_AUDIO,
-        audio_dir=AUDIO_DIR if SAVE_AUDIO else None,
-        speed=speed
+        save_audio=should_save,
+        audio_dir=AUDIO_DIR if should_save else None,
+        speed=speed,
+        skip_playback=skip_playback
     )
 
 
@@ -790,18 +799,21 @@ def record_audio(duration: float) -> np.ndarray:
             sys.stderr = original_stderr
 
 
-def record_audio_with_silence_detection(max_duration: float, disable_silence_detection: bool = False, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None) -> Tuple[np.ndarray, bool]:
+def record_audio_with_silence_detection(max_duration: float, disable_silence_detection: bool = False, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None, assume_speech: bool = False) -> Tuple[np.ndarray, bool]:
     """Record audio from microphone with automatic silence detection.
-    
+
     Uses WebRTC VAD to detect when the user stops speaking and automatically
     stops recording after a configurable silence threshold.
-    
+
     Args:
         max_duration: Maximum recording duration in seconds
         disable_silence_detection: If True, disables silence detection and uses fixed duration recording
         min_duration: Minimum recording duration before silence detection can stop (default: 0.0)
         vad_aggressiveness: VAD aggressiveness level (0-3). If None, uses VAD_AGGRESSIVENESS from config
-        
+        assume_speech: If True, start in SPEECH_ACTIVE state (for post-barge-in
+            recording where speech was already detected). Skips the initial
+            silence grace period and immediately begins tracking silence.
+
     Returns:
         Tuple of (audio_data, speech_detected):
             - audio_data: Numpy array of recorded audio samples
@@ -844,8 +856,12 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         chunks = []
         silence_duration_ms = 0
         recording_duration = 0
-        speech_detected = False
+        speech_detected = assume_speech
         stop_recording = False
+        wall_clock_start = time.time()
+        # Wall-clock safety cap: 3x audio max_duration prevents infinite recording
+        # when audio chunks arrive slower than real-time (device starvation)
+        wall_clock_max = max_duration * 3
         
         # Use a queue for thread-safe communication
         import queue
@@ -861,7 +877,10 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     f"Silence threshold: {SILENCE_THRESHOLD_MS}ms, "
                     f"Min duration: {MIN_RECORDING_DURATION}s, "
                     f"Initial grace period: {INITIAL_SILENCE_GRACE_PERIOD}s")
-        
+
+        if assume_speech:
+            logger.info("Starting in SPEECH_ACTIVE state (post-barge-in continuation)")
+
         if VAD_DEBUG:
             logger.info(f"[VAD_DEBUG] Starting VAD recording with config:")
             logger.info(f"[VAD_DEBUG]   max_duration: {max_duration}s")
@@ -896,8 +915,13 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                                blocksize=chunk_samples):
                 
                 logger.debug("Started continuous audio stream")
-                
+
                 while recording_duration < max_duration and not stop_recording:
+                    # Wall-clock safety check: prevent infinite recording
+                    # when audio device is starved and chunks arrive slowly
+                    if time.time() - wall_clock_start > wall_clock_max:
+                        logger.warning(f"Wall-clock timeout ({wall_clock_max:.0f}s) exceeded with only {recording_duration:.1f}s audio time - stopping")
+                        break
                     try:
                         # Get audio chunk from queue with timeout
                         chunk = audio_queue.get(timeout=0.1)
@@ -943,8 +967,13 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                                     logger.info(f"[VAD_DEBUG] STATE CHANGE: WAITING_FOR_SPEECH -> SPEECH_ACTIVE at t={recording_duration:.1f}s")
                                 speech_detected = True
                                 silence_duration_ms = 0
-                            # No timeout in this state - just keep waiting
-                            # The only exit is speech detection or max_duration
+                            else:
+                                # Timeout if no speech detected within grace period
+                                if recording_duration >= INITIAL_SILENCE_GRACE_PERIOD:
+                                    logger.info(f"✓ No speech detected within {INITIAL_SILENCE_GRACE_PERIOD}s grace period, stopping")
+                                    if VAD_DEBUG:
+                                        logger.info(f"[VAD_DEBUG] STOP: No speech detected within initial grace period")
+                                    stop_recording = True
                         else:
                             # We have detected speech at some point
                             if is_speech:
@@ -1043,7 +1072,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     
                     # Try recording again with the new device (recursive call in sync context)
                     logger.info("Retrying recording with new audio device...")
-                    return record_audio_with_silence_detection(max_duration, disable_silence_detection, min_duration, vad_aggressiveness)
+                    return record_audio_with_silence_detection(max_duration, disable_silence_detection, min_duration, vad_aggressiveness, assume_speech)
                     
                 except Exception as reinit_error:
                     logger.error(f"Failed to reinitialize audio: {reinit_error}")
@@ -1072,6 +1101,239 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         # For fallback, assume speech is present since we can't detect
         return (record_audio(max_duration), True)
 
+
+class DuplexBargeInPlayer:
+    """
+    Barge-in player using separate input/output streams for reliability.
+
+    Uses NonBlockingAudioPlayer for TTS playback while monitoring
+    microphone input in a separate thread. When user speech is detected
+    (via energy threshold above playback level), playback stops and
+    the player collects the user's audio for transcription.
+
+    Includes acoustic echo suppression by tracking output level and
+    only triggering barge-in when input significantly exceeds output.
+
+    Note: Two-pass TTS design limitation
+        When barge_in=True, TTS audio is first generated silently (skip_playback=True),
+        saved to disk, then replayed via this player with microphone monitoring.
+        This adds latency equal to the TTS generation time before the user hears audio.
+        A single-pass approach (monitoring during live streaming) is tracked for future work.
+    """
+
+    # Named constants for tunable parameters
+    ECHO_MARGIN: float = 1.3  # Input must be 30% louder than output
+    EMA_DECAY: float = 0.7  # Exponential moving average decay for energy tracking
+    EMA_UPDATE: float = 0.3  # Exponential moving average update weight
+    MONITOR_CHUNK_MS: float = 0.01  # 10ms monitoring chunk duration (seconds)
+    RING_BUFFER_DURATION: float = 0.5  # Pre-trigger audio history (seconds)
+    PLAYBACK_CHUNK_SIZE: int = 2048  # Samples per energy computation chunk
+    POLL_INTERVAL: float = 0.01  # Polling interval for barge-in check (seconds)
+
+    def __init__(
+        self,
+        sample_rate: int = SAMPLE_RATE,
+        channels: int = CHANNELS,
+        energy_threshold: float = BARGE_IN_ENERGY_THRESHOLD,
+        min_speech_ms: int = BARGE_IN_MIN_SPEECH_MS,
+    ):
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.energy_threshold = energy_threshold
+        self.min_speech_ms = min_speech_ms
+
+        # Lock for thread-safe access to shared mutable state between
+        # the sounddevice audio callback thread and the monitoring thread
+        self._lock = threading.Lock()
+
+        # Barge-in detection state (protected by _lock)
+        self._barge_in_detected = False
+        self._speech_start_time: Optional[float] = None
+        self._collected_audio: list[np.ndarray] = []
+        self._stop_monitoring = False
+
+        # Echo suppression: track output level to ignore speaker feedback
+        self._current_output_energy: float = 0.0
+
+        # Chunk size for monitoring
+        self.chunk_samples = int(sample_rate * self.MONITOR_CHUNK_MS)
+
+        # Ring buffer for pre-trigger audio using deque for O(1) append/pop
+        self.ring_buffer_size = int(self.RING_BUFFER_DURATION * sample_rate)
+        self._ring_buffer: deque[np.ndarray] = deque()
+        self._ring_buffer_samples = 0
+
+    @property
+    def barge_in_detected(self) -> bool:
+        """Thread-safe read of barge-in detection flag."""
+        with self._lock:
+            return self._barge_in_detected
+
+    @property
+    def stop_monitoring(self) -> bool:
+        """Thread-safe read of stop monitoring flag."""
+        with self._lock:
+            return self._stop_monitoring
+
+    @stop_monitoring.setter
+    def stop_monitoring(self, value: bool) -> None:
+        """Thread-safe write of stop monitoring flag."""
+        with self._lock:
+            self._stop_monitoring = value
+
+    def _set_output_energy(self, energy: float) -> None:
+        """Thread-safe update of current output energy."""
+        with self._lock:
+            self._current_output_energy = energy
+
+    def _monitor_callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
+        """Callback for input stream to monitor for barge-in.
+
+        Runs on the sounddevice audio thread. All access to shared mutable state
+        is protected by self._lock to prevent races with run_with_monitoring.
+        """
+        if status:
+            logger.warning(f"Input stream status: {status}")
+
+        with self._lock:
+            if self._stop_monitoring:
+                return
+
+            input_energy = np.abs(indata).mean() * 32768.0
+
+            echo_threshold = max(
+                self.energy_threshold,
+                self._current_output_energy * self.ECHO_MARGIN
+            )
+
+            audio_int16 = (indata.flatten() * 32768.0).astype(np.int16)
+
+            if not self._barge_in_detected:
+                # Add to ring buffer (deque with O(1) operations)
+                self._ring_buffer.append(audio_int16.copy())
+                self._ring_buffer_samples += len(audio_int16)
+
+                # Trim ring buffer to maintain size limit
+                while self._ring_buffer_samples > self.ring_buffer_size:
+                    removed = self._ring_buffer.popleft()
+                    self._ring_buffer_samples -= len(removed)
+
+                if input_energy > echo_threshold:
+                    if self._speech_start_time is None:
+                        self._speech_start_time = time.time()
+                        logger.debug(f"Barge-in triggered: input={input_energy:.0f}, output={self._current_output_energy:.0f}, threshold={echo_threshold:.0f}")
+
+                    self._collected_audio.append(audio_int16.copy())
+
+                    speech_duration_ms = (time.time() - self._speech_start_time) * 1000
+                    if speech_duration_ms >= self.min_speech_ms:
+                        logger.info(f"Barge-in confirmed after {speech_duration_ms:.0f}ms - including {len(self._ring_buffer)} pre-trigger chunks")
+                        self._barge_in_detected = True
+                        # Prepend ring buffer to captured audio (atomic under lock)
+                        self._collected_audio = list(self._ring_buffer) + self._collected_audio
+                        self._ring_buffer.clear()
+                        self._ring_buffer_samples = 0
+                else:
+                    self._speech_start_time = None
+                    self._collected_audio = []
+            else:
+                self._collected_audio.append(audio_int16.copy())
+
+    async def play_with_monitoring(
+        self,
+        audio_data: np.ndarray,
+        post_barge_in_duration: float = 0.3
+    ) -> tuple[bool, Optional[np.ndarray]]:
+        """
+        Play audio while monitoring for barge-in.
+
+        Args:
+            audio_data: Audio samples to play (int16 or float32).
+            post_barge_in_duration: Seconds to continue recording after barge-in
+                is detected, to capture trailing speech. Defaults to 0.3s.
+
+        Returns:
+            Tuple of (was_interrupted, collected_audio)
+        """
+        with self._lock:
+            self._barge_in_detected = False
+            self._speech_start_time = None
+            self._collected_audio = []
+            self._stop_monitoring = False
+
+        if len(audio_data) == 0:
+            logger.warning("No audio to play for barge-in monitoring")
+            return False, None
+
+        if audio_data.dtype == np.int16:
+            play_audio = audio_data.astype(np.float32) / 32768.0
+        else:
+            play_audio = audio_data.astype(np.float32)
+
+        chunk_size = self.PLAYBACK_CHUNK_SIZE
+        output_energies: list[float] = []
+        for i in range(0, len(play_audio), chunk_size):
+            chunk = play_audio[i:i + chunk_size]
+            energy = np.abs(chunk).mean() * 32768.0
+            output_energies.append(energy)
+
+        loop = asyncio.get_running_loop()
+
+        try:
+            def run_with_monitoring() -> None:
+                input_stream = sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=self.channels,
+                    dtype=np.float32,
+                    callback=self._monitor_callback,
+                    blocksize=self.chunk_samples,
+                )
+
+                player = NonBlockingAudioPlayer()
+
+                with input_stream:
+                    player.play(play_audio, self.sample_rate, blocking=False)
+
+                    chunk_duration = chunk_size / self.sample_rate
+                    start_time = time.time()
+
+                    while not player.playback_complete.is_set():
+                        if self.barge_in_detected:
+                            logger.info("Barge-in detected - stopping playback")
+                            player.stop()
+                            break
+
+                        elapsed = time.time() - start_time
+                        current_chunk = int(elapsed / chunk_duration)
+                        if current_chunk < len(output_energies):
+                            self._set_output_energy(output_energies[current_chunk])
+                        else:
+                            self._set_output_energy(0)
+
+                        time.sleep(self.POLL_INTERVAL)
+
+                    self._set_output_energy(0)
+
+                    if self.barge_in_detected and post_barge_in_duration > 0:
+                        time.sleep(post_barge_in_duration)
+
+                self.stop_monitoring = True
+
+            await loop.run_in_executor(None, run_with_monitoring)
+
+            with self._lock:
+                if self._barge_in_detected and self._collected_audio:
+                    combined_audio = np.concatenate(self._collected_audio).flatten()
+                    logger.info(f"Barge-in captured {len(combined_audio)} samples")
+                    return True, combined_audio
+                else:
+                    return False, None
+
+        except Exception as e:
+            logger.error(f"Barge-in playback failed: {e}")
+            return False, None
+
+
 @mcp.tool()
 async def converse(
     message: str,
@@ -1092,7 +1354,8 @@ async def converse(
     chime_leading_silence: Optional[float] = None,
     chime_trailing_silence: Optional[float] = None,
     metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
-    wait_for_conch: Union[bool, str] = False
+    wait_for_conch: Union[bool, str] = False,
+    barge_in: Union[bool, str] = False
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -1159,6 +1422,8 @@ consult the MCP resources listed above.
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
     if isinstance(wait_for_conch, str):
         wait_for_conch = wait_for_conch.lower() in ('true', '1', 'yes', 'on')
+    if isinstance(barge_in, str):
+        barge_in = barge_in.lower() in ('true', '1', 'yes', 'on')
 
     # Convert vad_aggressiveness to integer if provided as string
     if vad_aggressiveness is not None and isinstance(vad_aggressiveness, str):
@@ -1357,7 +1622,9 @@ consult the MCP resources listed above.
                             instructions=tts_instructions,
                             audio_format=audio_format,
                             initial_provider=tts_provider,
-                            speed=speed
+                            speed=speed,
+                            force_save_audio=barge_in,
+                            skip_playback=barge_in
                         )
                 
                 # Add TTS sub-metrics
@@ -1439,6 +1706,50 @@ consult the MCP resources listed above.
                         result = "Error: Could not speak message. All TTS providers failed. Check that local services are running or set OPENAI_API_KEY for cloud fallback."
                     return result
 
+                # === BARGE-IN MODE ===
+                # Note: Barge-in uses a two-pass design (generate silently, then replay
+                # with monitoring). This adds latency equal to TTS generation time before
+                # the user hears audio. See DuplexBargeInPlayer docstring for details.
+                barge_in_audio: Optional[np.ndarray] = None
+                barge_in_occurred = False
+
+                if barge_in and tts_success and tts_metrics:
+                    logger.info("Barge-in mode: replaying TTS with microphone monitoring (two-pass, expect higher TTFA)")
+                    audio_path = tts_metrics.get('audio_path')
+                    if audio_path and os.path.exists(audio_path):
+                        try:
+                            audio_segment = AudioSegment.from_file(audio_path)
+                            tts_sr = audio_segment.frame_rate
+                            tts_audio = np.array(audio_segment.get_array_of_samples())
+
+                            if tts_sr != SAMPLE_RATE:
+                                from math import gcd
+                                from scipy import signal
+                                # Use resample_poly for better performance with integer ratios
+                                divisor = gcd(SAMPLE_RATE, tts_sr)
+                                up = SAMPLE_RATE // divisor
+                                down = tts_sr // divisor
+                                tts_audio = signal.resample_poly(tts_audio, up, down).astype(np.int16)
+
+                            if tts_audio.dtype != np.int16:
+                                tts_audio = tts_audio.astype(np.int16)
+
+                            barge_in_player = DuplexBargeInPlayer(
+                                sample_rate=SAMPLE_RATE,
+                                channels=CHANNELS,
+                                energy_threshold=BARGE_IN_ENERGY_THRESHOLD,
+                                min_speech_ms=BARGE_IN_MIN_SPEECH_MS,
+                            )
+
+                            barge_in_occurred, barge_in_audio = await barge_in_player.play_with_monitoring(
+                                tts_audio,
+                                post_barge_in_duration=0.3
+                            )
+                        except Exception as e:
+                            logger.warning(f"Barge-in replay failed: {e}")
+                            barge_in_occurred = False
+                            barge_in_audio = None
+
                 # If speak-only mode, return success after TTS
                 if not wait_for_response:
                     # Format timing info for speak-only mode
@@ -1479,19 +1790,26 @@ consult the MCP resources listed above.
                     logger.info(f"Speak-only result: {result}")
                     return result
 
-                # Brief pause before listening
-                await asyncio.sleep(0.5)
-                
-                # Play "listening" feedback sound
-                await play_audio_feedback(
-                    "listening",
-                    openai_clients,
-                    chime_enabled,
-                    "whisper",
-                    chime_leading_silence=chime_leading_silence,
-                    chime_trailing_silence=chime_trailing_silence
-                )
-                
+                # === NORMAL RECORDING PATH ===
+                # When barge-in occurred, skip delay and chimes - go straight to recording
+                if barge_in_occurred:
+                    logger.info("Barge-in detected - continuing with VAD recording (no delay)")
+                    # No delay or chime - user is already speaking
+                else:
+                    # Normal path - add delay and chime (even in barge-in mode if no interrupt)
+                    # Brief pause before listening
+                    await asyncio.sleep(0.5)
+
+                    # Play "listening" feedback sound
+                    await play_audio_feedback(
+                        "listening",
+                        openai_clients,
+                        chime_enabled,
+                        "whisper",
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence
+                    )
+
                 # Record response
                 logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
 
@@ -1500,9 +1818,12 @@ consult the MCP resources listed above.
                     event_logger.log_event(event_logger.RECORDING_START)
 
                 record_start = time.perf_counter()
-                logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                    None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                # After barge-in, use shorter min_duration and assume speech is active
+                post_barge_in_min = MIN_RECORDING_DURATION if barge_in_occurred else listen_duration_min
+                post_barge_in_assume_speech = barge_in_occurred
+                logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={post_barge_in_min}, vad_aggressiveness={vad_aggressiveness}, assume_speech={post_barge_in_assume_speech}")
+                audio_data, speech_detected = await asyncio.get_running_loop().run_in_executor(
+                    None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, post_barge_in_min, vad_aggressiveness, post_barge_in_assume_speech
                 )
                 timings['record'] = time.perf_counter() - record_start
                 
@@ -1512,16 +1833,22 @@ consult the MCP resources listed above.
                         "duration": timings['record'],
                         "samples": len(audio_data)
                     })
-                
-                # Play "finished" feedback sound
-                await play_audio_feedback(
-                    "finished",
-                    openai_clients,
-                    chime_enabled,
-                    "whisper",
-                    chime_leading_silence=chime_leading_silence,
-                    chime_trailing_silence=chime_trailing_silence
-                )
+
+                # Prepend barge-in audio if available
+                if barge_in_occurred and barge_in_audio is not None and len(barge_in_audio) > 0:
+                    audio_data = np.concatenate([barge_in_audio, audio_data])
+                    speech_detected = True
+
+                # Play "finished" feedback sound (skip if barge-in occurred)
+                if not barge_in_occurred:
+                    await play_audio_feedback(
+                        "finished",
+                        openai_clients,
+                        chime_enabled,
+                        "whisper",
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence
+                    )
                 
                 # Mark the end of recording - this is when user expects response to start
                 user_done_time = time.perf_counter()
@@ -1681,7 +2008,7 @@ consult the MCP resources listed above.
 
                         # Record audio
                         record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                        audio_data, speech_detected = await asyncio.get_running_loop().run_in_executor(
                             None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                         )
                         record_time = time.perf_counter() - record_start
@@ -1737,7 +2064,7 @@ consult the MCP resources listed above.
 
                         # Record audio
                         record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                        audio_data, speech_detected = await asyncio.get_running_loop().run_in_executor(
                             None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                         )
                         record_time = time.perf_counter() - record_start

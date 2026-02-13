@@ -176,10 +176,14 @@ async def text_to_speech(
     instructions: Optional[str] = None,
     audio_format: Optional[str] = None,
     conversation_id: Optional[str] = None,
-    speed: Optional[float] = None
+    speed: Optional[float] = None,
+    skip_playback: bool = False
 ) -> tuple[bool, Optional[dict]]:
     """Convert text to speech and play it.
-    
+
+    Args:
+        skip_playback: If True, generate and save audio but don't play it (for barge-in mode)
+
     Returns:
         tuple: (success: bool, metrics: dict) where metrics contains 'generation' and 'playback' times
     """
@@ -276,7 +280,8 @@ async def text_to_speech(
                 debug=debug,
                 save_audio=save_audio,
                 audio_dir=audio_dir,
-                conversation_id=conversation_id
+                conversation_id=conversation_id,
+                skip_playback=skip_playback
             )
             
             if success:
