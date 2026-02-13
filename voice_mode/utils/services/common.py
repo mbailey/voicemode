@@ -58,23 +58,53 @@ def is_port_accessible(port: int, host: str = "127.0.0.1", timeout: float = 1.0)
         return False
 
 
-def check_service_status(port: int) -> Tuple[str, Optional[psutil.Process]]:
+def find_process_by_name(name: str) -> Optional[psutil.Process]:
+    """Find a running process by name.
+
+    Returns the first matching process, or None.
+    """
+    try:
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                if proc.name() == name and proc.is_running():
+                    return proc
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    except Exception as e:
+        logger.error(f"Error finding process by name: {e}")
+    return None
+
+
+def check_service_status(port: int, process_name: Optional[str] = None) -> Tuple[str, Optional[psutil.Process]]:
     """Check the status of a service on a given port.
-    
+
+    Args:
+        port: The port to check.
+        process_name: Optional process name to detect "initializing" state.
+            If the process is running but the port is not yet accessible,
+            returns "initializing" instead of "not_available".
+
     Returns:
         Tuple of (status, process):
         - ("local", process) if running locally
         - ("forwarded", None) if accessible but not local
+        - ("initializing", process) if process is running but port not yet open
         - ("not_available", None) if not accessible at all
     """
-    # First check if there's a local process
+    # First check if there's a local process listening on the port
     proc = find_process_by_port(port)
     if proc:
         return ("local", proc)
-    
-    # No local process, check if port is accessible (might be forwarded)
+
+    # No local process on port, check if port is accessible (might be forwarded)
     if is_port_accessible(port):
         return ("forwarded", None)
-    
+
+    # Port not accessible — check if the process is alive but still starting up
+    if process_name:
+        proc = find_process_by_name(process_name)
+        if proc:
+            return ("initializing", proc)
+
     # Not accessible at all
     return ("not_available", None)

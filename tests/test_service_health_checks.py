@@ -59,7 +59,7 @@ def test_startup_script_content():
     # Check Whisper startup script
     whisper_script = templates_dir / "start-whisper-server.sh"
     content = whisper_script.read_text()
-    assert "#!/bin/bash" in content
+    assert "#!/usr/bin/env bash" in content
     assert "source" in content  # Sources voicemode.env
     assert "VOICEMODE_WHISPER_MODEL" in content  # Reads model config
     assert "VOICEMODE_WHISPER_PORT" in content  # Reads port config
