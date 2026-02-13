@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.0] - 2026-02-14
+
+### Added
+
+- **STT Prompt for Vocabulary Biasing** - Set `VOICEMODE_STT_PROMPT` to hint Whisper on frequently misrecognized words (e.g., proper nouns, technical terms)
+- **Claude Code Hooks CLI** (VM-618) - `voicemode claude hooks add/remove/status` to manage soundfont hooks without manual JSON editing
+- **VoiceMode Connect Device Visibility** (VM-633) - WebSocket connection shows your device on the voicemode.dev dashboard with online/offline status
+- **Latest Audio Symlinks** (VM-614) - `~/.voicemode/audio/latest-tts.*` and `latest-stt.*` symlinks for quick access to most recent recordings
+- **VoiceMode Marketplace** - `claude install voicemode@voicemode` plugin distribution via marketplace
+- **VoiceMode Connect Skill** (VM-595) - Bundled skill and documentation for remote voice via mobile/web clients
+
+### Fixed
+
+- **Soundfonts silently disabled for all users** - Hook receiver returned false when `VOICEMODE_SOUNDFONTS_ENABLED` was commented out (the default) instead of falling through to enabled
+- **Whisper CoreML hang on M1 Max** (VM-640) - Startup timeout (120s) with auto-fallback to Metal-only when CoreML compilation hangs on incompatible hardware
+- **webrtcvad broken with setuptools>=81** - Switched to `webrtcvad-wheels` fork which uses `importlib.metadata` instead of removed `pkg_resources`
+- **Hook receiver not installed** (VM-621) - `voicemode claude hooks add` now installs the bash hook receiver and symlinks it correctly
+- **Connect auto-enabled by default** (VM-633) - Changed `CONNECT_AUTO_ENABLED` to default false so devices don't appear on dashboard without opt-in
+
 ## [8.1.0] - 2026-02-02
 
 ### Added

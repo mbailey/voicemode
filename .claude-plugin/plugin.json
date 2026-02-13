@@ -1,7 +1,7 @@
 {
   "name": "voicemode",
   "description": "Voice conversations with Claude Code using local speech-to-text and text-to-speech",
-  "version": "8.1.0p1",
+  "version": "8.2.0p0",
   "author": {
     "name": "Mike Bailey",
     "email": "mike@failmode.com"
