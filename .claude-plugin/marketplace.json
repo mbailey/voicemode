@@ -1,7 +1,7 @@
 {
   "name": "voicemode",
   "metadata": {
-    "description": "VoiceMode - voice conversations for Claude Code"
+    "description": "VoiceMode - Voice conversations for Claude Code"
   },
   "owner": {
     "name": "VoiceMode",
@@ -14,7 +14,7 @@
       "version": "8.1.0p1",
       "author": {
         "name": "Mike Bailey",
-        "email": "mike@failmode.com"
+        "email": "mike@voicemode.dev"
       },
       "source": "./",
       "category": "productivity",
