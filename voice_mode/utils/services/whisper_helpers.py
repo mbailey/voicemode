@@ -140,7 +140,7 @@ async def download_whisper_model(
         
         # Initialize core_ml_result
         core_ml_result = None
-        
+
         # Check for Core ML support on Apple Silicon (unless explicitly skipped)
         if platform.system() == "Darwin" and platform.machine() == "arm64" and not skip_core_ml:
             # Download pre-built Core ML model from Hugging Face

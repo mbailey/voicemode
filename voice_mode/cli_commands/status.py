@@ -31,6 +31,7 @@ from voice_mode.utils.services.common import find_process_by_port, check_service
 class ServiceStatus(str, Enum):
     """Status of a service."""
     RUNNING = "running"
+    INITIALIZING = "initializing"
     NOT_RUNNING = "not_running"
     NOT_INSTALLED = "not_installed"
     FORWARDED = "forwarded"
@@ -187,7 +188,7 @@ def format_memory(bytes_val: float) -> str:
 
 def check_whisper_service() -> ServiceInfo:
     """Check Whisper (STT) service status."""
-    status, proc = check_service_status(WHISPER_PORT)
+    status, proc = check_service_status(WHISPER_PORT, process_name="whisper-server")
 
     # Check if installed - try multiple paths
     voicemode_dir = Path.home() / ".voicemode"
@@ -274,6 +275,15 @@ def check_whisper_service() -> ServiceInfo:
             port=WHISPER_PORT,
             auto_start=auto_start,
             health="healthy"
+        )
+    elif status == "initializing":
+        return ServiceInfo(
+            name="Whisper",
+            type="stt",
+            status=ServiceStatus.INITIALIZING,
+            port=WHISPER_PORT,
+            auto_start=auto_start,
+            health="initializing"
         )
     else:
         return ServiceInfo(

@@ -309,16 +309,22 @@ async def status_service(service_name: str) -> str:
     else:
         if service_name == "whisper":
             port = WHISPER_PORT
+            process_name = "whisper-server"
         elif service_name == "kokoro":
             port = KOKORO_PORT
+            process_name = None
         elif service_name == "voicemode":
             port = VOICEMODE_SERVE_PORT
+            process_name = None
         else:
             port = 3000
+            process_name = None
 
-        status, proc = check_service_status(port)
+        status, proc = check_service_status(port, process_name=process_name)
 
-        if status == "not_available":
+        if status == "initializing":
+            return f"⏳ {service_name.capitalize()} is initializing (process running, waiting for server to be ready)"
+        elif status == "not_available":
             # For Kokoro, check if it's in the process of starting up
             if service_name == "kokoro":
                 startup_status = is_kokoro_starting_up()
