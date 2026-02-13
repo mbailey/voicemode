@@ -140,9 +140,9 @@ async def kokoro_onnx_install(
     try:
         # Set default directories
         if models_dir is None:
-            models_dir = os.path.expanduser(MODELS_DIR)
+            models_dir = str(MODELS_DIR)
         else:
-            models_dir = os.path.expanduser(models_dir)
+            models_dir = os.path.expanduser(str(models_dir))
 
         if model is None:
             model = KOKORO_ONNX_MODEL

@@ -13,11 +13,25 @@ Kokoro ONNX is a lightweight alternative to the PyTorch-based Kokoro service. It
 | GPU required | Optional | No (optional) |
 | Startup time | Slower | Faster |
 
+### Real-world Benchmarks
+
+Streaming TTS on CPU (text: "Hello! How can I help you today?"):
+
+| Metric | Kokoro ONNX | Kokoro PyTorch | Improvement |
+|--------|-------------|----------------|-------------|
+| Time to first audio (TTFA) | 1.6s | 7.8s | **4.9x faster** |
+| Total streaming time | 3.6s | 9.8s | **2.7x faster** |
+
+ONNX Runtime uses all CPU cores in parallel, while PyTorch uses a single core at 100%.
+
 **GPU Acceleration**: ONNX Runtime supports GPU via `onnxruntime-gpu` (NVIDIA CUDA), `onnxruntime-directml` (Windows - AMD/Intel/NVIDIA), or `onnxruntime-migraphx` (Linux AMD). CPU inference is already fast due to multi-core utilisation.
 
 ## Quick Start
 
 ```bash
+# Install kokoro-onnx service
+voicemode service install kokoro-onnx
+
 # Start the service
 voicemode service start kokoro-onnx
 
@@ -175,3 +189,35 @@ uv run python -m uvicorn voice_mode.services.kokoro_onnx.server:app \
 - [Kokoro Setup](kokoro-setup.md) - PyTorch-based Kokoro service
 - [Configuration Guide](configuration.md) - VoiceMode configuration
 - [Selecting Voices](selecting-voices.md) - Voice selection guide
+
+## Appendix: Raw Benchmark Logs
+
+<details>
+<summary>Kokoro ONNX (port 8881)</summary>
+
+```
+2026-02-13 11:16:29,448 - voicemode - INFO - simple_tts_failover called with: text='Hello! How can I help you today?...', voice=af_sky, model=tts-1
+2026-02-13 11:16:29,449 - voicemode - INFO - simple_tts_failover: Starting with TTS_BASE_URLS = ['http://127.0.0.1:8881/v1']
+2026-02-13 11:16:29,449 - voicemode - INFO - Trying TTS endpoint: http://127.0.0.1:8881/v1
+2026-02-13 11:16:29,452 - voicemode - INFO - TTS: Converting text to speech: 'Hello! How can I help you today?'
+2026-02-13 11:16:31,076 - voicemode - INFO - First audio chunk received after 1.623s
+2026-02-13 11:16:33,081 - voicemode - INFO - Streaming complete - TTFA: 1.623s, Total: 3.629s, Chunks: 24
+2026-02-13 11:16:33,082 - voicemode - INFO - ✓ TTS streamed successfully - TTFA: 1.623s
+```
+
+</details>
+
+<details>
+<summary>Kokoro PyTorch (port 8880)</summary>
+
+```
+2026-02-13 11:16:11,799 - voicemode - INFO - simple_tts_failover called with: text='Hello! How can I help you today?...', voice=af_sky, model=tts-1
+2026-02-13 11:16:11,799 - voicemode - INFO - simple_tts_failover: Starting with TTS_BASE_URLS = ['http://127.0.0.1:8880/v1']
+2026-02-13 11:16:11,799 - voicemode - INFO - Trying TTS endpoint: http://127.0.0.1:8880/v1
+2026-02-13 11:16:11,803 - voicemode - INFO - TTS: Converting text to speech: 'Hello! How can I help you today?'
+2026-02-13 11:16:19,578 - voicemode - INFO - First audio chunk received after 7.774s
+2026-02-13 11:16:21,625 - voicemode - INFO - Streaming complete - TTFA: 7.774s, Total: 9.821s, Chunks: 25
+2026-02-13 11:16:21,625 - voicemode - INFO - ✓ TTS streamed successfully - TTFA: 7.774s
+```
+
+</details>
