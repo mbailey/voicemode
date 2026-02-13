@@ -141,8 +141,10 @@ soundfonts_enabled() {
   local config_file="$HOME/.voicemode/voicemode.env"
   if [[ -f "$config_file" ]]; then
     enabled=$(grep -E '^VOICEMODE_SOUNDFONTS_ENABLED=' "$config_file" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'" || echo "")
-    [[ "$enabled" == "true" || "$enabled" == "1" || "$enabled" == "yes" || "$enabled" == "on" ]]
-    return
+    if [[ -n "$enabled" ]]; then
+      [[ "$enabled" == "true" || "$enabled" == "1" || "$enabled" == "yes" || "$enabled" == "on" ]]
+      return
+    fi
   fi
 
   # Default: enabled
