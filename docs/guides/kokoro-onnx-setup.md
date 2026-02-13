@@ -9,8 +9,11 @@ Kokoro ONNX is a lightweight alternative to the PyTorch-based Kokoro service. It
 | Model size | ~310 MB | ~88 MB (int8) |
 | Memory usage | ~2 GB | ~300 MB |
 | CPU utilisation | Single core | All cores |
-| GPU required | Optional | No |
+| Inference time | ~30s+ | <10s |
+| GPU required | Optional | No (optional) |
 | Startup time | Slower | Faster |
+
+**GPU Acceleration**: ONNX Runtime supports GPU via `onnxruntime-gpu` (NVIDIA CUDA), `onnxruntime-directml` (Windows - AMD/Intel/NVIDIA), or `onnxruntime-migraphx` (Linux AMD). CPU inference is already fast due to multi-core utilisation.
 
 ## Quick Start
 
@@ -29,35 +32,34 @@ Default endpoint: `http://127.0.0.1:8881/v1`
 
 ## Installation
 
-### 1. Install Dependencies
+### Option 1: Automatic (Recommended)
 
 ```bash
-# Install voice-mode with kokoro-onnx dependencies
-cd /path/to/voicemode
-make install-kokoro-onnx
+# Install dependencies and download models automatically
+voicemode service install kokoro-onnx
 
-# Or manually
-pip install kokoro-onnx fastapi uvicorn
+# Start the service
+voicemode service start kokoro-onnx
 ```
 
-### 2. Download Model Files
+This will:
+- Install Python dependencies (kokoro-onnx, fastapi, uvicorn)
+- Download the int8 model and voices file to `~/.voicemode/models/`
+- Install the start script
 
-Download from [kokoro-onnx releases](https://github.com/thewh1teagle/kokoro-onnx/releases):
+### Option 2: Manual Installation
 
 ```bash
+# Install dependencies
+pip install kokoro-onnx fastapi uvicorn
+
+# Download model files
 mkdir -p ~/.voicemode/models
 cd ~/.voicemode/models
-
-# Download int8 model (recommended, 88MB)
 curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx
-
-# Download voices file (required, 27MB)
 curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
-```
 
-### 3. Start the Service
-
-```bash
+# Start the service
 voicemode service start kokoro-onnx
 ```
 
