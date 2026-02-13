@@ -29,11 +29,11 @@ VoiceMode enables natural voice conversations with Claude Code. Voice isn't abou
 The fastest way for Claude Code users to get started:
 
 ```bash
-# Add the plugin marketplace
-claude plugin marketplace add mbailey/plugins
+# Add the VoiceMode marketplace
+claude plugin marketplace add mbailey/voicemode
 
 # Install VoiceMode plugin
-claude plugin install voicemode@mbailey
+claude plugin install voicemode
 
 ## Install dependencies (CLI, Local Voice Services)
 

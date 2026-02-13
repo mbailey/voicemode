@@ -579,18 +579,27 @@
 
         <section>
             <h2>Quick Start<span class="typing-indicator"></span></h2>
+            <h3 style="color: var(--text-secondary); margin-bottom: 0.5rem;">Option 1: Claude Code Plugin (Recommended)</h3>
+            <div class="code-block">
+<span class="comment"># Add VoiceMode marketplace</span><br>
+claude plugin marketplace add mbailey/voicemode<br><br>
+<span class="comment"># Install VoiceMode plugin</span><br>
+claude plugin install voicemode<br><br>
+<span class="comment"># Install dependencies (local voice services)</span><br>
+/voicemode:install<br><br>
+<span class="comment"># Start talking!</span><br>
+/voicemode:converse
+</div>
+            <h3 style="color: var(--text-secondary); margin-top: 1.5rem; margin-bottom: 0.5rem;">Option 2: Python Installer</h3>
             <div class="code-block">
 <span class="comment"># Install VoiceMode MCP python package and dependencies</span><br>
 curl -LsSf https://astral.sh/uv/install.sh | sh<br>
 uvx voice-mode-install<br><br>
-<span class="comment"># Optional: Set OpenAI API key (backup if local services unavailable)</span><br>
-export OPENAI_API_KEY=your-openai-key<br><br>
 <span class="comment"># Add VoiceMode to Claude</span><br>
 claude mcp add --scope user voicemode -- uvx --refresh voice-mode<br><br>
 <span class="comment"># Start a voice conversation</span><br>
 claude converse
-</code>
-            </div>
+</div>
             <p style="margin-top: 1.5rem; color: var(--text-secondary);">
                 The voice-mode-install command automatically:
             </p>
