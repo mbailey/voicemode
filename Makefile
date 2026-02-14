@@ -1,6 +1,6 @@
 # Voice MCP Makefile
 
-.PHONY: help install dev-install clean \
+.PHONY: help install dev-install install-kokoro-onnx clean \
 	build build-package build-installer build-dev \
 	test test-package test-all test-unit test-integration test-parallel test-markers \
 	coverage coverage-html coverage-xml \
@@ -19,9 +19,10 @@ help:
 	@echo "Voice MCP Build Targets:"
 	@echo ""
 	@echo "Development:"
-	@echo "  install       - Install package in normal mode"
-	@echo "  dev-install   - Install package in editable mode with dev dependencies"
-	@echo "  clean         - Remove all build artifacts and caches"
+	@echo "  install            - Install package in normal mode"
+	@echo "  dev-install        - Install package in editable mode with dev dependencies"
+	@echo "  install-kokoro-onnx - Install with kokoro-onnx TTS backend dependencies"
+	@echo "  clean              - Remove all build artifacts and caches"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test          - Run unit tests with pytest"
@@ -97,6 +98,12 @@ dev-install:
 	@echo "Installing voice-mode with development dependencies..."
 	uv pip install -e ".[dev,test]"
 	@echo "Development installation complete!"
+
+# Install package with kokoro-onnx dependencies (lightweight TTS)
+install-kokoro-onnx:
+	@echo "Installing voice-mode with kokoro-onnx dependencies..."
+	uv pip install -e ".[kokoro-onnx]"
+	@echo "Kokoro ONNX installation complete!"
 
 # Build Python package
 build-package:

@@ -611,6 +611,14 @@ KOKORO_MODELS_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_MODELS_DIR", str(BAS
 KOKORO_CACHE_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_CACHE_DIR", str(BASE_DIR / "cache" / "kokoro")))
 KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
 
+# ==================== KOKORO ONNX CONFIGURATION ====================
+
+# Kokoro ONNX - lightweight alternative to PyTorch Kokoro
+KOKORO_ONNX_PORT = int(os.getenv("VOICEMODE_KOKORO_ONNX_PORT", "8881"))
+KOKORO_ONNX_MODEL = os.getenv("VOICEMODE_KOKORO_ONNX_MODEL", "kokoro-v1.0.int8.onnx")
+KOKORO_ONNX_VOICES = os.getenv("VOICEMODE_KOKORO_ONNX_VOICES", "voices-v1.0.bin")
+KOKORO_ONNX_MODELS_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_ONNX_MODELS_DIR", str(BASE_DIR / "models")))
+
 # ==================== SERVICE MANAGEMENT CONFIGURATION ====================
 
 # Auto-enable services after installation

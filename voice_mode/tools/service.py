@@ -12,7 +12,7 @@ from typing import Literal, Optional, Dict, Any, Union
 import psutil
 
 from voice_mode.server import mcp
-from voice_mode.config import WHISPER_PORT, KOKORO_PORT, SERVICE_AUTO_ENABLE
+from voice_mode.config import WHISPER_PORT, KOKORO_PORT, KOKORO_ONNX_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
 
 # Default port for VoiceMode serve command (HTTP MCP server)
@@ -92,6 +92,16 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
         return {
             "HOME": home,
             "START_SCRIPT": start_script,
+        }
+    elif service_name == "kokoro-onnx":
+        # Kokoro ONNX service - lightweight TTS using ONNX Runtime
+        kokoro_onnx_dir = os.path.join(voicemode_dir, "services", "kokoro-onnx")
+        start_script = os.path.join(kokoro_onnx_dir, "bin", "start-kokoro-onnx.sh")
+
+        return {
+            "HOME": home,
+            "START_SCRIPT": start_script,
+            "KOKORO_ONNX_DIR": kokoro_onnx_dir,
         }
     else:
         raise ValueError(f"Unknown service: {service_name}")
@@ -174,6 +184,45 @@ async def install_voicemode_connect_script() -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Error installing VoiceMode Connect start script: {e}")
+        return {"success": False, "error": str(e)}
+
+
+async def install_kokoro_onnx_start_script() -> Dict[str, Any]:
+    """Install the Kokoro ONNX start script to the expected location.
+
+    This function copies the start script template to the
+    ~/.voicemode/services/kokoro-onnx/bin/ directory.
+
+    Returns:
+        Dict with success status and start_script path
+    """
+    voicemode_dir = os.path.expanduser(os.environ.get("VOICEMODE_BASE_DIR", "~/.voicemode"))
+    bin_dir = os.path.join(voicemode_dir, "services", "kokoro-onnx", "bin")
+    start_script_path = os.path.join(bin_dir, "start-kokoro-onnx.sh")
+
+    try:
+        # Create bin directory if it doesn't exist
+        os.makedirs(bin_dir, exist_ok=True)
+
+        # Load template script from package
+        template_path = Path(__file__).parent.parent / "templates" / "scripts" / "start-kokoro-onnx.sh"
+        if not template_path.exists():
+            return {"success": False, "error": f"Template not found: {template_path}"}
+
+        template_content = template_path.read_text()
+
+        # Write the start script
+        with open(start_script_path, 'w') as f:
+            f.write(template_content)
+
+        # Make executable
+        os.chmod(start_script_path, 0o755)
+
+        logger.info(f"Installed Kokoro ONNX start script at {start_script_path}")
+        return {"success": True, "start_script": start_script_path}
+
+    except Exception as e:
+        logger.error(f"Error installing Kokoro ONNX start script: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -313,6 +362,9 @@ async def status_service(service_name: str) -> str:
         elif service_name == "kokoro":
             port = KOKORO_PORT
             process_name = None
+        elif service_name == "kokoro-onnx":
+            port = KOKORO_ONNX_PORT
+            process_name = None
         elif service_name == "voicemode":
             port = VOICEMODE_SERVE_PORT
             process_name = None
@@ -417,6 +469,15 @@ async def status_service(service_name: str) -> str:
                     extra_info_parts.append(f"Version: {version_info['version']}")
             except:
                 pass
+        elif service_name == "kokoro-onnx":
+            # Kokoro ONNX server info
+            extra_info_parts.append("Backend: ONNX Runtime")
+            try:
+                import kokoro_onnx
+                if hasattr(kokoro_onnx, "__version__"):
+                    extra_info_parts.append(f"kokoro-onnx: {kokoro_onnx.__version__}")
+            except:
+                pass
         elif service_name == "voicemode":
             # VoiceMode HTTP server info
             # Extract transport and host from command line
@@ -476,6 +537,8 @@ async def start_service(service_name: str) -> str:
             port = WHISPER_PORT
         elif service_name == "kokoro":
             port = KOKORO_PORT
+        elif service_name == "kokoro-onnx":
+            port = KOKORO_ONNX_PORT
         elif service_name == "voicemode":
             port = VOICEMODE_SERVE_PORT
         else:
@@ -599,6 +662,16 @@ async def start_service(service_name: str) -> str:
 
         cmd = [str(start_script)]
 
+    elif service_name == "kokoro-onnx":
+        # Start kokoro-onnx server directly using uvicorn
+        import sys
+        cmd = [
+            sys.executable, "-m", "uvicorn",
+            "voice_mode.services.kokoro_onnx.server:app",
+            "--host", "0.0.0.0",
+            "--port", str(port)
+        ]
+
     elif service_name == "voicemode":
         # Start voicemode serve command directly
         # Use sys.executable to ensure we use the same Python that's running this script
@@ -660,6 +733,8 @@ async def stop_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "kokoro-onnx":
+        port = KOKORO_ONNX_PORT
     elif service_name == "voicemode":
         port = VOICEMODE_SERVE_PORT
     else:
@@ -767,6 +842,16 @@ async def enable_service(service_name: str) -> str:
             start_script = config_vars.get("START_SCRIPT", "")
             if not start_script or not Path(start_script).exists():
                 return "❌ Kokoro start script not found. Please run kokoro_install first."
+
+        elif service_name == "kokoro-onnx":
+            start_script = config_vars.get("START_SCRIPT", "")
+            if not start_script or not Path(start_script).exists():
+                # Auto-install the start script for kokoro-onnx
+                install_result = await install_kokoro_onnx_start_script()
+                if not install_result.get("success"):
+                    return f"❌ Failed to install Kokoro ONNX start script: {install_result.get('error', 'Unknown error')}"
+                start_script = install_result.get("start_script", "")
+                logger.info(f"Auto-installed Kokoro ONNX start script at {start_script}")
 
         elif service_name == "voicemode":
             start_script = config_vars.get("START_SCRIPT", "")

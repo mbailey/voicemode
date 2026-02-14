@@ -96,7 +96,7 @@ def voice_mode() -> None:
 #   voicemode service status [service]
 # etc.
 
-VALID_SERVICES = ['whisper', 'kokoro', 'voicemode', 'connect']
+VALID_SERVICES = ['whisper', 'kokoro', 'kokoro-onnx', 'voicemode', 'connect']
 
 
 @voice_mode_main_cli.group()
@@ -106,10 +106,11 @@ def service():
 
     \b
     Services:
-      whisper    Local speech-to-text (STT) on port 2022
-      kokoro     Local text-to-speech (TTS) on port 8880
-      voicemode  HTTP MCP server for remote access on port 8765
-      connect    Remote wake standby (WebSocket client)
+      whisper      Local speech-to-text (STT) on port 2022
+      kokoro       Local text-to-speech (TTS/PyTorch) on port 8880
+      kokoro-onnx  Local text-to-speech (TTS/ONNX) on port 8881
+      voicemode    HTTP MCP server for remote access on port 8765
+      connect      Remote wake standby (WebSocket client)
 
     \b
     Quick Start:
@@ -302,6 +303,9 @@ def service_health(service_name):
     elif service_name == 'kokoro':
         port = 8880
         display_name = 'Kokoro'
+    elif service_name == 'kokoro-onnx':
+        port = 8881
+        display_name = 'Kokoro ONNX'
     else:
         click.echo(f"❌ Unknown service: {service_name}")
         return
@@ -371,6 +375,20 @@ def service_install(service_name, force):
                     click.echo(f"   Install path: {result['install_path']}")
             else:
                 click.echo(f"❌ Kokoro installation failed: {result.get('error', 'Unknown error')}")
+        else:
+            click.echo(result)
+    elif service_name == 'kokoro-onnx':
+        from voice_mode.services.kokoro_onnx.installer import kokoro_onnx_install
+        result = asyncio.run(kokoro_onnx_install(force_reinstall=force))
+        if isinstance(result, dict):
+            if result.get("success"):
+                click.echo(f"✅ Kokoro ONNX installed successfully")
+                if result.get('models_dir'):
+                    click.echo(f"   Models: {result['models_dir']}")
+                if result.get('model'):
+                    click.echo(f"   Model: {result['model']}")
+            else:
+                click.echo(f"❌ Kokoro ONNX installation failed: {result.get('error', 'Unknown error')}")
         else:
             click.echo(result)
     elif service_name == 'voicemode':
