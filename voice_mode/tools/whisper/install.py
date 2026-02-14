@@ -507,7 +507,23 @@ async def whisper_install(
                 missing_deps.append("build-essential (run: sudo apt-get install build-essential)")
             
             if use_gpu and not shutil.which("nvcc"):
-                missing_deps.append("CUDA toolkit (for GPU support)")
+                # Offer to install CUDA or suggest --no-gpu
+                from voice_mode.utils.dependencies import install_missing_dependencies
+                print("\n⚠️  NVIDIA GPU detected but CUDA toolkit is not installed.")
+                is_interactive = sys.stdin.isatty() if hasattr(sys.stdin, 'isatty') else False
+                success, msg = install_missing_dependencies(
+                    ["nvidia-cuda-toolkit"],
+                    interactive=is_interactive
+                )
+                if not success:
+                    # User declined or install failed - suggest alternative
+                    print("\n💡 Tip: Use --no-gpu to install without GPU acceleration")
+                    return {
+                        "success": False,
+                        "error": "CUDA toolkit required for GPU support",
+                        "message": "Run with --no-gpu for CPU-only installation"
+                    }
+                # CUDA installed successfully, continue with GPU build
         
         if missing_deps:
             return {
