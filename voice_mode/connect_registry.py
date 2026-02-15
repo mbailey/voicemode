@@ -10,6 +10,8 @@ Phase 1: Device status visibility only. No audio routing through Connect yet.
 import asyncio
 import json
 import logging
+import shutil
+import subprocess
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -102,8 +104,13 @@ class ConnectRegistry:
         self._connected = False
         self._session_id: Optional[str] = None
         self._task: Optional[asyncio.Task] = None
+        self._ws = None  # Active WebSocket connection reference
         self._status_message: Optional[str] = None
         self._reconnect_count = 0
+        # Wakeable agent state
+        self._wakeable_team_name: Optional[str] = None
+        self._wakeable_agent_name: Optional[str] = None
+        self._wakeable_agent_platform: Optional[str] = None
 
     @property
     def devices(self) -> List[DeviceInfo]:
@@ -179,6 +186,7 @@ class ConnectRegistry:
                 self._status_message = "Connecting..."
 
                 async with websockets.connect(ws_url) as ws:
+                    self._ws = ws
                     self._connected = True
                     retry_delay = 1  # Reset on successful connection
                     self._reconnect_count = 0
@@ -208,6 +216,10 @@ class ConnectRegistry:
                     }
                     await ws.send(json.dumps(ready_msg))
 
+                    # Re-register as wakeable if previously registered
+                    if self._wakeable_team_name:
+                        await self._send_wakeable_registration(ws)
+
                     # Start heartbeat
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))
 
@@ -229,10 +241,12 @@ class ConnectRegistry:
             except asyncio.CancelledError:
                 logger.info("Connect registry: shutting down")
                 self._connected = False
+                self._ws = None
                 self._status_message = "Shut down"
                 return
             except Exception as e:
                 self._connected = False
+                self._ws = None
                 self._devices = []
                 self._reconnect_count += 1
                 self._status_message = f"Reconnecting (attempt {self._reconnect_count})"
@@ -275,8 +289,104 @@ class ConnectRegistry:
         elif msg_type == "ack":
             pass  # Acknowledgment, no action needed
 
+        elif msg_type == "agent_message":
+            # A user sent a message to this wakeable agent via the dashboard
+            text = msg.get("text", "")
+            sender = msg.get("from", "user")
+            await self._handle_agent_message(text, sender)
+
         else:
             logger.debug(f"Connect registry: unhandled message type: {msg_type}")
+
+    async def _handle_agent_message(self, text: str, sender: str):
+        """Handle an incoming agent_message by calling send-message to inject into team inbox."""
+        team_name = self._wakeable_team_name
+        if not team_name:
+            logger.warning("Connect registry: received agent_message but not registered as wakeable")
+            return
+
+        if not text.strip():
+            logger.warning("Connect registry: received empty agent_message, ignoring")
+            return
+
+        # Check send-message is available
+        send_message_path = shutil.which("send-message")
+        if not send_message_path:
+            logger.error("Connect registry: send-message not found on PATH")
+            return
+
+        try:
+            cmd = [send_message_path, team_name, "--from", sender, text]
+            logger.info(f"Connect registry: delivering message to team '{team_name}' from '{sender}'")
+            result = await asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                logger.error(f"Connect registry: send-message failed: {result.stderr.strip()}")
+            else:
+                logger.info(f"Connect registry: message delivered: {result.stdout.strip()}")
+        except subprocess.TimeoutExpired:
+            logger.error("Connect registry: send-message timed out")
+        except Exception as e:
+            logger.error(f"Connect registry: failed to deliver message: {e}")
+
+    async def register_wakeable(self, team_name: str, agent_name: str, agent_platform: str = "claude-code"):
+        """Register this MCP server as a wakeable agent.
+
+        Sends a capabilities_update to the gateway with wakeable fields.
+        After registration, users can send messages to this agent from the dashboard.
+
+        Args:
+            team_name: Claude Code team name (used by send-message for inbox injection)
+            agent_name: Display name shown in the VoiceMode dashboard
+            agent_platform: Platform identifier (default: claude-code)
+        """
+        self._wakeable_team_name = team_name
+        self._wakeable_agent_name = agent_name
+        self._wakeable_agent_platform = agent_platform
+
+        if self._ws and self._connected:
+            await self._send_wakeable_registration(self._ws)
+        else:
+            logger.info("Connect registry: wakeable registration queued (will send on connect)")
+
+    async def unregister_wakeable(self):
+        """Unregister this MCP server as a wakeable agent.
+
+        Sends a capabilities_update with wakeable=False to the gateway.
+        """
+        self._wakeable_team_name = None
+        self._wakeable_agent_name = None
+        self._wakeable_agent_platform = None
+
+        if self._ws and self._connected:
+            try:
+                msg = {
+                    "type": "capabilities_update",
+                    "wakeable": False,
+                }
+                await self._ws.send(json.dumps(msg))
+                logger.info("Connect registry: unregistered as wakeable")
+            except Exception as e:
+                logger.warning(f"Connect registry: failed to send wakeable unregistration: {e}")
+
+    async def _send_wakeable_registration(self, ws):
+        """Send the wakeable registration message over a WebSocket connection."""
+        try:
+            msg = {
+                "type": "capabilities_update",
+                "wakeable": True,
+                "teamName": self._wakeable_team_name,
+                "agentName": self._wakeable_agent_name,
+                "agentPlatform": self._wakeable_agent_platform or "claude-code",
+            }
+            await ws.send(json.dumps(msg))
+            logger.info(
+                f"Connect registry: registered as wakeable "
+                f"(agent: {self._wakeable_agent_name}, team: {self._wakeable_team_name})"
+            )
+        except Exception as e:
+            logger.warning(f"Connect registry: failed to send wakeable registration: {e}")
 
     def get_status_text(self) -> str:
         """Formatted status text for the service tool."""
@@ -300,6 +410,10 @@ class ConnectRegistry:
                 lines.append("  Remote Devices: none")
         elif self._connected:
             lines.append("  Remote Devices: none")
+
+        # Show wakeable agent status
+        if self._wakeable_team_name:
+            lines.append(f"  Wakeable: {self._wakeable_agent_name} (team: {self._wakeable_team_name})")
 
         return "\n".join(lines)
 
