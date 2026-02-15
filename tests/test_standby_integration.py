@@ -47,6 +47,44 @@ class TestStandbyStartOperator:
         assert "no such option" in result.output.lower() or "error" in result.output.lower()
 
 
+class TestStandbyWakeCommand:
+    """Test the --wake-command option."""
+
+    def test_standby_help_shows_wake_command(self):
+        """Test that standby help shows the --wake-command option."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+        result = runner.invoke(connect, ["standby", "--help"])
+
+        assert result.exit_code == 0
+        assert "--wake-command" in result.output
+
+    def test_standby_accepts_wake_command_option(self):
+        """Test that --wake-command is accepted as a valid option."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+        # This will fail due to no auth, but should NOT fail with "no such option"
+        result = runner.invoke(connect, ["standby", "--wake-command", "send-message cora"])
+
+        # Should not be an option error
+        assert "no such option" not in (result.output or "").lower()
+
+    def test_wake_command_env_var(self):
+        """Test that VOICEMODE_WAKE_COMMAND env var is documented in help."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+        result = runner.invoke(connect, ["standby", "--help"])
+
+        assert result.exit_code == 0
+        assert "VOICEMODE_WAKE_COMMAND" in result.output
+
+
 class TestStartOperatorFunction:
     """Test the start_operator nested function behavior.
 

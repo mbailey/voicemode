@@ -3169,13 +3169,21 @@ def logout():
               help='Agent to wake on incoming calls (default: operator)')
 @click.option('--wake-message', envvar='VOICEMODE_WAKE_MESSAGE',
               help='Custom message to send to agent on wake (default: greeting prompt)')
-def standby(url: str, token: str | None, agent_name: str, wake_message: str | None):
+@click.option('--wake-command', envvar='VOICEMODE_WAKE_COMMAND',
+              help='Custom command to deliver wake messages (default: voicemode agent send). '
+                   'The message is passed as the final argument. '
+                   'Example: "send-message cora" calls "send-message cora <message>"')
+def standby(url: str, token: str | None, agent_name: str, wake_message: str | None,
+            wake_command: str | None):
     """Wait for incoming voice sessions and wake an agent.
 
     Connects to voicemode.dev and listens for wake signals. When someone
-    initiates a voice session (from iOS app or web), this command uses
-    'voicemode agent send' to wake the specified agent. If the agent isn't
-    running, it will be started automatically.
+    initiates a voice session (from iOS app or web), this command delivers
+    the wake message to the configured agent.
+
+    By default, uses 'voicemode agent send' which auto-starts agents in
+    tmux. Use --wake-command to override with a custom command (e.g.
+    'send-message cora' for team inbox delivery).
 
     The connection stays alive, waiting for calls. Press Ctrl+C to stop.
 
@@ -3198,6 +3206,12 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
         # Wake a specific agent
         voicemode connect standby --agent cora
         voicemode connect standby -a tesi
+
+        # Use custom wake command (e.g. team inbox delivery)
+        voicemode connect standby --wake-command "send-message cora"
+
+        # Or via environment variable
+        VOICEMODE_WAKE_COMMAND="send-message cora" voicemode connect standby
 
         # Specify token directly (overrides stored credentials)
         voicemode connect standby --token your-token-here
@@ -3259,50 +3273,68 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
     def wake_agent(wake_msg: dict) -> bool:
         """Start or wake the configured agent when wake signal received.
 
-        Uses 'voicemode agent send -a <agent>' to deliver the wake message.
-        This command auto-starts the agent if not running, keeping WebSocket
-        listener decoupled from agent management.
+        Uses either a custom wake command (--wake-command / VOICEMODE_WAKE_COMMAND)
+        or the default 'voicemode agent send -a <agent>' to deliver the message.
+
+        Custom command receives the message as its final argument:
+            send-message cora "the message"
 
         Returns:
             True if message was sent successfully, False otherwise
         """
+        import shlex
+
         reason = wake_msg.get('reason', 'unknown')
         caller_id = wake_msg.get('callerId', 'unknown')
+        user_text = wake_msg.get('text')
         click.echo(f"\n🔔 Wake signal received! Reason: {reason}, Caller: {caller_id}")
 
         # Build the wake message for the agent
-        # Use custom message if provided, otherwise default greeting prompt
-        if wake_message:
+        # Priority: user message text > custom wake message > default greeting
+        if reason == 'user_message' and user_text:
+            msg_to_send = user_text
+            click.echo(f"📨 User message: {user_text[:100]}{'...' if len(user_text) > 100 else ''}")
+        elif wake_message:
             msg_to_send = wake_message
         else:
             msg_to_send = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
 
-        click.echo(f"Waking agent '{agent_name}' via 'voicemode agent send'...")
+        # Build command: custom wake command or default voicemode agent send
+        if wake_command:
+            cmd = shlex.split(wake_command) + [msg_to_send]
+            cmd_display = wake_command
+        else:
+            cmd = ['voicemode', 'agent', 'send', '-a', agent_name, msg_to_send]
+            cmd_display = f"voicemode agent send -a {agent_name}"
+
+        click.echo(f"Waking agent via '{cmd_display}'...")
 
         try:
-            # Use 'voicemode agent send -a <agent>' which auto-starts if needed
             result = subprocess.run(
-                ['voicemode', 'agent', 'send', '-a', agent_name, msg_to_send],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,  # 30 second timeout for agent start + send
             )
 
             if result.returncode == 0:
-                click.echo(f"✅ Agent '{agent_name}' woken successfully")
+                click.echo(f"✅ Agent woken successfully via '{cmd_display}'")
+                if result.stdout.strip():
+                    click.echo(f"   {result.stdout.strip()}")
                 return True
             else:
                 error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-                click.echo(f"❌ Failed to wake agent '{agent_name}': {error_msg}", err=True)
+                click.echo(f"❌ Failed to wake agent: {error_msg}", err=True)
                 return False
         except subprocess.TimeoutExpired:
-            click.echo(f"❌ Timeout waiting for agent '{agent_name}' to start", err=True)
+            click.echo(f"❌ Timeout running '{cmd_display}'", err=True)
             return False
         except FileNotFoundError:
-            click.echo(f"❌ 'voicemode' command not found in PATH", err=True)
+            cmd_name = cmd[0] if cmd else "unknown"
+            click.echo(f"❌ Command not found: '{cmd_name}'", err=True)
             return False
         except Exception as e:
-            click.echo(f"❌ Failed to wake agent '{agent_name}': {e}", err=True)
+            click.echo(f"❌ Failed to wake agent: {e}", err=True)
             return False
 
     def send_status(ws, status: str, error: str | None = None, wake_id: str | None = None):
@@ -3362,7 +3394,10 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
                     },
                 }
                 ws.send(json.dumps(ready_msg))
-                click.echo(f"📡 Ready as '{agent_name}', waiting for voice sessions...")
+                if wake_command:
+                    click.echo(f"📡 Ready, waiting for voice sessions (wake: {wake_command})...")
+                else:
+                    click.echo(f"📡 Ready as '{agent_name}', waiting for voice sessions...")
                 click.echo("   Press Ctrl+C to stop")
                 click.echo()
 
