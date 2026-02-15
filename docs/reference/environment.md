@@ -93,7 +93,7 @@ Supported formats: `pcm`, `opus`, `mp3`, `wav`, `flac`, `aac`
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
-| `VOICEMODE_VAD_AGGRESSIVENESS` | VAD level (0-3) | `2` | `3` |
+| `VOICEMODE_VAD_AGGRESSIVENESS` | VAD level (0-3) | `3` | `3` |
 | `VOICEMODE_DISABLE_VAD` | Disable VAD | `false` | `true` |
 | `VOICEMODE_DISABLE_SILENCE_DETECTION` | Disable silence detection | `false` | `true` |
 | `VOICEMODE_SILENCE_THRESHOLD` | Silence duration (seconds) | `3.0` | `5.0` |

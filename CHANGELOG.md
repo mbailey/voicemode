@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Default VAD aggressiveness raised to 3** (GH-248) - Level 2 caused ~93% false positive speech detection on MacBook Pro mics, preventing silence detection from triggering. Level 3 eliminates false positives while maintaining good speech detection.
+
 ## [8.2.0] - 2026-02-14
 
 ### Added

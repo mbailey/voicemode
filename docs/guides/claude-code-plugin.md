@@ -90,7 +90,7 @@ Once installed, Claude has access to these MCP tools:
 | `wait_for_response` | true | Listen for user response after speaking |
 | `listen_duration_max` | 120 | Maximum recording time (seconds) |
 | `voice` | auto | TTS voice name |
-| `vad_aggressiveness` | 2 | Voice detection strictness (0-3) |
+| `vad_aggressiveness` | 3 | Voice detection strictness (0-3) |
 
 ## Hooks and Soundfonts
 

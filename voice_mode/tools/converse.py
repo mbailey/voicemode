@@ -1126,7 +1126,7 @@ KEY PARAMETERS:
 • voice (string): TTS voice name (auto-selected unless specified)
 • tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)
 • disable_silence_detection (bool, default: false): Disable auto-stop on silence
-• vad_aggressiveness (0-3, default: 2): Voice detection strictness (0=permissive, 3=strict)
+• vad_aggressiveness (0-3, default: 3): Voice detection strictness (0=permissive, 3=strict)
 • speed (0.25-4.0): Speech rate (1.0=normal, 2.0=double speed)
 • chime_enabled (bool): Enable/disable audio feedback chimes
 • chime_leading_silence (float): Silence before chime in seconds

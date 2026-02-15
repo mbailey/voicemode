@@ -212,8 +212,8 @@ def load_voicemode_env():
 # Disable silence detection for noisy environments (true/false)
 # VOICEMODE_DISABLE_SILENCE_DETECTION=false
 
-# VAD aggressiveness level 0-3, higher = more strict (default: 2)
-# VOICEMODE_VAD_AGGRESSIVENESS=2
+# VAD aggressiveness level 0-3, higher = more strict (default: 3)
+# VOICEMODE_VAD_AGGRESSIVENESS=3
 
 # Silence threshold in milliseconds before stopping (default: 1000)
 # VOICEMODE_SILENCE_THRESHOLD_MS=1000
@@ -640,7 +640,7 @@ CHANNELS = 1
 DISABLE_SILENCE_DETECTION = os.getenv("VOICEMODE_DISABLE_SILENCE_DETECTION", "false").lower() in ("true", "1", "yes", "on")
 
 # VAD (Voice Activity Detection) configuration
-VAD_AGGRESSIVENESS = int(os.getenv("VOICEMODE_VAD_AGGRESSIVENESS", "2"))  # 0-3, higher = more aggressive
+VAD_AGGRESSIVENESS = int(os.getenv("VOICEMODE_VAD_AGGRESSIVENESS", "3"))  # 0-3, higher = more aggressive
 SILENCE_THRESHOLD_MS = int(os.getenv("VOICEMODE_SILENCE_THRESHOLD_MS", "1000"))  # Stop after 1000ms (1 second) of silence
 MIN_RECORDING_DURATION = float(os.getenv("VOICEMODE_MIN_RECORDING_DURATION", "0.5"))  # Minimum 0.5s recording
 VAD_CHUNK_DURATION_MS = 30  # VAD frame size (must be 10, 20, or 30ms)

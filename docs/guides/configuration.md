@@ -161,7 +161,7 @@ VOICEMODE_CHIME_POST_DELAY=0.5  # Seconds after
 # VAD Aggressiveness (0-3)
 # 0: Least aggressive (captures more)
 # 3: Most aggressive (filters more)
-VOICEMODE_VAD_AGGRESSIVENESS=2
+VOICEMODE_VAD_AGGRESSIVENESS=3
 
 # Silence detection
 VOICEMODE_SILENCE_THRESHOLD=3.0     # Seconds of silence

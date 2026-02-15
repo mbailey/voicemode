@@ -123,12 +123,12 @@ Voice Activity Detection strictness level.
 **Levels:**
 - `0` - Least aggressive, includes more audio, may include non-speech
 - `1` - Slightly stricter filtering
-- `2` - Balanced (default) - good for most environments
-- `3` - Most aggressive, strict detection, may cut off soft speech
+- `2` - Balanced - good for most environments
+- `3` - Most aggressive, strict detection (default) - best for filtering background noise
 
 **When to adjust:**
 - Quiet room: Use 0-1 to catch all speech
-- Normal home/office: Use default (2)
+- Normal home/office: Use default (3)
 - Noisy cafe/outdoors: Use 3
 
 ### chime_leading_silence
