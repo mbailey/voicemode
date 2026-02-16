@@ -466,3 +466,56 @@ class TestWakeableAgent:
         registry = ConnectRegistry()
         text = registry.get_status_text()
         assert "Wakeable" not in text
+
+
+class TestConnectRegistryProperties:
+    """Tests for is_connecting and status_message properties."""
+
+    def test_is_connecting_false_initially(self):
+        """Not connecting before initialization."""
+        registry = ConnectRegistry()
+        assert registry.is_connecting is False
+
+    def test_is_connecting_true_when_task_running(self):
+        """is_connecting is True when task is running but not yet connected."""
+        registry = ConnectRegistry()
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        registry._task = mock_task
+        registry._connected = False
+        assert registry.is_connecting is True
+
+    def test_is_connecting_false_when_connected(self):
+        """is_connecting is False once connected (even if task running)."""
+        registry = ConnectRegistry()
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        registry._task = mock_task
+        registry._connected = True
+        assert registry.is_connecting is False
+
+    def test_is_connecting_false_when_task_done(self):
+        """is_connecting is False if task has finished."""
+        registry = ConnectRegistry()
+        mock_task = MagicMock()
+        mock_task.done.return_value = True
+        registry._task = mock_task
+        registry._connected = False
+        assert registry.is_connecting is False
+
+    def test_status_message_default(self):
+        """Default status message when not initialized."""
+        registry = ConnectRegistry()
+        assert registry.status_message == "Not initialized"
+
+    def test_status_message_connected(self):
+        """Status message when connected."""
+        registry = ConnectRegistry()
+        registry._connected = True
+        assert registry.status_message == "Connected"
+
+    def test_status_message_custom(self):
+        """Custom status message takes priority."""
+        registry = ConnectRegistry()
+        registry._status_message = "Connecting..."
+        assert registry.status_message == "Connecting..."
