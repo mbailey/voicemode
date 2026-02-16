@@ -387,50 +387,35 @@ class TestWakeableAgent:
         assert sent["wakeable"] is False
 
     @pytest.mark.asyncio
-    async def test_handle_agent_message_calls_send_message(self):
-        """agent_message handler calls send-message script."""
+    async def test_handle_agent_message_calls_deliver_message(self):
+        """agent_message handler calls deliver_message from messaging module."""
         registry = ConnectRegistry()
-        registry._wakeable_team_name = "cora"
+        registry._wakeable_agent_name = "Cora 7"
 
-        with patch("shutil.which", return_value="/usr/local/bin/send-message"), \
-             patch("asyncio.to_thread") as mock_to_thread:
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            mock_result.stdout = "Sent to cora/team-lead: Hello"
-            mock_to_thread.return_value = mock_result
-
+        with patch("voice_mode.messaging.deliver_message", return_value={"delivered_to": ["inbox"], "agent_name": "Cora 7"}) as mock_deliver:
             await registry._handle_agent_message("Hello", "user")
 
-            mock_to_thread.assert_called_once()
-            call_args = mock_to_thread.call_args
-            # First positional arg is subprocess.run
-            # Second is the command list
-            cmd = call_args[0][1]
-            assert cmd[0] == "/usr/local/bin/send-message"
-            assert cmd[1] == "cora"
-            assert "--from" in cmd
-            assert "user" in cmd
-            assert "Hello" in cmd
+            mock_deliver.assert_called_once_with("Cora 7", "Hello", sender="user")
 
     @pytest.mark.asyncio
     async def test_handle_agent_message_ignores_when_not_wakeable(self):
         """agent_message is ignored when not registered as wakeable."""
         registry = ConnectRegistry()
-        # _wakeable_team_name is None
+        # _wakeable_agent_name is None
 
-        with patch("shutil.which") as mock_which:
+        with patch("voice_mode.messaging.deliver_message") as mock_deliver:
             await registry._handle_agent_message("Hello", "user")
-            mock_which.assert_not_called()
+            mock_deliver.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_handle_agent_message_ignores_empty_text(self):
         """agent_message with empty text is ignored."""
         registry = ConnectRegistry()
-        registry._wakeable_team_name = "cora"
+        registry._wakeable_agent_name = "Cora 7"
 
-        with patch("shutil.which") as mock_which:
+        with patch("voice_mode.messaging.deliver_message") as mock_deliver:
             await registry._handle_agent_message("", "user")
-            mock_which.assert_not_called()
+            mock_deliver.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_handle_agent_message_via_handle_message(self):
@@ -446,6 +431,16 @@ class TestWakeableAgent:
                 "agentId": "agent-abc123",
             })
             mock_handler.assert_called_once_with("What's up?", "mike")
+
+    @pytest.mark.asyncio
+    async def test_register_wakeable_creates_live_inbox(self):
+        """register_wakeable calls setup_live_inbox to create symlink."""
+        registry = ConnectRegistry()
+
+        with patch("voice_mode.messaging.setup_live_inbox") as mock_setup:
+            await registry.register_wakeable("cora", "Cora 7", "claude-code")
+
+            mock_setup.assert_called_once_with("Cora 7", "cora")
 
     def test_get_status_text_shows_wakeable(self):
         """Status text includes wakeable info when registered."""

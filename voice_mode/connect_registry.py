@@ -10,8 +10,6 @@ Phase 1: Device status visibility only. No audio routing through Connect yet.
 import asyncio
 import json
 import logging
-import shutil
-import subprocess
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -334,9 +332,8 @@ class ConnectRegistry:
             logger.debug(f"Connect registry: unhandled message type: {msg_type}")
 
     async def _handle_agent_message(self, text: str, sender: str):
-        """Handle an incoming agent_message by calling send-message to inject into team inbox."""
-        team_name = self._wakeable_team_name
-        if not team_name:
+        """Handle an incoming agent_message by delivering to the agent's inbox."""
+        if not self._wakeable_agent_name:
             logger.warning("Connect registry: received agent_message but not registered as wakeable")
             return
 
@@ -344,24 +341,14 @@ class ConnectRegistry:
             logger.warning("Connect registry: received empty agent_message, ignoring")
             return
 
-        # Check send-message is available
-        send_message_path = shutil.which("send-message")
-        if not send_message_path:
-            logger.error("Connect registry: send-message not found on PATH")
-            return
+        from .messaging import deliver_message
 
         try:
-            cmd = [send_message_path, team_name, "--from", sender, text]
-            logger.info(f"Connect registry: delivering message to team '{team_name}' from '{sender}'")
+            logger.info(f"Connect registry: delivering message to '{self._wakeable_agent_name}' from '{sender}'")
             result = await asyncio.to_thread(
-                subprocess.run, cmd, capture_output=True, text=True, timeout=10
+                deliver_message, self._wakeable_agent_name, text, sender=sender
             )
-            if result.returncode != 0:
-                logger.error(f"Connect registry: send-message failed: {result.stderr.strip()}")
-            else:
-                logger.info(f"Connect registry: message delivered: {result.stdout.strip()}")
-        except subprocess.TimeoutExpired:
-            logger.error("Connect registry: send-message timed out")
+            logger.info(f"Connect registry: message delivered: {result}")
         except Exception as e:
             logger.error(f"Connect registry: failed to deliver message: {e}")
 
@@ -379,6 +366,13 @@ class ConnectRegistry:
         self._wakeable_team_name = team_name
         self._wakeable_agent_name = agent_name
         self._wakeable_agent_platform = agent_platform
+
+        # Set up live-inbox symlink for direct message delivery
+        from .messaging import setup_live_inbox
+        try:
+            setup_live_inbox(agent_name, team_name)
+        except Exception as e:
+            logger.warning(f"Connect registry: failed to setup live-inbox: {e}")
 
         if self._ws and self._connected:
             await self._send_wakeable_registration(self._ws)
