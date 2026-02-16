@@ -38,14 +38,24 @@ async def register_wakeable(
 
     await connect_registry.initialize()
 
-    if not connect_registry.is_connected:
+    # If Connect is disabled or has no credentials (no background task started),
+    # that's a real error. But if the task is running and just hasn't connected
+    # yet, register_wakeable() will queue and send when the connection is ready.
+    if not connect_registry.is_connected and not connect_registry.is_connecting:
         return (
             "Error: Not connected to VoiceMode Connect. "
-            "Check credentials with: voicemode connect login"
+            f"{connect_registry.status_message}"
         )
 
     await connect_registry.register_wakeable(team_name, agent_name, agent_platform)
-    return f"Registered as wakeable: {agent_name} (team: {team_name})"
+
+    if connect_registry.is_connected:
+        return f"Registered as wakeable: {agent_name} (team: {team_name})"
+    else:
+        return (
+            f"Wakeable registration queued: {agent_name} (team: {team_name}). "
+            f"Will activate when Connect finishes connecting."
+        )
 
 
 @mcp.tool()

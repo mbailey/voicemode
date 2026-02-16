@@ -120,6 +120,16 @@ class ConnectRegistry:
     def is_connected(self) -> bool:
         return self._connected
 
+    @property
+    def is_connecting(self) -> bool:
+        """True if a connection attempt is in progress (task running but not yet connected)."""
+        return self._task is not None and not self._task.done() and not self._connected
+
+    @property
+    def status_message(self) -> str:
+        """Current status message for diagnostics."""
+        return self._status_message or ("Connected" if self._connected else "Not initialized")
+
     async def initialize(self):
         """Start the WebSocket connection if not already running.
 
