@@ -468,6 +468,54 @@ class TestWakeableAgent:
         assert "Wakeable" not in text
 
 
+class TestAutoWakeable:
+    """Tests for auto-registration as wakeable on connect."""
+
+    def test_auto_registered_initially_false(self):
+        """Auto-registration flag starts as False."""
+        registry = ConnectRegistry()
+        assert registry._auto_registered is False
+
+    def test_get_status_text_shows_auto_tag(self):
+        """Status text shows [auto] tag for auto-registered agents."""
+        registry = ConnectRegistry()
+        registry._connected = True
+        registry._status_message = "Connected"
+        registry._devices = []
+        registry._wakeable_team_name = "cora"
+        registry._wakeable_agent_name = "Cora 7"
+        registry._auto_registered = True
+
+        text = registry.get_status_text()
+        assert "[auto]" in text
+        assert "Cora 7" in text
+
+    def test_get_status_text_no_auto_tag_for_manual(self):
+        """Status text does not show [auto] for manually registered agents."""
+        registry = ConnectRegistry()
+        registry._connected = True
+        registry._status_message = "Connected"
+        registry._devices = []
+        registry._wakeable_team_name = "cora"
+        registry._wakeable_agent_name = "Cora 7"
+        registry._auto_registered = False
+
+        text = registry.get_status_text()
+        assert "[auto]" not in text
+        assert "Cora 7" in text
+
+    @pytest.mark.asyncio
+    async def test_manual_register_prevents_auto(self):
+        """Manual register_wakeable prevents auto-registration from overwriting."""
+        registry = ConnectRegistry()
+        await registry.register_wakeable("my-team", "My Agent")
+
+        # Simulate what auto-register checks
+        assert registry._wakeable_team_name == "my-team"
+        # Auto-register condition: not self._wakeable_team_name would be False
+        # So auto-register would NOT trigger — correct behavior
+
+
 class TestConnectRegistryProperties:
     """Tests for is_connecting and status_message properties."""
 

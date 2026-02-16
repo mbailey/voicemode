@@ -17,7 +17,13 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .config import CONNECT_AUTO_ENABLED, CONNECT_WS_URL
+from .config import (
+    CONNECT_AUTO_ENABLED,
+    CONNECT_WS_URL,
+    AGENT_AUTO_WAKEABLE,
+    AGENT_NAME,
+    AGENT_TEAM_NAME,
+)
 
 logger = logging.getLogger("voicemode")
 
@@ -111,6 +117,7 @@ class ConnectRegistry:
         self._wakeable_team_name: Optional[str] = None
         self._wakeable_agent_name: Optional[str] = None
         self._wakeable_agent_platform: Optional[str] = None
+        self._auto_registered = False  # Track if auto-registration has been done
 
     @property
     def devices(self) -> List[DeviceInfo]:
@@ -229,6 +236,24 @@ class ConnectRegistry:
                     # Re-register as wakeable if previously registered
                     if self._wakeable_team_name:
                         await self._send_wakeable_registration(ws)
+
+                    # Auto-register as wakeable if configured and not already registered
+                    if (
+                        not self._wakeable_team_name
+                        and not self._auto_registered
+                        and AGENT_AUTO_WAKEABLE
+                        and AGENT_NAME
+                        and AGENT_TEAM_NAME
+                    ):
+                        self._wakeable_team_name = AGENT_TEAM_NAME
+                        self._wakeable_agent_name = AGENT_NAME
+                        self._wakeable_agent_platform = "claude-code"
+                        self._auto_registered = True
+                        await self._send_wakeable_registration(ws)
+                        logger.info(
+                            f"Connect registry: auto-registered as wakeable "
+                            f"(agent: {AGENT_NAME}, team: {AGENT_TEAM_NAME})"
+                        )
 
                     # Start heartbeat
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))
@@ -423,7 +448,8 @@ class ConnectRegistry:
 
         # Show wakeable agent status
         if self._wakeable_team_name:
-            lines.append(f"  Wakeable: {self._wakeable_agent_name} (team: {self._wakeable_team_name})")
+            auto_str = " [auto]" if self._auto_registered else ""
+            lines.append(f"  Wakeable: {self._wakeable_agent_name} (team: {self._wakeable_team_name}){auto_str}")
 
         return "\n".join(lines)
 

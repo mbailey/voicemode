@@ -317,6 +317,21 @@ TTS \\bAPI\\b A P I # API as individual letters
 # VOICEMODE_THINKING_ANNOUNCE_VOICE=true
 
 #############
+# Agent Identity
+#############
+
+# Agent name shown in the VoiceMode dashboard (default: empty, no auto-register)
+# Set per-project so each project has its own agent identity
+# VOICEMODE_AGENT_NAME=Cora 7
+
+# Claude Code team name for message delivery (default: empty)
+# VOICEMODE_TEAM_NAME=cora
+
+# Auto-register as wakeable on MCP startup (true/false, default: false)
+# Requires VOICEMODE_AGENT_NAME and VOICEMODE_TEAM_NAME to be set
+# VOICEMODE_AUTO_WAKEABLE=false
+
+#############
 # Service Management
 #############
 
@@ -620,6 +635,12 @@ SERVICE_AUTO_ENABLE = env_bool("VOICEMODE_SERVICE_AUTO_ENABLE", True)
 
 CONNECT_AUTO_ENABLED = env_bool("VOICEMODE_CONNECT_AUTO", False)
 CONNECT_WS_URL = os.getenv("VOICEMODE_CONNECT_WS_URL", "wss://voicemode.dev/ws")
+
+# Agent identity for wakeable registration
+# Set per-project in voicemode.env to give each project its own agent identity
+AGENT_NAME = os.getenv("VOICEMODE_AGENT_NAME", "")
+AGENT_TEAM_NAME = os.getenv("VOICEMODE_TEAM_NAME", "")
+AGENT_AUTO_WAKEABLE = env_bool("VOICEMODE_AUTO_WAKEABLE", False)
 
 # ==================== SOUND FONTS CONFIGURATION ====================
 
