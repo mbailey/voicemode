@@ -1,10 +1,11 @@
 """
-WebSocket client for VoiceMode Connect (voicemode.dev).
+DEPRECATED: Use voice_mode.connect.client instead.
 
-Maintains a persistent connection to the Connect gateway to track remote devices.
-Follows the ProviderRegistry singleton pattern from provider_discovery.py.
+This module is retained for backward compatibility. The functionality has been
+refactored into the voice_mode.connect package (types, config, users, messaging,
+presence, client).
 
-Phase 1: Device status visibility only. No audio routing through Connect yet.
+See: voice_mode/connect/client.py for the replacement ConnectClient class.
 """
 
 import asyncio
@@ -17,7 +18,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .config import CONNECT_AUTO_ENABLED, CONNECT_WS_URL
+from .config import CONNECT_ENABLED, CONNECT_WS_URL
 
 logger = logging.getLogger("voicemode")
 
@@ -141,8 +142,8 @@ class ConnectRegistry:
 
         self._initialized = True
 
-        if not CONNECT_AUTO_ENABLED:
-            self._status_message = "Disabled (VOICEMODE_CONNECT_AUTO=false)"
+        if not CONNECT_ENABLED:
+            self._status_message = "Disabled (VOICEMODE_CONNECT_ENABLED=false)"
             logger.debug("Connect registry disabled by config")
             return
 
@@ -299,6 +300,10 @@ class ConnectRegistry:
         elif msg_type == "ack":
             pass  # Acknowledgment, no action needed
 
+        elif msg_type == "wake":
+            # User clicked the call button on the VoiceMode dashboard
+            await self._handle_wake(msg)
+
         elif msg_type == "agent_message":
             # A user sent a message to this wakeable agent via the dashboard
             text = msg.get("text", "")
@@ -307,6 +312,25 @@ class ConnectRegistry:
 
         else:
             logger.debug(f"Connect registry: unhandled message type: {msg_type}")
+
+    async def _handle_wake(self, msg: dict):
+        """Handle a wake message (call button pressed on dashboard).
+
+        Builds a text message from the wake payload and delivers it
+        via the same path as agent_message.
+        """
+        reason = msg.get("reason", "unknown")
+        caller_id = msg.get("callerId", "unknown")
+        user_text = msg.get("text")
+
+        # Build message text from wake payload
+        if reason == "user_message" and user_text:
+            text = user_text
+        else:
+            text = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
+
+        logger.info(f"Connect registry: wake signal received (reason={reason}, caller={caller_id})")
+        await self._handle_agent_message(text, f"wake:{caller_id}")
 
     async def _handle_agent_message(self, text: str, sender: str):
         """Handle an incoming agent_message by calling send-message to inject into team inbox."""

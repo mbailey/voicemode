@@ -298,10 +298,11 @@ async def status_service(service_name: str) -> str:
                 parts.append(f"Connect standby process is running (PID: {proc.pid}) but could not get details")
 
         # In-process WebSocket client (voicemode.dev)
-        from voice_mode.connect_registry import connect_registry
-        if not connect_registry._initialized:
-            await connect_registry.initialize()
-        parts.append(connect_registry.get_status_text())
+        from voice_mode.connect.client import get_client
+        client = get_client()
+        if not client.is_connected and not client.is_connecting:
+            await client.connect()
+        parts.append(client.get_status_text())
 
         if not parts:
             return "❌ Connect is not available (no credentials - run: voicemode connect login)"
