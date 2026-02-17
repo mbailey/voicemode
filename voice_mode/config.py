@@ -627,8 +627,19 @@ SERVICE_AUTO_ENABLE = env_bool("VOICEMODE_SERVICE_AUTO_ENABLE", True)
 
 # ==================== CONNECT CONFIGURATION ====================
 
-CONNECT_AUTO_ENABLED = env_bool("VOICEMODE_CONNECT_AUTO", False)
+CONNECT_ENABLED = env_bool("VOICEMODE_CONNECT_ENABLED", False)
 CONNECT_WS_URL = os.getenv("VOICEMODE_CONNECT_WS_URL", "wss://voicemode.dev/ws")
+CONNECT_USERS = [u.strip() for u in os.getenv("VOICEMODE_CONNECT_USERS", "").split(",") if u.strip()]
+AGENT_NAME = os.getenv("VOICEMODE_AGENT_NAME", "")
+HOST_ALIAS = os.getenv("VOICEMODE_HOST_ALIAS", "")
+
+# Derived: effective hostname for addressing
+import socket as _socket
+CONNECT_HOST = HOST_ALIAS or _socket.gethostname().split('.')[0]
+
+# Backward compatibility: support old env var names during migration
+if not CONNECT_ENABLED and env_bool("VOICEMODE_CONNECT_AUTO", False):
+    CONNECT_ENABLED = True
 
 # ==================== SOUND FONTS CONFIGURATION ====================
 

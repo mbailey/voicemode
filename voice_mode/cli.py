@@ -3031,16 +3031,16 @@ def favorite():
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def connect():
-    """Connect to voicemode.dev for remote voice control.
+    """VoiceMode Connect — remote messaging and presence.
 
-    Enables remote voice sessions from iOS app or web browser.
-    The listener connects to voicemode.dev and waits for incoming calls,
-    starting Claude Code when someone initiates a voice session.
+    Connect your AI agents to voicemode.dev for remote messaging
+    from mobile apps, web browsers, and other agents.
 
     Examples:
         voicemode connect login
-        voicemode connect standby
         voicemode connect status
+        voicemode connect user add voicemode --name "Cora 7"
+        voicemode connect user list
     """
     pass
 
@@ -3478,117 +3478,184 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
 @connect.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def status():
-    """Show authentication status for voicemode.dev.
+    """Show connection state, registered users, and presence.
 
-    Displays whether you're logged in, your user info, and token expiry.
+    Displays whether VoiceMode Connect is enabled, the connection
+    state, and a list of registered mailboxes with their status.
+    """
+    import json
+    from voice_mode.connect import config as connect_config
+    from voice_mode.connect.users import UserManager
+    from voice_mode import config
+
+    if not config.CONNECT_ENABLED:
+        click.echo("VoiceMode Connect: disabled")
+        click.echo()
+        click.echo("Set VOICEMODE_CONNECT_ENABLED=true in your voicemode.env to enable.")
+        return
+
+    # Connection state
+    from voice_mode.connect.users import CONNECT_DIR
+    state_file = CONNECT_DIR / "state.json"
+    if state_file.exists():
+        state = json.loads(state_file.read_text())
+        status_str = state.get("status", "unknown")
+        connected_since = state.get("connected_since", "")
+        if status_str == "up":
+            click.echo(f"VoiceMode Connect: up (connected since {connected_since})")
+        else:
+            click.echo(f"VoiceMode Connect: {status_str}")
+    else:
+        click.echo("VoiceMode Connect: enabled (not connected)")
+
+    click.echo(f"Gateway: {config.CONNECT_WS_URL}")
+    click.echo(f"Host: {connect_config.get_host()}")
+    click.echo()
+
+    # Users
+    mgr = UserManager(connect_config.get_host())
+    users = mgr.list()
+
+    if not users:
+        click.echo("Users: (none)")
+        click.echo()
+        click.echo("Add one with: voicemode connect user add <name>")
+    else:
+        click.echo("Users:")
+        for u in users:
+            presence = mgr.get_presence(u.name).value.capitalize()
+            display = f" ({u.display_name})" if u.display_name else ""
+            sub = f"  subscribed -> {u.subscribed_team}" if u.subscribed_team else "  no subscriber"
+            click.echo(f"  {u.address:<20} {presence}{display:<20} {sub}")
+
+
+@connect.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def user():
+    """Manage Connect mailboxes.
+
+    Mailboxes are project-scoped identities that receive messages
+    from the VoiceMode dashboard and other agents.
 
     Examples:
-        voicemode connect status
+        voicemode connect user add voicemode --name "Cora 7"
+        voicemode connect user list
+        voicemode connect user remove taskmaster
     """
-    from voice_mode.auth import get_valid_credentials, format_expiry
+    pass
 
-    credentials = get_valid_credentials(auto_refresh=False)
 
-    if credentials is None:
-        click.echo("Not logged in.")
+@user.command('add')
+@click.argument('name')
+@click.option('--name', 'display_name', default='', help='Display name for dashboard')
+@click.option('--subscribe', 'subscribe_team', default=None, help='Claude team name - creates inbox-live symlink')
+@click.help_option('-h', '--help', help='Show this message and exit')
+def user_add(name: str, display_name: str, subscribe_team: str | None):
+    """Add a mailbox.
+
+    NAME is the mailbox identifier (lowercase, alphanumeric + hyphens).
+    This creates the directory structure under ~/.voicemode/connect/users/NAME/
+
+    Examples:
+        voicemode connect user add voicemode --name "Cora 7" --subscribe my-team
+        voicemode connect user add taskmaster --name "Taskmaster"
+    """
+    import re
+    from voice_mode.connect.config import require_enabled, ConnectDisabledError, get_host
+    from voice_mode.connect.users import UserManager
+
+    try:
+        require_enabled()
+    except ConnectDisabledError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+
+    # Validate name
+    if not re.match(r'^[a-z][a-z0-9-]*$', name):
+        click.echo("Error: Name must be lowercase, start with a letter, and contain only letters, numbers, and hyphens.", err=True)
+        raise SystemExit(1)
+
+    mgr = UserManager(get_host())
+    user_info = mgr.add(name, display_name=display_name, subscribe_team=subscribe_team)
+
+    click.echo(f"Added user: {user_info.address}")
+    if display_name:
+        click.echo(f"  Display name: {display_name}")
+    if subscribe_team:
+        click.echo(f"  Subscribed to team: {subscribe_team}")
+
+
+@user.command('list')
+@click.help_option('-h', '--help', help='Show this message and exit')
+def user_list():
+    """List registered mailboxes.
+
+    Shows all mailboxes on this machine with their address,
+    display name, presence state, and subscription status.
+    """
+    from voice_mode.connect.config import require_enabled, ConnectDisabledError, get_host
+    from voice_mode.connect.users import UserManager
+
+    try:
+        require_enabled()
+    except ConnectDisabledError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+
+    mgr = UserManager(get_host())
+    users = mgr.list()
+
+    if not users:
+        click.echo("No users registered.")
         click.echo()
-        click.echo("Run 'voicemode connect login' to authenticate.")
+        click.echo("Add one with: voicemode connect user add <name>")
         return
 
-    click.echo("✓ Logged in to voicemode.dev")
-    click.echo()
+    # Header
+    click.echo(f"{'NAME':<14} {'ADDRESS':<20} {'DISPLAY NAME':<15} {'PRESENCE':<12} {'SUBSCRIBER'}")
+    click.echo("-" * 80)
 
-    if credentials.user_info:
-        email = credentials.user_info.get("email", "unknown")
-        name = credentials.user_info.get("name", "")
-        if name:
-            click.echo(f"  User: {name} ({email})")
-        else:
-            click.echo(f"  User: {email}")
+    for u in users:
+        presence = mgr.get_presence(u.name).value.capitalize()
+        subscriber = u.subscribed_team or "—"
+        click.echo(f"{u.name:<14} {u.address:<20} {u.display_name or '—':<15} {presence:<12} {subscriber}")
+
+
+@user.command('remove')
+@click.argument('name')
+@click.option('--keep-inbox', is_flag=True, help="Don't delete the persistent inbox file")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def user_remove(name: str, keep_inbox: bool):
+    """Remove a mailbox.
+
+    Removes the user directory, inbox-live symlink, and metadata.
+    Use --keep-inbox to preserve the persistent inbox file.
+    """
+    from voice_mode.connect.config import require_enabled, ConnectDisabledError, get_host
+    from voice_mode.connect.users import UserManager
+
+    try:
+        require_enabled()
+    except ConnectDisabledError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+
+    mgr = UserManager(get_host())
+
+    if keep_inbox:
+        # Save inbox before removal
+        import shutil
+        user_dir = mgr._user_dir(name)
+        inbox = user_dir / "inbox"
+        if inbox.exists():
+            backup = user_dir.parent / f"{name}.inbox.bak"
+            shutil.copy2(inbox, backup)
+            click.echo(f"  Inbox backed up to: {backup}")
+
+    if mgr.remove(name):
+        click.echo(f"Removed user: {name}")
     else:
-        click.echo("  User: (no user info available)")
-
-    click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
-
-    if credentials.is_expired():
-        click.echo()
-        click.echo("  Note: Token has expired. It will be refreshed automatically on next use.")
-
-    # Show remote devices via WebSocket
-    click.echo()
-    _show_remote_devices(credentials)
-
-
-def _show_remote_devices(credentials):
-    """Connect to voicemode.dev briefly to show remote devices."""
-    import json
-    import urllib.parse
-
-    try:
-        import websockets.sync.client as ws_sync
-    except ImportError:
-        click.echo("  Remote Devices: (websockets package not installed)")
-        return
-
-    # Refresh credentials if needed
-    from voice_mode.auth import get_valid_credentials
-    fresh_creds = get_valid_credentials(auto_refresh=True)
-    if not fresh_creds:
-        click.echo("  Remote Devices: (credentials expired)")
-        return
-
-    url = "wss://voicemode.dev/ws"
-    token = urllib.parse.quote(fresh_creds.access_token)
-    ws_url = f"{url}?token={token}"
-
-    try:
-        with ws_sync.connect(ws_url, close_timeout=3) as ws:
-            # Wait for 'connected' message
-            raw = ws.recv(timeout=5)
-            msg = json.loads(raw)
-            if msg.get("type") != "connected":
-                click.echo("  Remote Devices: (unexpected server response)")
-                return
-
-            # Send ready so server sends us the connections list
-            ws.send(json.dumps({
-                "type": "ready",
-                "device": {"platform": "cli-status"},
-                "capabilities": {"tts": False, "stt": False},
-            }))
-
-            # Wait for 'connections' message
-            for _ in range(10):  # Read up to 10 messages looking for connections
-                raw = ws.recv(timeout=5)
-                msg = json.loads(raw)
-                if msg.get("type") == "connections":
-                    connections = msg.get("connections", [])
-                    # Filter out our own cli-status connection
-                    remote = [c for c in connections if c.get("platform") != "cli-status"]
-                    if not remote:
-                        click.echo("  Remote Devices: none")
-                    else:
-                        click.echo("  Remote Devices:")
-                        for c in remote:
-                            name = c.get("name") or c.get("platform", "unknown").capitalize()
-                            platform = c.get("platform", "")
-                            ready = "ready" if c.get("ready") else "not ready"
-                            caps = []
-                            cap_dict = c.get("capabilities", {})
-                            if cap_dict.get("tts"):
-                                caps.append("TTS")
-                            if cap_dict.get("stt"):
-                                caps.append("STT")
-                            if cap_dict.get("canStartOperator"):
-                                caps.append("Wake")
-                            caps_str = "+".join(caps) if caps else "none"
-                            platform_str = f" ({platform})" if platform else ""
-                            click.echo(f"    {name}{platform_str} - {ready}, {caps_str}")
-                    return
-
-            click.echo("  Remote Devices: (no response from server)")
-
-    except Exception as e:
-        click.echo(f"  Remote Devices: (connection failed: {e})")
+        click.echo(f"User not found: {name}", err=True)
+        raise SystemExit(1)
 
 
