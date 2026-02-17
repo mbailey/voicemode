@@ -12,7 +12,12 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Import the service function - get the actual function from the tool decorator
-from voice_mode.tools.service import service as service_tool
+from voice_mode.tools.service import (
+    service as service_tool,
+    is_service_ready,
+    wait_for_service,
+    get_service_port,
+)
 
 # Extract the actual function from the FastMCP tool wrapper
 service = service_tool.fn
@@ -303,6 +308,118 @@ class TestUnifiedServiceTool:
             assert "enabled" in result
             # Verify service file was written (regenerated from template)
             mock_write.assert_called_once()
+
+
+class TestWaitFunctionality:
+    """Test cases for the wait flag functionality (VM-523)"""
+
+    def test_get_service_port(self):
+        """Test get_service_port returns correct ports"""
+        assert get_service_port("whisper") == 2022
+        assert get_service_port("kokoro") == 8880
+        assert get_service_port("voicemode") == 8765
+        assert get_service_port("unknown") == 3000  # fallback
+
+    def test_is_service_ready_port_not_listening(self):
+        """Test is_service_ready returns False when port is not accessible"""
+        with patch('voice_mode.tools.service.is_port_accessible', return_value=False):
+            result = is_service_ready("whisper")
+            assert result is False
+
+    def test_is_service_ready_port_listening(self):
+        """Test is_service_ready returns True when port is accessible"""
+        with patch('voice_mode.tools.service.is_port_accessible', return_value=True):
+            result = is_service_ready("whisper")
+            assert result is True
+
+    def test_is_service_ready_kokoro_port_accessible_but_loading(self):
+        """Test is_service_ready returns False for Kokoro during model loading"""
+        with patch('voice_mode.tools.service.is_port_accessible', return_value=True), \
+             patch('voice_mode.tools.service.is_kokoro_starting_up', return_value="loading model"):
+            result = is_service_ready("kokoro")
+            assert result is False
+
+    def test_is_service_ready_kokoro_fully_ready(self):
+        """Test is_service_ready returns True for Kokoro when fully ready"""
+        with patch('voice_mode.tools.service.is_port_accessible', return_value=True), \
+             patch('voice_mode.tools.service.is_kokoro_starting_up', return_value=None):
+            result = is_service_ready("kokoro")
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_wait_for_service_immediate_ready(self):
+        """Test wait_for_service returns immediately when service is ready"""
+        with patch('voice_mode.tools.service.is_service_ready', return_value=True), \
+             patch('voice_mode.tools.service.status_service', return_value="✅ Whisper is running"):
+            success, message = await wait_for_service("whisper", timeout=10)
+            assert success is True
+            assert "✅ Whisper is running" in message
+
+    @pytest.mark.asyncio
+    async def test_wait_for_service_timeout(self):
+        """Test wait_for_service returns timeout message after max wait"""
+        with patch('voice_mode.tools.service.is_service_ready', return_value=False), \
+             patch('asyncio.sleep', new_callable=AsyncMock):
+            success, message = await wait_for_service("kokoro", timeout=2, interval=0.5)
+            assert success is False
+            assert "⏱️ Timeout" in message
+            assert "kokoro" in message
+            assert "2 seconds" in message
+
+    @pytest.mark.asyncio
+    async def test_wait_for_service_becomes_ready_during_wait(self):
+        """Test wait_for_service succeeds when service becomes ready during wait"""
+        # Service not ready on first 2 calls, then ready
+        ready_sequence = [False, False, True]
+        call_count = [0]
+
+        def mock_is_ready(service_name):
+            result = ready_sequence[min(call_count[0], len(ready_sequence) - 1)]
+            call_count[0] += 1
+            return result
+
+        with patch('voice_mode.tools.service.is_service_ready', side_effect=mock_is_ready), \
+             patch('voice_mode.tools.service.status_service', return_value="✅ Kokoro is running"), \
+             patch('asyncio.sleep', new_callable=AsyncMock):
+            success, message = await wait_for_service("kokoro", timeout=10)
+            assert success is True
+            assert "✅ Kokoro is running" in message
+
+    @pytest.mark.asyncio
+    async def test_service_status_with_wait_enabled(self):
+        """Test service() with wait=True calls wait_for_service"""
+        with patch('voice_mode.tools.service.wait_for_service', return_value=(True, "✅ Service ready")):
+            result = await service("whisper", "status", wait=True)
+            assert result == "✅ Service ready"
+
+    @pytest.mark.asyncio
+    async def test_service_status_with_wait_and_timeout(self):
+        """Test service() with wait=True and custom timeout"""
+        with patch('voice_mode.tools.service.wait_for_service', return_value=(True, "✅ Ready")) as mock_wait:
+            await service("kokoro", "status", wait=True, timeout=120)
+            mock_wait.assert_called_once_with("kokoro", timeout=120)
+
+    @pytest.mark.asyncio
+    async def test_service_status_without_wait(self):
+        """Test service() with wait=False uses normal status"""
+        with patch('voice_mode.tools.service.status_service', return_value="✅ Status") as mock_status:
+            result = await service("whisper", "status", wait=False)
+            assert result == "✅ Status"
+            mock_status.assert_called_once_with("whisper")
+
+    @pytest.mark.asyncio
+    async def test_service_wait_string_conversion(self):
+        """Test service() converts string wait/timeout params correctly"""
+        with patch('voice_mode.tools.service.wait_for_service', return_value=(True, "✅ Ready")) as mock_wait:
+            await service("whisper", "status", wait="true", timeout="30")
+            mock_wait.assert_called_once_with("whisper", timeout=30)
+
+    @pytest.mark.asyncio
+    async def test_service_wait_invalid_timeout_uses_default(self):
+        """Test service() uses default timeout for invalid timeout value"""
+        with patch('voice_mode.tools.service.wait_for_service', return_value=(True, "✅ Ready")) as mock_wait:
+            await service("whisper", "status", wait=True, timeout="invalid")
+            mock_wait.assert_called_once_with("whisper", timeout=60)  # default
 
 
 class TestServicePrompts:

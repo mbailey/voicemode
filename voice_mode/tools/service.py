@@ -19,8 +19,89 @@ from voice_mode.utils.services.common import find_process_by_port, check_service
 VOICEMODE_SERVE_PORT = 8765
 from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_whisper_model
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support, is_kokoro_starting_up
+from voice_mode.utils.services.common import is_port_accessible
 
 logger = logging.getLogger("voicemode")
+
+
+def get_service_port(service_name: str) -> int:
+    """Get the port for a service."""
+    if service_name == "whisper":
+        return WHISPER_PORT
+    elif service_name == "kokoro":
+        return KOKORO_PORT
+    elif service_name == "voicemode":
+        return VOICEMODE_SERVE_PORT
+    else:
+        return 3000
+
+
+def is_service_ready(service_name: str) -> bool:
+    """Check if a service is ready to accept requests.
+
+    For most services, this means the port is accessible.
+    For Kokoro, we also check that model loading is complete.
+
+    Args:
+        service_name: Name of the service (whisper, kokoro, voicemode)
+
+    Returns:
+        True if service is ready, False otherwise
+    """
+    port = get_service_port(service_name)
+
+    # Check if port is accessible
+    if not is_port_accessible(port):
+        return False
+
+    # Kokoro needs extra check for model loading
+    if service_name == "kokoro":
+        startup_status = is_kokoro_starting_up()
+        if startup_status is not None:
+            return False
+
+    return True
+
+
+async def wait_for_service(
+    service_name: str,
+    timeout: int = 60,
+    interval: float = 1.0
+) -> tuple[bool, str]:
+    """Wait for a service to become ready.
+
+    Args:
+        service_name: Name of the service
+        timeout: Maximum seconds to wait
+        interval: Seconds between checks
+
+    Returns:
+        Tuple of (success, message)
+        - (True, status_message) if service became ready
+        - (False, timeout_message) if timeout exceeded
+    """
+    import sys
+
+    elapsed = 0.0
+
+    # Initial message to stderr for progress indication
+    print(f"Waiting for {service_name} to become ready... (timeout: {timeout}s)",
+          file=sys.stderr, flush=True)
+
+    while elapsed < timeout:
+        if is_service_ready(service_name):
+            print("", file=sys.stderr)  # Newline after dots
+            return (True, await status_service(service_name))
+
+        # Progress indication
+        print(".", end="", file=sys.stderr, flush=True)
+
+        await asyncio.sleep(interval)
+        elapsed += interval
+
+    # Timeout
+    print("", file=sys.stderr)  # Newline after dots
+    return (False, f"⏱️ Timeout: {service_name} did not become ready within {timeout} seconds")
 
 
 def get_service_config_vars(service_name: str) -> Dict[str, Any]:
@@ -984,7 +1065,9 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 async def service(
     service_name: Literal["whisper", "kokoro", "voicemode", "connect"],
     action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs"] = "status",
-    lines: Optional[Union[int, str]] = None
+    lines: Optional[Union[int, str]] = None,
+    wait: Optional[Union[bool, str]] = None,
+    timeout: Optional[Union[int, str]] = None
 ) -> str:
     """Unified service management tool for voice mode services.
 
@@ -1001,6 +1084,8 @@ async def service(
             - disable: Remove service from boot/login
             - logs: View recent service logs
         lines: Number of log lines to show (only for logs action, default: 50)
+        wait: Wait for service to become ready (only for status action, default: false)
+        timeout: Maximum seconds to wait (only when wait=true, default: 60)
 
     Returns:
         Status message indicating the result of the action
@@ -1011,6 +1096,8 @@ async def service(
         service("voicemode", "start") # Start VoiceMode HTTP MCP server
         service("connect", "enable")  # Enable Connect standby service for remote wake
         service("whisper", "logs", 100)  # View last 100 lines of Whisper logs
+        service("kokoro", "status", wait=True)  # Wait for Kokoro to be ready
+        service("whisper", "status", wait=True, timeout=120)  # Wait with custom timeout
     """
     # Convert lines to integer if provided as string
     if lines is not None and isinstance(lines, str):
@@ -1019,9 +1106,34 @@ async def service(
         except ValueError:
             logger.warning(f"Invalid lines value '{lines}', using default 50")
             lines = 50
-    
+
+    # Convert wait to boolean if provided as string
+    wait_enabled = False
+    if wait is not None:
+        if isinstance(wait, str):
+            wait_enabled = wait.lower() in ("true", "1", "yes")
+        else:
+            wait_enabled = bool(wait)
+
+    # Convert timeout to integer if provided as string
+    timeout_seconds = 60  # default
+    if timeout is not None:
+        if isinstance(timeout, str):
+            try:
+                timeout_seconds = int(timeout)
+            except ValueError:
+                logger.warning(f"Invalid timeout value '{timeout}', using default 60")
+        else:
+            timeout_seconds = int(timeout)
+
     # Route to appropriate handler
     if action == "status":
+        if wait_enabled:
+            success, message = await wait_for_service(
+                service_name,
+                timeout=timeout_seconds
+            )
+            return message
         return await status_service(service_name)
     elif action == "start":
         return await start_service(service_name)
