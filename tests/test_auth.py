@@ -211,13 +211,16 @@ class TestTokenStorage:
 
     @pytest.fixture
     def temp_credentials_dir(self, tmp_path, monkeypatch):
-        """Set up temporary credentials directory."""
+        """Set up temporary credentials directory with plaintext store."""
         creds_dir = tmp_path / ".voicemode"
         creds_file = creds_dir / "credentials"
+        migrated_file = creds_dir / "credentials.migrated"
 
-        # Patch the module-level constants
-        monkeypatch.setattr("voice_mode.auth.CREDENTIALS_DIR", creds_dir)
-        monkeypatch.setattr("voice_mode.auth.CREDENTIALS_FILE", creds_file)
+        # Force plaintext store and redirect paths
+        monkeypatch.setenv("VOICEMODE_CREDENTIAL_STORE", "plaintext")
+        monkeypatch.setattr("voice_mode.credential_store.CREDENTIALS_DIR", creds_dir)
+        monkeypatch.setattr("voice_mode.credential_store.CREDENTIALS_FILE", creds_file)
+        monkeypatch.setattr("voice_mode.credential_store.CREDENTIALS_MIGRATED_FILE", migrated_file)
 
         return creds_dir, creds_file
 
@@ -591,12 +594,15 @@ class TestGetValidCredentials:
 
     @pytest.fixture
     def temp_credentials_dir(self, tmp_path, monkeypatch):
-        """Set up temporary credentials directory."""
+        """Set up temporary credentials directory with plaintext store."""
         creds_dir = tmp_path / ".voicemode"
         creds_file = creds_dir / "credentials"
+        migrated_file = creds_dir / "credentials.migrated"
 
-        monkeypatch.setattr("voice_mode.auth.CREDENTIALS_DIR", creds_dir)
-        monkeypatch.setattr("voice_mode.auth.CREDENTIALS_FILE", creds_file)
+        monkeypatch.setenv("VOICEMODE_CREDENTIAL_STORE", "plaintext")
+        monkeypatch.setattr("voice_mode.credential_store.CREDENTIALS_DIR", creds_dir)
+        monkeypatch.setattr("voice_mode.credential_store.CREDENTIALS_FILE", creds_file)
+        monkeypatch.setattr("voice_mode.credential_store.CREDENTIALS_MIGRATED_FILE", migrated_file)
 
         return creds_dir, creds_file
 
