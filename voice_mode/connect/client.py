@@ -109,6 +109,7 @@ class ConnectClient:
         self._devices: list[DeviceInfo] = []
         self._status_message: Optional[str] = None
         self._reconnect_count = 0
+        self._primary_user = None  # User registered by THIS process (for backward-compat agentName)
 
     @property
     def is_connected(self) -> bool:
@@ -176,6 +177,7 @@ class ConnectClient:
 
     async def register_user(self, user) -> None:
         """Register a user with the gateway via capabilities_update."""
+        self._primary_user = user  # Track user registered by THIS process
         if self._ws and self.is_connected:
             await self.send_capabilities_update()
         else:
@@ -224,10 +226,12 @@ class ConnectClient:
         }
 
         # Backward compat: include old wakeable fields for current gateway
+        # Use _primary_user (registered by THIS process) to avoid conflicts
+        # when multiple MCP processes share the same users directory
         if users:
-            first_user = users[0]
+            compat_user = self._primary_user or users[0]
             msg["wakeable"] = True
-            msg["agentName"] = first_user.display_name or first_user.name
+            msg["agentName"] = compat_user.display_name or compat_user.name
             msg["agentPlatform"] = "claude-code"
         else:
             msg["wakeable"] = False
