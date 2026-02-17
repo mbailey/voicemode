@@ -132,11 +132,13 @@ def _write_live_inbox(symlink_path: Path, text: str, sender: str, source: str, t
             except (json.JSONDecodeError, OSError):
                 existing = []
 
-        # Append new message in Claude Code format
+        # Append new message in Claude Code team inbox format
         claude_message = {
-            "role": "user",
-            "content": f"[VoiceMode Connect] Message from {source}:\n\n{text}",
+            "from": sender,
+            "text": text,
+            "summary": text[:50] if len(text) > 50 else text,
             "timestamp": timestamp.isoformat(),
+            "read": False,
         }
         existing.append(claude_message)
 
