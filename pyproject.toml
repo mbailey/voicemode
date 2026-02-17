@@ -44,6 +44,7 @@ dependencies = [
     "webrtcvad-wheels>=2.0.14",  # Maintained fork with importlib.metadata (no pkg_resources)
     "click>=8.0.0",
     "pyyaml>=6.0.0",
+    "keyring>=25.0.0",
 ]
 
 [project.optional-dependencies]

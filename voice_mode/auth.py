@@ -4,14 +4,12 @@ OAuth authentication module for VoiceMode CLI.
 Implements PKCE flow for secure authentication with voicemode.dev via Auth0.
 Handles token storage, loading, refresh, and expiry management.
 
-Storage: ~/.voicemode/credentials (JSON, mode 0600)
+Storage: OS keychain via keyring (default), or ~/.voicemode/credentials (plaintext opt-out)
 """
 
 import base64
 import hashlib
 import http.server
-import json
-import os
 import secrets
 import socket
 import threading
@@ -367,53 +365,49 @@ class AuthError(Exception):
 
 def save_credentials(credentials: Credentials) -> None:
     """
-    Save credentials to disk.
+    Save credentials to the active credential store.
 
-    Creates the credentials directory if needed and sets file permissions to 0600.
+    Uses OS keychain by default, or plaintext file if configured.
 
     Args:
         credentials: Credentials to save
     """
-    # Ensure directory exists
-    CREDENTIALS_DIR.mkdir(parents=True, exist_ok=True)
+    from voice_mode.credential_store import get_credential_store
 
-    # Write credentials
-    with open(CREDENTIALS_FILE, "w") as f:
-        json.dump(credentials.to_dict(), f, indent=2)
-
-    # Set restrictive permissions (user read/write only)
-    os.chmod(CREDENTIALS_FILE, 0o600)
+    store = get_credential_store()
+    store.save(credentials.to_dict())
 
 
 def load_credentials() -> Credentials | None:
     """
-    Load credentials from disk.
+    Load credentials from the active credential store.
 
     Returns:
-        Credentials if file exists and is valid, None otherwise
+        Credentials if found and valid, None otherwise
     """
-    if not CREDENTIALS_FILE.exists():
-        return None
+    from voice_mode.credential_store import get_credential_store
 
+    store = get_credential_store()
+    data = store.load()
+    if data is None:
+        return None
     try:
-        with open(CREDENTIALS_FILE) as f:
-            data = json.load(f)
         return Credentials.from_dict(data)
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except (KeyError, TypeError):
         return None
 
 
 def clear_credentials() -> bool:
     """
-    Delete stored credentials.
+    Delete stored credentials from the active credential store.
 
     Returns:
         True if credentials were deleted, False if they didn't exist
     """
-    if CREDENTIALS_FILE.exists():
-        CREDENTIALS_FILE.unlink()
-        return True
-    return False
+    from voice_mode.credential_store import get_credential_store
+
+    store = get_credential_store()
+    return store.clear()
 
 
 def get_valid_credentials(auto_refresh: bool = True) -> Credentials | None:
