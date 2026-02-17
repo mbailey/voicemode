@@ -63,12 +63,14 @@ class TestDeliverMessage:
 
         assert result["delivered"] is True
 
-        # Check live inbox has correct format
+        # Check live inbox has correct Claude Code team inbox format
         content = json.loads(live_target.read_text())
         assert isinstance(content, list)
         assert len(content) == 1
-        assert content[0]["role"] == "user"
-        assert "hello from web" in content[0]["content"]
+        assert content[0]["from"] == "user"
+        assert content[0]["text"] == "hello from web"
+        assert "summary" in content[0]
+        assert content[0]["read"] is False
 
     def test_works_without_symlink(self, user_dir):
         result = deliver_message(user_dir, "hello")
@@ -217,13 +219,15 @@ class TestWriteLiveInbox:
         content = json.loads(target.read_text())
         assert isinstance(content, list)
         assert len(content) == 1
-        assert content[0]["role"] == "user"
-        assert "[VoiceMode Connect]" in content[0]["content"]
-        assert "hello" in content[0]["content"]
+        assert content[0]["from"] == "user"
+        assert content[0]["text"] == "hello"
+        assert content[0]["summary"] == "hello"
+        assert content[0]["read"] is False
+        assert "timestamp" in content[0]
 
     def test_appends_to_existing_array(self, tmp_path):
         target = tmp_path / "team-lead.json"
-        target.write_text('[{"role":"user","content":"existing","timestamp":"2024-01-01T00:00:00+00:00"}]\n')
+        target.write_text('[{"from":"system","text":"existing","timestamp":"2024-01-01T00:00:00+00:00","read":true}]\n')
 
         symlink = tmp_path / "inbox-live"
         symlink.symlink_to(target)
@@ -233,8 +237,9 @@ class TestWriteLiveInbox:
 
         content = json.loads(target.read_text())
         assert len(content) == 2
-        assert content[0]["content"] == "existing"
-        assert "new message" in content[1]["content"]
+        assert content[0]["text"] == "existing"
+        assert content[1]["text"] == "new message"
+        assert content[1]["from"] == "user"
 
     def test_returns_false_when_target_dir_missing(self, tmp_path):
         target = tmp_path / "nonexistent" / "team-lead.json"
