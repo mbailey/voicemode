@@ -89,7 +89,7 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "START_SCRIPT": start_script,
         }
     elif service_name == "connect":
-        # VoiceMode connect service - runs voicemode connect standby for remote wake
+        # VoiceMode connect service - runs voicemode connect up for remote voice
         start_script = os.path.join(voicemode_dir, "services", "connect", "bin", "start-voicemode-connect.sh")
 
         return {
@@ -181,10 +181,10 @@ async def install_voicemode_connect_script() -> Dict[str, Any]:
 
 
 def find_connect_process():
-    """Find the voicemode connect standby process by command line.
+    """Find the voicemode connect up process by command line.
 
     Unlike other services that listen on ports, connect is a WebSocket client.
-    We find it by looking for the voicemode connect standby command.
+    We find it by looking for the voicemode connect up command.
 
     Returns:
         psutil.Process if found, None otherwise
@@ -194,7 +194,7 @@ def find_connect_process():
             cmdline = proc.info.get('cmdline') or []
             # Join cmdline to search for the pattern
             cmdline_str = ' '.join(cmdline).lower()
-            if 'voicemode' in cmdline_str and 'connect' in cmdline_str and 'standby' in cmdline_str:
+            if 'voicemode' in cmdline_str and 'connect' in cmdline_str and 'up' in cmdline_str:
                 return proc
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -268,7 +268,7 @@ async def status_service(service_name: str) -> str:
     if service_name == "connect":
         parts = []
 
-        # Standalone standby process
+        # Standalone connect up process
         proc = find_connect_process()
         if proc:
             # Build process status (reuses the logic below for proc info)
@@ -290,15 +290,14 @@ async def status_service(service_name: str) -> str:
                 else:
                     uptime_str = f"{seconds}s"
 
-                parts.append(f"""✅ Connect standby process is running
+                parts.append(f"""✅ Connect process is running
    PID: {proc.pid}
    CPU: {cpu_percent:.1f}%
    Memory: {memory_mb:.1f} MB
    Uptime: {uptime_str}
-   Mode: standby
    Type: WebSocket client""")
             except Exception:
-                parts.append(f"Connect standby process is running (PID: {proc.pid}) but could not get details")
+                parts.append(f"Connect process is running (PID: {proc.pid}) but could not get details")
 
         # In-process WebSocket client (voicemode.dev)
         from voice_mode.connect.client import get_client
@@ -440,8 +439,7 @@ async def status_service(service_name: str) -> str:
             except:
                 pass
         elif service_name == "connect":
-            # VoiceMode Connect standby info (WebSocket client, no port)
-            extra_info_parts.append("Mode: standby")
+            # VoiceMode Connect info (WebSocket client, no port)
             extra_info_parts.append("Type: WebSocket client")
             # Try to get version info
             try:
@@ -610,9 +608,9 @@ async def start_service(service_name: str) -> str:
         cmd = [sys.executable, "-m", "voice_mode", "serve", "--port", str(port)]
 
     elif service_name == "connect":
-        # Start voicemode connect standby directly
+        # Start voicemode connect up directly
         import sys
-        cmd = [sys.executable, "-m", "voice_mode", "connect", "standby"]
+        cmd = [sys.executable, "-m", "voice_mode", "connect", "up"]
 
     else:
         return f"❌ Unknown service: {service_name}"
@@ -921,7 +919,7 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
             if service_name == "voicemode":
                 process_name = "voicemode-serve"
             elif service_name == "connect":
-                process_name = "voicemode"  # connect runs as "voicemode connect standby"
+                process_name = "voicemode"  # connect runs as "voicemode connect up"
             else:
                 process_name = f"{service_name}-server"
             cmd = [
@@ -992,7 +990,7 @@ async def service(
 ) -> str:
     """Unified service management tool for voice mode services.
 
-    Manage Whisper (STT), Kokoro (TTS), VoiceMode (HTTP MCP server), and Connect (standby) services.
+    Manage Whisper (STT), Kokoro (TTS), VoiceMode (HTTP MCP server), and Connect services.
 
     Args:
         service_name: The service to manage ("whisper", "kokoro", "voicemode", or "connect")
@@ -1013,7 +1011,7 @@ async def service(
         service("whisper", "status")  # Check if Whisper is running
         service("kokoro", "start")    # Start Kokoro service
         service("voicemode", "start") # Start VoiceMode HTTP MCP server
-        service("connect", "enable")  # Enable Connect standby service for remote wake
+        service("connect", "enable")  # Enable Connect service for remote voice
         service("whisper", "logs", 100)  # View last 100 lines of Whisper logs
     """
     # Convert lines to integer if provided as string

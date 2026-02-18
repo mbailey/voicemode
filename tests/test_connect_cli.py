@@ -235,9 +235,8 @@ class TestDown:
         assert not pid_file.exists()
 
 
-class TestStandbyAlias:
-    def test_standby_still_works(self, runner):
-        """standby command should still exist (hidden, deprecated)."""
+class TestStandbyRemoved:
+    def test_standby_command_removed(self, runner):
+        """standby command should no longer exist (replaced by 'up')."""
         result = runner.invoke(voice_mode_main_cli, ["connect", "standby", "--help"])
-        assert result.exit_code == 0
-        assert "Deprecated" in result.output or "deprecated" in result.output
+        assert result.exit_code != 0

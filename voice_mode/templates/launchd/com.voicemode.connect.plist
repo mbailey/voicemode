@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- com.voicemode.connect.plist v1.0.0 -->
 <!-- Last updated: 2026-01-30 -->
-<!-- Runs voicemode connect standby on login for remote wake from iOS/web -->
+<!-- Runs voicemode connect up on login for remote voice from iOS/web -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
