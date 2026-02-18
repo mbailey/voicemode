@@ -72,10 +72,13 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
                     start_script = script
                     break
 
+        from voice_mode.config import KOKORO_MAX_REQUESTS
+
         return {
             "HOME": home,
             "START_SCRIPT": str(start_script) if start_script and start_script.exists() else "",
             "KOKORO_DIR": kokoro_dir,
+            "KOKORO_MAX_REQUESTS": str(KOKORO_MAX_REQUESTS),
         }
     elif service_name == "voicemode":
         # VoiceMode serve service - runs the HTTP MCP server

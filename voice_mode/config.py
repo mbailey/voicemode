@@ -202,6 +202,10 @@ def load_voicemode_env():
 # Default Kokoro voice
 # VOICEMODE_KOKORO_DEFAULT_VOICE=af_sky
 
+# Max requests before Kokoro worker restarts (mitigates memory leak)
+# See: https://github.com/hexgrad/kokoro/issues/152
+# VOICEMODE_KOKORO_MAX_REQUESTS=200
+
 #############
 # Recording & Voice Activity Detection
 #############
@@ -619,6 +623,7 @@ KOKORO_PORT = int(os.getenv("VOICEMODE_KOKORO_PORT", "8880"))
 KOKORO_MODELS_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_MODELS_DIR", str(BASE_DIR / "models" / "kokoro")))
 KOKORO_CACHE_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_CACHE_DIR", str(BASE_DIR / "cache" / "kokoro")))
 KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
+KOKORO_MAX_REQUESTS = int(os.getenv("VOICEMODE_KOKORO_MAX_REQUESTS", "200"))
 
 # ==================== SERVICE MANAGEMENT CONFIGURATION ====================
 

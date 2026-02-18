@@ -24,10 +24,12 @@ def test_get_service_config_vars():
     assert "HOME" in whisper_vars
     assert "START_SCRIPT" in whisper_vars
 
-    # Test kokoro config - now only has HOME and START_SCRIPT
+    # Test kokoro config - has HOME, START_SCRIPT, KOKORO_DIR, KOKORO_MAX_REQUESTS
     kokoro_vars = get_service_config_vars("kokoro")
     assert "HOME" in kokoro_vars
     assert "START_SCRIPT" in kokoro_vars
+    assert "KOKORO_MAX_REQUESTS" in kokoro_vars
+    assert int(kokoro_vars["KOKORO_MAX_REQUESTS"]) > 0
 
 
 def test_get_service_config_vars_handles_missing_start_script():
