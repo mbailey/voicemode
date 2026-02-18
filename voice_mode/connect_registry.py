@@ -108,10 +108,10 @@ class ConnectRegistry:
         self._ws = None  # Active WebSocket connection reference
         self._status_message: Optional[str] = None
         self._reconnect_count = 0
-        # Available agent state (gateway compat: still uses "wakeable" wire format)
-        self._wakeable_team_name: Optional[str] = None
-        self._wakeable_agent_name: Optional[str] = None
-        self._wakeable_agent_platform: Optional[str] = None
+        # Available agent state
+        self._available_team_name: Optional[str] = None
+        self._available_agent_name: Optional[str] = None
+        self._available_agent_platform: Optional[str] = None
 
     @property
     def devices(self) -> List[DeviceInfo]:
@@ -227,9 +227,9 @@ class ConnectRegistry:
                     }
                     await ws.send(json.dumps(ready_msg))
 
-                    # Re-register as wakeable if previously registered
-                    if self._wakeable_team_name:
-                        await self._send_wakeable_registration(ws)
+                    # Re-register as available if previously registered
+                    if self._available_team_name:
+                        await self._send_available_registration(ws)
 
                     # Start heartbeat
                     heartbeat_task = asyncio.create_task(self._heartbeat_loop(ws))
@@ -305,7 +305,7 @@ class ConnectRegistry:
             await self._handle_wake(msg)
 
         elif msg_type == "agent_message":
-            # A user sent a message to this wakeable agent via the dashboard
+            # A user sent a message to this available agent via the dashboard
             text = msg.get("text", "")
             sender = msg.get("from", "user")
             await self._handle_agent_message(text, sender)
@@ -334,9 +334,9 @@ class ConnectRegistry:
 
     async def _handle_agent_message(self, text: str, sender: str):
         """Handle an incoming agent_message by calling send-message to inject into team inbox."""
-        team_name = self._wakeable_team_name
+        team_name = self._available_team_name
         if not team_name:
-            logger.warning("Connect registry: received agent_message but not registered as wakeable")
+            logger.warning("Connect registry: received agent_message but not registered as available")
             return
 
         if not text.strip():
@@ -364,10 +364,10 @@ class ConnectRegistry:
         except Exception as e:
             logger.error(f"Connect registry: failed to deliver message: {e}")
 
-    async def register_wakeable(self, team_name: str, agent_name: str, agent_platform: str = "claude-code"):
-        """Register this MCP server as a wakeable agent.
+    async def register_available(self, team_name: str, agent_name: str, agent_platform: str = "claude-code"):
+        """Register this MCP server as an available agent.
 
-        Sends a capabilities_update to the gateway with wakeable fields.
+        Sends a capabilities_update to the gateway.
         After registration, users can send messages to this agent from the dashboard.
 
         Args:
@@ -375,52 +375,54 @@ class ConnectRegistry:
             agent_name: Display name shown in the VoiceMode dashboard
             agent_platform: Platform identifier (default: claude-code)
         """
-        self._wakeable_team_name = team_name
-        self._wakeable_agent_name = agent_name
-        self._wakeable_agent_platform = agent_platform
+        self._available_team_name = team_name
+        self._available_agent_name = agent_name
+        self._available_agent_platform = agent_platform
 
         if self._ws and self._connected:
-            await self._send_wakeable_registration(self._ws)
+            await self._send_available_registration(self._ws)
         else:
-            logger.info("Connect registry: wakeable registration queued (will send on connect)")
+            logger.info("Connect registry: available registration queued (will send on connect)")
 
-    async def unregister_wakeable(self):
-        """Unregister this MCP server as a wakeable agent.
+    async def unregister_available(self):
+        """Unregister this MCP server as an available agent.
 
-        Sends a capabilities_update with wakeable=False to the gateway.
+        Sends a capabilities_update removing availability to the gateway.
         """
-        self._wakeable_team_name = None
-        self._wakeable_agent_name = None
-        self._wakeable_agent_platform = None
+        self._available_team_name = None
+        self._available_agent_name = None
+        self._available_agent_platform = None
 
         if self._ws and self._connected:
             try:
                 msg = {
                     "type": "capabilities_update",
+                    # Gateway wire format: "wakeable" field controls availability
                     "wakeable": False,
                 }
                 await self._ws.send(json.dumps(msg))
-                logger.info("Connect registry: unregistered as wakeable")
+                logger.info("Connect registry: unregistered as available")
             except Exception as e:
-                logger.warning(f"Connect registry: failed to send wakeable unregistration: {e}")
+                logger.warning(f"Connect registry: failed to send unregistration: {e}")
 
-    async def _send_wakeable_registration(self, ws):
-        """Send the wakeable registration message over a WebSocket connection."""
+    async def _send_available_registration(self, ws):
+        """Send the available registration message over a WebSocket connection."""
         try:
             msg = {
                 "type": "capabilities_update",
+                # Gateway wire format: "wakeable" field controls availability
                 "wakeable": True,
-                "teamName": self._wakeable_team_name,
-                "agentName": self._wakeable_agent_name,
-                "agentPlatform": self._wakeable_agent_platform or "claude-code",
+                "teamName": self._available_team_name,
+                "agentName": self._available_agent_name,
+                "agentPlatform": self._available_agent_platform or "claude-code",
             }
             await ws.send(json.dumps(msg))
             logger.info(
-                f"Connect registry: registered as wakeable "
-                f"(agent: {self._wakeable_agent_name}, team: {self._wakeable_team_name})"
+                f"Connect registry: registered as available "
+                f"(agent: {self._available_agent_name}, team: {self._available_team_name})"
             )
         except Exception as e:
-            logger.warning(f"Connect registry: failed to send wakeable registration: {e}")
+            logger.warning(f"Connect registry: failed to send available registration: {e}")
 
     def get_status_text(self) -> str:
         """Formatted status text for the service tool."""
@@ -446,8 +448,8 @@ class ConnectRegistry:
             lines.append("  Remote Devices: none")
 
         # Show available agent status
-        if self._wakeable_team_name:
-            lines.append(f"  Available: {self._wakeable_agent_name} (team: {self._wakeable_team_name})")
+        if self._available_team_name:
+            lines.append(f"  Available: {self._available_agent_name} (team: {self._available_team_name})")
 
         return "\n".join(lines)
 

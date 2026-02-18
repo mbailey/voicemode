@@ -305,92 +305,94 @@ class TestConnectRegistry:
         assert registry._initialized is False
 
 
-class TestWakeableAgent:
-    """Tests for wakeable agent registration and messaging."""
+class TestAvailableAgent:
+    """Tests for available agent registration and messaging."""
 
-    def test_initial_wakeable_state(self):
-        """Registry starts with no wakeable registration."""
+    def test_initial_available_state(self):
+        """Registry starts with no available registration."""
         registry = ConnectRegistry()
-        assert registry._wakeable_team_name is None
-        assert registry._wakeable_agent_name is None
-        assert registry._wakeable_agent_platform is None
+        assert registry._available_team_name is None
+        assert registry._available_agent_name is None
+        assert registry._available_agent_platform is None
 
     @pytest.mark.asyncio
-    async def test_register_wakeable_stores_state(self):
-        """register_wakeable stores team/agent info even when not connected."""
+    async def test_register_available_stores_state(self):
+        """register_available stores team/agent info even when not connected."""
         registry = ConnectRegistry()
-        await registry.register_wakeable("cora", "Cora 7", "claude-code")
+        await registry.register_available("cora", "Cora 7", "claude-code")
 
-        assert registry._wakeable_team_name == "cora"
-        assert registry._wakeable_agent_name == "Cora 7"
-        assert registry._wakeable_agent_platform == "claude-code"
+        assert registry._available_team_name == "cora"
+        assert registry._available_agent_name == "Cora 7"
+        assert registry._available_agent_platform == "claude-code"
 
     @pytest.mark.asyncio
-    async def test_register_wakeable_sends_capabilities_update(self):
-        """register_wakeable sends capabilities_update when connected."""
+    async def test_register_available_sends_capabilities_update(self):
+        """register_available sends capabilities_update when connected."""
         registry = ConnectRegistry()
         mock_ws = AsyncMock()
         registry._ws = mock_ws
         registry._connected = True
 
-        await registry.register_wakeable("cora", "Cora 7", "claude-code")
+        await registry.register_available("cora", "Cora 7", "claude-code")
 
         mock_ws.send.assert_called_once()
         import json
         sent = json.loads(mock_ws.send.call_args[0][0])
         assert sent["type"] == "capabilities_update"
+        # Wire format: gateway uses "wakeable" field name
         assert sent["wakeable"] is True
         assert sent["teamName"] == "cora"
         assert sent["agentName"] == "Cora 7"
         assert sent["agentPlatform"] == "claude-code"
 
     @pytest.mark.asyncio
-    async def test_register_wakeable_queues_when_disconnected(self):
-        """register_wakeable queues registration when not connected."""
+    async def test_register_available_queues_when_disconnected(self):
+        """register_available queues registration when not connected."""
         registry = ConnectRegistry()
         # No ws, not connected
-        await registry.register_wakeable("cora", "Cora 7")
+        await registry.register_available("cora", "Cora 7")
 
         # State should be stored for later
-        assert registry._wakeable_team_name == "cora"
-        assert registry._wakeable_agent_name == "Cora 7"
+        assert registry._available_team_name == "cora"
+        assert registry._available_agent_name == "Cora 7"
 
     @pytest.mark.asyncio
-    async def test_unregister_wakeable_clears_state(self):
-        """unregister_wakeable clears all wakeable state."""
+    async def test_unregister_available_clears_state(self):
+        """unregister_available clears all available state."""
         registry = ConnectRegistry()
-        registry._wakeable_team_name = "cora"
-        registry._wakeable_agent_name = "Cora 7"
-        registry._wakeable_agent_platform = "claude-code"
+        registry._available_team_name = "cora"
+        registry._available_agent_name = "Cora 7"
+        registry._available_agent_platform = "claude-code"
 
-        await registry.unregister_wakeable()
+        await registry.unregister_available()
 
-        assert registry._wakeable_team_name is None
-        assert registry._wakeable_agent_name is None
-        assert registry._wakeable_agent_platform is None
+        assert registry._available_team_name is None
+        assert registry._available_agent_name is None
+        assert registry._available_agent_platform is None
 
     @pytest.mark.asyncio
-    async def test_unregister_wakeable_sends_when_connected(self):
-        """unregister_wakeable sends wakeable=False when connected."""
+    async def test_unregister_available_sends_when_connected(self):
+        """unregister_available sends unavailable status when connected."""
         registry = ConnectRegistry()
         mock_ws = AsyncMock()
         registry._ws = mock_ws
         registry._connected = True
-        registry._wakeable_team_name = "cora"
+        registry._available_team_name = "cora"
 
-        await registry.unregister_wakeable()
+        await registry.unregister_available()
 
         mock_ws.send.assert_called_once()
         import json
         sent = json.loads(mock_ws.send.call_args[0][0])
         assert sent["type"] == "capabilities_update"
+        # Wire format: gateway uses "wakeable" field name
         assert sent["wakeable"] is False
 
     @pytest.mark.asyncio
     async def test_handle_agent_message_calls_send_message(self):
         """agent_message handler calls send-message script."""
         registry = ConnectRegistry()
-        registry._wakeable_team_name = "cora"
+        registry._available_team_name = "cora"
 
         with patch("shutil.which", return_value="/usr/local/bin/send-message"), \
              patch("asyncio.to_thread") as mock_to_thread:
@@ -413,10 +415,10 @@ class TestWakeableAgent:
             assert "Hello" in cmd
 
     @pytest.mark.asyncio
-    async def test_handle_agent_message_ignores_when_not_wakeable(self):
-        """agent_message is ignored when not registered as wakeable."""
+    async def test_handle_agent_message_ignores_when_not_available(self):
+        """agent_message is ignored when not registered as available."""
         registry = ConnectRegistry()
-        # _wakeable_team_name is None
+        # _available_team_name is None
 
         with patch("shutil.which") as mock_which:
             await registry._handle_agent_message("Hello", "user")
@@ -426,7 +428,7 @@ class TestWakeableAgent:
     async def test_handle_agent_message_ignores_empty_text(self):
         """agent_message with empty text is ignored."""
         registry = ConnectRegistry()
-        registry._wakeable_team_name = "cora"
+        registry._available_team_name = "cora"
 
         with patch("shutil.which") as mock_which:
             await registry._handle_agent_message("", "user")
@@ -436,7 +438,7 @@ class TestWakeableAgent:
     async def test_handle_agent_message_via_handle_message(self):
         """agent_message type routes through _handle_message correctly."""
         registry = ConnectRegistry()
-        registry._wakeable_team_name = "cora"
+        registry._available_team_name = "cora"
 
         with patch.object(registry, "_handle_agent_message", new_callable=AsyncMock) as mock_handler:
             await registry._handle_message({
@@ -453,8 +455,8 @@ class TestWakeableAgent:
         registry._connected = True
         registry._status_message = "Connected"
         registry._devices = []
-        registry._wakeable_team_name = "cora"
-        registry._wakeable_agent_name = "Cora 7"
+        registry._available_team_name = "cora"
+        registry._available_agent_name = "Cora 7"
 
         text = registry.get_status_text()
         assert "Available" in text

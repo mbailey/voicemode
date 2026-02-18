@@ -193,7 +193,7 @@ class ConnectClient:
                 try:
                     msg = {
                         "type": "capabilities_update",
-                        "wakeable": False,
+                        "wakeable": False,  # Gateway wire format
                         "users": [],
                     }
                     await self._ws.send(json.dumps(msg))
@@ -219,23 +219,20 @@ class ConnectClient:
                 "presence": presence.value,
             })
 
-        # Build message with backward-compat fields
         msg = {
             "type": "capabilities_update",
             "users": user_entries,
         }
 
-        # Gateway compat: include "wakeable" field (gateway still expects it).
-        # This will be removed when the gateway migrates to user/endpoint model.
-        # Use _primary_user (registered by THIS process) to avoid conflicts
-        # when multiple MCP processes share the same users directory.
+        # Gateway wire format: uses "wakeable" field to control availability.
+        # Will be removed when gateway migrates to user/endpoint model.
         if users:
-            compat_user = self._primary_user or users[0]
-            msg["wakeable"] = True  # Gateway compat — means "available"
-            msg["agentName"] = compat_user.display_name or compat_user.name
+            primary = self._primary_user or users[0]
+            msg["wakeable"] = True
+            msg["agentName"] = primary.display_name or primary.name
             msg["agentPlatform"] = "claude-code"
         else:
-            msg["wakeable"] = False  # Gateway compat — means "not available"
+            msg["wakeable"] = False
 
         try:
             await self._ws.send(json.dumps(msg))

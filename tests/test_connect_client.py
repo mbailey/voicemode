@@ -355,7 +355,8 @@ class TestCapabilitiesUpdate:
         assert sent["users"][0]["host"] == "test-host"
 
     @pytest.mark.asyncio
-    async def test_backward_compat_fields(self, client, user_manager):
+    async def test_gateway_wire_format_fields(self, client, user_manager):
+        """Gateway wire format includes wakeable/agentName/agentPlatform fields."""
         user_manager.add("cora", display_name="Cora 7")
 
         mock_ws = AsyncMock()
@@ -370,7 +371,7 @@ class TestCapabilitiesUpdate:
         assert sent["agentPlatform"] == "claude-code"
 
     @pytest.mark.asyncio
-    async def test_no_users_sends_unwakeable(self, client):
+    async def test_no_users_sends_unavailable(self, client):
         mock_ws = AsyncMock()
         client._ws = mock_ws
         client.state = ConnectState.CONNECTED
