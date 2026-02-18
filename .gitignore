@@ -89,6 +89,9 @@ node_modules/
 # Next.js build artifacts
 .next/
 
+# Worktrees
+.worktrees/
+
 # Misc
 .cache/
 *.bak
