@@ -105,8 +105,8 @@ class TestConnectRegistry:
 
     @pytest.mark.asyncio
     async def test_initialize_disabled(self, monkeypatch):
-        """Initialize does nothing when CONNECT_AUTO_ENABLED is False."""
-        monkeypatch.setattr("voice_mode.connect_registry.CONNECT_AUTO_ENABLED", False)
+        """Initialize does nothing when CONNECT_ENABLED is False."""
+        monkeypatch.setattr("voice_mode.connect_registry.CONNECT_ENABLED", False)
         registry = ConnectRegistry()
         await registry.initialize()
 
@@ -117,7 +117,7 @@ class TestConnectRegistry:
     @pytest.mark.asyncio
     async def test_initialize_no_credentials(self, monkeypatch):
         """Initialize without credentials shows appropriate message."""
-        monkeypatch.setattr("voice_mode.connect_registry.CONNECT_AUTO_ENABLED", True)
+        monkeypatch.setattr("voice_mode.connect_registry.CONNECT_ENABLED", True)
 
         async def fake_get_creds(*args, **kwargs):
             return None
@@ -133,7 +133,7 @@ class TestConnectRegistry:
     @pytest.mark.asyncio
     async def test_initialize_idempotent(self, monkeypatch):
         """Calling initialize() twice does not re-initialize."""
-        monkeypatch.setattr("voice_mode.connect_registry.CONNECT_AUTO_ENABLED", False)
+        monkeypatch.setattr("voice_mode.connect_registry.CONNECT_ENABLED", False)
         registry = ConnectRegistry()
         await registry.initialize()
         await registry.initialize()  # Should be a no-op
