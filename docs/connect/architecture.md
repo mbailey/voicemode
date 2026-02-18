@@ -9,9 +9,9 @@ How agents and clients connect through voicemode.dev.
 │   AI Agent      │              │     Client      │
 │  (Claude Code)  │              │  (iOS/Web App)  │
 └────────┬────────┘              └────────┬────────┘
-         │ MCP                            │ WebSocket
-         │                                │
-         └────────────┬───────────────────┘
+         │ CLI                           │ WebSocket
+         │                               │
+         └────────────┬──────────────────┘
                       │
               ┌───────┴───────┐
               │ voicemode.dev │
@@ -23,11 +23,11 @@ How agents and clients connect through voicemode.dev.
 
 ### Agents
 
-AI assistants that want to have voice conversations. They connect via MCP (Model Context Protocol) and use tools like `status` and `converse`.
+AI assistants that want to have voice conversations. They use CLI commands (`voicemode connect up/down/status`) to manage the connection and interact with the platform.
 
-- Connect using `mcp-remote` to `https://voicemode.dev/mcp`
-- Authenticate via OAuth
-- Call MCP tools to interact with the platform
+- Connect using `voicemode connect up` to establish a WebSocket connection
+- Authenticate via `voicemode connect login` (Auth0 OAuth)
+- CLI is the common interface for both humans and agents
 
 ### Clients
 
@@ -37,16 +37,15 @@ Devices that handle the actual voice I/O (microphone/speaker). They connect via 
 - Web app - browser-based dashboard at voicemode.dev
 - Future: macOS menu bar app, browser extension
 
-### Local MCP Server
+### Local Connect Process
 
-The local VoiceMode MCP server can also connect to voicemode.dev to monitor remote devices. This provides device visibility without requiring the remote MCP server.
+The `voicemode connect up` command starts a long-running process that:
 
-Two connection methods are available:
-
-- **Standalone standby process** (`voicemode connect standby`) - a long-running CLI process that listens for wake signals and starts agents
-- **In-process WebSocket client** - a background connection within the MCP server that tracks connected devices (opt-in via `VOICEMODE_CONNECT_AUTO=true`)
-
-The in-process client is disabled by default. VoiceMode does not connect to external services without explicit user opt-in.
+- Connects to voicemode.dev via WebSocket
+- Announces registered users/agents to the gateway
+- Watches for user configuration changes and announces updates
+- Delivers incoming messages to agent inboxes
+- Requires `VOICEMODE_CONNECT_ENABLED=true` (no external connections without explicit opt-in)
 
 ### Platform
 
@@ -58,27 +57,27 @@ The voicemode.dev backend routes messages between agents and clients.
 
 ## Connection Flow
 
-1. **Agent connects**: Claude Code adds the MCP server and authenticates
-2. **Client connects**: User opens iOS/web app and signs in with same account
-3. **Agent sends message**: Uses `converse` tool with text to speak
-4. **Platform routes**: Message delivered to connected client(s)
-5. **Client speaks**: TTS plays on device, STT captures response
-6. **Response returns**: User's voice response sent back to agent
+1. **User enables Connect**: Sets `VOICEMODE_CONNECT_ENABLED=true` in voicemode.env
+2. **User logs in**: `voicemode connect login` authenticates with voicemode.dev
+3. **User registers agents**: `voicemode connect user add cora --name "Cora 7"`
+4. **Connect starts**: `voicemode connect up` establishes WebSocket connection
+5. **Client connects**: User opens iOS/web app and signs in with same account
+6. **Messages flow**: Platform routes messages between agents and clients
 
 ## Authentication
 
 Both agents and clients authenticate against the same voicemode.dev account:
 
-- **Agents**: OAuth flow triggered when MCP tools are first used
+- **Agents**: OAuth flow via `voicemode connect login`
 - **Clients**: Standard login flow in app/web
 
 The platform matches agents to clients by user account.
 
 ## Protocol Notes
 
-- MCP transport: stdio to mcp-remote, which handles HTTP/SSE
-- WebSocket: persistent connection for clients
+- WebSocket: persistent connection for both agents and clients
 - Voice data: handled by clients, not transmitted through platform (clients use their own TTS/STT)
+- CLI tools: agents use `voicemode connect` CLI commands, guided by the voicemode-connect skill
 
 ## See Also
 
