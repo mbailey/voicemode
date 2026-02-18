@@ -3038,9 +3038,11 @@ def connect():
 
     Examples:
         voicemode connect login
+        voicemode connect up
         voicemode connect status
         voicemode connect user add voicemode --name "Cora 7"
         voicemode connect user list
+        voicemode connect down
     """
     pass
 
@@ -3053,7 +3055,7 @@ def login(no_browser: bool):
 
     Opens your browser to complete authentication via Auth0.
     After successful login, your credentials are stored locally
-    and used automatically by 'voicemode connect standby'.
+    and used automatically by 'voicemode connect up'.
 
     The login process:
     1. Opens browser to voicemode.dev/Auth0 login page
@@ -3114,7 +3116,7 @@ def login(no_browser: bool):
 
         click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
         click.echo()
-        click.echo("You can now use 'voicemode connect standby' to receive calls.")
+        click.echo("You can now use 'voicemode connect up' to receive calls.")
 
     except KeyboardInterrupt:
         click.echo()
@@ -3160,6 +3162,207 @@ def logout():
 
 @connect.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
+def up():
+    """Bring up connection to voicemode.dev.
+
+    Connects to the gateway, discovers registered users, and announces
+    them as available. Watches for local user changes (new subscriptions,
+    removed agents) and re-announces automatically.
+
+    The gateway is the source of truth for user availability. This process
+    bridges local state to the gateway.
+
+    \b
+    Prerequisites:
+        1. Run 'voicemode connect login' to authenticate
+        2. Add users with 'voicemode connect user add <name>'
+
+    \b
+    What happens on connect:
+        1. WebSocket connection to voicemode.dev
+        2. Reads ~/.voicemode/connect/users/*/meta.json
+        3. Announces each user with capabilities_update
+        4. Watches for symlink changes (new agents subscribing)
+        5. Delivers incoming messages to user inboxes
+
+    Examples:
+        voicemode connect up
+
+        # Check who's connected
+        voicemode connect status
+    """
+    from voice_mode.connect.config import require_enabled, ConnectDisabledError
+
+    try:
+        require_enabled()
+    except ConnectDisabledError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+    # Verify credentials before starting async loop
+    from voice_mode.auth import get_valid_credentials, AuthError
+    try:
+        credentials = get_valid_credentials(auto_refresh=True)
+        if not credentials:
+            click.echo("Error: Not logged in.", err=True)
+            click.echo()
+            click.echo("Run 'voicemode connect login' to authenticate.")
+            sys.exit(1)
+        user_info = credentials.user_info or {}
+        email = user_info.get("email", "authenticated user")
+        click.echo(f"Using stored credentials for: {email}")
+    except AuthError as e:
+        click.echo(f"Error: Authentication failed: {e}", err=True)
+        click.echo()
+        click.echo("Run 'voicemode connect login' to re-authenticate.")
+        sys.exit(1)
+
+    # Try to import websockets
+    try:
+        import websockets  # noqa: F401
+    except ImportError:
+        click.echo("Error: websockets package required.", err=True)
+        click.echo()
+        click.echo("Install with: pip install websockets")
+        sys.exit(1)
+
+    from voice_mode.connect.config import get_host
+    from voice_mode.connect.users import UserManager, CONNECT_DIR
+    from voice_mode.connect.client import ConnectClient
+
+    host = get_host()
+    user_manager = UserManager(host)
+    client = ConnectClient(user_manager)
+
+    # Write PID file for 'down' command
+    pid_file = CONNECT_DIR / "pid"
+    CONNECT_DIR.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()))
+
+    users = user_manager.list()
+    click.echo(f"Host: {host}")
+    click.echo(f"Users: {len(users)} registered")
+    for u in users:
+        presence = user_manager.get_presence(u.name)
+        display = f" ({u.display_name})" if u.display_name else ""
+        click.echo(f"  {u.address}{display} [{presence.value}]")
+    click.echo()
+
+    async def _run():
+        import signal as _signal
+
+        shutdown_event = asyncio.Event()
+
+        def _handle_signal():
+            click.echo("\nShutting down...")
+            shutdown_event.set()
+
+        loop = asyncio.get_event_loop()
+        for sig in (_signal.SIGINT, _signal.SIGTERM):
+            loop.add_signal_handler(sig, _handle_signal)
+
+        # Connect
+        await client.connect()
+
+        # Wait for connection to establish (up to 10s)
+        for _ in range(20):
+            if client.is_connected:
+                break
+            await asyncio.sleep(0.5)
+
+        if client.is_connected:
+            click.echo(f"✅ Connected to gateway")
+            click.echo(f"📡 Watching for user changes... (Ctrl+C to stop)")
+            click.echo()
+        else:
+            click.echo(f"⚠️  Connection in progress: {client.status_message}")
+            click.echo(f"📡 Will announce users when connected... (Ctrl+C to stop)")
+            click.echo()
+
+        # File-watch loop: poll users directory for symlink changes
+        watcher_task = asyncio.create_task(
+            _watch_user_changes(client, user_manager)
+        )
+
+        # Wait for shutdown signal
+        await shutdown_event.wait()
+
+        # Cleanup
+        watcher_task.cancel()
+        try:
+            await watcher_task
+        except asyncio.CancelledError:
+            pass
+
+        await client.disconnect()
+        click.echo("Disconnected.")
+
+    async def _watch_user_changes(client, user_manager):
+        """Poll users directory for symlink changes, re-announce on change."""
+        from voice_mode.connect.watcher import watch_user_changes
+        await watch_user_changes(client, user_manager, echo=click.echo)
+
+    try:
+        asyncio.run(_run())
+    finally:
+        # Clean up PID file
+        try:
+            pid_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    click.echo("Goodbye!")
+
+
+@connect.command()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def down():
+    """Disconnect from voicemode.dev.
+
+    Signals the running 'voicemode connect up' process to shut down
+    gracefully. Uses a PID file to find the running process.
+
+    Examples:
+        voicemode connect down
+    """
+    import signal as _signal
+
+    from voice_mode.connect.users import CONNECT_DIR
+
+    pid_file = CONNECT_DIR / "pid"
+    if not pid_file.exists():
+        click.echo("No connect process running (no PID file).")
+        return
+
+    try:
+        pid = int(pid_file.read_text().strip())
+    except (ValueError, OSError):
+        click.echo("Error: Could not read PID file.", err=True)
+        pid_file.unlink(missing_ok=True)
+        sys.exit(1)
+
+    # Check if process is actually running
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        click.echo(f"Connect process (PID {pid}) is not running. Cleaning up.")
+        pid_file.unlink(missing_ok=True)
+        return
+    except PermissionError:
+        click.echo(f"Connect process (PID {pid}) exists but cannot be signaled.", err=True)
+        sys.exit(1)
+
+    # Send SIGTERM for graceful shutdown
+    try:
+        os.kill(pid, _signal.SIGTERM)
+        click.echo(f"Sent shutdown signal to connect process (PID {pid}).")
+    except OSError as e:
+        click.echo(f"Error sending signal: {e}", err=True)
+        sys.exit(1)
+
+
+@connect.command(hidden=True)
+@click.help_option('-h', '--help', help='Show this message and exit')
 @click.option('--url', default='wss://voicemode.dev/ws',
               help='WebSocket URL for voicemode.dev')
 @click.option('--token', envvar='VOICEMODE_DEV_TOKEN',
@@ -3175,46 +3378,10 @@ def logout():
                    'Example: "send-message cora" calls "send-message cora <message>"')
 def standby(url: str, token: str | None, agent_name: str, wake_message: str | None,
             wake_command: str | None):
-    """Wait for incoming voice sessions and wake an agent.
+    """(Deprecated: use 'voicemode connect up' instead)
 
-    Connects to voicemode.dev and listens for wake signals. When someone
-    initiates a voice session (from iOS app or web), this command delivers
-    the wake message to the configured agent.
-
-    By default, uses 'voicemode agent send' which auto-starts agents in
-    tmux. Use --wake-command to override with a custom command (e.g.
-    'send-message cora' for team inbox delivery).
-
-    The connection stays alive, waiting for calls. Press Ctrl+C to stop.
-
-    \b
-    Prerequisites:
-        1. Run 'voicemode connect login' to authenticate
-        2. The agent will be started automatically on first wake
-
-    \b
-    Related Commands:
-        voicemode agent start   - Pre-start an agent
-        voicemode agent status  - Check if agent is running
-        voicemode agent list    - List available agents
-        voicemode agent stop    - Stop an agent
-
-    Examples:
-        # Wake operator (default)
-        voicemode connect standby
-
-        # Wake a specific agent
-        voicemode connect standby --agent cora
-        voicemode connect standby -a tesi
-
-        # Use custom wake command (e.g. team inbox delivery)
-        voicemode connect standby --wake-command "send-message cora"
-
-        # Or via environment variable
-        VOICEMODE_WAKE_COMMAND="send-message cora" voicemode connect standby
-
-        # Specify token directly (overrides stored credentials)
-        voicemode connect standby --token your-token-here
+    Legacy standby command — connects to voicemode.dev and listens for
+    wake signals. Retained for backward compatibility.
     """
     import json
     import time
@@ -3222,6 +3389,9 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
     import threading
 
     from voice_mode.auth import get_valid_credentials, AuthError
+
+    click.echo("Note: 'standby' is deprecated. Use 'voicemode connect up' instead.", err=True)
+    click.echo()
 
     # Get authentication token
     # Priority: --token flag > VOICEMODE_DEV_TOKEN env > stored credentials
@@ -3271,17 +3441,7 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
     signal.signal(signal.SIGTERM, signal_handler)
 
     def wake_agent(wake_msg: dict) -> bool:
-        """Start or wake the configured agent when wake signal received.
-
-        Uses either a custom wake command (--wake-command / VOICEMODE_WAKE_COMMAND)
-        or the default 'voicemode agent send -a <agent>' to deliver the message.
-
-        Custom command receives the message as its final argument:
-            send-message cora "the message"
-
-        Returns:
-            True if message was sent successfully, False otherwise
-        """
+        """Start or wake the configured agent when wake signal received."""
         import shlex
 
         reason = wake_msg.get('reason', 'unknown')
@@ -3289,8 +3449,6 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
         user_text = wake_msg.get('text')
         click.echo(f"\n🔔 Wake signal received! Reason: {reason}, Caller: {caller_id}")
 
-        # Build the wake message for the agent
-        # Priority: user message text > custom wake message > default greeting
         if reason == 'user_message' and user_text:
             msg_to_send = user_text
             click.echo(f"📨 User message: {user_text[:100]}{'...' if len(user_text) > 100 else ''}")
@@ -3299,7 +3457,6 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
         else:
             msg_to_send = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
 
-        # Build command: custom wake command or default voicemode agent send
         if wake_command:
             cmd = shlex.split(wake_command) + [msg_to_send]
             cmd_display = wake_command
@@ -3314,7 +3471,7 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 second timeout for agent start + send
+                timeout=30,
             )
 
             if result.returncode == 0:
@@ -3426,7 +3583,6 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
                         msg_type = msg.get('type')
 
                         if msg_type == 'wake':
-                            # Wake the configured agent using 'voicemode agent send'
                             send_status(ws, 'starting', wake_id=msg.get('id'))
                             success = wake_agent(msg)
                             if success:
@@ -3435,14 +3591,12 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
                                 send_status(ws, 'error', error=f'Failed to wake agent {agent_name}', wake_id=msg.get('id'))
 
                         elif msg_type == 'ack':
-                            # Acknowledgment - just log it
                             if msg.get('status') == 'ok':
-                                pass  # All good
+                                pass
                             else:
                                 click.echo(f"⚠️ Server error: {msg.get('error')}")
 
                         elif msg_type == 'heartbeat':
-                            # Respond to heartbeat
                             ws.send(json.dumps({
                                 'type': 'heartbeat',
                                 'timestamp': int(time.time() * 1000),
@@ -3455,7 +3609,6 @@ def standby(url: str, token: str | None, agent_name: str, wake_message: str | No
                             click.echo(f"📨 {msg_type}: {msg}")
 
                     except TimeoutError:
-                        # Just a timeout, continue loop
                         continue
                     except Exception as e:
                         if running:

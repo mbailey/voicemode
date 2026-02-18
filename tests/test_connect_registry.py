@@ -447,8 +447,8 @@ class TestWakeableAgent:
             })
             mock_handler.assert_called_once_with("What's up?", "mike")
 
-    def test_get_status_text_shows_wakeable(self):
-        """Status text includes wakeable info when registered."""
+    def test_get_status_text_shows_available(self):
+        """Status text includes available agent info when registered."""
         registry = ConnectRegistry()
         registry._connected = True
         registry._status_message = "Connected"
@@ -457,15 +457,15 @@ class TestWakeableAgent:
         registry._wakeable_agent_name = "Cora 7"
 
         text = registry.get_status_text()
-        assert "Wakeable" in text
+        assert "Available" in text
         assert "Cora 7" in text
         assert "cora" in text
 
-    def test_get_status_text_no_wakeable(self):
-        """Status text omits wakeable info when not registered."""
+    def test_get_status_text_no_available(self):
+        """Status text omits available agent info when not registered."""
         registry = ConnectRegistry()
         text = registry.get_status_text()
-        assert "Wakeable" not in text
+        assert "Available" not in text
 
 
 class TestConnectRegistryProperties:
