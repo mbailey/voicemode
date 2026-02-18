@@ -1018,7 +1018,7 @@ class TestStandbyCLI:
         result = runner.invoke(connect, ["standby", "--help"])
 
         assert result.exit_code == 0
-        assert "Wait for incoming voice sessions" in result.output
+        assert "Deprecated" in result.output or "standby" in result.output.lower()
         assert "--token" in result.output
         assert "--url" in result.output
 

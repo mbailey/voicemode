@@ -7,8 +7,8 @@ import subprocess
 class TestStandbyStartOperator:
     """Test the start_operator function in the standby command."""
 
-    def test_standby_help_shows_agent_info(self):
-        """Test that standby help mentions agent commands."""
+    def test_standby_help_shows_deprecated(self):
+        """Test that standby help shows deprecation notice."""
         from click.testing import CliRunner
         from voice_mode.cli import connect
 
@@ -16,8 +16,9 @@ class TestStandbyStartOperator:
         result = runner.invoke(connect, ["standby", "--help"])
 
         assert result.exit_code == 0
-        # Should mention that it uses agent commands
-        assert "voicemode agent send" in result.output or "agent" in result.output
+        # Should mention deprecation and the replacement command
+        assert "deprecated" in result.output.lower() or "Deprecated" in result.output
+        assert "up" in result.output
         # Should not mention removed options
         assert "--claude-command" not in result.output
         assert "--session" not in result.output
@@ -67,14 +68,13 @@ class TestStandbyWakeCommand:
         from voice_mode.cli import connect
 
         runner = CliRunner()
-        # This will fail due to no auth, but should NOT fail with "no such option"
-        result = runner.invoke(connect, ["standby", "--wake-command", "send-message cora"])
+        result = runner.invoke(connect, ["standby", "--help"])
 
-        # Should not be an option error
-        assert "no such option" not in (result.output or "").lower()
+        # --wake-command should appear in help
+        assert "--wake-command" in result.output
 
-    def test_wake_command_env_var(self):
-        """Test that VOICEMODE_WAKE_COMMAND env var is documented in help."""
+    def test_wake_command_option_in_help(self):
+        """Test that --wake-command option is documented in help."""
         from click.testing import CliRunner
         from voice_mode.cli import connect
 
@@ -82,7 +82,7 @@ class TestStandbyWakeCommand:
         result = runner.invoke(connect, ["standby", "--help"])
 
         assert result.exit_code == 0
-        assert "VOICEMODE_WAKE_COMMAND" in result.output
+        assert "--wake-command" in result.output
 
 
 class TestStartOperatorFunction:

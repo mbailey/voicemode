@@ -108,7 +108,7 @@ class ConnectRegistry:
         self._ws = None  # Active WebSocket connection reference
         self._status_message: Optional[str] = None
         self._reconnect_count = 0
-        # Wakeable agent state
+        # Available agent state (gateway compat: still uses "wakeable" wire format)
         self._wakeable_team_name: Optional[str] = None
         self._wakeable_agent_name: Optional[str] = None
         self._wakeable_agent_platform: Optional[str] = None
@@ -445,9 +445,9 @@ class ConnectRegistry:
         elif self._connected:
             lines.append("  Remote Devices: none")
 
-        # Show wakeable agent status
+        # Show available agent status
         if self._wakeable_team_name:
-            lines.append(f"  Wakeable: {self._wakeable_agent_name} (team: {self._wakeable_team_name})")
+            lines.append(f"  Available: {self._wakeable_agent_name} (team: {self._wakeable_team_name})")
 
         return "\n".join(lines)
 

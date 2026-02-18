@@ -199,3 +199,27 @@ class UserManager:
         if self.is_subscribed(name):
             return Presence.AVAILABLE
         return Presence.ONLINE
+
+    def snapshot(self) -> dict:
+        """Capture current state of all users and their symlinks.
+
+        Returns a dict keyed by username with display_name, symlink_target,
+        and subscribed status. Used by the file-watcher to detect changes.
+        """
+        state = {}
+        for user in self.list():
+            user_dir = self._user_dir(user.name)
+            symlink = user_dir / "inbox-live"
+            if symlink.is_symlink():
+                try:
+                    target = str(symlink.readlink())
+                except OSError:
+                    target = None
+            else:
+                target = None
+            state[user.name] = {
+                "display_name": user.display_name,
+                "symlink_target": target,
+                "subscribed": user.subscribed_team is not None,
+            }
+        return state

@@ -1,8 +1,8 @@
 """VoiceMode Connect MCP tools.
 
 Manage Connect mailboxes, read inboxes, and check connection status.
-Backward-compatible register/unregister_wakeable wrappers are included
-for existing integrations.
+Backward-compatible register/unregister wrappers (formerly "wakeable")
+are included for existing integrations.
 """
 
 import logging
@@ -65,7 +65,7 @@ async def connect_inbox(
 
 @mcp.tool()
 async def connect_status() -> str:
-    """Show VoiceMode Connect status including users and presence."""
+    """Get a list of all active VoiceMode connections for the authenticated user. Returns device information including platform, name, capabilities (TTS/STT/wake), and connection status. Use this to see which devices are connected before sending voice commands."""
     if not connect_config.is_enabled():
         return DISABLED_MSG
 
@@ -133,6 +133,8 @@ async def connect_user_remove(name: str) -> str:
 
 
 # --- Backward-compatible wrappers ---
+# These maintain the old "wakeable" API names for existing integrations.
+# Internally they delegate to the user-based connect system.
 
 
 @mcp.tool()
@@ -183,4 +185,4 @@ async def unregister_wakeable() -> str:
         client.user_manager.remove(user.name)
         await client.unregister_user(user.name)
 
-    return "Unregistered as wakeable."
+    return "Unregistered as available."
