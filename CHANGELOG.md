@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.1] - 2026-02-19
+
+### Fixed
+
+- **FastMCP 3.0 breaking change** - Pin FastMCP dependency to <3.0 to prevent installation failures caused by FastMCP 3.0.0 breaking changes ([#278](https://github.com/mbailey/voicemode/issues/278))
+
 ## [8.2.0] - 2026-02-14
 
 ### Added
