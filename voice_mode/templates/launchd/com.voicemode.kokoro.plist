@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- com.voicemode.kokoro.plist v1.3.1 -->
-<!-- Last updated: 2025-12-02 -->
+<!-- com.voicemode.kokoro.plist v1.4.0 -->
+<!-- Last updated: 2026-02-18 -->
 <!-- Compatible with: kokoro-fastapi v1.0.0+ -->
 <!-- Simplified: start script handles config via voicemode.env -->
 <plist version="1.0">
@@ -26,6 +26,8 @@
     <dict>
         <key>PATH</key>
         <string>{HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <key>UVICORN_LIMIT_MAX_REQUESTS</key>
+        <string>{KOKORO_MAX_REQUESTS}</string>
     </dict>
 </dict>
 </plist>

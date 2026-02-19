@@ -1,5 +1,5 @@
-# voicemode-kokoro.service v1.2.1
-# Last updated: 2026-01-20
+# voicemode-kokoro.service v1.3.0
+# Last updated: 2026-02-18
 # Compatible with: kokoro-fastapi v1.0.0+
 # Simplified: start script handles config via voicemode.env
 
@@ -19,6 +19,8 @@ RestartPreventExitStatus=127
 # Environment - start script sources voicemode.env for port config
 # Include .cargo/bin for ARM64 Linux where Rust may be needed to build dependencies
 Environment="PATH=%h/.cargo/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# Restart worker after N requests to mitigate memory leak (hexgrad/kokoro#152)
+Environment="UVICORN_LIMIT_MAX_REQUESTS={KOKORO_MAX_REQUESTS}"
 
 # Resource limits
 MemoryLimit=4G
