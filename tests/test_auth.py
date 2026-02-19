@@ -701,10 +701,10 @@ class TestLoginCLI:
         from voice_mode.cli import connect
 
         runner = CliRunner()
-        result = runner.invoke(connect, ["login", "--help"])
+        result = runner.invoke(connect, ["auth", "login", "--help"])
 
         assert result.exit_code == 0
-        assert "Authenticate with voicemode.dev" in result.output
+        assert "Sign in to your voicemode.dev account" in result.output
         assert "--no-browser" in result.output
 
     def test_login_success(self):
@@ -723,7 +723,7 @@ class TestLoginCLI:
         runner = CliRunner()
 
         with patch("voice_mode.auth.login", return_value=mock_credentials) as mock_login:
-            result = runner.invoke(connect, ["login", "--no-browser"])
+            result = runner.invoke(connect, ["auth", "login", "--no-browser"])
 
             # Should have called auth.login
             assert mock_login.called
@@ -744,7 +744,7 @@ class TestLoginCLI:
         runner = CliRunner()
 
         with patch("voice_mode.auth.login", side_effect=KeyboardInterrupt()):
-            result = runner.invoke(connect, ["login", "--no-browser"])
+            result = runner.invoke(connect, ["auth", "login", "--no-browser"])
 
             assert result.exit_code == 1
             assert "cancelled" in result.output.lower()
@@ -757,7 +757,7 @@ class TestLoginCLI:
         runner = CliRunner()
 
         with patch("voice_mode.auth.login", side_effect=AuthError("Authentication timed out. Please try again.")):
-            result = runner.invoke(connect, ["login", "--no-browser"])
+            result = runner.invoke(connect, ["auth", "login", "--no-browser"])
 
             assert result.exit_code == 1
             assert "timed out" in result.output.lower()
@@ -770,7 +770,7 @@ class TestLoginCLI:
         runner = CliRunner()
 
         with patch("voice_mode.auth.login", side_effect=AuthError("No available ports")):
-            result = runner.invoke(connect, ["login", "--no-browser"])
+            result = runner.invoke(connect, ["auth", "login", "--no-browser"])
 
             assert result.exit_code == 1
             assert "failed" in result.output.lower()
@@ -800,7 +800,7 @@ class TestLoginCLI:
             return mock_credentials
 
         with patch("voice_mode.auth.login", side_effect=mock_login):
-            result = runner.invoke(connect, ["login", "--no-browser"])
+            result = runner.invoke(connect, ["auth", "login", "--no-browser"])
 
             assert result.exit_code == 0
             # When --no-browser is set, URL should be displayed
@@ -817,10 +817,10 @@ class TestLogoutCLI:
         from voice_mode.cli import connect
 
         runner = CliRunner()
-        result = runner.invoke(connect, ["logout", "--help"])
+        result = runner.invoke(connect, ["auth", "logout", "--help"])
 
         assert result.exit_code == 0
-        assert "Log out from voicemode.dev" in result.output
+        assert "Log out from your voicemode.dev account" in result.output
 
     def test_logout_with_credentials(self):
         """Test logout when credentials exist."""
@@ -839,7 +839,7 @@ class TestLogoutCLI:
 
         with patch("voice_mode.auth.load_credentials", return_value=mock_credentials), \
              patch("voice_mode.auth.clear_credentials", return_value=True):
-            result = runner.invoke(connect, ["logout"])
+            result = runner.invoke(connect, ["auth", "logout"])
 
             assert result.exit_code == 0
             assert "Logged out successfully" in result.output
@@ -854,7 +854,7 @@ class TestLogoutCLI:
 
         with patch("voice_mode.auth.load_credentials", return_value=None), \
              patch("voice_mode.auth.clear_credentials", return_value=False):
-            result = runner.invoke(connect, ["logout"])
+            result = runner.invoke(connect, ["auth", "logout"])
 
             assert result.exit_code == 0
             assert "Already logged out" in result.output
@@ -876,7 +876,7 @@ class TestLogoutCLI:
 
         with patch("voice_mode.auth.load_credentials", return_value=mock_credentials), \
              patch("voice_mode.auth.clear_credentials", return_value=True):
-            result = runner.invoke(connect, ["logout"])
+            result = runner.invoke(connect, ["auth", "logout"])
 
             assert result.exit_code == 0
             assert "Logged out successfully" in result.output
@@ -884,56 +884,78 @@ class TestLogoutCLI:
             assert "Removed credentials for:" not in result.output
 
 
-class TestStatusCLI:
-    """Test the 'voicemode connect status' CLI command.
+class TestAuthStatusCLI:
+    """Test the 'voicemode connect auth status' CLI command."""
 
-    Note: connect status now shows connection state and users,
-    not authentication details. Auth info was removed when status
-    was refactored in VM-724/VM-734.
-    """
-
-    def test_status_command_exists(self):
-        """Test that status command is registered under connect group."""
+    def test_auth_status_command_exists(self):
+        """Test that auth status command is registered."""
         from click.testing import CliRunner
         from voice_mode.cli import connect
 
         runner = CliRunner()
-        result = runner.invoke(connect, ["status", "--help"])
+        result = runner.invoke(connect, ["auth", "status", "--help"])
 
         assert result.exit_code == 0
-        assert "status" in result.output.lower()
+        assert "authentication" in result.output.lower() or "account" in result.output.lower()
 
-    def test_status_shows_disabled_when_not_enabled(self):
-        """Test status shows disabled when CONNECT_ENABLED is false."""
+    def test_auth_status_not_logged_in(self):
+        """Test auth status when not logged in."""
         from click.testing import CliRunner
         from voice_mode.cli import connect
-        import voice_mode.config as config_mod
 
         runner = CliRunner()
 
-        with patch.object(config_mod, "CONNECT_ENABLED", False):
-            result = runner.invoke(connect, ["status"])
+        with patch("voice_mode.auth.get_valid_credentials", return_value=None):
+            result = runner.invoke(connect, ["auth", "status"])
 
             assert result.exit_code == 0
-            assert "disabled" in result.output
+            assert "Not logged in" in result.output
+            assert "voicemode connect auth login" in result.output
 
-    def test_status_shows_enabled_when_enabled(self):
-        """Test status shows enabled state when CONNECT_ENABLED is true."""
+    def test_auth_status_logged_in(self):
+        """Test auth status when logged in with user info."""
         from click.testing import CliRunner
         from voice_mode.cli import connect
-        import voice_mode.config as config_mod
-        import voice_mode.connect.users as users_mod
+
+        mock_credentials = Credentials(
+            access_token="test_access_token",
+            refresh_token="test_refresh_token",
+            expires_at=time.time() + 3600,
+            token_type="Bearer",
+            user_info={"email": "test@example.com", "name": "Test User"},
+        )
 
         runner = CliRunner()
 
-        with patch.object(config_mod, "CONNECT_ENABLED", True), \
-             patch.object(config_mod, "CONNECT_HOST", "testhost"), \
-             patch.object(config_mod, "CONNECT_WS_URL", "wss://voicemode.dev/ws"), \
-             patch.object(users_mod, "USERS_DIR", Path("/tmp/nonexistent")):
-            result = runner.invoke(connect, ["status"])
+        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials):
+            result = runner.invoke(connect, ["auth", "status"])
 
             assert result.exit_code == 0
-            assert "enabled" in result.output
+            assert "Logged in to voicemode.dev" in result.output
+            assert "Test User" in result.output
+            assert "test@example.com" in result.output
+
+    def test_auth_status_expired_token(self):
+        """Test auth status when token is expired."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        mock_credentials = Credentials(
+            access_token="test_access_token",
+            refresh_token="test_refresh_token",
+            expires_at=time.time() - 100,  # Expired
+            token_type="Bearer",
+            user_info={"email": "test@example.com", "name": "Test User"},
+        )
+
+        runner = CliRunner()
+
+        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials):
+            result = runner.invoke(connect, ["auth", "status"])
+
+            assert result.exit_code == 0
+            assert "Logged in to voicemode.dev" in result.output
+            assert "expired" in result.output.lower()
 
 
 class TestStandbyRemoved:

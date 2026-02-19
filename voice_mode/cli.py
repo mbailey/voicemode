@@ -3037,7 +3037,7 @@ def connect():
     from mobile apps, web browsers, and other agents.
 
     Examples:
-        voicemode connect login
+        voicemode connect auth login
         voicemode connect up
         voicemode connect status
         voicemode connect user add voicemode --name "Cora 7"
@@ -3047,11 +3047,24 @@ def connect():
     pass
 
 
-@connect.command()
+@connect.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def auth():
+    """Manage authentication with voicemode.dev.
+
+    Examples:
+        voicemode connect auth login
+        voicemode connect auth logout
+        voicemode connect auth status
+    """
+    pass
+
+
+@auth.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
 @click.option('--no-browser', is_flag=True, help='Print URL instead of opening browser')
 def login(no_browser: bool):
-    """Authenticate with voicemode.dev using your browser.
+    """Sign in to your voicemode.dev account.
 
     Opens your browser to complete authentication via Auth0.
     After successful login, your credentials are stored locally
@@ -3061,14 +3074,14 @@ def login(no_browser: bool):
     1. Opens browser to voicemode.dev/Auth0 login page
     2. You authenticate with your account
     3. Browser redirects to local callback URL
-    4. Credentials are stored in ~/.voicemode/credentials
+    4. Credentials are stored securely in OS keychain
 
     Examples:
         # Standard login (opens browser automatically)
-        voicemode connect login
+        voicemode connect auth login
 
         # Print URL instead of opening browser
-        voicemode connect login --no-browser
+        voicemode connect auth login --no-browser
     """
     from voice_mode.auth import login as auth_login, AuthError, format_expiry
 
@@ -3134,16 +3147,16 @@ def login(no_browser: bool):
         sys.exit(1)
 
 
-@connect.command()
+@auth.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def logout():
-    """Log out from voicemode.dev and clear stored credentials.
+    """Log out from your voicemode.dev account.
 
     Removes locally stored authentication tokens. You will need to
-    run 'voicemode connect login' again to authenticate.
+    run 'voicemode connect auth login' again to authenticate.
 
     Examples:
-        voicemode connect logout
+        voicemode connect auth logout
     """
     from voice_mode.auth import load_credentials, clear_credentials
 
@@ -3160,6 +3173,56 @@ def logout():
         click.echo("Already logged out (no credentials stored).")
 
 
+@auth.command("status")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def auth_status():
+    """Display active account and authentication state.
+
+    Shows whether you are logged in, your account details,
+    and token expiry information.
+
+    Examples:
+        voicemode connect auth status
+    """
+    from voice_mode.auth import get_valid_credentials, format_expiry, AuthError
+    import time as time_module
+
+    try:
+        credentials = get_valid_credentials(auto_refresh=False)
+    except AuthError:
+        credentials = None
+
+    if not credentials:
+        click.echo("Not logged in to voicemode.dev")
+        click.echo()
+        click.echo("Run: voicemode connect auth login")
+        return
+
+    click.echo("✓ Logged in to voicemode.dev")
+
+    if credentials.user_info:
+        name = credentials.user_info.get("name", "")
+        email = credentials.user_info.get("email", "")
+        if name and email:
+            click.echo(f"  Account: {name} ({email})")
+        elif email:
+            click.echo(f"  Account: {email}")
+        else:
+            click.echo("  Account: (no user info available)")
+    else:
+        click.echo("  Account: (no user info available)")
+
+    # Token status
+    if credentials.expires_at:
+        if credentials.expires_at < time_module.time():
+            click.echo(f"  Token: expired (will be refreshed automatically)")
+        else:
+            click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+
+    if credentials.refresh_token:
+        click.echo("  Refresh token: present")
+
+
 @connect.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def up():
@@ -3174,7 +3237,7 @@ def up():
 
     \b
     Prerequisites:
-        1. Run 'voicemode connect login' to authenticate
+        1. Run 'voicemode connect auth login' to authenticate
         2. Add users with 'voicemode connect user add <name>'
 
     \b
@@ -3206,7 +3269,7 @@ def up():
         if not credentials:
             click.echo("Error: Not logged in.", err=True)
             click.echo()
-            click.echo("Run 'voicemode connect login' to authenticate.")
+            click.echo("Run 'voicemode connect auth login' to authenticate.")
             sys.exit(1)
         user_info = credentials.user_info or {}
         email = user_info.get("email", "authenticated user")
@@ -3214,7 +3277,7 @@ def up():
     except AuthError as e:
         click.echo(f"Error: Authentication failed: {e}", err=True)
         click.echo()
-        click.echo("Run 'voicemode connect login' to re-authenticate.")
+        click.echo("Run 'voicemode connect auth login' to re-authenticate.")
         sys.exit(1)
 
     # Try to import websockets
