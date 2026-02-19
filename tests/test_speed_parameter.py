@@ -4,8 +4,9 @@ import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
 from voice_mode.tools.converse import converse as converse_tool
 
-# The converse function is wrapped by @mcp.tool(), so we need to access the actual function
-converse = converse_tool.fn
+# The converse function is wrapped by @mcp.tool() in FastMCP 2.x (returns FunctionTool),
+# but in FastMCP 3.x the decorator returns the raw function.
+converse = getattr(converse_tool, 'fn', converse_tool)
 
 
 class TestSpeedParameter:

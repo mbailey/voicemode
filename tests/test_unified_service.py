@@ -11,19 +11,19 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import the service function - get the actual function from the tool decorator
+# Import the service function - get the actual function from the tool decorator.
+# FastMCP 2.x wraps tools as FunctionTool (with .fn attribute),
+# FastMCP 3.x returns the raw function.
 from voice_mode.tools.service import service as service_tool
-
-# Extract the actual function from the FastMCP tool wrapper
-service = service_tool.fn
+service = getattr(service_tool, 'fn', service_tool)
 
 # Import prompts for testing
 from voice_mode.prompts.services import whisper_prompt as whisper_prompt_tool
 from voice_mode.prompts.services import kokoro_prompt as kokoro_prompt_tool
 
-# Extract the actual functions from FastMCP prompt wrappers
-whisper_prompt = whisper_prompt_tool.fn
-kokoro_prompt = kokoro_prompt_tool.fn
+# Extract the actual functions from FastMCP prompt/tool wrappers
+whisper_prompt = getattr(whisper_prompt_tool, 'fn', whisper_prompt_tool)
+kokoro_prompt = getattr(kokoro_prompt_tool, 'fn', kokoro_prompt_tool)
 
 
 class TestUnifiedServiceTool:
