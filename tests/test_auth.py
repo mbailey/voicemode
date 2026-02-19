@@ -9,6 +9,7 @@ import hashlib
 import os
 import socket
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -884,7 +885,12 @@ class TestLogoutCLI:
 
 
 class TestStatusCLI:
-    """Test the 'voicemode connect status' CLI command."""
+    """Test the 'voicemode connect status' CLI command.
+
+    Note: connect status now shows connection state and users,
+    not authentication details. Auth info was removed when status
+    was refactored in VM-724/VM-734.
+    """
 
     def test_status_command_exists(self):
         """Test that status command is registered under connect group."""
@@ -895,115 +901,39 @@ class TestStatusCLI:
         result = runner.invoke(connect, ["status", "--help"])
 
         assert result.exit_code == 0
-        assert "authentication status" in result.output.lower()
+        assert "status" in result.output.lower()
 
-    def test_status_logged_in_with_user_info(self):
-        """Test status when logged in with full user info."""
+    def test_status_shows_disabled_when_not_enabled(self):
+        """Test status shows disabled when CONNECT_ENABLED is false."""
         from click.testing import CliRunner
         from voice_mode.cli import connect
-
-        mock_credentials = Credentials(
-            access_token="test_access_token",
-            refresh_token="test_refresh_token",
-            expires_at=time.time() + 3600,
-            token_type="Bearer",
-            user_info={"email": "test@example.com", "name": "Test User"},
-        )
+        import voice_mode.config as config_mod
 
         runner = CliRunner()
 
-        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials):
+        with patch.object(config_mod, "CONNECT_ENABLED", False):
             result = runner.invoke(connect, ["status"])
 
             assert result.exit_code == 0
-            assert "Logged in to voicemode.dev" in result.output
-            assert "Test User" in result.output
-            assert "test@example.com" in result.output
-            assert "Token expires:" in result.output
+            assert "disabled" in result.output
 
-    def test_status_logged_in_email_only(self):
-        """Test status when logged in with email but no name."""
+    def test_status_shows_enabled_when_enabled(self):
+        """Test status shows enabled state when CONNECT_ENABLED is true."""
         from click.testing import CliRunner
         from voice_mode.cli import connect
-
-        mock_credentials = Credentials(
-            access_token="test_access_token",
-            refresh_token="test_refresh_token",
-            expires_at=time.time() + 3600,
-            token_type="Bearer",
-            user_info={"email": "test@example.com"},
-        )
+        import voice_mode.config as config_mod
+        import voice_mode.connect.users as users_mod
 
         runner = CliRunner()
 
-        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials):
+        with patch.object(config_mod, "CONNECT_ENABLED", True), \
+             patch.object(config_mod, "CONNECT_HOST", "testhost"), \
+             patch.object(config_mod, "CONNECT_WS_URL", "wss://voicemode.dev/ws"), \
+             patch.object(users_mod, "USERS_DIR", Path("/tmp/nonexistent")):
             result = runner.invoke(connect, ["status"])
 
             assert result.exit_code == 0
-            assert "Logged in to voicemode.dev" in result.output
-            assert "User: test@example.com" in result.output
-            # Should not have parentheses when there's no name
-            assert "User: test@example.com\n" in result.output or "User: test@example.com" in result.output
-
-    def test_status_logged_in_no_user_info(self):
-        """Test status when logged in but no user info."""
-        from click.testing import CliRunner
-        from voice_mode.cli import connect
-
-        mock_credentials = Credentials(
-            access_token="test_access_token",
-            refresh_token="test_refresh_token",
-            expires_at=time.time() + 3600,
-            token_type="Bearer",
-            user_info=None,
-        )
-
-        runner = CliRunner()
-
-        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials):
-            result = runner.invoke(connect, ["status"])
-
-            assert result.exit_code == 0
-            assert "Logged in to voicemode.dev" in result.output
-            assert "no user info available" in result.output
-            assert "Token expires:" in result.output
-
-    def test_status_not_logged_in(self):
-        """Test status when not logged in."""
-        from click.testing import CliRunner
-        from voice_mode.cli import connect
-
-        runner = CliRunner()
-
-        with patch("voice_mode.auth.get_valid_credentials", return_value=None):
-            result = runner.invoke(connect, ["status"])
-
-            assert result.exit_code == 0
-            assert "Not logged in" in result.output
-            assert "voicemode connect login" in result.output
-
-    def test_status_expired_token(self):
-        """Test status when token is expired."""
-        from click.testing import CliRunner
-        from voice_mode.cli import connect
-
-        mock_credentials = Credentials(
-            access_token="test_access_token",
-            refresh_token="test_refresh_token",
-            expires_at=time.time() - 100,  # Expired
-            token_type="Bearer",
-            user_info={"email": "test@example.com", "name": "Test User"},
-        )
-
-        runner = CliRunner()
-
-        with patch("voice_mode.auth.get_valid_credentials", return_value=mock_credentials):
-            result = runner.invoke(connect, ["status"])
-
-            assert result.exit_code == 0
-            assert "Logged in to voicemode.dev" in result.output
-            assert "expired" in result.output.lower()
-            assert "refreshed automatically" in result.output
+            assert "enabled" in result.output
 
 
 class TestStandbyRemoved:
