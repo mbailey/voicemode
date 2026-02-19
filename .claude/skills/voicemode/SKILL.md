@@ -44,6 +44,7 @@ voicemode:converse("Searching the codebase now...", wait_for_response=False)
 ```
 
 For most conversations, just pass your message - defaults handle everything else.
+Use default converse tool parameters unless there's a good reason not to. Timing parameters (`listen_duration_max`, `listen_duration_min`) use smart defaults with silence detection - don't override unless the user requests it or you see a clear need. Defaults are configurable by the user via `~/.voicemode/voicemode.env`.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
