@@ -124,6 +124,90 @@ def find_available_port(start: int = CALLBACK_PORT_START, end: int = CALLBACK_PO
     return None
 
 
+def _callback_page(success: bool, error_message: str = "") -> str:
+    """Generate styled OAuth callback page using Ink & Seal design tokens."""
+    if success:
+        icon_bg = "#3fb950"
+        icon_svg = (
+            '<path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" fill="#0d1117"/>'
+        )
+        heading = "Authentication Successful"
+        message = "You can close this window and return to the terminal."
+    else:
+        icon_bg = "#f85149"
+        icon_svg = (
+            '<path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59'
+            " 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
+            '" fill="#0d1117"/>'
+        )
+        heading = "Authentication Failed"
+        message = f"Error: {error_message}" if error_message else "Something went wrong."
+
+    return f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceMode - {heading}</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0d1117;
+    color: #e6edf3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+  }}
+  .card {{
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 48px 40px;
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+  }}
+  .icon {{
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background: {icon_bg};
+    border-radius: 50%;
+    margin-bottom: 20px;
+  }}
+  h1 {{
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #e6edf3;
+  }}
+  p {{
+    font-size: 14px;
+    color: #8b949e;
+    line-height: 1.5;
+  }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div>
+      <div class="icon">
+        <svg width="24" height="24" viewBox="0 0 24 24">{icon_svg}</svg>
+      </div>
+    </div>
+    <h1>{heading}</h1>
+    <p>{message}</p>
+  </div>
+</body>
+</html>"""
+
+
 class CallbackHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler for OAuth callback."""
 
@@ -165,22 +249,10 @@ class CallbackHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
         if "error" in CallbackHandler.callback_result:
-            html = """
-            <html><body style="font-family: system-ui; text-align: center; padding: 50px;">
-            <h1>Authentication Failed</h1>
-            <p>Error: {}</p>
-            <p>You can close this window.</p>
-            </body></html>
-            """.format(
-                CallbackHandler.callback_result.get("error_description", "Unknown error")
-            )
+            error_desc = CallbackHandler.callback_result.get("error_description", "Unknown error")
+            html = _callback_page(success=False, error_message=error_desc)
         else:
-            html = """
-            <html><body style="font-family: system-ui; text-align: center; padding: 50px;">
-            <h1>Authentication Successful!</h1>
-            <p>You can close this window and return to the terminal.</p>
-            </body></html>
-            """
+            html = _callback_page(success=True)
 
         self.wfile.write(html.encode("utf-8"))
 
