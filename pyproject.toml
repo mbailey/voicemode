@@ -29,7 +29,7 @@ classifiers = [
 
 dependencies = [
     "uv>=0.4.0",
-    "fastmcp>=2.3.2",  # Requires http_app(transport="sse") API
+    "fastmcp>=2.3.2,<3",  # Pin to 2.x until FastMCP 3.0 migration (VM-742)
     "numpy",
     "sounddevice",
     "scipy",
