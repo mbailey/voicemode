@@ -1121,8 +1121,6 @@ Example: If user says "search for tasks created yesterday", check for and invoke
 KEY PARAMETERS:
 • message (required): The message to speak
 • wait_for_response (bool, default: true): Listen for response after speaking
-• listen_duration_max (number, default: 120): Max listen time in seconds
-• listen_duration_min (number, default: 2.0): Min recording time before silence detection
 • voice (string): TTS voice name (auto-selected unless specified)
 • tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)
 • disable_silence_detection (bool, default: false): Disable auto-stop on silence
@@ -1138,6 +1136,13 @@ KEY PARAMETERS:
 • wait_for_conch (bool, default: false): Multi-agent coordination
   - false: If another agent is speaking, return status immediately
   - true: Wait until the other agent finishes, then speak
+
+TIMING PARAMETERS (usually leave at defaults):
+  Silence detection handles most cases automatically. Only override these if
+  silence detection is disabled or the user reports being cut off.
+  Defaults are configurable by the user via ~/.voicemode/voicemode.env.
+• listen_duration_max (number, default: 120): Max listen time in seconds
+• listen_duration_min (number, default: 2.0): Min recording time before silence detection
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
