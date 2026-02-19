@@ -370,3 +370,61 @@ class TestConchAtomicLocking:
         assert data["agent"] == "override"
 
         conch.release()
+
+    def test_release_without_acquire_does_not_delete_lock_file(self):
+        """release() on non-holder must NOT delete the lock file.
+
+        Regression test: Previously, release() would unconditionally delete
+        ~/.voicemode/conch even when the caller never acquired the lock. This
+        destroyed the flock held by the actual owner (on a different inode),
+        allowing multiple agents to speak simultaneously.
+        """
+        # Agent A acquires the conch
+        holder = Conch(agent_name="holder")
+        assert holder.try_acquire() is True
+        assert Conch.LOCK_FILE.exists()
+
+        # Agent B fails to acquire
+        blocked = Conch(agent_name="blocked")
+        assert blocked.try_acquire() is False
+
+        # Agent B calls release() — this should NOT delete the lock file
+        blocked.release()
+
+        # Lock file should still exist (belongs to Agent A)
+        assert Conch.LOCK_FILE.exists(), (
+            "release() on non-holder deleted the lock file, "
+            "breaking flock coordination for the actual holder"
+        )
+
+        # Agent A should still be holding the lock
+        assert Conch.is_active()
+
+        # Clean up
+        holder.release()
+
+    def test_non_holder_release_preserves_flock_coordination(self):
+        """After non-holder release(), a third agent cannot acquire.
+
+        This tests the full failure scenario: if release() deletes the file,
+        a third caller creates a new file (new inode) and gets its own flock,
+        resulting in two agents holding 'exclusive' locks simultaneously.
+        """
+        # Agent A acquires
+        agent_a = Conch(agent_name="agent_a")
+        assert agent_a.try_acquire() is True
+
+        # Agent B fails and releases (should be a no-op for the file)
+        agent_b = Conch(agent_name="agent_b")
+        assert agent_b.try_acquire() is False
+        agent_b.release()
+
+        # Agent C should NOT be able to acquire (Agent A still holds it)
+        agent_c = Conch(agent_name="agent_c")
+        assert agent_c.try_acquire() is False, (
+            "Agent C acquired the conch while Agent A still holds it! "
+            "This means release() destroyed the lock file and broke coordination."
+        )
+
+        # Clean up
+        agent_a.release()
