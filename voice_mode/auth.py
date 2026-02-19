@@ -171,23 +171,6 @@ def _callback_page(success: bool, error_message: str = "") -> str:
     width: 100%;
     text-align: center;
   }}
-  .logo {{
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    height: 36px;
-    background: #D44638;
-    border-radius: 50%;
-    margin-bottom: 24px;
-  }}
-  .logo span {{
-    font-family: Georgia, serif;
-    font-weight: bold;
-    font-size: 14px;
-    color: #E8B90F;
-    letter-spacing: -0.5px;
-  }}
   .icon {{
     display: inline-flex;
     align-items: center;
@@ -213,7 +196,6 @@ def _callback_page(success: bool, error_message: str = "") -> str:
 </head>
 <body>
   <div class="card">
-    <div class="logo"><span>VM</span></div>
     <div>
       <div class="icon">
         <svg width="24" height="24" viewBox="0 0 24 24">{icon_svg}</svg>
