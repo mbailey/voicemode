@@ -75,6 +75,12 @@ def voice_mode_main_cli(ctx, debug, tools_enabled, tools_disabled):
     if tools_disabled:
         os.environ['VOICEMODE_TOOLS_DISABLED'] = tools_disabled
 
+    # Check if we should prompt for telemetry consent (only for interactive CLI commands)
+    # Skip for MCP server mode (when no subcommand) as MCP uses stdio and can't prompt
+    if ctx.invoked_subcommand is not None:
+        from voice_mode.utils.telemetry_prompt import maybe_prompt_for_telemetry
+        maybe_prompt_for_telemetry()
+
     if ctx.invoked_subcommand is None:
         # No subcommand - run MCP server
         # Note: warnings are already suppressed at module level unless debug is enabled

@@ -123,6 +123,64 @@ Supported formats: `pcm`, `opus`, `mp3`, `wav`, `flac`, `aac`
 
 Log levels: `debug`, `info`, `warning`, `error`, `critical`
 
+## Telemetry and Privacy
+
+VoiceMode includes optional, privacy-respecting telemetry to help improve the project.
+
+### Telemetry Configuration
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `VOICEMODE_TELEMETRY` | Enable telemetry (`true`/`false`/`ask`) | `ask` | `true` |
+| `DO_NOT_TRACK` | Universal opt-out (any value disables telemetry) | Not set | `1` |
+| `VOICEMODE_TELEMETRY_ENDPOINT` | Custom telemetry endpoint URL | (project default) | `https://...` |
+
+### Opt-Out Methods
+
+There are several ways to disable telemetry:
+
+1. **Universal Standard**: Set `DO_NOT_TRACK=1` in your environment (this is the [Console Do Not Track](https://consoledonottrack.com/) standard)
+2. **Explicit Opt-Out**: Set `VOICEMODE_TELEMETRY=false`
+3. **CLI Prompt**: When first asked, choose "No" to opt out
+
+The precedence order is:
+1. `DO_NOT_TRACK` overrides everything (if set to any value)
+2. `VOICEMODE_TELEMETRY=true` or `VOICEMODE_TELEMETRY=false` for explicit preference
+3. `VOICEMODE_TELEMETRY=ask` (default) prompts user on first interactive use
+
+### What IS Collected
+
+When telemetry is enabled, VoiceMode collects:
+
+- **Anonymous ID**: Random UUID generated on first run (no connection to identity)
+- **Environment**: OS type, VoiceMode version, installation method (dev/uv/pip)
+- **Usage statistics** (binned for privacy):
+  - Number of conversations (not content)
+  - Duration bins (e.g., "1-5 minutes", not exact times)
+  - Exchange counts (e.g., "6-10 exchanges", not exact counts)
+  - Provider usage (e.g., "kokoro", "whisper-local")
+  - Transport type (local/livekit)
+
+### What is NOT Collected
+
+VoiceMode telemetry never collects:
+
+- Voice recordings or audio content
+- Transcribed text or conversation content
+- File paths beyond anonymized patterns
+- IP addresses (hashed for rate limiting only)
+- User names, emails, or identifying information
+- API keys or credentials
+- Specific timestamps (only date-based aggregation)
+
+### Privacy Protections
+
+- **Binning**: Exact values are grouped into ranges to prevent fingerprinting
+- **Anonymization**: All paths and error messages are sanitized
+- **Rate Limiting**: Maximum 10 events per hour per anonymous ID
+- **Retention**: Data automatically deleted after 90 days
+- **No PII**: Designed from the ground up to avoid personal information
+
 ## Advanced Features
 
 ### Emotional TTS

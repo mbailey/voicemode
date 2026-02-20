@@ -9,6 +9,7 @@ import os
 import logging
 import asyncio
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime
@@ -852,6 +853,338 @@ def setup_logging() -> logging.Logger:
     
     return logger
 
+# ==================== TELEMETRY CONFIGURATION ====================
+
+# Telemetry opt-in/opt-out configuration
+# Precedence (highest to lowest):
+# 1. DO_NOT_TRACK (any value) → telemetry DISABLED (universal opt-out)
+# 2. VOICEMODE_TELEMETRY=true → enabled
+# 3. VOICEMODE_TELEMETRY=false → disabled
+# 4. VOICEMODE_TELEMETRY=ask → need to prompt user (default)
+
+# DO_NOT_TRACK - universal opt-out standard (https://consoledonottrack.com/)
+# If set to any value, telemetry is disabled
+DO_NOT_TRACK = os.getenv("DO_NOT_TRACK")
+
+# VOICEMODE_TELEMETRY - tool-specific telemetry control
+# Values: "ask" (default), "true", "false"
+VOICEMODE_TELEMETRY = os.getenv("VOICEMODE_TELEMETRY", "ask").lower()
+
+# Validate VOICEMODE_TELEMETRY value
+if VOICEMODE_TELEMETRY not in ("ask", "true", "false", "1", "0", "yes", "no", "on", "off"):
+    VOICEMODE_TELEMETRY = "ask"
+
+# Normalize boolean-style values to "true"/"false"
+if VOICEMODE_TELEMETRY in ("1", "yes", "on"):
+    VOICEMODE_TELEMETRY = "true"
+elif VOICEMODE_TELEMETRY in ("0", "no", "off"):
+    VOICEMODE_TELEMETRY = "false"
+
+# VOICEMODE_TELEMETRY_ENDPOINT - backend URL for telemetry data
+# Default endpoint (temporary - will change to custom domain before release)
+# Users can override with VOICEMODE_TELEMETRY_ENDPOINT environment variable
+_DEFAULT_TELEMETRY_ENDPOINT = "https://voicemode-telemetry.late-limit-5e4c.workers.dev/telemetry"
+VOICEMODE_TELEMETRY_ENDPOINT = os.getenv("VOICEMODE_TELEMETRY_ENDPOINT", _DEFAULT_TELEMETRY_ENDPOINT)
+
+
+def is_telemetry_enabled() -> bool:
+    """Determine if telemetry should be enabled based on environment and configuration.
+
+    Precedence (highest to lowest):
+    1. DO_NOT_TRACK (any value) → telemetry DISABLED (universal opt-out)
+    2. VOICEMODE_TELEMETRY=true → enabled
+    3. VOICEMODE_TELEMETRY=false → disabled
+    4. VOICEMODE_TELEMETRY=ask → disabled (requires explicit opt-in)
+
+    Returns:
+        True if telemetry is enabled, False otherwise
+    """
+    # 1. Check DO_NOT_TRACK (any value means opt-out)
+    if DO_NOT_TRACK is not None:
+        return False
+
+    # 2. Check VOICEMODE_TELEMETRY
+    if VOICEMODE_TELEMETRY == "true":
+        return True
+    elif VOICEMODE_TELEMETRY == "false":
+        return False
+    elif VOICEMODE_TELEMETRY == "ask":
+        # "ask" means telemetry is disabled until user explicitly opts in
+        # The opt-in prompt will be handled by the UX layer (tel-007)
+        return False
+
+    # Default: disabled (privacy-first)
+    return False
+
+
+def get_telemetry_status() -> Dict[str, any]:
+    """Get detailed telemetry status information.
+
+    Returns:
+        Dictionary with telemetry status details:
+        - enabled: bool - Whether telemetry is currently enabled
+        - reason: str - Why telemetry is enabled/disabled
+        - do_not_track: bool - Whether DO_NOT_TRACK is set
+        - voicemode_telemetry: str - Value of VOICEMODE_TELEMETRY
+        - endpoint: str | None - Telemetry endpoint URL
+        - telemetry_id: str - Anonymous telemetry ID
+    """
+    enabled = is_telemetry_enabled()
+
+    # Determine reason
+    if DO_NOT_TRACK is not None:
+        reason = "DO_NOT_TRACK environment variable is set (universal opt-out)"
+    elif VOICEMODE_TELEMETRY == "true":
+        reason = "VOICEMODE_TELEMETRY=true (explicit opt-in)"
+    elif VOICEMODE_TELEMETRY == "false":
+        reason = "VOICEMODE_TELEMETRY=false (explicit opt-out)"
+    elif VOICEMODE_TELEMETRY == "ask":
+        reason = "VOICEMODE_TELEMETRY=ask (user has not been prompted yet)"
+    else:
+        reason = "Default privacy-first policy (disabled)"
+
+    return {
+        "enabled": enabled,
+        "reason": reason,
+        "do_not_track": DO_NOT_TRACK is not None,
+        "voicemode_telemetry": VOICEMODE_TELEMETRY,
+        "endpoint": VOICEMODE_TELEMETRY_ENDPOINT,
+        "telemetry_id": get_telemetry_id() if enabled else None
+    }
+
+
+def get_telemetry_id() -> str:
+    """Get or create the anonymous telemetry ID.
+
+    The telemetry ID is a permanent UUID that uniquely identifies this VoiceMode
+    installation. It is generated once on first use and stored in ~/.voicemode/telemetry_id.
+
+    This ID is used for anonymous usage analytics and does not contain any personal
+    information. It allows aggregating usage patterns while maintaining user privacy.
+
+    Returns:
+        UUID string identifying this installation
+    """
+    telemetry_id_path = BASE_DIR / "telemetry_id"
+
+    # Check if telemetry ID already exists
+    if telemetry_id_path.exists():
+        try:
+            telemetry_id = telemetry_id_path.read_text().strip()
+            # Validate it's a valid UUID
+            uuid.UUID(telemetry_id)
+            return telemetry_id
+        except (ValueError, OSError):
+            # Invalid UUID or read error, regenerate
+            pass
+
+    # Generate new telemetry ID
+    telemetry_id = str(uuid.uuid4())
+
+    try:
+        # Ensure base directory exists
+        BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Write telemetry ID to file with secure permissions
+        telemetry_id_path.write_text(telemetry_id)
+        os.chmod(telemetry_id_path, 0o600)
+    except OSError:
+        # Continue even if we can't save - telemetry isn't critical
+        pass
+
+    return telemetry_id
+
+
+# Environment detection - lazy cached values
+_environment_cache: Dict[str, Optional[str]] = {}
+
+
+def get_os_type() -> str:
+    """Detect the operating system type.
+
+    Returns:
+        OS type string: "Darwin" (macOS), "Linux", "Windows", or "Unknown"
+    """
+    if "os_type" not in _environment_cache:
+        import platform
+        _environment_cache["os_type"] = platform.system()
+    return _environment_cache["os_type"]
+
+
+def get_installation_method() -> str:
+    """Detect how VoiceMode was installed.
+
+    Checks for:
+    - Development mode: Running from source with editable install
+    - UV: Installed with uv package manager
+    - Pip: Installed with pip
+
+    Returns:
+        Installation method: "dev", "uv", "pip", or "unknown"
+    """
+    if "install_method" not in _environment_cache:
+        import sys
+
+        method = "unknown"
+
+        # Check if running from editable/development install
+        # In dev mode, __file__ points to source directory
+        try:
+            module_file = Path(__file__).resolve()
+
+            # Check if we're in a git repository (dev mode indicator)
+            try:
+                git_root = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    capture_output=True,
+                    text=True,
+                    cwd=module_file.parent,
+                    timeout=1
+                )
+                if git_root.returncode == 0:
+                    # Running from git repo suggests dev mode
+                    method = "dev"
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+
+            # If not dev, check for package manager indicators
+            if method == "unknown":
+                # Check sys.prefix for uv indicators
+                prefix = Path(sys.prefix)
+
+                # UV typically uses .venv or creates virtual envs with specific structure
+                if (prefix / ".uv").exists() or ".uv" in str(prefix):
+                    method = "uv"
+                # Check for pip install
+                elif (prefix / "lib").exists():
+                    method = "pip"
+
+        except Exception:
+            # If detection fails, fall back to unknown
+            pass
+
+        _environment_cache["install_method"] = method
+
+    return _environment_cache["install_method"]
+
+
+def get_mcp_host() -> Optional[str]:
+    """Detect the MCP host application.
+
+    Checks environment variables and process tree to identify:
+    - Claude Code (CLAUDE_CODE_*)
+    - Cursor (CURSOR_*)
+    - Cline (CLINE_*)
+    - Other MCP hosts
+
+    Returns:
+        MCP host name or None if unknown
+    """
+    if "mcp_host" not in _environment_cache:
+        host = None
+
+        # Check environment variables for known hosts
+        if any(key.startswith("CLAUDE_CODE_") for key in os.environ):
+            host = "claude-code"
+        elif any(key.startswith("CURSOR_") for key in os.environ):
+            host = "cursor"
+        elif any(key.startswith("CLINE_") for key in os.environ):
+            host = "cline"
+        elif "MCP_HOST" in os.environ:
+            # Generic MCP_HOST variable
+            host = os.environ["MCP_HOST"]
+
+        # If no env vars found, check process tree
+        if host is None:
+            try:
+                # Get parent process name
+                ppid = os.getppid()
+                proc_result = subprocess.run(
+                    ["ps", "-p", str(ppid), "-o", "comm="],
+                    capture_output=True,
+                    text=True,
+                    timeout=1
+                )
+                if proc_result.returncode == 0:
+                    parent_name = proc_result.stdout.strip().lower()
+
+                    # Check for known MCP host process names
+                    if "claude" in parent_name or "code" in parent_name:
+                        host = "claude-code"
+                    elif "cursor" in parent_name:
+                        host = "cursor"
+                    elif "cline" in parent_name:
+                        host = "cline"
+                    elif "node" in parent_name or "electron" in parent_name:
+                        # Generic Node/Electron app - likely an MCP host
+                        host = "electron-app"
+
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                pass
+
+        _environment_cache["mcp_host"] = host
+
+    return _environment_cache["mcp_host"]
+
+
+def get_execution_source() -> str:
+    """Detect whether running as MCP server or CLI command.
+
+    Checks:
+    - stdin/stdout to detect MCP stdio transport
+    - Command line arguments
+    - Parent process
+
+    Returns:
+        Execution source: "mcp" or "cli"
+    """
+    if "exec_source" not in _environment_cache:
+        import sys
+
+        source = "cli"  # Default to CLI
+
+        # Check if stdin is a pipe (MCP servers use stdio transport)
+        try:
+            import stat
+            mode = os.fstat(sys.stdin.fileno()).st_mode
+            if stat.S_ISFIFO(mode):
+                # stdin is a pipe - likely MCP mode
+                source = "mcp"
+        except (OSError, AttributeError):
+            pass
+
+        # Check command line arguments
+        if source == "cli" and len(sys.argv) > 0:
+            # If invoked with server.py or as a module, it's MCP
+            if "server.py" in sys.argv[0] or "-m" in sys.argv:
+                source = "mcp"
+
+        # Check for MCP-specific environment variables
+        if "MCP_SERVER" in os.environ or "MCP_TRANSPORT" in os.environ:
+            source = "mcp"
+
+        _environment_cache["exec_source"] = source
+
+    return _environment_cache["exec_source"]
+
+
+def get_environment_info() -> Dict[str, Optional[str]]:
+    """Get all environment detection information.
+
+    Returns:
+        Dictionary with environment details:
+        - os_type: Operating system (Darwin, Linux, Windows)
+        - install_method: How VoiceMode was installed (dev, uv, pip)
+        - mcp_host: MCP host application (claude-code, cursor, etc.)
+        - exec_source: Execution context (mcp, cli)
+    """
+    return {
+        "os_type": get_os_type(),
+        "install_method": get_installation_method(),
+        "mcp_host": get_mcp_host(),
+        "exec_source": get_execution_source()
+    }
+
 # ==================== DIRECTORY INITIALIZATION ====================
 
 def initialize_directories():
@@ -1170,6 +1503,10 @@ disable_sounddevice_stderr_redirect()
 
 # Set up logger
 logger = setup_logging()
+
+# Initialize telemetry ID
+TELEMETRY_ID = get_telemetry_id()
+logger.debug(f"Telemetry ID: {TELEMETRY_ID}")
 
 # Log any format validation warnings
 if 'AUDIO_FORMAT' in locals() and '_invalid_audio_format' in locals():
