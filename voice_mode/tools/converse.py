@@ -1961,7 +1961,10 @@ consult the MCP resources listed above.
                     "held_seconds": held_seconds
                 })
         else:
-            conch.release()  # Safe to call even if not acquired
+            # Don't call release() when not acquired — it would delete the lock
+            # file belonging to the agent that IS holding the conch, defeating
+            # the flock coordination (they'd end up locking different inodes).
+            pass
 
         # Log tool request end
         if event_logger:

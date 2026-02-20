@@ -189,6 +189,10 @@ class Conch:
     def release(self) -> float:
         """Release the lock and return seconds held.
 
+        Only removes the lock file if this instance actually acquired the lock.
+        Removing it when not acquired would destroy the lock held by another
+        process (they'd be flocking different inodes after re-creation).
+
         Returns:
             Seconds the lock was held, or 0.0 if not acquired
         """
@@ -205,8 +209,9 @@ class Conch:
                 pass
             self._fd = None
 
-        # Remove the lock file
-        if self.LOCK_FILE.exists():
+        # Only remove the lock file if we actually acquired the lock.
+        # If we didn't acquire it, the file belongs to another process.
+        if self._acquired and self.LOCK_FILE.exists():
             try:
                 self.LOCK_FILE.unlink()
             except OSError:
