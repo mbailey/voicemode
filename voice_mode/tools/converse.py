@@ -1549,16 +1549,28 @@ consult the MCP resources listed above.
                         # We have captured audio - set flags for barge-in flow
                         barge_in_audio = True  # Mark audio as from barge-in for downstream edge case handling
                         speech_detected = True  # We know speech was detected (barge-in triggered)
-                        timings['record'] = tts_metrics.get('interrupted_at', 0)  # Recording during TTS
                         timings['barge_in'] = True
+                        barge_in_buffer = audio_data  # Save barge-in buffer
 
-                        # Skip listening chime since user is already speaking
-                        # Skip pause and normal recording since we have audio
+                        logger.info(f"📊 Barge-in buffer: {len(barge_in_buffer)} samples ({len(barge_in_buffer) / SAMPLE_RATE:.2f}s)")
 
-                        # Mark the end of "recording" (which was actually during TTS)
+                        # Continue recording after TTS stops (user is likely still speaking)
+                        logger.info("🎤 Continuing recording after barge-in...")
+                        record_start = time.perf_counter()
+                        continuation_audio, _ = await asyncio.get_event_loop().run_in_executor(
+                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                        )
+                        timings['record'] = time.perf_counter() - record_start
+
+                        # Prepend barge-in buffer to continuation recording
+                        if len(continuation_audio) > 0:
+                            audio_data = np.concatenate([barge_in_buffer, continuation_audio])
+                            logger.info(f"📊 Combined audio: {len(barge_in_buffer)} barge-in + {len(continuation_audio)} continuation = {len(audio_data)} total ({len(audio_data) / SAMPLE_RATE:.2f}s)")
+                        else:
+                            audio_data = barge_in_buffer
+                            logger.info(f"📊 No continuation audio, using barge-in buffer only ({len(audio_data) / SAMPLE_RATE:.2f}s)")
+
                         user_done_time = time.perf_counter()
-                        logger.info(f"📊 Barge-in audio captured at {timings['record']:.1f}s into TTS playback")
-                        logger.info(f"📊 Captured {len(audio_data)} samples ({len(audio_data) / SAMPLE_RATE:.2f}s) of user speech")
 
                 # Normal flow: user didn't interrupt, record their response
                 if not barge_in_occurred:
