@@ -36,8 +36,6 @@ class TestDeviceInfo:
             "ready": True,
             "connectedAt": 1700000000000,
             "lastActivity": 1700000060000,
-            "hasAgent": False,
-            "agentStatus": None,
         }
         device = DeviceInfo.from_connection_info(data)
 
@@ -48,7 +46,6 @@ class TestDeviceInfo:
         assert device.capabilities == {"tts": True, "stt": True}
         assert device.ready is True
         assert device.connected_at == 1700000000000
-        assert device.has_agent is False
 
     def test_from_connection_info_minimal(self):
         device = DeviceInfo.from_connection_info({})
@@ -73,9 +70,9 @@ class TestDeviceInfo:
     def test_capabilities_str(self):
         device = DeviceInfo(
             session_id="abc",
-            capabilities={"tts": True, "stt": True, "canStartOperator": True},
+            capabilities={"tts": True, "stt": True, "mic": True, "speaker": True},
         )
-        assert device.capabilities_str() == "TTS+STT+Wake"
+        assert device.capabilities_str() == "TTS+STT+Mic+Speaker"
 
     def test_capabilities_str_partial(self):
         device = DeviceInfo(
@@ -198,10 +195,10 @@ class TestConnectClientDisconnect:
 
 class TestHandleMessage:
     @pytest.mark.asyncio
-    async def test_connections_message(self, client):
+    async def test_devices_message(self, client):
         msg = {
-            "type": "connections",
-            "connections": [
+            "type": "devices",
+            "devices": [
                 {"sessionId": "s1", "platform": "ios", "ready": True},
                 {"sessionId": "s2", "platform": "web", "ready": False},
             ],
@@ -230,33 +227,15 @@ class TestHandleMessage:
         # Should log warning but not crash
 
     @pytest.mark.asyncio
-    async def test_wake_message(self, client, user_manager):
+    async def test_user_message_delivery(self, client, user_manager):
         user_manager.add("cora", display_name="Cora 7")
 
         msg = {
-            "type": "wake",
-            "reason": "call_button",
-            "callerId": "user-123",
-        }
-        await client._handle_message(msg)
-
-        # Should deliver to cora's inbox
-        from voice_mode.connect.messaging import read_inbox
-
-        messages = read_inbox(user_manager._user_dir("cora"))
-        assert len(messages) == 1
-        assert "Incoming voice call" in messages[0]["text"]
-        assert "user-123" in messages[0]["text"]
-
-    @pytest.mark.asyncio
-    async def test_wake_with_user_text(self, client, user_manager):
-        user_manager.add("cora", display_name="Cora 7")
-
-        msg = {
-            "type": "wake",
-            "reason": "user_message",
-            "callerId": "user-123",
+            "type": "user_message_delivery",
             "text": "Hey, are you there?",
+            "from": "user-123",
+            "userId": "user-abc123",
+            "target_user": "cora",
         }
         await client._handle_message(msg)
 
@@ -272,7 +251,7 @@ class TestHandleMessage:
         # Should log debug but not crash
 
 
-class TestHandleAgentMessage:
+class TestHandleUserMessageDelivery:
     @pytest.mark.asyncio
     async def test_routes_to_target_user(self, client, user_manager):
         user_manager.add("cora", display_name="Cora")
@@ -283,7 +262,7 @@ class TestHandleAgentMessage:
             "from": "dashboard-user",
             "target_user": "cora",
         }
-        await client._handle_agent_message(data)
+        await client._handle_user_message_delivery(data)
 
         from voice_mode.connect.messaging import read_inbox
 
@@ -299,7 +278,7 @@ class TestHandleAgentMessage:
         user_manager.add("cora", display_name="Cora")
 
         data = {"text": "Hello!", "from": "user"}
-        await client._handle_agent_message(data)
+        await client._handle_user_message_delivery(data)
 
         from voice_mode.connect.messaging import read_inbox
 
@@ -310,7 +289,7 @@ class TestHandleAgentMessage:
     async def test_ignores_empty_text(self, client, user_manager):
         user_manager.add("cora")
         data = {"text": "   ", "from": "user"}
-        await client._handle_agent_message(data)
+        await client._handle_user_message_delivery(data)
 
         from voice_mode.connect.messaging import read_inbox
 
@@ -321,13 +300,13 @@ class TestHandleAgentMessage:
     async def test_no_user_found(self, client):
         data = {"text": "Hello!", "from": "user", "target_user": "nobody"}
         # Should not raise, just log warning
-        await client._handle_agent_message(data)
+        await client._handle_user_message_delivery(data)
 
     @pytest.mark.asyncio
     async def test_message_source_is_gateway(self, client, user_manager):
         user_manager.add("cora")
         data = {"text": "test", "from": "user"}
-        await client._handle_agent_message(data)
+        await client._handle_user_message_delivery(data)
 
         from voice_mode.connect.messaging import read_inbox
 
@@ -355,8 +334,8 @@ class TestCapabilitiesUpdate:
         assert sent["users"][0]["host"] == "test-host"
 
     @pytest.mark.asyncio
-    async def test_gateway_wire_format_fields(self, client, user_manager):
-        """Gateway wire format includes wakeable/agentName/agentPlatform fields."""
+    async def test_platform_field(self, client, user_manager):
+        """capabilities_update includes platform field."""
         user_manager.add("cora", display_name="Cora 7")
 
         mock_ws = AsyncMock()
@@ -366,12 +345,13 @@ class TestCapabilitiesUpdate:
         await client.send_capabilities_update()
 
         sent = json.loads(mock_ws.send.call_args[0][0])
-        assert sent["wakeable"] is True
-        assert sent["agentName"] == "Cora 7"
-        assert sent["agentPlatform"] == "claude-code"
+        assert sent["platform"] == "claude-code"
+        assert "wakeable" not in sent
+        assert "agentName" not in sent
+        assert "agentPlatform" not in sent
 
     @pytest.mark.asyncio
-    async def test_no_users_sends_unavailable(self, client):
+    async def test_no_users_sends_empty_list(self, client):
         mock_ws = AsyncMock()
         client._ws = mock_ws
         client.state = ConnectState.CONNECTED
@@ -379,8 +359,8 @@ class TestCapabilitiesUpdate:
         await client.send_capabilities_update()
 
         sent = json.loads(mock_ws.send.call_args[0][0])
-        assert sent["wakeable"] is False
         assert sent["users"] == []
+        assert "wakeable" not in sent
 
     @pytest.mark.asyncio
     async def test_not_connected_noop(self, client):

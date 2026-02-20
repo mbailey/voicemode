@@ -38,8 +38,6 @@ class DeviceInfo:
     ready: bool = False
     connected_at: float = 0
     last_activity: float = 0
-    has_agent: bool = False
-    agent_status: Optional[str] = None
 
     @classmethod
     def from_connection_info(cls, data: dict) -> "DeviceInfo":
@@ -53,8 +51,6 @@ class DeviceInfo:
             ready=data.get("ready", False),
             connected_at=data.get("connectedAt", 0),
             last_activity=data.get("lastActivity", 0),
-            has_agent=data.get("hasAgent", False),
-            agent_status=data.get("agentStatus"),
         )
 
     def display_name(self) -> str:
@@ -72,8 +68,10 @@ class DeviceInfo:
             caps.append("TTS")
         if self.capabilities.get("stt"):
             caps.append("STT")
-        if self.capabilities.get("canStartOperator"):
-            caps.append("Wake")
+        if self.capabilities.get("mic"):
+            caps.append("Mic")
+        if self.capabilities.get("speaker"):
+            caps.append("Speaker")
         return "+".join(caps) if caps else "none"
 
     def activity_ago(self) -> str:
@@ -109,7 +107,7 @@ class ConnectClient:
         self._devices: list[DeviceInfo] = []
         self._status_message: Optional[str] = None
         self._reconnect_count = 0
-        self._primary_user = None  # User registered by THIS process (for backward-compat agentName)
+        self._primary_user = None  # User registered by THIS process
 
     @property
     def is_connected(self) -> bool:
@@ -193,7 +191,6 @@ class ConnectClient:
                 try:
                     msg = {
                         "type": "capabilities_update",
-                        "wakeable": False,  # Gateway wire format
                         "users": [],
                     }
                     await self._ws.send(json.dumps(msg))
@@ -222,17 +219,8 @@ class ConnectClient:
         msg = {
             "type": "capabilities_update",
             "users": user_entries,
+            "platform": "claude-code",
         }
-
-        # Gateway wire format: uses "wakeable" field to control availability.
-        # Will be removed when gateway migrates to user/endpoint model.
-        if users:
-            primary = self._primary_user or users[0]
-            msg["wakeable"] = True
-            msg["agentName"] = primary.display_name or primary.name
-            msg["agentPlatform"] = "claude-code"
-        else:
-            msg["wakeable"] = False
 
         try:
             await self._ws.send(json.dumps(msg))
@@ -377,10 +365,10 @@ class ConnectClient:
         """Handle a message from the WebSocket server."""
         msg_type = msg.get("type")
 
-        if msg_type == "connections":
-            connections = msg.get("connections", [])
+        if msg_type == "devices":
+            devices = msg.get("devices", [])
             self._devices = [
-                DeviceInfo.from_connection_info(c) for c in connections
+                DeviceInfo.from_connection_info(d) for d in devices
             ]
             logger.debug(
                 f"Connect client: {len(self._devices)} device(s) connected"
@@ -399,50 +387,20 @@ class ConnectClient:
         elif msg_type == "ack":
             pass
 
-        elif msg_type == "wake":
-            await self._handle_wake(msg)
-
-        elif msg_type == "agent_message":
-            await self._handle_agent_message(msg)
+        elif msg_type == "user_message_delivery":
+            await self._handle_user_message_delivery(msg)
 
         else:
             logger.debug(f"Connect client: unhandled message type: {msg_type}")
 
-    async def _handle_wake(self, msg: dict):
-        """Handle a wake message (call button pressed on dashboard)."""
-        reason = msg.get("reason", "unknown")
-        caller_id = msg.get("callerId", "unknown")
-        user_text = msg.get("text")
-
-        if reason == "user_message" and user_text:
-            text = user_text
-        else:
-            text = (
-                f"Incoming voice call from {caller_id}. "
-                "Please greet them and start a conversation."
-            )
-
-        logger.info(
-            f"Connect client: wake signal received "
-            f"(reason={reason}, caller={caller_id})"
-        )
-
-        # Route as an agent message
-        wake_data = {
-            "text": text,
-            "from": f"wake:{caller_id}",
-            "target_user": msg.get("target_user", ""),
-        }
-        await self._handle_agent_message(wake_data)
-
-    async def _handle_agent_message(self, data: dict):
-        """Route incoming agent_message to correct user inbox."""
+    async def _handle_user_message_delivery(self, data: dict):
+        """Route incoming user_message_delivery to correct user inbox."""
         text = data.get("text", "")
         sender = data.get("from", "user")
         target_user = data.get("target_user", "")
 
         if not text.strip():
-            logger.warning("Connect client: received empty agent_message, ignoring")
+            logger.warning("Connect client: received empty user_message_delivery, ignoring")
             return
 
         # Find the target user

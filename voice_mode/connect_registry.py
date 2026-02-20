@@ -38,8 +38,6 @@ class DeviceInfo:
     ready: bool = False
     connected_at: float = 0
     last_activity: float = 0
-    has_agent: bool = False
-    agent_status: Optional[str] = None
 
     @classmethod
     def from_connection_info(cls, data: dict) -> "DeviceInfo":
@@ -53,8 +51,6 @@ class DeviceInfo:
             ready=data.get("ready", False),
             connected_at=data.get("connectedAt", 0),
             last_activity=data.get("lastActivity", 0),
-            has_agent=data.get("hasAgent", False),
-            agent_status=data.get("agentStatus"),
         )
 
     def display_name(self) -> str:
@@ -72,8 +68,10 @@ class DeviceInfo:
             caps.append("TTS")
         if self.capabilities.get("stt"):
             caps.append("STT")
-        if self.capabilities.get("canStartOperator"):
-            caps.append("Wake")
+        if self.capabilities.get("mic"):
+            caps.append("Mic")
+        if self.capabilities.get("speaker"):
+            caps.append("Speaker")
         return "+".join(caps) if caps else "none"
 
     def activity_ago(self) -> str:
@@ -281,11 +279,11 @@ class ConnectRegistry:
         """Handle a message from the WebSocket server."""
         msg_type = msg.get("type")
 
-        if msg_type == "connections":
-            # Replace device list with current connections
-            connections = msg.get("connections", [])
+        if msg_type == "devices":
+            # Replace device list with current devices
+            devices = msg.get("devices", [])
             self._devices = [
-                DeviceInfo.from_connection_info(c) for c in connections
+                DeviceInfo.from_connection_info(d) for d in devices
             ]
             logger.debug(f"Connect registry: {len(self._devices)} device(s) connected")
 
@@ -300,47 +298,24 @@ class ConnectRegistry:
         elif msg_type == "ack":
             pass  # Acknowledgment, no action needed
 
-        elif msg_type == "wake":
-            # User clicked the call button on the VoiceMode dashboard
-            await self._handle_wake(msg)
-
-        elif msg_type == "agent_message":
-            # A user sent a message to this available agent via the dashboard
+        elif msg_type == "user_message_delivery":
+            # A user sent a message to this available user via the dashboard
             text = msg.get("text", "")
             sender = msg.get("from", "user")
-            await self._handle_agent_message(text, sender)
+            await self._handle_user_message_delivery(text, sender)
 
         else:
             logger.debug(f"Connect registry: unhandled message type: {msg_type}")
 
-    async def _handle_wake(self, msg: dict):
-        """Handle a wake message (call button pressed on dashboard).
-
-        Builds a text message from the wake payload and delivers it
-        via the same path as agent_message.
-        """
-        reason = msg.get("reason", "unknown")
-        caller_id = msg.get("callerId", "unknown")
-        user_text = msg.get("text")
-
-        # Build message text from wake payload
-        if reason == "user_message" and user_text:
-            text = user_text
-        else:
-            text = f"Incoming voice call from {caller_id}. Please greet them and start a conversation."
-
-        logger.info(f"Connect registry: wake signal received (reason={reason}, caller={caller_id})")
-        await self._handle_agent_message(text, f"wake:{caller_id}")
-
-    async def _handle_agent_message(self, text: str, sender: str):
-        """Handle an incoming agent_message by calling send-message to inject into team inbox."""
+    async def _handle_user_message_delivery(self, text: str, sender: str):
+        """Handle an incoming user_message_delivery by calling send-message to inject into team inbox."""
         team_name = self._available_team_name
         if not team_name:
-            logger.warning("Connect registry: received agent_message but not registered as available")
+            logger.warning("Connect registry: received user_message_delivery but not registered as available")
             return
 
         if not text.strip():
-            logger.warning("Connect registry: received empty agent_message, ignoring")
+            logger.warning("Connect registry: received empty user_message_delivery, ignoring")
             return
 
         # Check send-message is available
@@ -397,8 +372,7 @@ class ConnectRegistry:
             try:
                 msg = {
                     "type": "capabilities_update",
-                    # Gateway wire format: "wakeable" field controls availability
-                    "wakeable": False,
+                    "users": [],
                 }
                 await self._ws.send(json.dumps(msg))
                 logger.info("Connect registry: unregistered as available")
@@ -410,11 +384,8 @@ class ConnectRegistry:
         try:
             msg = {
                 "type": "capabilities_update",
-                # Gateway wire format: "wakeable" field controls availability
-                "wakeable": True,
                 "teamName": self._available_team_name,
-                "agentName": self._available_agent_name,
-                "agentPlatform": self._available_agent_platform or "claude-code",
+                "platform": self._available_agent_platform or "claude-code",
             }
             await ws.send(json.dumps(msg))
             logger.info(
