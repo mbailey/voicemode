@@ -403,11 +403,17 @@ class ConnectClient:
             logger.warning("Connect client: received empty user_message_delivery, ignoring")
             return
 
-        # Find the target user
+        # Find the target user by name, then by display_name as fallback
         user = None
         if target_user:
             user = self.user_manager.get(target_user)
-        else:
+            if not user:
+                # Try matching by display_name (gateway may send display name)
+                for u in self.user_manager.list():
+                    if u.display_name == target_user:
+                        user = u
+                        break
+        if not user:
             # Fall back to first registered user
             users = self.user_manager.list()
             user = users[0] if users else None
