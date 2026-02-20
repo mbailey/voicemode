@@ -12,18 +12,16 @@ class TestDeviceInfo:
     """Tests for DeviceInfo dataclass."""
 
     def test_from_connection_info_full(self):
-        """Parse a full ConnectionInfo JSON payload."""
+        """Parse a full DeviceInfo JSON payload."""
         data = {
             "sessionId": "abc123def456",
             "deviceId": "dev-iphone-xyz",
             "platform": "ios",
             "name": "Mike's iPhone",
-            "capabilities": {"tts": True, "stt": True, "canStartOperator": False},
+            "capabilities": {"tts": True, "stt": True, "mic": True, "speaker": True},
             "ready": True,
             "connectedAt": 1700000000000,
             "lastActivity": 1700000060000,
-            "hasAgent": False,
-            "agentStatus": None,
         }
         device = DeviceInfo.from_connection_info(data)
 
@@ -31,12 +29,10 @@ class TestDeviceInfo:
         assert device.device_id == "dev-iphone-xyz"
         assert device.platform == "ios"
         assert device.name == "Mike's iPhone"
-        assert device.capabilities == {"tts": True, "stt": True, "canStartOperator": False}
+        assert device.capabilities == {"tts": True, "stt": True, "mic": True, "speaker": True}
         assert device.ready is True
         assert device.connected_at == 1700000000000
         assert device.last_activity == 1700000060000
-        assert device.has_agent is False
-        assert device.agent_status is None
 
     def test_from_connection_info_minimal(self):
         """Parse a minimal ConnectionInfo with only sessionId."""
@@ -65,9 +61,9 @@ class TestDeviceInfo:
     def test_capabilities_str_all(self):
         device = DeviceInfo(
             session_id="abc",
-            capabilities={"tts": True, "stt": True, "canStartOperator": True},
+            capabilities={"tts": True, "stt": True, "mic": True, "speaker": True},
         )
-        assert device.capabilities_str() == "TTS+STT+Wake"
+        assert device.capabilities_str() == "TTS+STT+Mic+Speaker"
 
     def test_capabilities_str_partial(self):
         device = DeviceInfo(session_id="abc", capabilities={"tts": True, "stt": False})
@@ -140,12 +136,12 @@ class TestConnectRegistry:
         assert registry._initialized is True
 
     @pytest.mark.asyncio
-    async def test_handle_connections_message(self):
-        """Connections message replaces device list."""
+    async def test_handle_devices_message(self):
+        """Devices message replaces device list."""
         registry = ConnectRegistry()
         msg = {
-            "type": "connections",
-            "connections": [
+            "type": "devices",
+            "devices": [
                 {
                     "sessionId": "sess-iphone",
                     "platform": "ios",
@@ -174,14 +170,14 @@ class TestConnectRegistry:
         assert registry.devices[1].name == "MacBook Pro"
 
     @pytest.mark.asyncio
-    async def test_handle_connections_replaces_previous(self):
-        """New connections message replaces previous device list."""
+    async def test_handle_devices_replaces_previous(self):
+        """New devices message replaces previous device list."""
         registry = ConnectRegistry()
 
         # First message with 2 devices
         await registry._handle_message({
-            "type": "connections",
-            "connections": [
+            "type": "devices",
+            "devices": [
                 {"sessionId": "a", "ready": True},
                 {"sessionId": "b", "ready": True},
             ],
@@ -190,8 +186,8 @@ class TestConnectRegistry:
 
         # Second message with 1 device
         await registry._handle_message({
-            "type": "connections",
-            "connections": [{"sessionId": "c", "ready": True}],
+            "type": "devices",
+            "devices": [{"sessionId": "c", "ready": True}],
         })
         assert len(registry.devices) == 1
         assert registry.devices[0].session_id == "c"
@@ -339,11 +335,11 @@ class TestAvailableAgent:
         import json
         sent = json.loads(mock_ws.send.call_args[0][0])
         assert sent["type"] == "capabilities_update"
-        # Wire format: gateway uses "wakeable" field name
-        assert sent["wakeable"] is True
         assert sent["teamName"] == "cora"
-        assert sent["agentName"] == "Cora 7"
-        assert sent["agentPlatform"] == "claude-code"
+        assert sent["platform"] == "claude-code"
+        assert "wakeable" not in sent
+        assert "agentName" not in sent
+        assert "agentPlatform" not in sent
 
     @pytest.mark.asyncio
     async def test_register_available_queues_when_disconnected(self):
@@ -372,7 +368,7 @@ class TestAvailableAgent:
 
     @pytest.mark.asyncio
     async def test_unregister_available_sends_when_connected(self):
-        """unregister_available sends unavailable status when connected."""
+        """unregister_available sends empty users list when connected."""
         registry = ConnectRegistry()
         mock_ws = AsyncMock()
         registry._ws = mock_ws
@@ -385,12 +381,12 @@ class TestAvailableAgent:
         import json
         sent = json.loads(mock_ws.send.call_args[0][0])
         assert sent["type"] == "capabilities_update"
-        # Wire format: gateway uses "wakeable" field name
-        assert sent["wakeable"] is False
+        assert sent["users"] == []
+        assert "wakeable" not in sent
 
     @pytest.mark.asyncio
-    async def test_handle_agent_message_calls_send_message(self):
-        """agent_message handler calls send-message script."""
+    async def test_handle_user_message_delivery_calls_send_message(self):
+        """user_message_delivery handler calls send-message script."""
         registry = ConnectRegistry()
         registry._available_team_name = "cora"
 
@@ -401,7 +397,7 @@ class TestAvailableAgent:
             mock_result.stdout = "Sent to cora/team-lead: Hello"
             mock_to_thread.return_value = mock_result
 
-            await registry._handle_agent_message("Hello", "user")
+            await registry._handle_user_message_delivery("Hello", "user")
 
             mock_to_thread.assert_called_once()
             call_args = mock_to_thread.call_args
@@ -415,37 +411,37 @@ class TestAvailableAgent:
             assert "Hello" in cmd
 
     @pytest.mark.asyncio
-    async def test_handle_agent_message_ignores_when_not_available(self):
-        """agent_message is ignored when not registered as available."""
+    async def test_handle_user_message_delivery_ignores_when_not_available(self):
+        """user_message_delivery is ignored when not registered as available."""
         registry = ConnectRegistry()
         # _available_team_name is None
 
         with patch("shutil.which") as mock_which:
-            await registry._handle_agent_message("Hello", "user")
+            await registry._handle_user_message_delivery("Hello", "user")
             mock_which.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_handle_agent_message_ignores_empty_text(self):
-        """agent_message with empty text is ignored."""
+    async def test_handle_user_message_delivery_ignores_empty_text(self):
+        """user_message_delivery with empty text is ignored."""
         registry = ConnectRegistry()
         registry._available_team_name = "cora"
 
         with patch("shutil.which") as mock_which:
-            await registry._handle_agent_message("", "user")
+            await registry._handle_user_message_delivery("", "user")
             mock_which.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_handle_agent_message_via_handle_message(self):
-        """agent_message type routes through _handle_message correctly."""
+    async def test_handle_user_message_delivery_via_handle_message(self):
+        """user_message_delivery type routes through _handle_message correctly."""
         registry = ConnectRegistry()
         registry._available_team_name = "cora"
 
-        with patch.object(registry, "_handle_agent_message", new_callable=AsyncMock) as mock_handler:
+        with patch.object(registry, "_handle_user_message_delivery", new_callable=AsyncMock) as mock_handler:
             await registry._handle_message({
-                "type": "agent_message",
+                "type": "user_message_delivery",
                 "text": "What's up?",
                 "from": "mike",
-                "agentId": "agent-abc123",
+                "userId": "user-abc123def456abc123def456",
             })
             mock_handler.assert_called_once_with("What's up?", "mike")
 
