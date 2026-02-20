@@ -285,7 +285,7 @@ def get_provider_by_voice(voice: str) -> Optional[Dict[str, Any]]:
             "name": "Kokoro TTS",
             "type": "tts",
             "base_url": "http://127.0.0.1:8880/v1",
-            "voices": ["af_sky", "af_sarah", "am_adam", "af_nicole", "am_michael"]
+            "voices": ["af_sky", "af_sarah", "am_adam", "af_river", "am_michael"]
         }
     
     # OpenAI voices
@@ -303,7 +303,7 @@ def select_best_voice(provider: str, available_voices: Optional[List[str]] = Non
     if available_voices is None:
         # Get from registry if possible
         if provider == "kokoro":
-            available_voices = ["af_sky", "af_sarah", "am_adam", "af_nicole", "am_michael"]
+            available_voices = ["af_sky", "af_sarah", "am_adam", "af_river", "am_michael"]
         else:
             available_voices = ["alloy", "nova", "echo", "fable", "onyx", "shimmer"]
     
