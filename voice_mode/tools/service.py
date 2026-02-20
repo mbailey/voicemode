@@ -552,6 +552,7 @@ async def start_service(service_name: str) -> str:
                 return f"❌ Failed to start {service_name}: {error}"
     
     # Fallback to direct process start
+    config_vars = get_service_config_vars(service_name)
     if service_name == "whisper":
         # Find whisper-server binary
         whisper_bin = find_whisper_server()
@@ -564,7 +565,17 @@ async def start_service(service_name: str) -> str:
             return "❌ No Whisper model found. Please run download_model first."
         
         # Start whisper-server
-        cmd = [str(whisper_bin), "--host", "0.0.0.0", "--port", str(port), "--model", str(model_file)]
+        start_script = Path(config_vars["START_SCRIPT"])
+        if start_script.exists():
+            # Prefer start script if available
+            cmd = [str(start_script)]
+        else:
+            # Fallback to direct binary execution
+            cmd = [str(whisper_bin), "--host", "0.0.0.0", "--port", str(port),
+                "--model", str(model_file),
+                "--inference-path", "/v1/audio/transcriptions",
+                "--convert",
+            ]
         
     elif service_name == "kokoro":
         # Find kokoro installation
