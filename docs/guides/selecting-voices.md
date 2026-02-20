@@ -9,7 +9,7 @@ Voice Mode supports multiple TTS providers with different voices. This guide hel
 - **af_sky** - Natural female voice
 - **af_sarah** - Alternative female voice
 - **am_adam** - Natural male voice
-- **af_nicole** - Additional female option
+- **af_river** - Additional female option
 - **am_michael** - Additional male option
 
 ### OpenAI Voices
