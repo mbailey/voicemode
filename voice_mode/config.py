@@ -646,6 +646,11 @@ CONNECT_HOST = HOST_ALIAS or _socket.gethostname().split('.')[0]
 if not CONNECT_ENABLED and env_bool("VOICEMODE_CONNECT_AUTO", False):
     CONNECT_ENABLED = True
 
+# ==================== NOTIFICATIONS CONFIGURATION ====================
+
+NOTIFICATIONS_ENABLED = env_bool("VOICEMODE_NOTIFICATIONS_ENABLED", False)
+NOTIFICATIONS_LEVEL = os.getenv("VOICEMODE_NOTIFICATIONS_LEVEL", "count")
+
 # ==================== SOUND FONTS CONFIGURATION ====================
 
 # Sound fonts are enabled by default for audio feedback during tool calls

@@ -1476,11 +1476,18 @@ consult the MCP resources listed above.
                         error_message=None if tts_success else "TTS failed"
                     )
 
+                    # Check notifications (if enabled) — read-only, never modifies source data
+                    notification_str = ""
+                    from voice_mode.notifications import get_notification_manager
+                    nm = get_notification_manager()
+                    if nm:
+                        notification_str = nm.check_all()
+
                     # Format result based on metrics level
                     if effective_metrics_level == "minimal":
-                        result = "✓ Message spoken successfully"
+                        result = f"✓ Message spoken successfully{notification_str}"
                     else:
-                        result = f"✓ Message spoken successfully{timing_info}"
+                        result = f"✓ Message spoken successfully{timing_info}{notification_str}"
                     logger.info(f"Speak-only result: {result}")
                     return result
 
@@ -1897,10 +1904,17 @@ consult the MCP resources listed above.
 
                 # Logging already done immediately after TTS and STT complete
 
+                # Check notifications (if enabled) — read-only, never modifies source data
+                notification_str = ""
+                from voice_mode.notifications import get_notification_manager
+                nm = get_notification_manager()
+                if nm:
+                    notification_str = nm.check_all()
+
                 # Format result based on metrics level
                 stt_info = f" (STT: {stt_provider})" if 'stt_provider' in locals() and stt_provider != "unknown" else ""
                 if effective_metrics_level == "minimal":
-                    result = f"Voice response: {response_text}"
+                    result = f"Voice response: {response_text}{notification_str}"
                 elif effective_metrics_level == "verbose":
                     # Build verbose metrics block
                     verbose_parts = [f"Voice response: {response_text}{stt_info}"]
@@ -1911,15 +1925,16 @@ consult the MCP resources listed above.
                         verbose_parts.append(f"STT file: {timings['stt_file_size_bytes']/1024:.0f}KB")
                     if 'stt_is_local' in timings:
                         verbose_parts.append(f"STT local: {timings['stt_is_local']}")
-                    result = " | ".join(verbose_parts)
+                    verbose_parts_str = " | ".join(verbose_parts)
+                    result = f"{verbose_parts_str}{notification_str}"
                 else:  # summary (default)
-                    result = f"Voice response: {response_text}{stt_info} | Timing: {timing_str}"
+                    result = f"Voice response: {response_text}{stt_info} | Timing: {timing_str}{notification_str}"
                 success = True
             else:
                 if effective_metrics_level == "minimal":
-                    result = "No speech detected"
+                    result = f"No speech detected{notification_str}"
                 else:
-                    result = f"No speech detected | Timing: {timing_str}"
+                    result = f"No speech detected | Timing: {timing_str}{notification_str}"
                 success = True  # Not an error, just no speech
             return result
                 
