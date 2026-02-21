@@ -3025,6 +3025,39 @@ def favorite():
 
 
 # ============================================================================
+# Notifications Command Group
+# ============================================================================
+
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def notifications():
+    """Notification sources for converse tool.
+
+    Check notification sources (inbox messages, etc.) that can be
+    appended to converse responses as badge counts.
+
+    Examples:
+        voicemode notifications check-inbox
+    """
+    pass
+
+
+@notifications.command("check-inbox")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def check_inbox():
+    """Check Connect inboxes for new messages since last check.
+
+    Read-only: uses watermark file to track position. Never modifies inbox files.
+    Outputs JSON with count, summary, and detail fields.
+    """
+    import json as json_mod
+    from voice_mode.notifications.check_inbox import check_inbox_messages
+
+    result = check_inbox_messages()
+    click.echo(json_mod.dumps(result))
+
+
+# ============================================================================
 # Connect Command Group - Remote Control Integration
 # ============================================================================
 
