@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 """VoiceMode MCP Server - Modular version using FastMCP patterns."""
 
+import logging
 import os
 import platform
+from contextlib import asynccontextmanager
 
 # Note: audioop deprecation warning is suppressed in tools/__init__.py
 # (right before pydub is imported) to ensure it's applied after numpy/scipy
@@ -20,8 +22,36 @@ if platform.system() == "Darwin":
 
 from fastmcp import FastMCP
 
-# Create FastMCP instance
-mcp = FastMCP("voicemode")
+
+@asynccontextmanager
+async def _connect_lifespan(app):
+    # MCP server lifespan: auto-start/stop Connect WebSocket
+    log = logging.getLogger("voicemode")
+
+    from . import config as _config
+    if _config.CONNECT_ENABLED:
+        try:
+            from .connect.client import get_client
+            client = get_client()
+            await client.connect()
+            log.info("Connect WebSocket auto-started on MCP boot")
+        except Exception as e:
+            log.warning("Connect auto-start failed (non-fatal): %s", e)
+
+    yield
+
+    if _config.CONNECT_ENABLED:
+        try:
+            from .connect.client import get_client
+            client = get_client()
+            await client.disconnect()
+            log.info("Connect WebSocket disconnected on shutdown")
+        except Exception:
+            pass
+
+
+# Create FastMCP instance with Connect auto-start lifespan
+mcp = FastMCP("voicemode", lifespan=_connect_lifespan)
 
 # Import shared configuration and utilities
 from . import config
@@ -29,7 +59,7 @@ from . import config
 # Auto-import all tools, prompts, and resources
 # The __init__.py files in each directory handle the imports
 from . import tools
-from . import prompts 
+from . import prompts
 from . import resources
 
 # Main entry point
@@ -48,12 +78,12 @@ def main():
     # so the LLM can see error messages in tool responses
     # MCP servers use stdio with stdin/stdout connected to pipes, not terminals
     is_mcp_mode = not sys.stdin.isatty() or not sys.stdout.isatty()
-    
+
     # Check FFmpeg availability
     ffmpeg_installed, _ = check_ffmpeg()
     ffprobe_installed, _ = check_ffprobe()
     ffmpeg_available = ffmpeg_installed and ffprobe_installed
-    
+
     if not ffmpeg_available and not is_mcp_mode:
         # Interactive mode - show error and exit
         print("\n" + "="*60)
@@ -64,14 +94,14 @@ def main():
         print("❌ Voice Mode cannot start without FFmpeg.")
         print("Please install FFmpeg and try again.\n")
         sys.exit(1)
-    
+
     # Set up logging
     logger = setup_logging()
-    
+
     # Log version information
     from .version import __version__
     logger.info(f"Starting VoiceMode v{__version__}")
-    
+
     # Log FFmpeg status for MCP mode
     if not ffmpeg_available:
         logger.warning("FFmpeg is not installed - audio conversion features will not work")
@@ -80,7 +110,7 @@ def main():
         config.FFMPEG_AVAILABLE = False
     else:
         config.FFMPEG_AVAILABLE = True
-    
+
     # Initialize event logger
     if EVENT_LOG_ENABLED:
         event_logger = initialize_event_logger(
@@ -90,7 +120,7 @@ def main():
         logger.info(f"Event logging enabled, writing to {EVENT_LOG_DIR}")
     else:
         logger.info("Event logging disabled")
-    
+
     # Run the server
     mcp.run(transport="stdio")
 

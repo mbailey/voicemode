@@ -8,8 +8,12 @@ the modular connect subsystem (types, config, users, messaging).
 """
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
+import socket
+import subprocess
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -21,6 +25,70 @@ from .types import ConnectState
 from .users import UserManager
 
 logger = logging.getLogger("voicemode")
+
+def _get_project_name() -> str:
+    """Get the project name for device identity.
+
+    Tries (in order):
+    1. Git remote origin URL -> extract repo name
+    2. Git toplevel directory basename
+    3. Current directory basename
+    4. "claude-code" as last resort
+    """
+    try:
+        # Try git remote origin URL first (most stable identifier)
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            url = result.stdout.strip()
+            # Extract repo name from URL: git@github.com:user/repo.git or https://...
+            name = url.rstrip("/").rsplit("/", 1)[-1]
+            if name.endswith(".git"):
+                name = name[:-4]
+            if name:
+                return name
+    except Exception:
+        pass
+
+    try:
+        # Try git toplevel directory name
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            name = os.path.basename(result.stdout.strip())
+            if name:
+                return name
+    except Exception:
+        pass
+
+    # Fall back to current directory basename
+    name = os.path.basename(os.getcwd())
+    return name or "claude-code"
+
+
+def get_device_id() -> str:
+    """Derive a stable device ID from project name + hostname.
+
+    Two sessions in the SAME project share a device ID (second kicks first).
+    Two sessions in DIFFERENT projects get different device IDs.
+    Format: dev-{24 hex chars} matching gateway validation /^dev-[0-9a-f]{24}$/
+    """
+    hostname = socket.gethostname().split(".")[0]
+    project = _get_project_name()
+    seed = f"{project}@{hostname}"
+    hash_hex = hashlib.sha256(seed.encode()).hexdigest()[:24]
+    return f"dev-{hash_hex}"
+
+
+def get_device_name() -> str:
+    """Human-readable device name for the gateway: '{project} on {hostname}'."""
+    hostname = socket.gethostname().split(".")[0]
+    project = _get_project_name()
+    return f"{project} on {hostname}"
 
 
 @dataclass
@@ -295,6 +363,8 @@ class ConnectClient:
                         "device": {
                             "platform": "mcp-server",
                             "appVersion": __version__,
+                            "deviceId": get_device_id(),
+                            "name": get_device_name(),
                         },
                         "capabilities": {
                             "tts": True,
