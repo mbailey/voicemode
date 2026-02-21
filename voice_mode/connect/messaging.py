@@ -46,15 +46,6 @@ def deliver_message(
         try:
             delivered = _write_live_inbox(symlink, text, sender, source, now)
             message["delivered"] = delivered
-            if delivered:
-                # Update persistent inbox to mark as delivered
-                # (JSONL is append-only, so we append a delivery confirmation)
-                _write_persistent_inbox(user_dir / "inbox", {
-                    "id": msg_id,
-                    "type": "delivery_confirmation",
-                    "timestamp": now.isoformat(),
-                    "delivered": True,
-                })
         except Exception as e:
             logger.warning(f"Live inbox delivery failed: {e}")
 
