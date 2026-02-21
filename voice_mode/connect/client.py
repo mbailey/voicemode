@@ -423,10 +423,22 @@ class ConnectClient:
             return
 
         user_dir = self.user_manager._user_dir(user.name)
-        deliver_message(user_dir, text, sender=sender, source="gateway")
+        result = deliver_message(user_dir, text, sender=sender, source="gateway")
         logger.info(
             f"Connect client: delivered message to {user.name} from {sender}"
         )
+
+        # Send delivery confirmation back to the gateway (routes to sender)
+        if self._ws and result.get("delivered"):
+            try:
+                await self._ws.send(json.dumps({
+                    "type": "delivery_confirmation",
+                    "message_id": result["id"],
+                    "target_user": sender,
+                    "delivered": True,
+                }))
+            except Exception as e:
+                logger.warning(f"Connect client: failed to send delivery confirmation: {e}")
 
     def get_status_text(self) -> str:
         """Formatted status text for the service tool."""

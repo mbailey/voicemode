@@ -84,7 +84,7 @@ class TestDeliverMessage:
         result = deliver_message(user_dir, "hello", message_id="custom-123")
         assert result["id"] == "custom-123"
 
-    def test_delivery_confirmation_appended(self, user_dir, tmp_path):
+    def test_no_delivery_confirmation_in_recipient_inbox(self, user_dir, tmp_path):
         # Set up live inbox
         live_target_dir = tmp_path / "teams" / "test-team" / "inboxes"
         live_target_dir.mkdir(parents=True)
@@ -92,16 +92,17 @@ class TestDeliverMessage:
         symlink = user_dir / "inbox-live"
         symlink.symlink_to(live_target)
 
-        deliver_message(user_dir, "hello")
+        result = deliver_message(user_dir, "hello")
+        assert result["delivered"] is True
 
-        # Should have message + delivery confirmation in persistent inbox
+        # Should only have the message — no delivery confirmation in recipient inbox
         inbox = user_dir / "inbox"
         lines = [l for l in inbox.read_text().strip().splitlines() if l.strip()]
-        assert len(lines) == 2
+        assert len(lines) == 1
 
-        confirmation = json.loads(lines[1])
-        assert confirmation["type"] == "delivery_confirmation"
-        assert confirmation["delivered"] is True
+        msg = json.loads(lines[0])
+        assert msg["text"] == "hello"
+        assert msg.get("type") != "delivery_confirmation"
 
 
 class TestReadInbox:
@@ -159,15 +160,24 @@ class TestReadInbox:
         assert messages[1]["text"] == "message 8"
         assert messages[2]["text"] == "message 9"
 
-    def test_skips_delivery_confirmations(self, user_dir, tmp_path):
-        # Set up live inbox so delivery confirmations are written
-        live_target_dir = tmp_path / "teams" / "test-team" / "inboxes"
-        live_target_dir.mkdir(parents=True)
-        live_target = live_target_dir / "team-lead.json"
-        symlink = user_dir / "inbox-live"
-        symlink.symlink_to(live_target)
-
-        deliver_message(user_dir, "hello")
+    def test_skips_delivery_confirmations(self, user_dir):
+        # Manually write a delivery confirmation to test read_inbox filtering
+        # (delivery confirmations are no longer written by deliver_message,
+        # but read_inbox should still handle them for backwards compatibility)
+        inbox = user_dir / "inbox"
+        _write_persistent_inbox(inbox, {
+            "id": "msg_1",
+            "from": "user",
+            "text": "hello",
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "source": "test",
+        })
+        _write_persistent_inbox(inbox, {
+            "id": "msg_1",
+            "type": "delivery_confirmation",
+            "timestamp": "2024-01-01T00:00:00+00:00",
+            "delivered": True,
+        })
 
         messages = read_inbox(user_dir)
         # Should only see the actual message, not the delivery confirmation
