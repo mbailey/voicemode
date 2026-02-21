@@ -1887,6 +1887,13 @@ consult the MCP resources listed above.
             if event_logger and session_id:
                 event_logger.end_session()
             
+            # Check notifications (if enabled) — read-only, never modifies source data
+            notification_str = ""
+            from voice_mode.notifications import get_notification_manager
+            nm = get_notification_manager()
+            if nm:
+                notification_str = nm.check_all()
+
             if response_text:
                 # Save conversation transcription if enabled
                 if SAVE_TRANSCRIPTIONS:
@@ -1901,15 +1908,6 @@ consult the MCP resources listed above.
                         "timestamp": datetime.now().isoformat()
                     }
                     save_transcription(conversation_text, prefix="conversation", metadata=metadata)
-
-                # Logging already done immediately after TTS and STT complete
-
-                # Check notifications (if enabled) — read-only, never modifies source data
-                notification_str = ""
-                from voice_mode.notifications import get_notification_manager
-                nm = get_notification_manager()
-                if nm:
-                    notification_str = nm.check_all()
 
                 # Format result based on metrics level
                 stt_info = f" (STT: {stt_provider})" if 'stt_provider' in locals() and stt_provider != "unknown" else ""
