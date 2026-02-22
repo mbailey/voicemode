@@ -11,7 +11,6 @@
     {
       "name": "voicemode",
       "description": "Voice conversations with Claude Code using local speech-to-text and text-to-speech. Includes support for remote agents via mobile, web and CLI.",
-      "version": "8.1.0p1",
       "author": {
         "name": "Mike Bailey",
         "email": "mike@voicemode.dev"
