@@ -153,7 +153,7 @@ class ConnectClient:
 
         if creds is None:
             self._status_message = (
-                "Not connected (no credentials - run: voicemode connect login)"
+                "Not connected (no credentials - run: voicemode connect auth login)"
             )
             logger.debug("Connect client: no credentials available")
             return
