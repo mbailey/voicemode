@@ -34,21 +34,22 @@ def deliver_message(
         "text": text,
         "timestamp": now.isoformat(),
         "source": source,
-        "delivered": False,
     }
 
     # Always write to persistent inbox (JSONL — append-only)
     _write_persistent_inbox(user_dir / "inbox", message)
 
     # Try to write to live inbox (Claude team inbox via symlink)
+    delivered = False
     symlink = user_dir / "inbox-live"
     if symlink.is_symlink():
         try:
             delivered = _write_live_inbox(symlink, text, sender, source, now)
-            message["delivered"] = delivered
         except Exception as e:
             logger.warning(f"Live inbox delivery failed: {e}")
 
+    # Return delivery status for caller (e.g., to send confirmation back via gateway)
+    message["delivered"] = delivered
     return message
 
 
