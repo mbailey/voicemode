@@ -199,11 +199,25 @@ class ConnectClient:
                     logger.warning(f"Connect client: failed to send unregistration: {e}")
 
     async def send_capabilities_update(self) -> None:
-        """Send capabilities_update with all registered users to the gateway."""
+        """Send capabilities_update to the gateway.
+
+        Scoped to this process's primary user when set (MCP server mode).
+        Falls back to preconfigured users, then all users (standalone connect up).
+        """
         if not self._ws or not self.is_connected:
             return
 
-        users = self.user_manager.list()
+        # Scope to this agent's user(s)
+        if self._primary_user:
+            user = self.user_manager.get(self._primary_user.name)
+            users = [user] if user else []
+        else:
+            # Preconfigured users from env, or all users for standalone process
+            configured = connect_config.get_preconfigured_users()
+            if configured:
+                users = [u for name in configured if (u := self.user_manager.get(name))]
+            else:
+                users = self.user_manager.list()
 
         # Build user list for the new protocol
         user_entries = []
@@ -295,6 +309,8 @@ class ConnectClient:
                         "device": {
                             "platform": "mcp-server",
                             "appVersion": __version__,
+                            "deviceId": connect_config.get_device_id(),
+                            "name": connect_config.get_device_name(),
                         },
                         "capabilities": {
                             "tts": True,
