@@ -62,6 +62,9 @@ echo "Inbox-live: $CONNECT_USER_DIR/inbox-live -> $INBOX_TARGET" >> "$DEBUG_LOG"
 echo "=== on-team-created.sh DONE ===" >> "$DEBUG_LOG"
 
 # Tell the agent to register with the gateway via the LOCAL MCP tool
-# Note: Must specify "voicemode" MCP server to avoid confusion with remote "voicemode-connect" MCP
-echo "{\"systemMessage\": \"VoiceMode Connect inbox ready. Use the 'voicemode' MCP server (NOT 'voicemode-connect') to call: connect_status(set_presence=\\\"available\\\", username=\\\"$AGENT_NAME\\\")\"}"
+# Use hookSpecificOutput.additionalContext for reliable delivery to agent context
+# (systemMessage is UI-only for some hook events)
+cat <<HOOKEOF
+{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "VoiceMode Connect inbox ready. Use the 'voicemode' MCP server (NOT 'voicemode-connect') to call: connect_status(set_presence=\"available\", username=\"$AGENT_NAME\")"}}
+HOOKEOF
 exit 0
