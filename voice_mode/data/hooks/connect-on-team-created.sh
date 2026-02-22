@@ -51,7 +51,11 @@ TEAM_DIR="$HOME/.claude/teams/$TEAM_NAME"
 CONNECT_USER_DIR="$HOME/.voicemode/connect/users/$AGENT_NAME"
 mkdir -p "$CONNECT_USER_DIR"
 
-INBOX_TARGET="$TEAM_DIR/inboxes/team-lead.json"
+# Ensure the inboxes directory exists so is_subscribed() check passes
+# (symlink target's parent must exist for the user to be considered subscribed)
+INBOX_DIR="$TEAM_DIR/inboxes"
+mkdir -p "$INBOX_DIR"
+INBOX_TARGET="$INBOX_DIR/team-lead.json"
 ln -sfn "$INBOX_TARGET" "$CONNECT_USER_DIR/inbox-live"
 echo "Inbox-live: $CONNECT_USER_DIR/inbox-live -> $INBOX_TARGET" >> "$DEBUG_LOG"
 

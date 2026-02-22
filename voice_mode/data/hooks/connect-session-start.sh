@@ -10,13 +10,16 @@
 set -euo pipefail
 
 DEBUG_LOG="/tmp/voicemode-connect-hook-debug.log"
+echo "=== session-start.sh ENTRY $(date) ===" >> "$DEBUG_LOG"
 
 # Read hook input from stdin
 INPUT=$(cat)
+echo "Raw input: $INPUT" >> "$DEBUG_LOG"
 AGENT_TYPE=$(echo "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null)
 
 # Exit early if not an agent session
 if [ -z "$AGENT_TYPE" ]; then
+  echo "No agent_type found, exiting early" >> "$DEBUG_LOG"
   exit 0
 fi
 
