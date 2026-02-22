@@ -117,7 +117,8 @@ def _keyring_backend_is_viable() -> bool:
     """Check if the keyring backend can actually store secrets.
 
     Returns False if the backend is the fail.Keyring or chainer.ChainerBackend
-    with no viable backends (common on headless Linux).
+    with no viable backends (common on headless Linux), or if the keychain is
+    inaccessible at runtime (e.g. macOS over SSH, error -25308).
     """
     try:
         import keyring
@@ -140,7 +141,15 @@ def _keyring_backend_is_viable() -> bool:
                 for b in backend.backends
                 if (type(b).__module__ + "." + type(b).__qualname__) not in fail_backends
             ]
-            return len(viable) > 0
+            if len(viable) == 0:
+                return False
+
+        # Probe actual keychain access — catches macOS Keychain errors
+        # over SSH (error -25308) and similar runtime failures
+        try:
+            keyring.get_password(KEYRING_SERVICE, "__voicemode_probe__")
+        except Exception:
+            return False
 
         return True
     except Exception:
