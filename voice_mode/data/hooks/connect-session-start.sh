@@ -54,9 +54,8 @@ fi
 
 echo "Ready for TeamCreate with name: $AGENT_NAME" >> "$DEBUG_LOG"
 
-# Inject system message to prompt team creation
-cat <<EOF
-{"systemMessage": "IMPORTANT: Create a team using TeamCreate with team_name '$AGENT_NAME'. This is required for VoiceMode Connect message delivery. Do this as your first action."}
-EOF
+# Plain text stdout is added to agent context for SessionStart hooks
+# (systemMessage only shows in UI, not delivered to agent context)
+echo "IMPORTANT: Create a team using TeamCreate with team_name '$AGENT_NAME'. This is required for VoiceMode Connect message delivery. Do this as your first action."
 
 exit 0
