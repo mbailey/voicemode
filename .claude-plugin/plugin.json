@@ -14,6 +14,8 @@
     "./voice_mode/data/hooks/post-tool-use.json",
     "./voice_mode/data/hooks/notification.json",
     "./voice_mode/data/hooks/stop.json",
-    "./voice_mode/data/hooks/pre-compact.json"
+    "./voice_mode/data/hooks/pre-compact.json",
+    "./voice_mode/data/hooks/connect-session-start.json",
+    "./voice_mode/data/hooks/connect-on-team-created.json"
   ]
 }
