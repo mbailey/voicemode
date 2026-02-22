@@ -16,24 +16,28 @@ logger = logging.getLogger("voicemode")
 @mcp.tool()
 async def connect_status(
     set_presence: Optional[str] = None,
+    username: Optional[str] = None,
 ) -> str:
     """VoiceMode Connect status and presence.
 
     Check connection status and who's online, or set your availability.
-    Idempotent — safe to call multiple times.
+    Idempotent — safe to call multiple times. Creates user if needed.
 
     Args:
         set_presence: Optional. Set to "available" (green dot - ready for calls)
             or "away" (amber dot - connected but not accepting calls).
             Omit to just check status.
+        username: Optional. Your Connect username (e.g., "cora", "astrid").
+            Used to identify which user to register on this WebSocket.
+            The PostToolUse hook provides this in its systemMessage.
 
     Returns:
         Connection status, online contacts, and presence state.
 
     Examples:
-        connect_status()                        # Check status
-        connect_status(set_presence="available") # Go available (green dot)
-        connect_status(set_presence="away")      # Go away (amber dot)
+        connect_status()                                         # Check status
+        connect_status(set_presence="available", username="cora") # Go available
+        connect_status(set_presence="away")                       # Go away
     """
     from voice_mode.connect.client import get_client
     from voice_mode.connect import config as connect_config
@@ -52,18 +56,22 @@ async def connect_status(
 
     # Handle presence change
     if set_presence:
-        return await _set_presence(client, set_presence)
+        return await _set_presence(client, set_presence, username)
 
     # Default: return status
     return client.get_status_text()
 
 
-async def _ensure_user_registered(client) -> list:
+async def _ensure_user_registered(client, username: Optional[str] = None) -> list:
     """Ensure this agent's user is registered on the MCP server's WebSocket.
 
-    Idempotent — if already registered, returns existing user. If not,
-    discovers the user from the filesystem (created by hooks) and registers
-    it on this process's WebSocket connection.
+    Idempotent — if already registered, returns existing user. If username
+    is provided and user doesn't exist on filesystem, creates it.
+
+    Args:
+        client: The ConnectClient instance.
+        username: Optional explicit username. If provided and no filesystem
+            user exists, creates one with display name from VOICEMODE_AGENT_NAME.
 
     Returns list of this agent's users.
     """
@@ -75,7 +83,25 @@ async def _ensure_user_registered(client) -> list:
         if user:
             return [user]
 
-    # Not registered yet — discover from filesystem
+    # Explicit username provided — find or create
+    if username:
+        username = username.lower().strip()
+        user = client.user_manager.get(username)
+        if not user:
+            # Create user on filesystem (idempotent)
+            display_name = connect_config.get_agent_name() or username
+            user = client.user_manager.add(
+                name=username,
+                display_name=display_name,
+            )
+            logger.info(f"Created Connect user: {username}")
+
+        # Register on this WebSocket
+        await client.register_user(user)
+        logger.info(f"Registered user {username} on MCP server WebSocket")
+        return [user]
+
+    # No username — discover from filesystem
     # Look for users with inbox-live symlinks (set up by hooks)
     subscribed_users = [
         u for u in client.user_manager.list()
@@ -107,7 +133,7 @@ async def _ensure_user_registered(client) -> list:
     return []
 
 
-async def _set_presence(client, presence: str) -> str:
+async def _set_presence(client, presence: str, username: Optional[str] = None) -> str:
     """Set presence on the Connect gateway. Idempotent."""
     presence = presence.lower().strip()
 
@@ -127,14 +153,13 @@ async def _set_presence(client, presence: str) -> str:
             "Cannot set presence while disconnected."
         )
 
-    # Ensure user is registered (idempotent)
-    my_users = await _ensure_user_registered(client)
+    # Ensure user is registered (idempotent, creates if needed)
+    my_users = await _ensure_user_registered(client, username)
 
     if not my_users:
         return (
-            "No Connect users found. The PostToolUse hook should have "
-            "created a user after TeamCreate. Check that VoiceMode Connect "
-            "hooks are installed (voicemode plugin)."
+            "No Connect users found. Pass username parameter or ensure "
+            "the PostToolUse hook created a user after TeamCreate."
         )
 
     # For "available", verify inbox-live symlink exists

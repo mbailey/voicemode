@@ -70,5 +70,5 @@ fi
 
 echo "=== on-team-created.sh DONE ===" >> "$DEBUG_LOG"
 
-echo "{\"systemMessage\": \"VoiceMode Connect inbox ready. Call connect_status(set_presence=\\\"available\\\") to go available for voice calls.\"}"
+echo "{\"systemMessage\": \"VoiceMode Connect inbox ready. Call connect_status(set_presence=\\\"available\\\", username=\\\"$AGENT_NAME\\\") to go available for voice calls.\"}"
 exit 0
