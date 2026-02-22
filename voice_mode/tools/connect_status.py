@@ -2,6 +2,7 @@
 
 Provides a single MCP tool for checking connection status and
 setting agent presence (available/away) on the Connect gateway.
+Idempotent — ensures user exists and is registered before setting presence.
 """
 
 import logging
@@ -19,6 +20,7 @@ async def connect_status(
     """VoiceMode Connect status and presence.
 
     Check connection status and who's online, or set your availability.
+    Idempotent — safe to call multiple times.
 
     Args:
         set_presence: Optional. Set to "available" (green dot - ready for calls)
@@ -56,22 +58,40 @@ async def connect_status(
     return client.get_status_text()
 
 
-def _get_my_users(client) -> list:
-    """Get only the users that belong to this agent process.
+async def _ensure_user_registered(client) -> list:
+    """Ensure this agent's user is registered on the MCP server's WebSocket.
 
-    Scopes to the primary user (set via register_user) or to users
-    configured in VOICEMODE_CONNECT_USERS. Falls back to all users
-    only if neither is available.
+    Idempotent — if already registered, returns existing user. If not,
+    discovers the user from the filesystem (created by hooks) and registers
+    it on this process's WebSocket connection.
+
+    Returns list of this agent's users.
     """
     from voice_mode.connect import config as connect_config
 
-    # 1. Primary user registered by this process (set by register_user())
+    # Already registered — return it
     if client._primary_user:
         user = client.user_manager.get(client._primary_user.name)
         if user:
             return [user]
 
-    # 2. Users configured in VOICEMODE_CONNECT_USERS env var
+    # Not registered yet — discover from filesystem
+    # Look for users with inbox-live symlinks (set up by hooks)
+    subscribed_users = [
+        u for u in client.user_manager.list()
+        if client.user_manager.is_subscribed(u.name)
+    ]
+
+    if subscribed_users:
+        # Register the first subscribed user as our primary
+        user = subscribed_users[0]
+        await client.register_user(user)
+        logger.info(
+            f"Auto-registered user {user.name} on MCP server WebSocket"
+        )
+        return subscribed_users
+
+    # No subscribed users — check for preconfigured users
     configured = connect_config.get_preconfigured_users()
     if configured:
         users = []
@@ -80,14 +100,15 @@ def _get_my_users(client) -> list:
             if user:
                 users.append(user)
         if users:
+            await client.register_user(users[0])
             return users
 
-    # 3. Fallback: all registered users (shared connect up process)
-    return client.user_manager.list()
+    # No users found at all — return empty
+    return []
 
 
 async def _set_presence(client, presence: str) -> str:
-    """Set presence on the Connect gateway."""
+    """Set presence on the Connect gateway. Idempotent."""
     presence = presence.lower().strip()
 
     # Accept common aliases
@@ -106,13 +127,14 @@ async def _set_presence(client, presence: str) -> str:
             "Cannot set presence while disconnected."
         )
 
-    # Get only this agent's users (not all users on the system)
-    my_users = _get_my_users(client)
+    # Ensure user is registered (idempotent)
+    my_users = await _ensure_user_registered(client)
 
     if not my_users:
         return (
-            "No Connect users registered. "
-            "Register with: voicemode connect user add <name>"
+            "No Connect users found. The PostToolUse hook should have "
+            "created a user after TeamCreate. Check that VoiceMode Connect "
+            "hooks are installed (voicemode plugin)."
         )
 
     # For "available", verify inbox-live symlink exists
