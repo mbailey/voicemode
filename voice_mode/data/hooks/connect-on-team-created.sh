@@ -1,6 +1,7 @@
 #!/bin/bash
-# VoiceMode Connect: PostToolUse hook for TeamCreate (settings.json)
-# Wires up inbox delivery and registers user with Connect gateway
+# VoiceMode Connect: PostToolUse hook for TeamCreate
+# Sets up inbox-live symlink for message delivery.
+# User registration happens via the MCP server's connect_status tool.
 #
 # Reads team info from stdin (PostToolUse hook input JSON)
 # The field is tool_response (not tool_output)
@@ -43,32 +44,19 @@ fi
 # Use team name as the agent/user name for Connect
 AGENT_NAME="$TEAM_NAME"
 
-# Try to get display name from agent type or env
-AGENT_TYPE=$(echo "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null)
-DISPLAY_NAME="${VOICEMODE_AGENT_NAME:-${AGENT_TYPE:-$AGENT_NAME}}"
-
 TEAM_DIR="$HOME/.claude/teams/$TEAM_NAME"
 
-# 1. Set up Connect user inbox directory
+# Set up inbox-live symlink for message delivery
+# The MCP server's connect_status tool handles user registration on the gateway
 CONNECT_USER_DIR="$HOME/.voicemode/connect/users/$AGENT_NAME"
 mkdir -p "$CONNECT_USER_DIR"
 
-# 2. Symlink inbox-live to team leader inbox
 INBOX_TARGET="$TEAM_DIR/inboxes/team-lead.json"
 ln -sfn "$INBOX_TARGET" "$CONNECT_USER_DIR/inbox-live"
 echo "Inbox-live: $CONNECT_USER_DIR/inbox-live -> $INBOX_TARGET" >> "$DEBUG_LOG"
 
-# 3. Register with VoiceMode Connect (if connect up is running)
-if command -v voicemode &>/dev/null; then
-  voicemode connect user add "$AGENT_NAME" \
-    --name "$DISPLAY_NAME" \
-    --subscribe "$AGENT_NAME" 2>> "$DEBUG_LOG" || true
-  echo "Registered: $AGENT_NAME ($DISPLAY_NAME)" >> "$DEBUG_LOG"
-else
-  echo "voicemode not found, skipping registration" >> "$DEBUG_LOG"
-fi
-
 echo "=== on-team-created.sh DONE ===" >> "$DEBUG_LOG"
 
+# Tell the agent to register with the gateway via the MCP tool
 echo "{\"systemMessage\": \"VoiceMode Connect inbox ready. Call connect_status(set_presence=\\\"available\\\", username=\\\"$AGENT_NAME\\\") to go available for voice calls.\"}"
 exit 0
