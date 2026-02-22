@@ -61,6 +61,7 @@ echo "Inbox-live: $CONNECT_USER_DIR/inbox-live -> $INBOX_TARGET" >> "$DEBUG_LOG"
 
 echo "=== on-team-created.sh DONE ===" >> "$DEBUG_LOG"
 
-# Tell the agent to register with the gateway via the MCP tool
-echo "{\"systemMessage\": \"VoiceMode Connect inbox ready. Call connect_status(set_presence=\\\"available\\\", username=\\\"$AGENT_NAME\\\") to go available for voice calls.\"}"
+# Tell the agent to register with the gateway via the LOCAL MCP tool
+# Note: Must specify "voicemode" MCP server to avoid confusion with remote "voicemode-connect" MCP
+echo "{\"systemMessage\": \"VoiceMode Connect inbox ready. Use the 'voicemode' MCP server (NOT 'voicemode-connect') to call: connect_status(set_presence=\\\"available\\\", username=\\\"$AGENT_NAME\\\")\"}"
 exit 0
