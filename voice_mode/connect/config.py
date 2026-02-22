@@ -54,30 +54,19 @@ def _get_git_repo_name() -> str | None:
 
 
 def get_project_name() -> str:
-    """Get the project name for this MCP server instance.
+    """Get the project name where this MCP server is running.
+
+    Detects the project from the git repo root, falling back to
+    the current directory name. Used for device identity (not user
+    identity — the user/agent name is a separate concern).
 
     Priority:
-      1. VOICEMODE_CONNECT_USER env var (explicit single user override)
-      2. VOICEMODE_CONNECT_USERS[0] (legacy plural, first entry)
-      3. Git repo root basename (if in a git repo)
-      4. Current directory basename (final fallback)
+      1. Git repo root basename (if in a git repo)
+      2. Current directory basename (final fallback)
     """
-    # 1. Explicit single-user override
-    single_user = os.environ.get("VOICEMODE_CONNECT_USER", "").strip()
-    if single_user:
-        return single_user
-
-    # 2. Legacy plural users list
-    configured = get_preconfigured_users()
-    if configured:
-        return configured[0]
-
-    # 3. Git repo root name
     git_name = _get_git_repo_name()
     if git_name:
         return git_name
-
-    # 4. Fallback to cwd basename
     return os.path.basename(os.getcwd())
 
 
@@ -86,6 +75,9 @@ def get_device_id() -> str:
 
     Same project on same machine = same device ID = connection takeover.
     Different project or machine = different device ID = coexists.
+
+    The device represents WHERE an agent is running, not WHO the agent is.
+    User identity (who) is handled by agent registration (hooks/CLI).
 
     Format: dev-{24 hex chars} (matches gateway regex: /^dev-[0-9a-f]{24}$/)
     """
@@ -100,7 +92,8 @@ def get_device_id() -> str:
 def get_device_name() -> str:
     """Get the human-readable device name for dashboard display.
 
-    Format: {project}@{host} (e.g., "voicemode@mba")
+    Shows where this instance is running: project@host.
+    E.g., "voicemode@mba", "share-trading@mbp"
     """
     project = get_project_name()
     host = get_host()
