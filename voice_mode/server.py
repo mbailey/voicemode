@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 """VoiceMode MCP Server - Modular version using FastMCP patterns."""
 
+import logging
 import os
 import platform
+from contextlib import asynccontextmanager
 
 # Note: audioop deprecation warning is suppressed in tools/__init__.py
 # (right before pydub is imported) to ensure it's applied after numpy/scipy
@@ -20,8 +22,37 @@ if platform.system() == "Darwin":
 
 from fastmcp import FastMCP
 
-# Create FastMCP instance
-mcp = FastMCP("voicemode")
+logger = logging.getLogger("voicemode")
+
+
+@asynccontextmanager
+async def _connect_lifespan(app: FastMCP):
+    """Auto-connect to VoiceMode Connect gateway on MCP server startup."""
+    from .connect import config as connect_config
+
+    if connect_config.is_enabled():
+        from .connect.client import get_client
+
+        client = get_client()
+        logger.info("Connect auto-connect: starting WebSocket connection")
+        await client.connect()
+    else:
+        logger.debug("Connect auto-connect: disabled by config")
+
+    yield {}
+
+    # Shutdown: disconnect cleanly
+    if connect_config.is_enabled():
+        from .connect.client import get_client
+
+        client = get_client()
+        if client.is_connected or client.is_connecting:
+            logger.info("Connect auto-connect: disconnecting")
+            await client.disconnect()
+
+
+# Create FastMCP instance with Connect lifespan
+mcp = FastMCP("voicemode", lifespan=_connect_lifespan)
 
 # Import shared configuration and utilities
 from . import config
