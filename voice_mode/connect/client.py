@@ -312,10 +312,6 @@ class ConnectClient:
                             "deviceId": connect_config.get_device_id(),
                             "name": connect_config.get_device_name(),
                         },
-                        "capabilities": {
-                            "tts": True,
-                            "stt": True,
-                        },
                     }
                     await ws.send(json.dumps(ready_msg))
 
