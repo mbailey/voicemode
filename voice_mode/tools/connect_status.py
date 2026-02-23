@@ -34,6 +34,9 @@ async def connect_status(
         set_presence: Optional. Set to "available" (green dot - ready for calls)
             or "away" (amber dot - connected but not accepting calls).
             Omit to just check status.
+            Note: "available" requires wake-from-idle capability. In Claude Code,
+            create a team first (TeamCreate) to enable this. Without a team,
+            presence is downgraded to "away" with guidance on how to enable it.
         username: Optional. Your Connect username (e.g., "cora", "astrid").
             Used to identify which user to register on this WebSocket.
             The PostToolUse hook provides this in its systemMessage.

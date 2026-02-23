@@ -92,6 +92,22 @@ EOF
   echo "Created session file with team_name: $SESSION_FILE" >> "$DEBUG_LOG"
 fi
 
+# Find the agent_name from session file (needed for username param)
+AGENT_NAME=""
+if [ -f "$SESSION_FILE" ]; then
+  AGENT_NAME=$(jq -r '.agent_name // empty' "$SESSION_FILE" 2>/dev/null)
+fi
+
 echo "=== on-team-created.sh DONE ===" >> "$DEBUG_LOG"
+
+# Output guidance for agent to go available
+USERNAME_HINT=""
+if [ -n "$AGENT_NAME" ]; then
+  USERNAME_HINT=", username=\\\"${AGENT_NAME}\\\""
+fi
+
+cat <<HOOKEOF
+{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "VoiceMode Connect: Team created. You can now go available for voice calls with connect_status(set_presence=\\\"available\\\"${USERNAME_HINT})."}}
+HOOKEOF
 
 exit 0
