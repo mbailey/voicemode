@@ -5593,7 +5593,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.0.0" },
     { name = "coremltools", marker = "extra == 'coreml'", specifier = ">=7.0" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'test'", specifier = ">=7.4.0" },
-    { name = "fastmcp", specifier = ">=2.3.2" },
+    { name = "fastmcp", specifier = ">=2.3.2,<3" },
     { name = "flask", marker = "extra == 'scripts'", specifier = ">=3.0.0" },
     { name = "gradio", marker = "extra == 'notebooks'", specifier = ">=4.0.0" },
     { name = "httpx" },

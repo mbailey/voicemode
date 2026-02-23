@@ -1,0 +1,15 @@
+{
+  "description": "VoiceMode Connect: SessionStart hook - cleans up stale team dir and prompts agent to create team for Connect",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/voice_mode/data/hooks/connect-session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -7,6 +7,7 @@
 # Environment configuration
 .env.local
 .env
+.voicemode.env
 
 # Python
 __pycache__/
@@ -91,6 +92,7 @@ node_modules/
 
 # Worktrees
 .worktrees/
+.claude/worktrees/
 
 # Misc
 .cache/
