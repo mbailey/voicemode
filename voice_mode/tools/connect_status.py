@@ -257,6 +257,7 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
         )
 
     # Auto-discover team_name from session file and set up wake symlink
+    downgraded_from_available = False
     if presence == "available":
         session_data = _get_session_data()
         team_name = session_data.get("team_name", "")
@@ -265,6 +266,18 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
             if _ensure_inbox_live_symlink(agent_name, team_name):
                 logger.info(
                     f"Wake-from-idle enabled: {agent_name} -> team {team_name}"
+                )
+
+        # Check if wake-from-idle is actually set up
+        if my_users:
+            symlink = Path.home() / ".voicemode" / "connect" / "users" / my_users[0].name / "inbox-live"
+            if not symlink.is_symlink():
+                # Downgrade to "away" — can't be truly available without wake
+                presence = "away"
+                downgraded_from_available = True
+                logger.info(
+                    "Downgraded presence from available to away "
+                    "(no wake-from-idle capability)"
                 )
 
     # Build presence update for only this agent's users
@@ -289,19 +302,19 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
         }
         await client._ws.send(json.dumps(msg))
 
-        if presence == "available":
+        if downgraded_from_available:
+            return (
+                "Set to Away (amber dot) instead of Available.\n"
+                "Available requires wake-from-idle capability.\n"
+                "To enable: create a team with TeamCreate, then set presence again.\n"
+                "Messages will be delivered when you're active."
+            )
+        elif presence == "available":
             user_names = ", ".join(u.display_name or u.name for u in my_users)
-            # Check if wake-from-idle is set up
-            wake_status = ""
-            if my_users:
-                symlink = Path.home() / ".voicemode" / "connect" / "users" / my_users[0].name / "inbox-live"
-                if symlink.is_symlink():
-                    wake_status = "\nWake-from-idle: enabled (team inbox linked)"
-                else:
-                    wake_status = "\nWake-from-idle: disabled (no team — create one with TeamCreate to enable)"
             return (
                 f"Now Available (green dot). Users can call you.\n"
-                f"Registered as: {user_names}{wake_status}"
+                f"Registered as: {user_names}\n"
+                f"Wake-from-idle: enabled (team inbox linked)"
             )
         else:
             return "Now Away (amber dot). Messages will queue for later."
