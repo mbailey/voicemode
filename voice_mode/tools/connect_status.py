@@ -61,6 +61,14 @@ async def connect_status(
     if not client.is_connected and not client.is_connecting:
         logger.info("Connect: lazy WebSocket connect on first connect_status call")
         await client.connect()
+        # Wait for connection to actually be established
+        connected = await client.wait_connected(timeout=10.0)
+        if not connected:
+            return (
+                f"Failed to connect to VoiceMode Connect gateway.\n"
+                f"Status: {client.status_message}\n"
+                f"Check credentials with: voicemode connect auth status"
+            )
 
     # Handle presence change
     if set_presence:

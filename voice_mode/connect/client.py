@@ -107,6 +107,7 @@ class ConnectClient:
         self._status_message: Optional[str] = None
         self._reconnect_count = 0
         self._primary_user = None  # User registered by THIS process
+        self._connected_event = asyncio.Event()  # Set when WebSocket is connected
 
     @property
     def is_connected(self) -> bool:
@@ -125,6 +126,17 @@ class ConnectClient:
         return self._status_message or (
             "Connected" if self.is_connected else "Not initialized"
         )
+
+    async def wait_connected(self, timeout: float = 10.0) -> bool:
+        """Wait for the WebSocket connection to be established.
+
+        Returns True if connected within timeout, False otherwise.
+        """
+        try:
+            await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     async def connect(self) -> None:
         """Start background connection task.
@@ -168,6 +180,7 @@ class ConnectClient:
             except asyncio.CancelledError:
                 pass
         self.state = ConnectState.DISCONNECTED
+        self._connected_event.clear()
         self._devices = []
         self._ws = None
         self._status_message = "Disconnected"
@@ -282,6 +295,7 @@ class ConnectClient:
                 ) as ws:
                     self._ws = ws
                     self.state = ConnectState.CONNECTED
+                    self._connected_event.set()
                     retry_delay = 1
                     self._reconnect_count = 0
 

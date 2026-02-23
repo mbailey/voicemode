@@ -24,6 +24,7 @@ def mock_client():
     client.is_connected = True
     client.is_connecting = False
     client.connect = AsyncMock()
+    client.wait_connected = AsyncMock(return_value=True)
     client._primary_user = None
     client._ws = AsyncMock()
     client.user_manager = MagicMock()
