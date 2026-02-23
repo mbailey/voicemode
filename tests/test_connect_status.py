@@ -457,6 +457,97 @@ class TestSetPresenceWebSocketError:
         assert "Connection lost" in result
 
 
+class TestGetSessionData:
+    def test_direct_lookup_via_env_var(self, tmp_path):
+        """Finds session file via CLAUDE_SESSION_ID env var."""
+        from voice_mode.tools.connect_status import _get_session_data
+
+        # Create a session file
+        sessions_dir = tmp_path / ".voicemode" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        session_data = {
+            "session_id": "test-123",
+            "agent_name": "wimo",
+            "team_name": "wimo-voice",
+        }
+        (sessions_dir / "test-123.json").write_text(json.dumps(session_data))
+
+        with (
+            patch.dict("os.environ", {"CLAUDE_SESSION_ID": "test-123"}),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            result = _get_session_data()
+
+        assert result["session_id"] == "test-123"
+        assert result["team_name"] == "wimo-voice"
+
+    def test_fallback_scan_by_agent_name(self, tmp_path):
+        """Falls back to scanning sessions dir when CLAUDE_SESSION_ID not set."""
+        from voice_mode.tools.connect_status import _get_session_data
+
+        sessions_dir = tmp_path / ".voicemode" / "sessions"
+        sessions_dir.mkdir(parents=True)
+
+        # Create session files for different agents
+        for i, (agent, team) in enumerate(
+            [("wimo", "wimo-voice"), ("cora", "cora-team")]
+        ):
+            data = {
+                "session_id": f"sess-{i}",
+                "agent_name": agent,
+                "team_name": team,
+            }
+            (sessions_dir / f"sess-{i}.json").write_text(json.dumps(data))
+
+        with (
+            patch.dict("os.environ", {}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            # Remove CLAUDE_SESSION_ID if present
+            import os
+
+            os.environ.pop("CLAUDE_SESSION_ID", None)
+            result = _get_session_data(agent_name="wimo")
+
+        assert result["agent_name"] == "wimo"
+        assert result["team_name"] == "wimo-voice"
+
+    def test_fallback_returns_empty_without_agent_name(self, tmp_path):
+        """Returns empty dict when CLAUDE_SESSION_ID not set and no agent_name."""
+        from voice_mode.tools.connect_status import _get_session_data
+
+        with (
+            patch.dict("os.environ", {}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            import os
+
+            os.environ.pop("CLAUDE_SESSION_ID", None)
+            result = _get_session_data()
+
+        assert result == {}
+
+    def test_fallback_no_matching_agent(self, tmp_path):
+        """Returns empty dict when no session matches agent_name."""
+        from voice_mode.tools.connect_status import _get_session_data
+
+        sessions_dir = tmp_path / ".voicemode" / "sessions"
+        sessions_dir.mkdir(parents=True)
+        data = {"session_id": "sess-1", "agent_name": "cora", "team_name": "cora"}
+        (sessions_dir / "sess-1.json").write_text(json.dumps(data))
+
+        with (
+            patch.dict("os.environ", {}, clear=False),
+            patch("pathlib.Path.home", return_value=tmp_path),
+        ):
+            import os
+
+            os.environ.pop("CLAUDE_SESSION_ID", None)
+            result = _get_session_data(agent_name="wimo")
+
+        assert result == {}
+
+
 class TestSetPresenceMultipleUsers:
     @pytest.mark.asyncio
     async def test_multiple_users_all_included(self, mock_client, tmp_path):

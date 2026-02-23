@@ -33,18 +33,18 @@ else
   DEBUG_LOG="/dev/null"
 fi
 
-echo "=== session-start.sh $(date) ===" >> "$DEBUG_LOG"
+echo "=== connect-session-start.sh $(date) ===" >>"$DEBUG_LOG"
 
 # Read hook input from stdin
 INPUT=$(cat)
-echo "Raw input: $INPUT" >> "$DEBUG_LOG"
+echo "Raw input: $INPUT" >>"$DEBUG_LOG"
 
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 AGENT_TYPE=$(echo "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null)
 
 # Exit early if no session ID
 if [ -z "$SESSION_ID" ]; then
-  echo "No session_id found, exiting early" >> "$DEBUG_LOG"
+  echo "No session_id found, exiting early" >>"$DEBUG_LOG"
   exit 0
 fi
 
@@ -63,18 +63,18 @@ elif [ -n "${VOICEMODE_CONNECT_USERNAME:-}" ]; then
   IDENTITY_SOURCE="VOICEMODE_CONNECT_USERNAME"
 else
   # No identity available — exit early
-  echo "No agent identity found, exiting early" >> "$DEBUG_LOG"
+  echo "No agent identity found, exiting early" >>"$DEBUG_LOG"
   exit 0
 fi
 
 # Normalize to lowercase
 AGENT_NAME=$(echo "$AGENT_NAME" | tr '[:upper:]' '[:lower:]')
 
-echo "agent_name: $AGENT_NAME (from $IDENTITY_SOURCE), session_id: $SESSION_ID" >> "$DEBUG_LOG"
+echo "agent_name: $AGENT_NAME (from $IDENTITY_SOURCE), session_id: $SESSION_ID" >>"$DEBUG_LOG"
 
 # Sanitize agent name — only allow safe filesystem characters
 if [[ ! "$AGENT_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-  echo "Invalid agent name '$AGENT_NAME', exiting" >> "$DEBUG_LOG"
+  echo "Invalid agent name '$AGENT_NAME', exiting" >>"$DEBUG_LOG"
   exit 0
 fi
 
@@ -84,18 +84,18 @@ mkdir -p "$SESSIONS_DIR"
 
 SESSION_FILE="$SESSIONS_DIR/${SESSION_ID}.json"
 CWD=$(pwd)
-cat > "$SESSION_FILE" <<EOF
+cat >"$SESSION_FILE" <<EOF
 {"session_id":"$SESSION_ID","agent_name":"$AGENT_NAME","agent_type":"${AGENT_TYPE:-}","identity_source":"$IDENTITY_SOURCE","cwd":"$CWD","created":"$(date -u +%Y-%m-%dT%H:%M:%SZ)"}
 EOF
 
-echo "Wrote session identity: $SESSION_FILE" >> "$DEBUG_LOG"
+echo "Wrote session identity: $SESSION_FILE" >>"$DEBUG_LOG"
 
 # Ensure inbox directory exists for this agent
 INBOX_DIR="$HOME/.voicemode/connect/users/$AGENT_NAME"
 mkdir -p "$INBOX_DIR"
 if [ ! -f "$INBOX_DIR/inbox" ]; then
   touch "$INBOX_DIR/inbox"
-  echo "Created empty inbox: $INBOX_DIR/inbox" >> "$DEBUG_LOG"
+  echo "Created empty inbox: $INBOX_DIR/inbox" >>"$DEBUG_LOG"
 fi
 
 # Initialize delivery watermark to last message in inbox so old messages
@@ -106,14 +106,14 @@ if [ ! -f "$DELIVERED_FILE" ] && [ -s "$INBOX_DIR/inbox" ]; then
   # Get the last message ID from the inbox JSONL
   LAST_MSG_ID=$(tail -1 "$INBOX_DIR/inbox" | jq -r '.id // empty' 2>/dev/null)
   if [ -n "$LAST_MSG_ID" ]; then
-    echo "$LAST_MSG_ID" > "$DELIVERED_FILE"
-    echo "Initialized delivery watermark: $LAST_MSG_ID" >> "$DEBUG_LOG"
+    echo "$LAST_MSG_ID" >"$DELIVERED_FILE"
+    echo "Initialized delivery watermark: $LAST_MSG_ID" >>"$DEBUG_LOG"
   fi
 fi
 
 # Clean up stale session files (older than 7 days)
 find "$SESSIONS_DIR" -name "*.json" -mtime +7 -delete 2>/dev/null || true
 
-echo "=== session-start.sh DONE ===" >> "$DEBUG_LOG"
+echo "=== session-start.sh DONE ===" >>"$DEBUG_LOG"
 
 exit 0

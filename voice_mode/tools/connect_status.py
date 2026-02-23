@@ -87,26 +87,62 @@ async def connect_status(
     return client.get_status_text()
 
 
-def _get_session_data() -> dict:
+def _get_session_data(agent_name: Optional[str] = None) -> dict:
     """Read session identity data from the session file.
 
-    Uses CLAUDE_SESSION_ID env var to find the session file written
-    by the SessionStart hook at ~/.voicemode/sessions/{session_id}.json.
-    Returns empty dict if not available.
+    Tries two methods:
+    1. CLAUDE_SESSION_ID env var (direct lookup, most reliable)
+    2. Scan sessions directory for most recent file matching agent_name
+       (fallback for when CLAUDE_SESSION_ID is not in MCP server env,
+       which happens when Claude Code is started without --session-id)
+
+    Args:
+        agent_name: Optional agent name to filter session files in fallback scan.
+
+    Returns:
+        Session data dict, or empty dict if not available.
     """
+    sessions_dir = Path.home() / ".voicemode" / "sessions"
+
+    # Method 1: Direct lookup via CLAUDE_SESSION_ID
     session_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    if session_id:
+        session_file = sessions_dir / f"{session_id}.json"
+        if session_file.exists():
+            try:
+                data = json.loads(session_file.read_text())
+                logger.info(f"_get_session_data: found via CLAUDE_SESSION_ID: {session_file.name}")
+                return data
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Failed to read session file: {e}")
+
+    # Method 2: Scan for most recent session file matching agent_name
+    if agent_name and sessions_dir.exists():
+        try:
+            session_files = sorted(
+                sessions_dir.glob("*.json"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            for sf in session_files[:10]:  # Check last 10 at most
+                try:
+                    data = json.loads(sf.read_text())
+                    if data.get("agent_name") == agent_name:
+                        logger.info(
+                            f"_get_session_data: found via scan for {agent_name}: {sf.name}"
+                        )
+                        return data
+                except (json.JSONDecodeError, OSError):
+                    continue
+        except OSError as e:
+            logger.warning(f"Failed to scan sessions directory: {e}")
+
     if not session_id:
-        return {}
-
-    session_file = Path.home() / ".voicemode" / "sessions" / f"{session_id}.json"
-    if not session_file.exists():
-        return {}
-
-    try:
-        return json.loads(session_file.read_text())
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"Failed to read session file: {e}")
-        return {}
+        logger.info(
+            f"_get_session_data: CLAUDE_SESSION_ID not set"
+            + (f", no session found for agent {agent_name}" if agent_name else "")
+        )
+    return {}
 
 
 def _ensure_inbox(username: str) -> None:
@@ -268,14 +304,19 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
     # Auto-discover team_name from session file and set up wake symlink
     downgraded_from_available = False
     if presence == "available":
-        session_data = _get_session_data()
+        agent_name = my_users[0].name if my_users else None
+        session_data = _get_session_data(agent_name=agent_name)
         team_name = session_data.get("team_name", "")
+        logger.info(f"_set_presence: session_data={session_data}, team_name={team_name!r}")
         if team_name and my_users:
             agent_name = my_users[0].name
+            logger.info(f"_set_presence: calling _ensure_inbox_live_symlink({agent_name!r}, {team_name!r})")
             if _ensure_inbox_live_symlink(agent_name, team_name):
                 logger.info(
                     f"Wake-from-idle enabled: {agent_name} -> team {team_name}"
                 )
+            else:
+                logger.info(f"_set_presence: _ensure_inbox_live_symlink returned False")
 
         # Check if wake-from-idle is actually set up
         if my_users:
