@@ -27,31 +27,22 @@ logger = logging.getLogger("voicemode")
 
 @asynccontextmanager
 async def _connect_lifespan(app: FastMCP):
-    """Auto-connect to VoiceMode Connect gateway on MCP server startup."""
-    from .connect import config as connect_config
-
-    if connect_config.is_enabled():
-        from .connect.client import get_client
-
-        client = get_client()
-        logger.info("Connect auto-connect: starting WebSocket connection")
-        await client.connect()
-    else:
-        logger.debug("Connect auto-connect: disabled by config")
-
+    """Lifespan handler — Connect WebSocket is lazy (connects on first connect_status call)."""
     yield {}
 
-    # Shutdown: disconnect cleanly
+    # Shutdown: disconnect cleanly if a WebSocket was established during this session
+    from .connect import config as connect_config
+
     if connect_config.is_enabled():
         try:
             from .connect.client import get_client
 
             client = get_client()
             if client.is_connected or client.is_connecting:
-                logger.info("Connect auto-connect: disconnecting")
+                logger.info("Connect: disconnecting WebSocket on shutdown")
                 await client.disconnect()
         except Exception as e:
-            logger.warning(f"Connect auto-connect: error during disconnect: {e}")
+            logger.warning(f"Connect: error during disconnect: {e}")
 
 
 # Create FastMCP instance with Connect lifespan

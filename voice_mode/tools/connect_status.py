@@ -3,9 +3,13 @@
 Provides a single MCP tool for checking connection status and
 setting agent presence (available/away) on the Connect gateway.
 Idempotent — ensures user exists and is registered before setting presence.
+
+WebSocket connection is lazy — only established on first connect_status() call.
+Inbox directory is created when presence is first set.
 """
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 from voice_mode.server import mcp
@@ -50,8 +54,9 @@ async def connect_status(
 
     client = get_client()
 
-    # Ensure we're connected
+    # Lazy WebSocket connect — only on first call
     if not client.is_connected and not client.is_connecting:
+        logger.info("Connect: lazy WebSocket connect on first connect_status call")
         await client.connect()
 
     # Handle presence change
@@ -60,6 +65,19 @@ async def connect_status(
 
     # Default: return status
     return client.get_status_text()
+
+
+def _ensure_inbox(username: str) -> None:
+    """Ensure inbox directory and file exist for a user.
+
+    Creates ~/.voicemode/connect/users/{username}/inbox if missing.
+    """
+    inbox_dir = Path.home() / ".voicemode" / "connect" / "users" / username
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    inbox_file = inbox_dir / "inbox"
+    if not inbox_file.exists():
+        inbox_file.touch()
+        logger.info(f"Created inbox for user: {username}")
 
 
 async def _ensure_user_registered(client, username: Optional[str] = None) -> list:
@@ -96,34 +114,33 @@ async def _ensure_user_registered(client, username: Optional[str] = None) -> lis
             )
             logger.info(f"Created Connect user: {username}")
 
+        # Ensure inbox exists for this user
+        _ensure_inbox(username)
+
         # Register on this WebSocket
         await client.register_user(user)
         logger.info(f"Registered user {username} on MCP server WebSocket")
         return [user]
 
     # No username — discover from filesystem
-    # Look for users with inbox-live symlinks (set up by hooks)
-    subscribed_users = [
-        u for u in client.user_manager.list()
-        if client.user_manager.is_subscribed(u.name)
-    ]
+    all_users = client.user_manager.list()
 
-    if subscribed_users:
-        # Register the first subscribed user as our primary
-        user = subscribed_users[0]
+    if all_users:
+        # Register the first user as our primary
+        user = all_users[0]
+        _ensure_inbox(user.name)
         await client.register_user(user)
-        logger.info(
-            f"Auto-registered user {user.name} on MCP server WebSocket"
-        )
-        return subscribed_users
+        logger.info(f"Auto-registered user {user.name} on MCP server WebSocket")
+        return all_users
 
-    # No subscribed users — check for preconfigured users
+    # No users — check for preconfigured users
     configured = connect_config.get_preconfigured_users()
     if configured:
         users = []
         for name in configured:
             user = client.user_manager.get(name)
             if user:
+                _ensure_inbox(user.name)
                 users.append(user)
         if users:
             await client.register_user(users[0])
@@ -158,21 +175,8 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
 
     if not my_users:
         return (
-            "No Connect users found. Pass username parameter or ensure "
-            "the PostToolUse hook created a user after TeamCreate."
+            "No Connect users found. Pass username parameter to register."
         )
-
-    # For "available", verify inbox-live symlink exists
-    if presence == "available":
-        any_subscribed = any(
-            client.user_manager.is_subscribed(u.name) for u in my_users
-        )
-        if not any_subscribed:
-            return (
-                "Cannot go available: no inbox-live symlink found.\n"
-                "Create a Claude Code team first (TeamCreate), then try again.\n"
-                "The inbox-live symlink connects incoming messages to your team inbox."
-            )
 
     # Build presence update for only this agent's users
     user_entries = []
@@ -199,11 +203,11 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
         if presence == "available":
             user_names = ", ".join(u.display_name or u.name for u in my_users)
             return (
-                f"\u2705 Now Available (green dot). Users can call you.\n"
+                f"Now Available (green dot). Users can call you.\n"
                 f"Registered as: {user_names}"
             )
         else:
-            return "\u2705 Now Away (amber dot). Messages will queue for later."
+            return "Now Away (amber dot). Messages will queue for later."
 
     except Exception as e:
         logger.error(f"Failed to set presence: {e}")

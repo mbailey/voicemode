@@ -224,13 +224,12 @@ class TestEnsureUserRegistered:
         mock_client.user_manager.get.assert_called_with("cora")
 
     @pytest.mark.asyncio
-    async def test_auto_discover_subscribed_users(self, mock_client):
-        """Without username, discovers subscribed users from filesystem."""
+    async def test_auto_discover_users(self, mock_client):
+        """Without username, discovers users from filesystem."""
         from voice_mode.tools.connect_status import _ensure_user_registered
 
         user = _make_user()
         mock_client.user_manager.list.return_value = [user]
-        mock_client.user_manager.is_subscribed.return_value = True
 
         result = await _ensure_user_registered(mock_client)
         assert result == [user]
@@ -289,12 +288,11 @@ class TestSetPresenceMissingUser:
 
 class TestSetPresenceAvailable:
     @pytest.mark.asyncio
-    async def test_available_requires_subscription(self, mock_client):
-        """Going 'available' fails if no inbox-live symlink."""
+    async def test_available_succeeds_without_subscription(self, mock_client):
+        """Going 'available' works without inbox-live symlink (no Teams dependency)."""
         from voice_mode.tools.connect_status import _set_presence
 
         user = _make_user()
-        mock_client.user_manager.is_subscribed.return_value = False
 
         with patch(
             "voice_mode.tools.connect_status._ensure_user_registered",
@@ -303,8 +301,8 @@ class TestSetPresenceAvailable:
         ):
             result = await _set_presence(mock_client, "available")
 
-        assert "Cannot go available" in result
-        assert "inbox-live" in result
+        assert "Now Available" in result
+        mock_client._ws.send.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_available_sends_capabilities_update(self, mock_client):
