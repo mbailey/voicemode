@@ -75,6 +75,12 @@ async def connect_status(
 
     # Handle presence change
     if set_presence:
+        # Auto-discover username from session file if not explicitly provided
+        if not username:
+            session_data = _get_session_data()
+            username = session_data.get("agent_name", "") or None
+            if username:
+                logger.info(f"Auto-discovered username from session: {username}")
         return await _set_presence(client, set_presence, username)
 
     # Default: return status
