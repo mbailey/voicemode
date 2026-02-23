@@ -1,0 +1,16 @@
+{
+  "description": "VoiceMode Connect: PostToolUse hook - checks inbox for pending messages after voice interactions",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__voicemode__converse",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/voice_mode/data/hooks/check-notifications.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
