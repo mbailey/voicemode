@@ -66,8 +66,10 @@ if [[ ! "$TEAM_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
   exit 0
 fi
 
-# Use team name as the agent/user name for Connect
-AGENT_NAME="$TEAM_NAME"
+# Use agent_type from hook input as the stable Connect identity (e.g., "cora")
+# The team name may be random, but the Connect identity should be stable
+AGENT_TYPE=$(echo "$INPUT" | jq -r '.agent_type // empty' 2>/dev/null)
+AGENT_NAME="${AGENT_TYPE:-$TEAM_NAME}"
 
 TEAM_DIR="$HOME/.claude/teams/$TEAM_NAME"
 
@@ -83,6 +85,7 @@ mkdir -p "$INBOX_DIR"
 INBOX_TARGET="$INBOX_DIR/team-lead.json"
 ln -sfn "$INBOX_TARGET" "$CONNECT_USER_DIR/inbox-live"
 echo "Inbox-live: $CONNECT_USER_DIR/inbox-live -> $INBOX_TARGET" >> "$DEBUG_LOG"
+echo "Connect identity: $AGENT_NAME (agent_type: ${AGENT_TYPE:-none}, team: $TEAM_NAME)" >> "$DEBUG_LOG"
 
 echo "=== on-team-created.sh DONE ===" >> "$DEBUG_LOG"
 

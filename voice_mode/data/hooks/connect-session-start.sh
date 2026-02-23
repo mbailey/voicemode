@@ -1,6 +1,6 @@
 #!/bin/bash
 # VoiceMode Connect: SessionStart hook (settings.json)
-# Cleans up stale team dir and prompts agent to create team for Connect
+# Prompts agent to create team for Connect message delivery
 #
 # Fires for ALL sessions but exits early if:
 # - Not an agent session (no --agent flag)
@@ -57,30 +57,10 @@ if [[ ! "$AGENT_TYPE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
   exit 0
 fi
 
-# Use agent_type as the team/user name
-AGENT_NAME="$AGENT_TYPE"
-
-# Clean up old team dir so TeamCreate gets the exact name
-TEAM_DIR="$HOME/.claude/teams/$AGENT_NAME"
-
-if [ -L "$TEAM_DIR" ]; then
-  # Symlink — resolve target, stale it, remove symlink
-  TARGET=$(readlink -f "$TEAM_DIR" 2>/dev/null || readlink "$TEAM_DIR")
-  echo "Found symlink: $TEAM_DIR -> $TARGET" >> "$DEBUG_LOG"
-  if [ -d "$TARGET" ]; then
-    mv "$TARGET" "${TARGET}.stale-$(date +%s)" 2>/dev/null || true
-  fi
-  rm -f "$TEAM_DIR"
-elif [ -d "$TEAM_DIR" ]; then
-  # Real directory — rename to stale
-  mv "$TEAM_DIR" "${TEAM_DIR}.stale-$(date +%s)" 2>/dev/null || true
-  echo "Staled: $TEAM_DIR" >> "$DEBUG_LOG"
-fi
-
-echo "Ready for TeamCreate with name: $AGENT_NAME" >> "$DEBUG_LOG"
+echo "Prompting agent to create team" >> "$DEBUG_LOG"
 
 # Plain text stdout is added to agent context for SessionStart hooks
 # (systemMessage only shows in UI, not delivered to agent context)
-echo "IMPORTANT: Create a team using TeamCreate with team_name '$AGENT_NAME'. This is required for VoiceMode Connect message delivery. Do this as your first action."
+echo "Create a team using TeamCreate. This is required for VoiceMode Connect message delivery. Do this as your first action."
 
 exit 0
