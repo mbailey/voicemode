@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import voice_mode.credential_store as cred_mod
 from voice_mode.credential_store import (
     KEYRING_SERVICE,
     KEYRING_USERNAME,
@@ -294,28 +295,40 @@ class TestMigration:
 class TestGetCredentialStore:
     """Tests for the store selection logic."""
 
+    @pytest.fixture(autouse=True)
+    def reset_cache(self):
+        """Reset the singleton cache between tests."""
+        cred_mod._cached_store = None
+        yield
+        cred_mod._cached_store = None
+
     def test_plaintext_when_configured(self, monkeypatch):
         monkeypatch.setenv("VOICEMODE_CREDENTIAL_STORE", "plaintext")
         store = get_credential_store()
         assert isinstance(store, PlaintextStore)
 
-    def test_keyring_when_viable(self, monkeypatch):
-        monkeypatch.delenv("VOICEMODE_CREDENTIAL_STORE", raising=False)
+    def test_keyring_when_configured_and_viable(self, monkeypatch):
+        monkeypatch.setenv("VOICEMODE_CREDENTIAL_STORE", "keyring")
         with patch("voice_mode.credential_store._keyring_backend_is_viable", return_value=True), \
              patch("voice_mode.credential_store._migrate_plaintext_to_keyring"):
             store = get_credential_store()
             assert isinstance(store, KeyringStore)
 
     def test_fallback_to_plaintext_when_keyring_unavailable(self, monkeypatch):
-        monkeypatch.delenv("VOICEMODE_CREDENTIAL_STORE", raising=False)
+        monkeypatch.setenv("VOICEMODE_CREDENTIAL_STORE", "keyring")
         with patch("voice_mode.credential_store._keyring_backend_is_viable", return_value=False):
             store = get_credential_store()
             assert isinstance(store, PlaintextStore)
 
-    def test_default_is_keyring(self, monkeypatch):
-        """When VOICEMODE_CREDENTIAL_STORE is unset, default to keyring."""
+    def test_default_is_plaintext(self, monkeypatch):
+        """When VOICEMODE_CREDENTIAL_STORE is unset, default to plaintext."""
         monkeypatch.delenv("VOICEMODE_CREDENTIAL_STORE", raising=False)
-        with patch("voice_mode.credential_store._keyring_backend_is_viable", return_value=True), \
-             patch("voice_mode.credential_store._migrate_plaintext_to_keyring"):
-            store = get_credential_store()
-            assert isinstance(store, KeyringStore)
+        store = get_credential_store()
+        assert isinstance(store, PlaintextStore)
+
+    def test_singleton_cache_returns_same_instance(self, monkeypatch):
+        """Repeated calls return the cached instance."""
+        monkeypatch.delenv("VOICEMODE_CREDENTIAL_STORE", raising=False)
+        store1 = get_credential_store()
+        store2 = get_credential_store()
+        assert store1 is store2

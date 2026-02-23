@@ -5,8 +5,8 @@ Provides KeyringStore (OS keychain) and PlaintextStore (file-based) implementati
 The active store is selected based on VOICEMODE_CREDENTIAL_STORE environment variable
 and keyring backend availability.
 
-Default: keyring (OS keychain)
-Opt-out: VOICEMODE_CREDENTIAL_STORE=plaintext
+Default: plaintext (file-based)
+Opt-in: VOICEMODE_CREDENTIAL_STORE=keyring
 """
 
 import json
@@ -175,29 +175,41 @@ def _migrate_plaintext_to_keyring(keyring_store: KeyringStore) -> None:
         logger.warning(f"Failed to migrate credentials to keyring: {e}")
 
 
+_cached_store: CredentialStore | None = None
+
+
 def get_credential_store() -> CredentialStore:
     """Get the active credential store based on configuration and availability.
 
     Priority:
-    1. VOICEMODE_CREDENTIAL_STORE=plaintext -> PlaintextStore
-    2. VOICEMODE_CREDENTIAL_STORE=keyring (or unset, default) -> KeyringStore if viable
+    1. VOICEMODE_CREDENTIAL_STORE=plaintext (or unset, default) -> PlaintextStore
+    2. VOICEMODE_CREDENTIAL_STORE=keyring -> KeyringStore if viable
     3. Fallback to PlaintextStore with warning if keyring backend is unavailable
     """
-    store_type = os.getenv("VOICEMODE_CREDENTIAL_STORE", "keyring").lower()
+    global _cached_store
+    if _cached_store is not None:
+        return _cached_store
+
+    store_type = os.getenv("VOICEMODE_CREDENTIAL_STORE", "plaintext").lower()
 
     if store_type == "plaintext":
-        return PlaintextStore()
+        _cached_store = PlaintextStore()
+        return _cached_store
 
-    # Default: try keyring
-    if _keyring_backend_is_viable():
+    # Explicit keyring request
+    if store_type == "keyring" and _keyring_backend_is_viable():
         store = KeyringStore()
         _migrate_plaintext_to_keyring(store)
-        return store
+        _cached_store = store
+        return _cached_store
 
-    # Keyring backend not viable — fall back to plaintext
-    logger.warning(
-        "Keyring backend unavailable (headless system?). "
-        "Falling back to plaintext credential storage. "
-        "Set VOICEMODE_CREDENTIAL_STORE=plaintext to suppress this warning."
-    )
-    return PlaintextStore()
+    # Keyring requested but not viable — fall back
+    if store_type == "keyring":
+        logger.warning(
+            "Keyring backend unavailable (headless system?). "
+            "Falling back to plaintext credential storage. "
+            "Set VOICEMODE_CREDENTIAL_STORE=plaintext to suppress this warning."
+        )
+
+    _cached_store = PlaintextStore()
+    return _cached_store
