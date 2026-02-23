@@ -6,9 +6,12 @@ Idempotent — ensures user exists and is registered before setting presence.
 
 WebSocket connection is lazy — only established on first connect_status() call.
 Inbox directory is created when presence is first set.
+Inbox-live symlink is set up for wake-from-idle when team_name is available.
 """
 
+import json
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -67,6 +70,28 @@ async def connect_status(
     return client.get_status_text()
 
 
+def _get_session_data() -> dict:
+    """Read session identity data from the session file.
+
+    Uses CLAUDE_SESSION_ID env var to find the session file written
+    by the SessionStart hook at ~/.voicemode/sessions/{session_id}.json.
+    Returns empty dict if not available.
+    """
+    session_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    if not session_id:
+        return {}
+
+    session_file = Path.home() / ".voicemode" / "sessions" / f"{session_id}.json"
+    if not session_file.exists():
+        return {}
+
+    try:
+        return json.loads(session_file.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"Failed to read session file: {e}")
+        return {}
+
+
 def _ensure_inbox(username: str) -> None:
     """Ensure inbox directory and file exist for a user.
 
@@ -78,6 +103,51 @@ def _ensure_inbox(username: str) -> None:
     if not inbox_file.exists():
         inbox_file.touch()
         logger.info(f"Created inbox for user: {username}")
+
+
+def _ensure_inbox_live_symlink(username: str, team_name: str) -> bool:
+    """Set up inbox-live symlink for wake-from-idle capability.
+
+    Creates a symlink from the VoiceMode user inbox to the Claude Code
+    team inbox. When messages arrive via Connect, they're written to both
+    the VoiceMode inbox (for hook-based delivery) and the team inbox
+    (for wake-from-idle via Claude Code Teams).
+
+    Args:
+        username: The agent's Connect username.
+        team_name: The Claude Code team name (directory under ~/.claude/teams/).
+
+    Returns:
+        True if symlink was created/exists, False if team dir doesn't exist.
+    """
+    team_inbox = Path.home() / ".claude" / "teams" / team_name / "inboxes" / "team-lead.json"
+    user_dir = Path.home() / ".voicemode" / "connect" / "users" / username
+    symlink_path = user_dir / "inbox-live"
+
+    # Verify team directory exists (agent actually created the team)
+    team_dir = Path.home() / ".claude" / "teams" / team_name
+    if not team_dir.exists():
+        logger.debug(f"Team directory doesn't exist: {team_dir}")
+        return False
+
+    # Ensure inboxes directory exists
+    team_inbox.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create or update symlink
+    try:
+        if symlink_path.is_symlink():
+            # Update if pointing to different target
+            if symlink_path.resolve() != team_inbox:
+                symlink_path.unlink()
+                symlink_path.symlink_to(team_inbox)
+                logger.info(f"Updated inbox-live symlink: {symlink_path} -> {team_inbox}")
+        else:
+            symlink_path.symlink_to(team_inbox)
+            logger.info(f"Created inbox-live symlink: {symlink_path} -> {team_inbox}")
+        return True
+    except OSError as e:
+        logger.warning(f"Failed to create inbox-live symlink: {e}")
+        return False
 
 
 async def _ensure_user_registered(client, username: Optional[str] = None) -> list:
@@ -178,6 +248,17 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
             "No Connect users found. Pass username parameter to register."
         )
 
+    # Auto-discover team_name from session file and set up wake symlink
+    if presence == "available":
+        session_data = _get_session_data()
+        team_name = session_data.get("team_name", "")
+        if team_name and my_users:
+            agent_name = my_users[0].name
+            if _ensure_inbox_live_symlink(agent_name, team_name):
+                logger.info(
+                    f"Wake-from-idle enabled: {agent_name} -> team {team_name}"
+                )
+
     # Build presence update for only this agent's users
     user_entries = []
     for user in my_users:
@@ -202,9 +283,17 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
 
         if presence == "available":
             user_names = ", ".join(u.display_name or u.name for u in my_users)
+            # Check if wake-from-idle is set up
+            wake_status = ""
+            if my_users:
+                symlink = Path.home() / ".voicemode" / "connect" / "users" / my_users[0].name / "inbox-live"
+                if symlink.is_symlink():
+                    wake_status = "\nWake-from-idle: enabled (team inbox linked)"
+                else:
+                    wake_status = "\nWake-from-idle: disabled (no team — create one with TeamCreate to enable)"
             return (
                 f"Now Available (green dot). Users can call you.\n"
-                f"Registered as: {user_names}"
+                f"Registered as: {user_names}{wake_status}"
             )
         else:
             return "Now Away (amber dot). Messages will queue for later."
