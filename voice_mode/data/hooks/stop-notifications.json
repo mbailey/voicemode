@@ -1,0 +1,15 @@
+{
+  "description": "VoiceMode Connect: Stop hook - blocks agent stop when inbox has pending messages",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/voice_mode/data/hooks/stop-notifications.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

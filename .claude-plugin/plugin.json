@@ -16,6 +16,7 @@
     "./voice_mode/data/hooks/stop.json",
     "./voice_mode/data/hooks/pre-compact.json",
     "./voice_mode/data/hooks/connect-session-start.json",
-    "./voice_mode/data/hooks/check-notifications.json"
+    "./voice_mode/data/hooks/check-notifications.json",
+    "./voice_mode/data/hooks/stop-notifications.json"
   ]
 }
