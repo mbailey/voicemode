@@ -51,6 +51,12 @@ if ! command -v voicemode &>/dev/null; then
   exit 0
 fi
 
+# Sanitize agent_type — only allow safe filesystem characters
+if [[ ! "$AGENT_TYPE" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  echo "Invalid agent_type '$AGENT_TYPE', exiting" >> "$DEBUG_LOG"
+  exit 0
+fi
+
 # Use agent_type as the team/user name
 AGENT_NAME="$AGENT_TYPE"
 

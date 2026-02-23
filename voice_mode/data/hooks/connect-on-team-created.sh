@@ -60,6 +60,12 @@ if [ -z "$TEAM_NAME" ]; then
   exit 0
 fi
 
+# Sanitize team name — only allow safe filesystem characters
+if [[ ! "$TEAM_NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  echo "Invalid team name '$TEAM_NAME', exiting" >> "$DEBUG_LOG"
+  exit 0
+fi
+
 # Use team name as the agent/user name for Connect
 AGENT_NAME="$TEAM_NAME"
 

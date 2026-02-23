@@ -43,12 +43,15 @@ async def _connect_lifespan(app: FastMCP):
 
     # Shutdown: disconnect cleanly
     if connect_config.is_enabled():
-        from .connect.client import get_client
+        try:
+            from .connect.client import get_client
 
-        client = get_client()
-        if client.is_connected or client.is_connecting:
-            logger.info("Connect auto-connect: disconnecting")
-            await client.disconnect()
+            client = get_client()
+            if client.is_connected or client.is_connecting:
+                logger.info("Connect auto-connect: disconnecting")
+                await client.disconnect()
+        except Exception as e:
+            logger.warning(f"Connect auto-connect: error during disconnect: {e}")
 
 
 # Create FastMCP instance with Connect lifespan
