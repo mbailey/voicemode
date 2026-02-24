@@ -309,27 +309,64 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
         session_data = _get_session_data(agent_name=agent_name)
         team_name = session_data.get("team_name", "")
         logger.info(f"_set_presence: session_data={session_data}, team_name={team_name!r}")
-        if team_name and my_users:
-            agent_name = my_users[0].name
-            logger.info(f"_set_presence: calling _ensure_inbox_live_symlink({agent_name!r}, {team_name!r})")
-            if _ensure_inbox_live_symlink(agent_name, team_name):
-                logger.info(
-                    f"Wake-from-idle enabled: {agent_name} -> team {team_name}"
-                )
-            else:
-                logger.info(f"_set_presence: _ensure_inbox_live_symlink returned False")
 
-        # Check if wake-from-idle is actually set up
         if my_users:
             symlink = Path.home() / ".voicemode" / "connect" / "users" / my_users[0].name / "inbox-live"
-            if not symlink.is_symlink():
-                # Downgrade to "away" — can't be truly available without wake
+
+            if not team_name:
+                # No team in current session — downgrade to "away"
+                # Don't remove existing symlink — it may belong to another
+                # active session with the same username (VM-818)
+                if symlink.is_symlink():
+                    logger.info(
+                        f"inbox-live symlink exists but not owned by this session "
+                        f"(no team_name): {symlink} -> {os.readlink(symlink)}"
+                    )
                 presence = "away"
                 downgraded_from_available = True
                 logger.info(
                     "Downgraded presence from available to away "
-                    "(no wake-from-idle capability)"
+                    "(no team_name in current session)"
                 )
+            else:
+                # Session has a team — validate and set up symlink
+                agent_name = my_users[0].name
+                expected_team_inbox = (
+                    Path.home() / ".claude" / "teams" / team_name
+                    / "inboxes" / "team-lead.json"
+                )
+
+                # Check for stale symlink pointing to wrong team
+                if symlink.is_symlink():
+                    try:
+                        current_target = Path(os.readlink(symlink))
+                        if current_target != expected_team_inbox:
+                            logger.info(
+                                f"Removing stale inbox-live symlink "
+                                f"(points to {current_target}, expected {expected_team_inbox})"
+                            )
+                            symlink.unlink()
+                    except OSError as e:
+                        logger.warning(f"Failed to read inbox-live symlink: {e}")
+                        symlink.unlink()
+
+                # Create/update symlink to current session's team
+                logger.info(f"_set_presence: calling _ensure_inbox_live_symlink({agent_name!r}, {team_name!r})")
+                if _ensure_inbox_live_symlink(agent_name, team_name):
+                    logger.info(
+                        f"Wake-from-idle enabled: {agent_name} -> team {team_name}"
+                    )
+                else:
+                    logger.info(f"_set_presence: _ensure_inbox_live_symlink returned False")
+
+                # Final check: symlink must exist and be valid
+                if not symlink.is_symlink():
+                    presence = "away"
+                    downgraded_from_available = True
+                    logger.info(
+                        "Downgraded presence from available to away "
+                        "(inbox-live symlink could not be created)"
+                    )
 
     # Build presence update for only this agent's users
     user_entries = []

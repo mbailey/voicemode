@@ -312,16 +312,23 @@ class TestSetPresenceAvailable:
 
     @pytest.mark.asyncio
     async def test_available_succeeds_with_wake(self, mock_client, tmp_path):
-        """'available' succeeds when inbox-live symlink exists."""
+        """'available' succeeds when session has team and inbox-live is valid."""
         from voice_mode.tools.connect_status import _set_presence
 
         user = _make_user()
 
-        # Create a fake inbox-live symlink
+        # Create team directory and inbox-live symlink pointing to it
+        team_dir = tmp_path / ".claude" / "teams" / "my-team" / "inboxes"
+        team_dir.mkdir(parents=True)
+        team_inbox = team_dir / "team-lead.json"
+
         user_dir = tmp_path / ".voicemode" / "connect" / "users" / "cora"
         user_dir.mkdir(parents=True)
         symlink = user_dir / "inbox-live"
-        symlink.symlink_to(tmp_path / "fake-target")
+        symlink.symlink_to(team_inbox)
+
+        # Session data with team_name matching the symlink target
+        session_data = {"agent_name": "cora", "team_name": "my-team"}
 
         with (
             patch(
@@ -330,6 +337,10 @@ class TestSetPresenceAvailable:
                 return_value=[user],
             ),
             patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "voice_mode.tools.connect_status._get_session_data",
+                return_value=session_data,
+            ),
         ):
             result = await _set_presence(mock_client, "available")
 
@@ -346,11 +357,17 @@ class TestSetPresenceAvailable:
 
         user = _make_user()
 
-        # Create a fake inbox-live symlink for available to succeed
+        # Create team directory and inbox-live symlink
+        team_dir = tmp_path / ".claude" / "teams" / "my-team" / "inboxes"
+        team_dir.mkdir(parents=True)
+        team_inbox = team_dir / "team-lead.json"
+
         user_dir = tmp_path / ".voicemode" / "connect" / "users" / "cora"
         user_dir.mkdir(parents=True)
         symlink = user_dir / "inbox-live"
-        symlink.symlink_to(tmp_path / "fake-target")
+        symlink.symlink_to(team_inbox)
+
+        session_data = {"agent_name": "cora", "team_name": "my-team"}
 
         with (
             patch(
@@ -359,6 +376,10 @@ class TestSetPresenceAvailable:
                 return_value=[user],
             ),
             patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "voice_mode.tools.connect_status._get_session_data",
+                return_value=session_data,
+            ),
         ):
             result = await _set_presence(mock_client, "available")
 
@@ -378,11 +399,17 @@ class TestSetPresenceAvailable:
 
         user = _make_user(display_name="Cora 7")
 
-        # Create a fake inbox-live symlink for available to succeed
+        # Create team directory and inbox-live symlink
+        team_dir = tmp_path / ".claude" / "teams" / "my-team" / "inboxes"
+        team_dir.mkdir(parents=True)
+        team_inbox = team_dir / "team-lead.json"
+
         user_dir = tmp_path / ".voicemode" / "connect" / "users" / "cora"
         user_dir.mkdir(parents=True)
         symlink = user_dir / "inbox-live"
-        symlink.symlink_to(tmp_path / "fake-target")
+        symlink.symlink_to(team_inbox)
+
+        session_data = {"agent_name": "cora", "team_name": "my-team"}
 
         with (
             patch(
@@ -391,10 +418,93 @@ class TestSetPresenceAvailable:
                 return_value=[user],
             ),
             patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "voice_mode.tools.connect_status._get_session_data",
+                return_value=session_data,
+            ),
         ):
             result = await _set_presence(mock_client, "available")
 
         assert "Cora 7" in result
+
+
+class TestSetPresenceStaleSymlink:
+    @pytest.mark.asyncio
+    async def test_downgrades_without_removing_others_symlink(self, mock_client, tmp_path):
+        """Downgrades to 'away' but leaves existing symlink intact (may belong to another session)."""
+        from voice_mode.tools.connect_status import _set_presence
+
+        user = _make_user()
+
+        # Create an inbox-live symlink (belongs to another session)
+        user_dir = tmp_path / ".voicemode" / "connect" / "users" / "cora"
+        user_dir.mkdir(parents=True)
+        symlink = user_dir / "inbox-live"
+        symlink.symlink_to(tmp_path / "other-sessions-target")
+
+        # Session data WITHOUT team_name (this session has no team)
+        session_data = {"agent_name": "cora"}
+
+        with (
+            patch(
+                "voice_mode.tools.connect_status._ensure_user_registered",
+                new_callable=AsyncMock,
+                return_value=[user],
+            ),
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "voice_mode.tools.connect_status._get_session_data",
+                return_value=session_data,
+            ),
+        ):
+            result = await _set_presence(mock_client, "available")
+
+        # Should downgrade to away but NOT remove the symlink
+        assert "Set to Away" in result
+        assert "TeamCreate" in result
+        assert symlink.is_symlink(), "Should not remove another session's symlink"
+
+    @pytest.mark.asyncio
+    async def test_stale_symlink_replaced_with_correct_team(self, mock_client, tmp_path):
+        """Stale inbox-live pointing to wrong team is replaced."""
+        from voice_mode.tools.connect_status import _set_presence
+
+        user = _make_user()
+
+        # Create correct team directory
+        correct_team_dir = tmp_path / ".claude" / "teams" / "correct-team" / "inboxes"
+        correct_team_dir.mkdir(parents=True)
+        correct_inbox = correct_team_dir / "team-lead.json"
+
+        # Create stale symlink pointing to WRONG team
+        user_dir = tmp_path / ".voicemode" / "connect" / "users" / "cora"
+        user_dir.mkdir(parents=True)
+        symlink = user_dir / "inbox-live"
+        wrong_inbox = tmp_path / ".claude" / "teams" / "wrong-team" / "inboxes" / "team-lead.json"
+        symlink.symlink_to(wrong_inbox)
+
+        # Session data with correct team_name
+        session_data = {"agent_name": "cora", "team_name": "correct-team"}
+
+        with (
+            patch(
+                "voice_mode.tools.connect_status._ensure_user_registered",
+                new_callable=AsyncMock,
+                return_value=[user],
+            ),
+            patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "voice_mode.tools.connect_status._get_session_data",
+                return_value=session_data,
+            ),
+        ):
+            result = await _set_presence(mock_client, "available")
+
+        # Should succeed and symlink should point to correct team
+        assert "Now Available" in result
+        import os
+        assert symlink.is_symlink()
+        assert os.readlink(str(symlink)) == str(correct_inbox)
 
 
 class TestSetPresenceAway:
@@ -559,11 +669,17 @@ class TestSetPresenceMultipleUsers:
             _make_user(name="echo", display_name="Echo"),
         ]
 
-        # Create inbox-live symlink for "cora" (first user checked for wake)
+        # Create team directory and inbox-live symlink for "cora" (first user)
+        team_dir = tmp_path / ".claude" / "teams" / "my-team" / "inboxes"
+        team_dir.mkdir(parents=True)
+        team_inbox = team_dir / "team-lead.json"
+
         user_dir = tmp_path / ".voicemode" / "connect" / "users" / "cora"
         user_dir.mkdir(parents=True)
         symlink = user_dir / "inbox-live"
-        symlink.symlink_to(tmp_path / "fake-target")
+        symlink.symlink_to(team_inbox)
+
+        session_data = {"agent_name": "cora", "team_name": "my-team"}
 
         with (
             patch(
@@ -572,6 +688,10 @@ class TestSetPresenceMultipleUsers:
                 return_value=users,
             ),
             patch("pathlib.Path.home", return_value=tmp_path),
+            patch(
+                "voice_mode.tools.connect_status._get_session_data",
+                return_value=session_data,
+            ),
         ):
             result = await _set_presence(mock_client, "available")
 
