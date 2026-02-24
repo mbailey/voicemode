@@ -49,10 +49,39 @@ def get_available_hooks() -> dict:
     return available
 
 
-def hook_name_completion(ctx, param, incomplete):
-    """Shell completion for hook names."""
+def get_installed_hook_names(scope: str) -> set[str]:
+    """Return set of hook names (kebab-case) that are installed for the given scope.
+
+    Reads the settings file and checks which hook events have VoiceMode
+    hooks present, then maps event names back to hook names.
+    """
+    event_to_name = {v: k for k, v in HOOK_NAME_TO_EVENT.items()}
+    try:
+        settings = read_settings(scope)
+    except Exception:
+        return set()
+    hooks_dict = settings.get('hooks', {})
+    installed = set()
+    for event, entries in hooks_dict.items():
+        if any(is_voicemode_hook(e) for e in entries):
+            if event in event_to_name:
+                installed.add(event_to_name[event])
+    return installed
+
+
+def hook_name_add_completion(ctx, param, incomplete):
+    """Shell completion for 'hooks add' - only suggest hooks NOT already installed."""
+    scope = (ctx.params.get('scope') or 'user')
     available = get_available_hooks()
-    return [name for name in available if name.startswith(incomplete)]
+    installed = get_installed_hook_names(scope)
+    return [name for name in sorted(available) if name not in installed and name.startswith(incomplete)]
+
+
+def hook_name_remove_completion(ctx, param, incomplete):
+    """Shell completion for 'hooks remove' - only suggest hooks that ARE installed."""
+    scope = (ctx.params.get('scope') or 'user')
+    installed = get_installed_hook_names(scope)
+    return [name for name in sorted(installed) if name.startswith(incomplete)]
 
 
 def install_hook_receiver() -> Path:
@@ -232,7 +261,7 @@ Examples:
   voicemode claude hooks add --scope local      # Add to local settings
 """)
 @click.help_option('-h', '--help', help='Show this message and exit')
-@click.argument('hook_name', required=False, default=None, shell_complete=hook_name_completion)
+@click.argument('hook_name', required=False, default=None, shell_complete=hook_name_add_completion)
 @click.option('-s', '--scope', type=click.Choice(['user', 'project', 'local']),
               default='user', show_default=True,
               help='Settings scope to install hooks into')
@@ -296,7 +325,7 @@ Examples:
   voicemode claude hooks remove -s project      # Remove from project settings
 """)
 @click.help_option('-h', '--help', help='Show this message and exit')
-@click.argument('hook_name', required=False, default=None, shell_complete=hook_name_completion)
+@click.argument('hook_name', required=False, default=None, shell_complete=hook_name_remove_completion)
 @click.option('-s', '--scope', type=click.Choice(['user', 'project', 'local']),
               default='user', show_default=True,
               help='Settings scope to remove hooks from')

@@ -11,11 +11,14 @@ from click.testing import CliRunner
 from voice_mode.cli_commands.claude import (
     claude,
     get_available_hooks,
+    get_installed_hook_names,
+    hook_name_add_completion,
+    hook_name_remove_completion,
     install_hook_receiver,
-    resolve_hook_command,
     is_voicemode_hook,
     merge_hooks,
     remove_hooks,
+    resolve_hook_command,
     HOOK_NAME_TO_EVENT,
 )
 
@@ -567,6 +570,163 @@ class TestInstallHookReceiver:
 
         assert result.exists()
         assert os.access(result, os.X_OK)
+
+
+class TestGetInstalledHookNames:
+    """Tests for get_installed_hook_names function."""
+
+    def test_empty_settings(self, temp_settings_dir):
+        """Should return empty set when no settings exist."""
+        installed = get_installed_hook_names('user')
+        assert installed == set()
+
+    def test_no_voicemode_hooks(self, temp_settings_dir):
+        """Should return empty set when no VoiceMode hooks are installed."""
+        from voice_mode.cli_commands import claude as claude_mod
+        settings_path = claude_mod.SETTINGS_PATHS['user']
+        settings_path.write_text(json.dumps({
+            'hooks': {
+                'PreToolUse': [
+                    {'hooks': [{'type': 'command', 'command': 'other-tool'}]}
+                ]
+            }
+        }))
+        installed = get_installed_hook_names('user')
+        assert installed == set()
+
+    def test_with_installed_hooks(self, temp_settings_dir):
+        """Should return hook names for installed VoiceMode hooks."""
+        from voice_mode.cli_commands import claude as claude_mod
+        settings_path = claude_mod.SETTINGS_PATHS['user']
+        settings_path.write_text(json.dumps({
+            'hooks': {
+                'PreToolUse': [
+                    {'hooks': [{'type': 'command', 'command': 'voicemode-hook-receiver || true'}]}
+                ],
+                'PostToolUse': [
+                    {'hooks': [{'type': 'command', 'command': 'voicemode-hook-receiver || true'}]}
+                ]
+            }
+        }))
+        installed = get_installed_hook_names('user')
+        assert installed == {'pre-tool-use', 'post-tool-use'}
+
+    def test_handles_read_error(self):
+        """Should return empty set on read error."""
+        with patch('voice_mode.cli_commands.claude.read_settings', side_effect=Exception("file error")):
+            installed = get_installed_hook_names('user')
+        assert installed == set()
+
+
+class TestHookNameAddCompletion:
+    """Tests for hook_name_add_completion function."""
+
+    def test_suggests_uninstalled_hooks(self, temp_settings_dir):
+        """Should only suggest hooks that are NOT installed."""
+        from voice_mode.cli_commands import claude as claude_mod
+        settings_path = claude_mod.SETTINGS_PATHS['user']
+        settings_path.write_text(json.dumps({
+            'hooks': {
+                'PreToolUse': [
+                    {'hooks': [{'type': 'command', 'command': 'voicemode-hook-receiver || true'}]}
+                ]
+            }
+        }))
+        ctx = MagicMock()
+        ctx.params = {'scope': 'user'}
+        completions = hook_name_add_completion(ctx, None, '')
+        assert 'pre-tool-use' not in completions
+        assert 'post-tool-use' in completions
+        assert 'notification' in completions
+
+    def test_suggests_all_when_none_installed(self, temp_settings_dir):
+        """Should suggest all hooks when none are installed."""
+        ctx = MagicMock()
+        ctx.params = {'scope': 'user'}
+        completions = hook_name_add_completion(ctx, None, '')
+        available = get_available_hooks()
+        # All available hooks that are in HOOK_NAME_TO_EVENT should be present
+        for name in available:
+            assert name in completions
+
+    def test_filters_by_prefix(self, temp_settings_dir):
+        """Should filter completions by prefix."""
+        ctx = MagicMock()
+        ctx.params = {'scope': 'user'}
+        completions = hook_name_add_completion(ctx, None, 'pre')
+        assert all(name.startswith('pre') for name in completions)
+
+    def test_defaults_to_user_scope(self, temp_settings_dir):
+        """Should default to user scope when scope not set."""
+        ctx = MagicMock()
+        ctx.params = {}
+        completions = hook_name_add_completion(ctx, None, '')
+        # Should not raise, should return available hooks
+        assert len(completions) > 0
+
+
+class TestHookNameRemoveCompletion:
+    """Tests for hook_name_remove_completion function."""
+
+    def test_suggests_installed_hooks(self, temp_settings_dir):
+        """Should only suggest hooks that ARE installed."""
+        from voice_mode.cli_commands import claude as claude_mod
+        settings_path = claude_mod.SETTINGS_PATHS['user']
+        settings_path.write_text(json.dumps({
+            'hooks': {
+                'PreToolUse': [
+                    {'hooks': [{'type': 'command', 'command': 'voicemode-hook-receiver || true'}]}
+                ],
+                'Stop': [
+                    {'hooks': [{'type': 'command', 'command': 'voicemode-hook-receiver || true'}]}
+                ]
+            }
+        }))
+        ctx = MagicMock()
+        ctx.params = {'scope': 'user'}
+        completions = hook_name_remove_completion(ctx, None, '')
+        assert 'pre-tool-use' in completions
+        assert 'stop' in completions
+        assert 'post-tool-use' not in completions
+        assert 'notification' not in completions
+
+    def test_empty_when_none_installed(self, temp_settings_dir):
+        """Should return empty list when no hooks are installed."""
+        ctx = MagicMock()
+        ctx.params = {'scope': 'user'}
+        completions = hook_name_remove_completion(ctx, None, '')
+        assert completions == []
+
+    def test_filters_by_prefix(self, temp_settings_dir):
+        """Should filter completions by prefix."""
+        from voice_mode.cli_commands import claude as claude_mod
+        settings_path = claude_mod.SETTINGS_PATHS['user']
+        settings_path.write_text(json.dumps({
+            'hooks': {
+                'PreToolUse': [
+                    {'hooks': [{'type': 'command', 'command': 'voicemode-hook-receiver || true'}]}
+                ],
+                'PostToolUse': [
+                    {'hooks': [{'type': 'command', 'command': 'voicemode-hook-receiver || true'}]}
+                ],
+                'Stop': [
+                    {'hooks': [{'type': 'command', 'command': 'voicemode-hook-receiver || true'}]}
+                ]
+            }
+        }))
+        ctx = MagicMock()
+        ctx.params = {'scope': 'user'}
+        completions = hook_name_remove_completion(ctx, None, 'p')
+        assert 'pre-tool-use' in completions
+        assert 'post-tool-use' in completions
+        assert 'stop' not in completions
+
+    def test_defaults_to_user_scope(self, temp_settings_dir):
+        """Should default to user scope when scope not set."""
+        ctx = MagicMock()
+        ctx.params = {}
+        completions = hook_name_remove_completion(ctx, None, '')
+        assert completions == []
 
 
 class TestHooksGroupDefault:
