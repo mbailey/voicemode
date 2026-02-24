@@ -174,65 +174,20 @@ class TestStatus:
         assert "2026-02-17T10:00:00Z" in result.output
 
 
-class TestUp:
-    def test_up_help(self, runner):
+class TestUpRemoved:
+    """Verify connect up command has been removed (VM-824)."""
+
+    def test_up_command_not_registered(self, runner):
         result = runner.invoke(voice_mode_main_cli, ["connect", "up", "--help"])
-        assert result.exit_code == 0
-        assert "Bring up connection" in result.output
-        assert "voicemode connect up" in result.output
-
-    def test_up_requires_connect_enabled(self, runner, monkeypatch):
-        import voice_mode.config as config_mod
-        monkeypatch.setattr(config_mod, "CONNECT_ENABLED", False)
-
-        result = runner.invoke(voice_mode_main_cli, ["connect", "up"])
         assert result.exit_code != 0
-        assert "not enabled" in result.output
-
-    def test_up_requires_credentials(self, runner, connect_env, monkeypatch):
-        """up should fail gracefully when not logged in."""
-        monkeypatch.setattr(
-            "voice_mode.auth.get_valid_credentials",
-            lambda auto_refresh=False: None,
-        )
-        result = runner.invoke(voice_mode_main_cli, ["connect", "up"])
-        assert result.exit_code != 0
-        assert "Not logged in" in result.output
 
 
-class TestDown:
-    def test_down_help(self, runner):
+class TestDownRemoved:
+    """Verify connect down command has been removed (VM-824)."""
+
+    def test_down_command_not_registered(self, runner):
         result = runner.invoke(voice_mode_main_cli, ["connect", "down", "--help"])
-        assert result.exit_code == 0
-        assert "Disconnect" in result.output
-
-    def test_down_no_process_running(self, runner, connect_env, tmp_path, monkeypatch):
-        """down should report when no process is running."""
-        import voice_mode.connect.users as users_mod
-        connect_dir = tmp_path / "connect"
-        connect_dir.mkdir(exist_ok=True)
-        monkeypatch.setattr(users_mod, "CONNECT_DIR", connect_dir)
-
-        result = runner.invoke(voice_mode_main_cli, ["connect", "down"])
-        assert result.exit_code == 0
-        assert "No connect process running" in result.output
-
-    def test_down_stale_pid(self, runner, connect_env, tmp_path, monkeypatch):
-        """down should clean up stale PID file for dead process."""
-        import voice_mode.connect.users as users_mod
-        connect_dir = tmp_path / "connect"
-        connect_dir.mkdir(exist_ok=True)
-        monkeypatch.setattr(users_mod, "CONNECT_DIR", connect_dir)
-
-        # Write a PID that doesn't exist (use a very high PID)
-        pid_file = connect_dir / "pid"
-        pid_file.write_text("999999999")
-
-        result = runner.invoke(voice_mode_main_cli, ["connect", "down"])
-        assert result.exit_code == 0
-        assert "not running" in result.output
-        # PID file should be cleaned up
-        assert not pid_file.exists()
+        assert result.exit_code != 0
 
 
 class TestStandbyRemoved:
