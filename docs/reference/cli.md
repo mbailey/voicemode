@@ -204,8 +204,7 @@ Diagnostic tools for voicemode
 voicemode diag [OPTIONS] COMMAND [ARGS]...
 
 Commands:
-  dependencies  Check system audio dependencies and provide installation guidance
-  devices       List available audio input and output devices  
+  devices       List available audio input and output devices
   info          Show voicemode installation information
   registry      Show voice provider registry with all discovered endpoints
 ```
@@ -333,29 +332,6 @@ voicemode exchanges clear
 
 ## Utility Commands
 
-### version
-Show Voice Mode version and check for updates
-
-```bash
-voicemode version
-
-# Check for updates
-voicemode version --check
-```
-
-### update
-Update Voice Mode to the latest version
-
-```bash
-voicemode update
-
-# Update to specific version
-voicemode update --version 2.3.0
-
-# Force update even if up-to-date
-voicemode update --force
-```
-
 ### completions
 Generate or install shell completion scripts
 
@@ -427,7 +403,6 @@ uvx --from . voicemode
 
 # Check diagnostics
 voicemode diag info
-voicemode diag dependencies
 ```
 
 ### Troubleshooting

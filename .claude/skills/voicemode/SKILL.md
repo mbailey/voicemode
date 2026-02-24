@@ -212,10 +212,6 @@ voicemode deps                      # Check dependencies
 voicemode diag info                 # System info
 voicemode diag devices              # Audio devices
 
-# History search
-voicemode history search "keyword"
-voicemode history play <exchange_id>
-
 # DJ Mode
 voicemode dj play <file|url>        # Start playback
 voicemode dj status                 # What's playing
