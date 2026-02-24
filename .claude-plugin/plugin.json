@@ -18,6 +18,7 @@
     "./voice_mode/data/hooks/connect-session-start.json",
     "./voice_mode/data/hooks/check-notifications.json",
     "./voice_mode/data/hooks/stop-notifications.json",
-    "./voice_mode/data/hooks/on-team-created.json"
+    "./voice_mode/data/hooks/on-team-created.json",
+    "./voice_mode/data/hooks/connect-session-end.json"
   ]
 }
