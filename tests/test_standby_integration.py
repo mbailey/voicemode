@@ -1,7 +1,7 @@
-"""Tests verifying the standby command has been removed.
+"""Tests verifying the standby and connect up/down commands have been removed.
 
-The standby command was replaced by 'voicemode connect up' which has
-proper VOICEMODE_CONNECT_ENABLED guard and the new connect architecture.
+The standalone daemon model (standby → connect up) was replaced by
+agent-driven presence via the connect_status MCP tool (VM-824).
 """
 
 
@@ -19,13 +19,22 @@ class TestStandbyRemoved:
         # Should fail because standby no longer exists
         assert result.exit_code != 0
 
-    def test_up_command_exists(self):
-        """'up' command should exist as the replacement."""
+
+class TestConnectUpDownRemoved:
+    """Verify connect up and down are gone (VM-824)."""
+
+    def test_up_command_not_registered(self):
         from click.testing import CliRunner
         from voice_mode.cli import connect
 
         runner = CliRunner()
         result = runner.invoke(connect, ["up", "--help"])
+        assert result.exit_code != 0
 
-        assert result.exit_code == 0
-        assert "voicemode.dev" in result.output
+    def test_down_command_not_registered(self):
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+        result = runner.invoke(connect, ["down", "--help"])
+        assert result.exit_code != 0

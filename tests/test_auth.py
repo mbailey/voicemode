@@ -958,8 +958,8 @@ class TestAuthStatusCLI:
             assert "expired" in result.output.lower()
 
 
-class TestStandbyRemoved:
-    """Verify the standby command has been removed (replaced by 'up')."""
+class TestStandbyAndUpRemoved:
+    """Verify standby, up, and down commands have been removed (VM-824)."""
 
     def test_standby_command_not_registered(self):
         """standby command should not exist under connect group."""
@@ -968,17 +968,22 @@ class TestStandbyRemoved:
 
         runner = CliRunner()
         result = runner.invoke(connect, ["standby", "--help"])
-
-        # Should fail because standby no longer exists
         assert result.exit_code != 0
 
-    def test_up_command_exists(self):
-        """'up' command should exist as the replacement."""
+    def test_up_command_not_registered(self):
+        """up command was removed — agents handle their own presence."""
         from click.testing import CliRunner
         from voice_mode.cli import connect
 
         runner = CliRunner()
         result = runner.invoke(connect, ["up", "--help"])
+        assert result.exit_code != 0
 
-        assert result.exit_code == 0
-        assert "voicemode.dev" in result.output
+    def test_down_command_not_registered(self):
+        """down command was removed along with up."""
+        from click.testing import CliRunner
+        from voice_mode.cli import connect
+
+        runner = CliRunner()
+        result = runner.invoke(connect, ["down", "--help"])
+        assert result.exit_code != 0

@@ -3036,13 +3036,15 @@ def connect():
     Connect your AI agents to voicemode.dev for remote messaging
     from mobile apps, web browsers, and other agents.
 
+    Presence is agent-driven: each agent announces itself via the
+    connect_status MCP tool when it starts a session.
+
     Examples:
         voicemode connect auth login
-        voicemode connect up
+        voicemode connect auth status
         voicemode connect status
         voicemode connect user add voicemode --name "Cora 7"
         voicemode connect user list
-        voicemode connect down
     """
     pass
 
@@ -3068,7 +3070,7 @@ def login(no_browser: bool):
 
     Opens your browser to complete authentication via Auth0.
     After successful login, your credentials are stored locally
-    and used automatically by 'voicemode connect up'.
+    and used automatically by agents via the connect_status MCP tool.
 
     The login process:
     1. Opens browser to voicemode.dev/Auth0 login page
@@ -3129,7 +3131,7 @@ def login(no_browser: bool):
 
         click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
         click.echo()
-        click.echo("You can now use 'voicemode connect up' to receive calls.")
+        click.echo("Agents will use these credentials automatically via connect_status.")
 
     except KeyboardInterrupt:
         click.echo()
@@ -3223,205 +3225,10 @@ def auth_status():
         click.echo("  Refresh token: present")
 
 
-@connect.command()
-@click.help_option('-h', '--help', help='Show this message and exit')
-def up():
-    """Bring up connection to voicemode.dev.
 
-    Connects to the gateway, discovers registered users, and announces
-    them as available. Watches for local user changes (new subscriptions,
-    removed agents) and re-announces automatically.
-
-    The gateway is the source of truth for user availability. This process
-    bridges local state to the gateway.
-
-    \b
-    Prerequisites:
-        1. Run 'voicemode connect auth login' to authenticate
-        2. Add users with 'voicemode connect user add <name>'
-
-    \b
-    What happens on connect:
-        1. WebSocket connection to voicemode.dev
-        2. Reads ~/.voicemode/connect/users/*/meta.json
-        3. Announces each user with capabilities_update
-        4. Watches for symlink changes (new agents subscribing)
-        5. Delivers incoming messages to user inboxes
-
-    Examples:
-        voicemode connect up
-
-        # Check who's connected
-        voicemode connect status
-    """
-    from voice_mode.connect.config import require_enabled, ConnectDisabledError
-
-    try:
-        require_enabled()
-    except ConnectDisabledError as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-    # Verify credentials before starting async loop
-    from voice_mode.auth import get_valid_credentials, AuthError
-    try:
-        credentials = get_valid_credentials(auto_refresh=True)
-        if not credentials:
-            click.echo("Error: Not logged in.", err=True)
-            click.echo()
-            click.echo("Run 'voicemode connect auth login' to authenticate.")
-            sys.exit(1)
-        user_info = credentials.user_info or {}
-        email = user_info.get("email", "authenticated user")
-        click.echo(f"Using stored credentials for: {email}")
-    except AuthError as e:
-        click.echo(f"Error: Authentication failed: {e}", err=True)
-        click.echo()
-        click.echo("Run 'voicemode connect auth login' to re-authenticate.")
-        sys.exit(1)
-
-    # Try to import websockets
-    try:
-        import websockets  # noqa: F401
-    except ImportError:
-        click.echo("Error: websockets package required.", err=True)
-        click.echo()
-        click.echo("Install with: pip install websockets")
-        sys.exit(1)
-
-    from voice_mode.connect.config import get_host
-    from voice_mode.connect.users import UserManager, CONNECT_DIR
-    from voice_mode.connect.client import ConnectClient
-
-    host = get_host()
-    user_manager = UserManager(host)
-    client = ConnectClient(user_manager)
-
-    # Write PID file for 'down' command
-    pid_file = CONNECT_DIR / "pid"
-    CONNECT_DIR.mkdir(parents=True, exist_ok=True)
-    pid_file.write_text(str(os.getpid()))
-
-    users = user_manager.list()
-    click.echo(f"Host: {host}")
-    click.echo(f"Users: {len(users)} registered")
-    for u in users:
-        presence = user_manager.get_presence(u.name)
-        display = f" ({u.display_name})" if u.display_name else ""
-        click.echo(f"  {u.address}{display} [{presence.value}]")
-    click.echo()
-
-    async def _run():
-        import signal as _signal
-
-        shutdown_event = asyncio.Event()
-
-        def _handle_signal():
-            click.echo("\nShutting down...")
-            shutdown_event.set()
-
-        loop = asyncio.get_event_loop()
-        for sig in (_signal.SIGINT, _signal.SIGTERM):
-            loop.add_signal_handler(sig, _handle_signal)
-
-        # Connect
-        await client.connect()
-
-        # Wait for connection to establish (up to 10s)
-        for _ in range(20):
-            if client.is_connected:
-                break
-            await asyncio.sleep(0.5)
-
-        if client.is_connected:
-            click.echo(f"✅ Connected to gateway")
-            click.echo(f"📡 Watching for user changes... (Ctrl+C to stop)")
-            click.echo()
-        else:
-            click.echo(f"⚠️  Connection in progress: {client.status_message}")
-            click.echo(f"📡 Will announce users when connected... (Ctrl+C to stop)")
-            click.echo()
-
-        # File-watch loop: poll users directory for symlink changes
-        watcher_task = asyncio.create_task(
-            _watch_user_changes(client, user_manager)
-        )
-
-        # Wait for shutdown signal
-        await shutdown_event.wait()
-
-        # Cleanup
-        watcher_task.cancel()
-        try:
-            await watcher_task
-        except asyncio.CancelledError:
-            pass
-
-        await client.disconnect()
-        click.echo("Disconnected.")
-
-    async def _watch_user_changes(client, user_manager):
-        """Poll users directory for symlink changes, re-announce on change."""
-        from voice_mode.connect.watcher import watch_user_changes
-        await watch_user_changes(client, user_manager, echo=click.echo)
-
-    try:
-        asyncio.run(_run())
-    finally:
-        # Clean up PID file
-        try:
-            pid_file.unlink(missing_ok=True)
-        except OSError:
-            pass
-
-    click.echo("Goodbye!")
-
-
-@connect.command()
-@click.help_option('-h', '--help', help='Show this message and exit')
-def down():
-    """Disconnect from voicemode.dev.
-
-    Signals the running 'voicemode connect up' process to shut down
-    gracefully. Uses a PID file to find the running process.
-
-    Examples:
-        voicemode connect down
-    """
-    import signal as _signal
-
-    from voice_mode.connect.users import CONNECT_DIR
-
-    pid_file = CONNECT_DIR / "pid"
-    if not pid_file.exists():
-        click.echo("No connect process running (no PID file).")
-        return
-
-    try:
-        pid = int(pid_file.read_text().strip())
-    except (ValueError, OSError):
-        click.echo("Error: Could not read PID file.", err=True)
-        pid_file.unlink(missing_ok=True)
-        sys.exit(1)
-
-    # Check if process is actually running
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        click.echo(f"Connect process (PID {pid}) is not running. Cleaning up.")
-        pid_file.unlink(missing_ok=True)
-        return
-    except PermissionError:
-        click.echo(f"Connect process (PID {pid}) exists but cannot be signaled.", err=True)
-        sys.exit(1)
-
-    # Send SIGTERM for graceful shutdown
-    try:
-        os.kill(pid, _signal.SIGTERM)
-        click.echo(f"Sent shutdown signal to connect process (PID {pid}).")
-    except OSError as e:
-        click.echo(f"Error sending signal: {e}", err=True)
-        sys.exit(1)
+# NOTE: 'connect up' and 'connect down' were removed in VM-824.
+# Presence is now agent-driven via the connect_status MCP tool.
+# Each agent announces itself via its own WebSocket connection.
 
 
 @connect.command()
