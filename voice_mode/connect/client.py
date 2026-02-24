@@ -158,13 +158,19 @@ class ConnectClient:
 
             creds = await asyncio.to_thread(get_valid_credentials, auto_refresh=True)
         except Exception as e:
-            self._status_message = f"Auth error: {e}"
+            self._status_message = (
+                f"Auth error: {e}\n"
+                "Run: voicemode connect auth login\n"
+                "Check: voicemode connect auth status"
+            )
             logger.warning(f"Connect client: could not load credentials: {e}")
             return
 
         if creds is None:
             self._status_message = (
-                "Not connected (no credentials - run: voicemode connect auth login)"
+                "Not connected (no credentials)\n"
+                "Run: voicemode connect auth login\n"
+                "Check: voicemode connect auth status"
             )
             logger.debug("Connect client: no credentials available")
             return
@@ -279,7 +285,11 @@ class ConnectClient:
                     get_valid_credentials, auto_refresh=True
                 )
                 if creds is None:
-                    self._status_message = "Not connected (credentials expired)"
+                    self._status_message = (
+                        "Not connected (credentials expired)\n"
+                        "Run: voicemode connect auth login\n"
+                        "Check: voicemode connect auth status"
+                    )
                     self.state = ConnectState.DISCONNECTED
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_retry_delay)

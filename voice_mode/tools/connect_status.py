@@ -70,7 +70,8 @@ async def connect_status(
             return (
                 f"Failed to connect to VoiceMode Connect gateway.\n"
                 f"Status: {client.status_message}\n"
-                f"Check credentials with: voicemode connect auth status"
+                f"Run: voicemode connect auth login\n"
+                f"Check: voicemode connect auth status"
             )
 
     # Handle presence change
