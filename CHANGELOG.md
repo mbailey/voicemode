@@ -7,9 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.3.0] - 2026-02-24 - Happy 1st Birthday, Claude Code!
+
+*February 24, 2026 — One year since Claude Code launched. This release celebrates with
+VoiceMode Connect: make inbound voice calls to your Claude Code agents from anywhere.*
+
+### Added
+
+#### VoiceMode Connect — Inbound Voice Calls
+
+- **connect_status MCP tool** (VM-770) - Manage agent presence directly from Claude Code conversations; always-on visibility on the voicemode.dev dashboard
+- **Auto-connect on startup** (VM-766) - WebSocket connection established automatically when the MCP server starts, so agents appear online without manual steps
+- **Deterministic device ID and scoped capabilities** (VM-768) - Stable device identity across restarts with fine-grained capability declarations
+- **User-based mailbox system** (VM-724) - Modular Connect architecture with per-user message routing, replacing the previous monolithic approach
+- **OS keychain credential storage** (VM-720) - Credentials stored securely via the `keyring` library with automatic fallback for headless/SSH environments
+- **Wakeable agent registration** (VMD-104) - Agents register as wakeable on the Connect gateway, enabling inbound calls to start conversations
+- **Configurable wake command** (VM-712) - Set a custom command to run when your agent receives an inbound wake-up call
+- **`connect up/down` commands** (VM-734) - Simple commands to announce availability and watch for incoming calls, replacing the old standby workflow
+- **Idempotent connect_status with auto-registration** - Calling connect_status multiple times is safe and automatically registers the agent if needed
+- **Username parameter for explicit identity** - Override auto-detected username when needed for multi-account setups
+- **OAuth callback page styled with Ink & Seal theme** - Polished dark-themed authentication flow
+
+#### Hook-based Connect Architecture (VM-802)
+
+- **Mid-conversation message delivery** (Phase 1) - PostToolUse hook delivers incoming messages while the agent is actively working, not just between turns
+- **Agent wake-up on pending messages** (Phase 2) - Stop hook checks for pending messages when the agent goes idle, triggering wake-up if calls are waiting
+- **Session identity with fallback chain** (Phase 3) - SessionStart hook establishes agent identity using session files, environment variables, or user prompts
+- **Wake-from-idle** (Phase 5) - TeamCreate hook and session store enable agents to wake from idle state when receiving inbound calls
+- **Automatic away presence** - Agents downgrade to "away" status when wake-from-idle is not available, giving callers accurate availability info
+- **Lazy WebSocket connections** - WebSocket only connects when needed, removing the Teams feature dependency
+- **Connect hooks as VoiceMode plugin** - All Connect hooks ship as part of the VoiceMode plugin, no manual settings.json editing required
+
 ### Changed
 
-- **Default VAD aggressiveness raised to 3** (GH-248) - Level 2 caused ~93% false positive speech detection on MacBook Pro mics, preventing silence detection from triggering. Level 3 eliminates false positives while maintaining good speech detection.
+- **Default VAD aggressiveness raised to 3** (GH-248) - Level 2 caused ~93% false positive speech detection on MacBook Pro mics, preventing silence detection from triggering. Level 3 eliminates false positives while maintaining good speech detection
+- **Default Kokoro voice changed to af_river** - Replaced af_nicole with af_river in recommended voice lists for a more natural sound
+- **Auth commands moved to `connect auth` subgroup** (VM-744) - `voicemode connect auth login/logout` for clearer command organization
+- **Kokoro memory leak mitigation** (VM-358) - Default `KOKORO_MAX_REQUEST=25` and `UVICORN_LIMIT_MAX_REQUESTS` in service templates to auto-restart workers before memory grows unbounded
+- **Auth token moved to Authorization header** (VM-784) - WebSocket authentication uses standard Authorization header instead of URL parameter for improved security
+- **Connect wire protocol aligned with gateway spec** (VMD-124) - Python client updated to match the VMD-124 gateway wire protocol for reliable cross-platform messaging
+- **Credential store defaults to plaintext with singleton cache** - More reliable across platforms than keychain-first approach, with automatic fallback for headless environments
+- **FastMCP pinned to <3** (VM-742) - Avoids breaking changes in FastMCP 3.0 until migration is complete
+- **Project name separated from user identity** - Configuration now cleanly distinguishes between project context and user identity
+
+### Fixed
+
+- **Delivery confirmation sent to wrong user** (VM-762) - Delivery receipts were going to the message recipient instead of the sender
+- **User lookup by display_name** - Match users by display_name when username lookup fails, fixing cases where names differ between systems
+- **Simultaneous agent speech** - Conch now properly prevents multiple agents from speaking at the same time in multi-agent setups
+- **Listen duration timing overrides** (VM-746) - Agents can no longer accidentally override silence detection timing defaults
+- **Register race condition on startup** - Resolved a race condition where agents could fail to register as available during rapid startup sequences
+- **Claude Code inbox format** - Fixed message format for live delivery to match Claude Code's expected inbox structure
+- **WebSocket connection state in connect_status** - Properly await WebSocket connection before checking state, preventing false "disconnected" reports
+- **Session ID discovery** - Falls back to session file scanning when CLAUDE_SESSION_ID is not available in the MCP environment
+- **Username auto-discovery** - Automatically discovers username from session files instead of prompting users in hooks
+- **Consistent auth login guidance** - All Connect error messages now include clear instructions for running `voicemode connect auth login`
+- **Input sanitization and lifespan error handling** - Improved robustness of the MCP server startup and shutdown lifecycle
+- **VOICEMODE_CONNECT_ENABLED guard** - Hook scripts now check the feature flag before executing, preventing unexpected Connect behavior when disabled
+
+### Removed
+
+- **Claude Code agent templates** - Removed built-in agent templates in favor of the plugin-based agent system
+- **Standby command** (VM-734) - Replaced by the simpler `connect up/down` workflow
+- **MCP connect tools module** (VM-724, VM-734) - Connect functionality moved to hook-based architecture; the old MCP tools module has been removed
+- **Wakeable terminology** (VM-724) - Renamed to "available" throughout the codebase for clarity
 
 ## [8.2.0] - 2026-02-14
 
