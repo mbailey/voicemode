@@ -1627,7 +1627,6 @@ from voice_mode.cli_commands import exchanges as exchanges_cmd
 from voice_mode.cli_commands import transcribe as transcribe_cmd
 from voice_mode.cli_commands import history as history_cmd
 from voice_mode.cli_commands import status as status_cmd
-from voice_mode.cli_commands import agent as agent_cmd
 from voice_mode.cli_commands import claude as claude_cmd
 
 # Add subcommands to legacy CLI
@@ -1640,9 +1639,6 @@ voice_mode_main_cli.add_command(history_cmd.history)
 
 # Add unified status command
 voice_mode_main_cli.add_command(status_cmd.status)
-
-# Add agent management commands
-voice_mode_main_cli.add_command(agent_cmd.agent)
 
 # Add Claude Code integration commands
 voice_mode_main_cli.add_command(claude_cmd.claude)
