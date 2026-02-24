@@ -81,12 +81,13 @@ from voice_mode import tools
 loaded_modules = [m for m in sys.modules.keys() if 'voice_mode.tools' in m]
 print('LOADED:', sorted(loaded_modules))
 
-# Should only load essential tools by default (converse, service)
+# Should only load essential tools by default (converse, service, connect_status)
 tool_count = len([m for m in loaded_modules if m.startswith('voice_mode.tools.')])
 print(f'Tool count: {tool_count}')
-assert tool_count == 2, f"Expected 2 tools (converse, service), got {tool_count}"
+assert tool_count == 3, f"Expected 3 tools (converse, service, connect_status), got {tool_count}"
 assert 'voice_mode.tools.converse' in sys.modules
 assert 'voice_mode.tools.service' in sys.modules
+assert 'voice_mode.tools.connect_status' in sys.modules
 print('SUCCESS')
 """],
         capture_output=True,
