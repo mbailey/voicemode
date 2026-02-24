@@ -200,42 +200,40 @@ class ConnectClient:
             logger.info("Connect client: user registration queued (will send on connect)")
 
     async def unregister_user(self, name: str) -> None:
-        """Unregister a user from the gateway."""
+        """Unregister a user from the gateway.
+
+        Sends an empty capabilities_update to clear this agent's presence.
+        """
         if self._ws and self.is_connected:
-            users = self.user_manager.list()
-            if users:
-                await self.send_capabilities_update()
-            else:
-                try:
-                    msg = {
-                        "type": "capabilities_update",
-                        "users": [],
-                    }
-                    await self._ws.send(json.dumps(msg))
-                    logger.info("Connect client: all users unregistered")
-                except Exception as e:
-                    logger.warning(f"Connect client: failed to send unregistration: {e}")
+            self._primary_user = None
+            try:
+                msg = {
+                    "type": "capabilities_update",
+                    "users": [],
+                    "platform": "claude-code",
+                }
+                await self._ws.send(json.dumps(msg))
+                logger.info(f"Connect client: unregistered user '{name}'")
+            except Exception as e:
+                logger.warning(f"Connect client: failed to send unregistration: {e}")
 
     async def send_capabilities_update(self) -> None:
         """Send capabilities_update to the gateway.
 
-        Scoped to this process's primary user when set (MCP server mode).
-        Falls back to preconfigured users, then all users (standalone connect up).
+        Only announces this process's primary user. If no user is registered,
+        sends an empty update (no users announced). Never scans the filesystem
+        for all users — each agent is responsible for its own presence.
         """
         if not self._ws or not self.is_connected:
             return
 
-        # Scope to this agent's user(s)
+        # Only announce this agent's registered user
         if self._primary_user:
             user = self.user_manager.get(self._primary_user.name)
             users = [user] if user else []
         else:
-            # Preconfigured users from env, or all users for standalone process
-            configured = connect_config.get_preconfigured_users()
-            if configured:
-                users = [u for name in configured if (u := self.user_manager.get(name))]
-            else:
-                users = self.user_manager.list()
+            # No user registered yet — don't announce anyone
+            users = []
 
         # Build user list for the new protocol
         user_entries = []
@@ -337,9 +335,8 @@ class ConnectClient:
                     }
                     await ws.send(json.dumps(ready_msg))
 
-                    # Re-register users if any are registered
-                    users = self.user_manager.list()
-                    if users:
+                    # Re-announce primary user on reconnect (if registered)
+                    if self._primary_user:
                         await self.send_capabilities_update()
 
                     # Start heartbeat
