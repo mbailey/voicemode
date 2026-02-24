@@ -3231,16 +3231,107 @@ def auth_status():
 # Each agent announces itself via its own WebSocket connection.
 
 
+async def _query_gateway_status(ws_url: str, access_token: str) -> dict:
+    """Query the Connect gateway for real-time status via a short-lived WebSocket.
+
+    Opens a WebSocket connection, authenticates, performs the ready handshake,
+    collects the initial devices snapshot, then disconnects.
+
+    Returns:
+        dict with keys: connected (bool), session_id (str), devices (list[dict]),
+        error (str or None)
+    """
+    import json
+
+    try:
+        import websockets
+    except ImportError:
+        return {
+            "connected": False,
+            "session_id": "",
+            "devices": [],
+            "error": "websockets package not installed",
+        }
+
+    try:
+        async with websockets.connect(
+            ws_url,
+            additional_headers={"Authorization": f"Bearer {access_token}"},
+            open_timeout=5,
+            close_timeout=2,
+        ) as ws:
+            # Wait for 'connected' message from gateway
+            raw = await asyncio.wait_for(ws.recv(), timeout=5)
+            msg = json.loads(raw)
+
+            if msg.get("type") != "connected":
+                return {
+                    "connected": False,
+                    "session_id": "",
+                    "devices": [],
+                    "error": f"Unexpected first message: {msg.get('type')}",
+                }
+
+            session_id = msg.get("sessionId", "")[:12]
+
+            # Send ready message to complete handshake
+            from voice_mode.connect import config as connect_config
+            from voice_mode.version import __version__
+
+            ready_msg = {
+                "type": "ready",
+                "device": {
+                    "platform": "cli-status",
+                    "appVersion": __version__,
+                    "deviceId": connect_config.get_device_id(),
+                    "name": f"cli-status@{connect_config.get_host()}",
+                },
+            }
+            await ws.send(json.dumps(ready_msg))
+
+            # Collect messages for a short window to get the devices snapshot
+            devices = []
+            try:
+                while True:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=2)
+                    msg = json.loads(raw)
+                    if msg.get("type") == "devices":
+                        devices = msg.get("devices", [])
+                        break
+                    # Skip heartbeat_ack, ack, etc.
+            except (asyncio.TimeoutError, TimeoutError):
+                # No devices message received within timeout -- that's OK
+                pass
+
+            return {
+                "connected": True,
+                "session_id": session_id,
+                "devices": devices,
+                "error": None,
+            }
+
+    except Exception as e:
+        return {
+            "connected": False,
+            "session_id": "",
+            "devices": [],
+            "error": str(e),
+        }
+
+
 @connect.command()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def status():
-    """Show connection state, registered users, and presence.
+    """Show real-time connection state from the gateway.
 
-    Displays whether VoiceMode Connect is enabled, the connection
-    state, and a list of registered mailboxes with their status.
+    Queries the VoiceMode Connect gateway (voicemode.dev) via a short-lived
+    WebSocket connection to show actual presence state -- not stale local
+    filesystem data.
+
+    Falls back to local filesystem state if the gateway is unreachable.
     """
-    import json
     from voice_mode.connect import config as connect_config
+    from voice_mode.connect.client import DeviceInfo
     from voice_mode.connect.users import UserManager
     from voice_mode import config
 
@@ -3250,25 +3341,77 @@ def status():
         click.echo("Set VOICEMODE_CONNECT_ENABLED=true in your voicemode.env to enable.")
         return
 
-    # Connection state
-    from voice_mode.connect.users import CONNECT_DIR
-    state_file = CONNECT_DIR / "state.json"
-    if state_file.exists():
-        state = json.loads(state_file.read_text())
-        status_str = state.get("status", "unknown")
-        connected_since = state.get("connected_since", "")
-        if status_str == "up":
-            click.echo(f"VoiceMode Connect: up (connected since {connected_since})")
-        else:
-            click.echo(f"VoiceMode Connect: {status_str}")
-    else:
-        click.echo("VoiceMode Connect: enabled (not connected)")
-
     click.echo(f"Gateway: {config.CONNECT_WS_URL}")
     click.echo(f"Host: {connect_config.get_host()}")
     click.echo()
 
-    # Users
+    # Try to get credentials for gateway query
+    gateway_result = None
+    try:
+        from voice_mode.auth import get_valid_credentials
+        creds = get_valid_credentials(auto_refresh=True)
+        if creds and creds.access_token:
+            gateway_result = asyncio.run(
+                _query_gateway_status(config.CONNECT_WS_URL, creds.access_token)
+            )
+    except Exception as e:
+        gateway_result = {
+            "connected": False,
+            "session_id": "",
+            "devices": [],
+            "error": str(e),
+        }
+
+    if gateway_result and gateway_result["connected"]:
+        # Gateway query succeeded -- show real-time state
+        click.echo(f"VoiceMode Connect: connected (session: {gateway_result['session_id']})")
+        click.echo()
+
+        devices = [
+            DeviceInfo.from_connection_info(d)
+            for d in gateway_result["devices"]
+        ]
+        remote_devices = [d for d in devices if d.platform != "cli-status"]
+
+        if remote_devices:
+            click.echo("Devices:")
+            for d in remote_devices:
+                ready_str = "ready" if d.ready else "not ready"
+                caps = d.capabilities_str()
+                activity = d.activity_ago()
+                platform_str = f" ({d.platform})" if d.platform else ""
+                click.echo(
+                    f"  {d.display_name()}{platform_str}"
+                    f" - {ready_str}, {caps} - {activity}"
+                )
+        else:
+            click.echo("Devices: (none)")
+    else:
+        # Gateway unreachable -- fall back to local filesystem state
+        error = gateway_result.get("error", "unknown") if gateway_result else "no credentials"
+        click.echo(f"VoiceMode Connect: gateway unreachable ({error})")
+        click.echo()
+        click.echo("Falling back to local filesystem state:")
+        click.echo()
+
+        # Show local filesystem state as fallback
+        import json
+        from voice_mode.connect.users import CONNECT_DIR
+        state_file = CONNECT_DIR / "state.json"
+        if state_file.exists():
+            state = json.loads(state_file.read_text())
+            status_str = state.get("status", "unknown")
+            connected_since = state.get("connected_since", "")
+            if status_str == "up":
+                click.echo(f"  Local state: up (connected since {connected_since})")
+            else:
+                click.echo(f"  Local state: {status_str}")
+        else:
+            click.echo("  Local state: no state file")
+
+    click.echo()
+
+    # Always show locally registered users
     mgr = UserManager(connect_config.get_host())
     users = mgr.list()
 
