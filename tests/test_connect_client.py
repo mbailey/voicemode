@@ -316,12 +316,14 @@ class TestHandleUserMessageDelivery:
 
 class TestCapabilitiesUpdate:
     @pytest.mark.asyncio
-    async def test_sends_users_list(self, client, user_manager):
-        user_manager.add("cora", display_name="Cora 7")
+    async def test_sends_registered_user(self, client, user_manager):
+        """capabilities_update only announces the registered primary user."""
+        user = user_manager.add("cora", display_name="Cora 7")
 
         mock_ws = AsyncMock()
         client._ws = mock_ws
         client.state = ConnectState.CONNECTED
+        client._primary_user = user  # Register as primary user
 
         await client.send_capabilities_update()
 
@@ -334,13 +336,29 @@ class TestCapabilitiesUpdate:
         assert sent["users"][0]["host"] == "test-host"
 
     @pytest.mark.asyncio
-    async def test_platform_field(self, client, user_manager):
-        """capabilities_update includes platform field."""
+    async def test_no_primary_user_sends_empty(self, client, user_manager):
+        """Without a registered primary user, no users are announced."""
         user_manager.add("cora", display_name="Cora 7")
 
         mock_ws = AsyncMock()
         client._ws = mock_ws
         client.state = ConnectState.CONNECTED
+        # No _primary_user set
+
+        await client.send_capabilities_update()
+
+        sent = json.loads(mock_ws.send.call_args[0][0])
+        assert sent["users"] == []
+
+    @pytest.mark.asyncio
+    async def test_platform_field(self, client, user_manager):
+        """capabilities_update includes platform field."""
+        user = user_manager.add("cora", display_name="Cora 7")
+
+        mock_ws = AsyncMock()
+        client._ws = mock_ws
+        client.state = ConnectState.CONNECTED
+        client._primary_user = user
 
         await client.send_capabilities_update()
 
