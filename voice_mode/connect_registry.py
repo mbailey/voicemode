@@ -14,7 +14,6 @@ import logging
 import shutil
 import subprocess
 import time
-import urllib.parse
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -186,15 +185,14 @@ class ConnectRegistry:
                     retry_delay = min(retry_delay * 2, max_retry_delay)
                     continue
 
-                # Build WebSocket URL with auth token
                 ws_url = CONNECT_WS_URL
-                token = urllib.parse.quote(creds.access_token)
-                separator = "&" if "?" in ws_url else "?"
-                ws_url = f"{ws_url}{separator}token={token}"
 
                 self._status_message = "Connecting..."
 
-                async with websockets.connect(ws_url) as ws:
+                async with websockets.connect(
+                    ws_url,
+                    additional_headers={"Authorization": f"Bearer {creds.access_token}"},
+                ) as ws:
                     self._ws = ws
                     self._connected = True
                     retry_delay = 1  # Reset on successful connection

@@ -3,6 +3,7 @@
 
 # Claude workspace - track plugin components, ignore local settings
 .claude/settings.local.json
+.claude/worktrees/
 
 # Environment configuration
 .env.local

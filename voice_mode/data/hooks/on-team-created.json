@@ -1,0 +1,16 @@
+{
+  "description": "VoiceMode Connect: PostToolUse hook for TeamCreate - captures team name for wake-from-idle symlink setup",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "TeamCreate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/voice_mode/data/hooks/on-team-created.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

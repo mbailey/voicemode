@@ -1,5 +1,5 @@
 {
-  "description": "VoiceMode Connect: SessionStart hook - cleans up stale team dir and prompts agent to create team for Connect",
+  "description": "VoiceMode Connect: SessionStart hook - writes session identity file for notification delivery",
   "hooks": {
     "SessionStart": [
       {

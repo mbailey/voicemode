@@ -3,9 +3,16 @@
 Provides a single MCP tool for checking connection status and
 setting agent presence (available/away) on the Connect gateway.
 Idempotent — ensures user exists and is registered before setting presence.
+
+WebSocket connection is lazy — only established on first connect_status() call.
+Inbox directory is created when presence is first set.
+Inbox-live symlink is set up for wake-from-idle when team_name is available.
 """
 
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Optional
 
 from voice_mode.server import mcp
@@ -27,6 +34,9 @@ async def connect_status(
         set_presence: Optional. Set to "available" (green dot - ready for calls)
             or "away" (amber dot - connected but not accepting calls).
             Omit to just check status.
+            Note: "available" requires wake-from-idle capability. In Claude Code,
+            create a team first (TeamCreate) to enable this. Without a team,
+            presence is downgraded to "away" with guidance on how to enable it.
         username: Optional. Your Connect username (e.g., "cora", "astrid").
             Used to identify which user to register on this WebSocket.
             The PostToolUse hook provides this in its systemMessage.
@@ -50,16 +60,148 @@ async def connect_status(
 
     client = get_client()
 
-    # Ensure we're connected
+    # Lazy WebSocket connect — only on first call
     if not client.is_connected and not client.is_connecting:
+        logger.info("Connect: lazy WebSocket connect on first connect_status call")
         await client.connect()
+        # Wait for connection to actually be established
+        connected = await client.wait_connected(timeout=10.0)
+        if not connected:
+            return (
+                f"Failed to connect to VoiceMode Connect gateway.\n"
+                f"Status: {client.status_message}\n"
+                f"Run: voicemode connect auth login\n"
+                f"Check: voicemode connect auth status"
+            )
 
     # Handle presence change
     if set_presence:
+        # Auto-discover username from session file if not explicitly provided
+        if not username:
+            session_data = _get_session_data()
+            username = session_data.get("agent_name", "") or None
+            if username:
+                logger.info(f"Auto-discovered username from session: {username}")
         return await _set_presence(client, set_presence, username)
 
     # Default: return status
     return client.get_status_text()
+
+
+def _get_session_data(agent_name: Optional[str] = None) -> dict:
+    """Read session identity data from the session file.
+
+    Tries two methods:
+    1. CLAUDE_SESSION_ID env var (direct lookup, most reliable)
+    2. Scan sessions directory for most recent file matching agent_name
+       (fallback for when CLAUDE_SESSION_ID is not in MCP server env,
+       which happens when Claude Code is started without --session-id)
+
+    Args:
+        agent_name: Optional agent name to filter session files in fallback scan.
+
+    Returns:
+        Session data dict, or empty dict if not available.
+    """
+    sessions_dir = Path.home() / ".voicemode" / "sessions"
+
+    # Method 1: Direct lookup via CLAUDE_SESSION_ID
+    session_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    if session_id:
+        session_file = sessions_dir / f"{session_id}.json"
+        if session_file.exists():
+            try:
+                data = json.loads(session_file.read_text())
+                logger.info(f"_get_session_data: found via CLAUDE_SESSION_ID: {session_file.name}")
+                return data
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Failed to read session file: {e}")
+
+    # Method 2: Scan for most recent session file matching agent_name
+    if agent_name and sessions_dir.exists():
+        try:
+            session_files = sorted(
+                sessions_dir.glob("*.json"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            for sf in session_files[:10]:  # Check last 10 at most
+                try:
+                    data = json.loads(sf.read_text())
+                    if data.get("agent_name") == agent_name:
+                        logger.info(
+                            f"_get_session_data: found via scan for {agent_name}: {sf.name}"
+                        )
+                        return data
+                except (json.JSONDecodeError, OSError):
+                    continue
+        except OSError as e:
+            logger.warning(f"Failed to scan sessions directory: {e}")
+
+    if not session_id:
+        logger.info(
+            f"_get_session_data: CLAUDE_SESSION_ID not set"
+            + (f", no session found for agent {agent_name}" if agent_name else "")
+        )
+    return {}
+
+
+def _ensure_inbox(username: str) -> None:
+    """Ensure inbox directory and file exist for a user.
+
+    Creates ~/.voicemode/connect/users/{username}/inbox if missing.
+    """
+    inbox_dir = Path.home() / ".voicemode" / "connect" / "users" / username
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    inbox_file = inbox_dir / "inbox"
+    if not inbox_file.exists():
+        inbox_file.touch()
+        logger.info(f"Created inbox for user: {username}")
+
+
+def _ensure_inbox_live_symlink(username: str, team_name: str) -> bool:
+    """Set up inbox-live symlink for wake-from-idle capability.
+
+    Creates a symlink from the VoiceMode user inbox to the Claude Code
+    team inbox. When messages arrive via Connect, they're written to both
+    the VoiceMode inbox (for hook-based delivery) and the team inbox
+    (for wake-from-idle via Claude Code Teams).
+
+    Args:
+        username: The agent's Connect username.
+        team_name: The Claude Code team name (directory under ~/.claude/teams/).
+
+    Returns:
+        True if symlink was created/exists, False if team dir doesn't exist.
+    """
+    team_inbox = Path.home() / ".claude" / "teams" / team_name / "inboxes" / "team-lead.json"
+    user_dir = Path.home() / ".voicemode" / "connect" / "users" / username
+    symlink_path = user_dir / "inbox-live"
+
+    # Verify team directory exists (agent actually created the team)
+    team_dir = Path.home() / ".claude" / "teams" / team_name
+    if not team_dir.exists():
+        logger.debug(f"Team directory doesn't exist: {team_dir}")
+        return False
+
+    # Ensure inboxes directory exists
+    team_inbox.parent.mkdir(parents=True, exist_ok=True)
+
+    # Create or update symlink
+    try:
+        if symlink_path.is_symlink():
+            # Update if pointing to different target
+            if symlink_path.resolve() != team_inbox:
+                symlink_path.unlink()
+                symlink_path.symlink_to(team_inbox)
+                logger.info(f"Updated inbox-live symlink: {symlink_path} -> {team_inbox}")
+        else:
+            symlink_path.symlink_to(team_inbox)
+            logger.info(f"Created inbox-live symlink: {symlink_path} -> {team_inbox}")
+        return True
+    except OSError as e:
+        logger.warning(f"Failed to create inbox-live symlink: {e}")
+        return False
 
 
 async def _ensure_user_registered(client, username: Optional[str] = None) -> list:
@@ -96,34 +238,33 @@ async def _ensure_user_registered(client, username: Optional[str] = None) -> lis
             )
             logger.info(f"Created Connect user: {username}")
 
+        # Ensure inbox exists for this user
+        _ensure_inbox(username)
+
         # Register on this WebSocket
         await client.register_user(user)
         logger.info(f"Registered user {username} on MCP server WebSocket")
         return [user]
 
     # No username — discover from filesystem
-    # Look for users with inbox-live symlinks (set up by hooks)
-    subscribed_users = [
-        u for u in client.user_manager.list()
-        if client.user_manager.is_subscribed(u.name)
-    ]
+    all_users = client.user_manager.list()
 
-    if subscribed_users:
-        # Register the first subscribed user as our primary
-        user = subscribed_users[0]
+    if all_users:
+        # Register the first user as our primary
+        user = all_users[0]
+        _ensure_inbox(user.name)
         await client.register_user(user)
-        logger.info(
-            f"Auto-registered user {user.name} on MCP server WebSocket"
-        )
-        return subscribed_users
+        logger.info(f"Auto-registered user {user.name} on MCP server WebSocket")
+        return all_users
 
-    # No subscribed users — check for preconfigured users
+    # No users — check for preconfigured users
     configured = connect_config.get_preconfigured_users()
     if configured:
         users = []
         for name in configured:
             user = client.user_manager.get(name)
             if user:
+                _ensure_inbox(user.name)
                 users.append(user)
         if users:
             await client.register_user(users[0])
@@ -158,21 +299,37 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
 
     if not my_users:
         return (
-            "No Connect users found. Pass username parameter or ensure "
-            "the PostToolUse hook created a user after TeamCreate."
+            "No Connect users found. Pass username parameter to register."
         )
 
-    # For "available", verify inbox-live symlink exists
+    # Auto-discover team_name from session file and set up wake symlink
+    downgraded_from_available = False
     if presence == "available":
-        any_subscribed = any(
-            client.user_manager.is_subscribed(u.name) for u in my_users
-        )
-        if not any_subscribed:
-            return (
-                "Cannot go available: no inbox-live symlink found.\n"
-                "Create a Claude Code team first (TeamCreate), then try again.\n"
-                "The inbox-live symlink connects incoming messages to your team inbox."
-            )
+        agent_name = my_users[0].name if my_users else None
+        session_data = _get_session_data(agent_name=agent_name)
+        team_name = session_data.get("team_name", "")
+        logger.info(f"_set_presence: session_data={session_data}, team_name={team_name!r}")
+        if team_name and my_users:
+            agent_name = my_users[0].name
+            logger.info(f"_set_presence: calling _ensure_inbox_live_symlink({agent_name!r}, {team_name!r})")
+            if _ensure_inbox_live_symlink(agent_name, team_name):
+                logger.info(
+                    f"Wake-from-idle enabled: {agent_name} -> team {team_name}"
+                )
+            else:
+                logger.info(f"_set_presence: _ensure_inbox_live_symlink returned False")
+
+        # Check if wake-from-idle is actually set up
+        if my_users:
+            symlink = Path.home() / ".voicemode" / "connect" / "users" / my_users[0].name / "inbox-live"
+            if not symlink.is_symlink():
+                # Downgrade to "away" — can't be truly available without wake
+                presence = "away"
+                downgraded_from_available = True
+                logger.info(
+                    "Downgraded presence from available to away "
+                    "(no wake-from-idle capability)"
+                )
 
     # Build presence update for only this agent's users
     user_entries = []
@@ -196,14 +353,22 @@ async def _set_presence(client, presence: str, username: Optional[str] = None) -
         }
         await client._ws.send(json.dumps(msg))
 
-        if presence == "available":
+        if downgraded_from_available:
+            return (
+                "Set to Away (amber dot) instead of Available.\n"
+                "Available requires wake-from-idle capability.\n"
+                "To enable: create a team with TeamCreate, then set presence again.\n"
+                "Messages will be delivered when you're active."
+            )
+        elif presence == "available":
             user_names = ", ".join(u.display_name or u.name for u in my_users)
             return (
-                f"✅ Now Available (green dot). Users can call you.\n"
-                f"Registered as: {user_names}"
+                f"Now Available (green dot). Users can call you.\n"
+                f"Registered as: {user_names}\n"
+                f"Wake-from-idle: enabled (team inbox linked)"
             )
         else:
-            return "✅ Now Away (amber dot). Messages will queue for later."
+            return "Now Away (amber dot). Messages will queue for later."
 
     except Exception as e:
         logger.error(f"Failed to set presence: {e}")

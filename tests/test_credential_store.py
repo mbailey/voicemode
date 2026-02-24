@@ -216,6 +216,86 @@ class TestBackendDetection:
         with patch.dict("sys.modules", {"keyring": mock_keyring}):
             assert _keyring_backend_is_viable() is False
 
+    def test_runtime_keychain_error_not_viable(self):
+        """macOS Keychain error -25308 over SSH makes backend not viable."""
+        BackendCls = _make_backend_class("keyring.backends.macOS", "Keyring")
+        mock_keyring = MagicMock()
+        mock_keyring.get_keyring.return_value = BackendCls()
+
+        # Simulate the macOS Keychain error that occurs over SSH
+        KeyringError = type("KeyringError", (Exception,), {})
+        mock_keyring.get_password.side_effect = KeyringError(
+            "Can't get password from keychain: (-25308, 'Unknown Error')"
+        )
+
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _keyring_backend_is_viable() is False
+
+    def test_chainer_with_runtime_keychain_error(self):
+        """Chainer backend with viable type but runtime failure is not viable."""
+        ChainerCls = _make_backend_class("keyring.backends.chainer", "ChainerBackend")
+        ViableCls = _make_backend_class("keyring.backends.macOS", "Keyring")
+
+        chainer = ChainerCls()
+        chainer.backends = [ViableCls()]
+
+        mock_keyring = MagicMock()
+        mock_keyring.get_keyring.return_value = chainer
+        mock_keyring.get_password.side_effect = OSError("Keychain access denied")
+
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _keyring_backend_is_viable() is False
+
+    def test_secretservice_runtime_dbus_error(self):
+        """Linux SecretService backend fails when DBus is unavailable."""
+        BackendCls = _make_backend_class(
+            "keyring.backends.SecretService", "Keyring"
+        )
+        mock_keyring = MagicMock()
+        mock_keyring.get_keyring.return_value = BackendCls()
+        mock_keyring.get_password.side_effect = Exception(
+            "org.freedesktop.DBus.Error.ServiceUnknown"
+        )
+
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _keyring_backend_is_viable() is False
+
+    def test_runtime_permission_error(self):
+        """PermissionError from keychain probe makes backend not viable."""
+        BackendCls = _make_backend_class("keyring.backends.macOS", "Keyring")
+        mock_keyring = MagicMock()
+        mock_keyring.get_keyring.return_value = BackendCls()
+        mock_keyring.get_password.side_effect = PermissionError(
+            "Keychain access not permitted"
+        )
+
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _keyring_backend_is_viable() is False
+
+    def test_runtime_error_generic(self):
+        """Generic RuntimeError from keychain probe makes backend not viable."""
+        BackendCls = _make_backend_class(
+            "keyring.backends.kwallet", "DBusKeyring"
+        )
+        mock_keyring = MagicMock()
+        mock_keyring.get_keyring.return_value = BackendCls()
+        mock_keyring.get_password.side_effect = RuntimeError(
+            "KWallet service not available"
+        )
+
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _keyring_backend_is_viable() is False
+
+    def test_probe_succeeds_backend_viable(self):
+        """Backend is viable when type check and probe both pass."""
+        BackendCls = _make_backend_class("keyring.backends.macOS", "Keyring")
+        mock_keyring = MagicMock()
+        mock_keyring.get_keyring.return_value = BackendCls()
+        mock_keyring.get_password.return_value = None  # probe returns None (no stored value)
+
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            assert _keyring_backend_is_viable() is True
+
     def test_import_error_not_viable(self):
         with patch.dict("sys.modules", {"keyring": None}):
             assert _keyring_backend_is_viable() is False
@@ -332,3 +412,18 @@ class TestGetCredentialStore:
         store1 = get_credential_store()
         store2 = get_credential_store()
         assert store1 is store2
+
+    def test_fallback_on_keychain_runtime_error(self, monkeypatch):
+        """Keychain runtime errors (e.g. SSH -25308) trigger plaintext fallback."""
+        monkeypatch.setenv("VOICEMODE_CREDENTIAL_STORE", "keyring")
+
+        BackendCls = _make_backend_class("keyring.backends.macOS", "Keyring")
+        mock_keyring = MagicMock()
+        mock_keyring.get_keyring.return_value = BackendCls()
+        mock_keyring.get_password.side_effect = Exception(
+            "Can't get password from keychain: (-25308, 'Unknown Error')"
+        )
+
+        with patch.dict("sys.modules", {"keyring": mock_keyring}):
+            store = get_credential_store()
+            assert isinstance(store, PlaintextStore)

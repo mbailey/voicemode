@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import time
-import urllib.parse
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -108,6 +107,7 @@ class ConnectClient:
         self._status_message: Optional[str] = None
         self._reconnect_count = 0
         self._primary_user = None  # User registered by THIS process
+        self._connected_event = asyncio.Event()  # Set when WebSocket is connected
 
     @property
     def is_connected(self) -> bool:
@@ -126,6 +126,17 @@ class ConnectClient:
         return self._status_message or (
             "Connected" if self.is_connected else "Not initialized"
         )
+
+    async def wait_connected(self, timeout: float = 10.0) -> bool:
+        """Wait for the WebSocket connection to be established.
+
+        Returns True if connected within timeout, False otherwise.
+        """
+        try:
+            await asyncio.wait_for(self._connected_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     async def connect(self) -> None:
         """Start background connection task.
@@ -147,13 +158,19 @@ class ConnectClient:
 
             creds = await asyncio.to_thread(get_valid_credentials, auto_refresh=True)
         except Exception as e:
-            self._status_message = f"Auth error: {e}"
+            self._status_message = (
+                f"Auth error: {e}\n"
+                "Run: voicemode connect auth login\n"
+                "Check: voicemode connect auth status"
+            )
             logger.warning(f"Connect client: could not load credentials: {e}")
             return
 
         if creds is None:
             self._status_message = (
-                "Not connected (no credentials - run: voicemode connect login)"
+                "Not connected (no credentials)\n"
+                "Run: voicemode connect auth login\n"
+                "Check: voicemode connect auth status"
             )
             logger.debug("Connect client: no credentials available")
             return
@@ -169,6 +186,7 @@ class ConnectClient:
             except asyncio.CancelledError:
                 pass
         self.state = ConnectState.DISCONNECTED
+        self._connected_event.clear()
         self._devices = []
         self._ws = None
         self._status_message = "Disconnected"
@@ -199,11 +217,25 @@ class ConnectClient:
                     logger.warning(f"Connect client: failed to send unregistration: {e}")
 
     async def send_capabilities_update(self) -> None:
-        """Send capabilities_update with all registered users to the gateway."""
+        """Send capabilities_update to the gateway.
+
+        Scoped to this process's primary user when set (MCP server mode).
+        Falls back to preconfigured users, then all users (standalone connect up).
+        """
         if not self._ws or not self.is_connected:
             return
 
-        users = self.user_manager.list()
+        # Scope to this agent's user(s)
+        if self._primary_user:
+            user = self.user_manager.get(self._primary_user.name)
+            users = [user] if user else []
+        else:
+            # Preconfigured users from env, or all users for standalone process
+            configured = connect_config.get_preconfigured_users()
+            if configured:
+                users = [u for name in configured if (u := self.user_manager.get(name))]
+            else:
+                users = self.user_manager.list()
 
         # Build user list for the new protocol
         user_entries = []
@@ -253,23 +285,27 @@ class ConnectClient:
                     get_valid_credentials, auto_refresh=True
                 )
                 if creds is None:
-                    self._status_message = "Not connected (credentials expired)"
+                    self._status_message = (
+                        "Not connected (credentials expired)\n"
+                        "Run: voicemode connect auth login\n"
+                        "Check: voicemode connect auth status"
+                    )
                     self.state = ConnectState.DISCONNECTED
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(retry_delay * 2, max_retry_delay)
                     continue
 
-                # Build WebSocket URL with auth token
                 ws_url = connect_config.get_ws_url()
-                token = urllib.parse.quote(creds.access_token)
-                separator = "&" if "?" in ws_url else "?"
-                ws_url = f"{ws_url}{separator}token={token}"
 
                 self._status_message = "Connecting..."
 
-                async with websockets.connect(ws_url) as ws:
+                async with websockets.connect(
+                    ws_url,
+                    additional_headers={"Authorization": f"Bearer {creds.access_token}"},
+                ) as ws:
                     self._ws = ws
                     self.state = ConnectState.CONNECTED
+                    self._connected_event.set()
                     retry_delay = 1
                     self._reconnect_count = 0
 
@@ -295,10 +331,8 @@ class ConnectClient:
                         "device": {
                             "platform": "mcp-server",
                             "appVersion": __version__,
-                        },
-                        "capabilities": {
-                            "tts": True,
-                            "stt": True,
+                            "deviceId": connect_config.get_device_id(),
+                            "name": connect_config.get_device_name(),
                         },
                     }
                     await ws.send(json.dumps(ready_msg))
