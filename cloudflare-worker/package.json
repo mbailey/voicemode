@@ -1,0 +1,23 @@
+{
+  "name": "voicemode-telemetry-worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for VoiceMode telemetry collection",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail",
+    "test": "./test-endpoint.sh"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "telemetry",
+    "voicemode"
+  ],
+  "author": "VoiceMode Contributors",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

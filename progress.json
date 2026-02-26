@@ -1,0 +1,29 @@
+{
+  "workflow_id": "VM-152-telemetry-harness",
+  "task_id": "VM-152",
+  "started": "2024-12-14",
+  "current_phase": "complete",
+  "current_feature": null,
+  "features_completed": 10,
+  "features_total": 10,
+  "sessions": [
+    {
+      "session_id": 1,
+      "started": "2024-12-14T12:30:00",
+      "ended": "2024-12-14T14:00:00",
+      "features_worked": ["tel-001", "tel-002", "tel-003", "tel-004", "tel-005", "tel-006", "tel-007"],
+      "summary": "Voice-driven session. Planned MVP scope, spawned worker agents for implementation. Completed: DO_NOT_TRACK research (tel-001), backend research recommending Cloudflare Workers (tel-002), anonymous ID generation (tel-003), environment detection for OS/install/MCP host (tel-004), full telemetry module with collector/privacy/client (tel-005), telemetry config with ask/true/false and DO_NOT_TRACK override (tel-006), and opt-in prompts for CLI and MCP (tel-007)."
+    },
+    {
+      "session_id": 2,
+      "started": "2025-12-14T04:30:00",
+      "ended": "2025-12-14T05:30:00",
+      "features_worked": ["tel-008", "tel-009", "tel-010"],
+      "summary": "Voice-driven session to complete remaining features. Deployed Cloudflare Worker backend (tel-008): fixed async hashIP bug, deployed to https://voicemode-telemetry.late-limit-5e4c.workers.dev with D1 database and KV rate limiting, all 6 tests passing. Dogfooding (tel-009): updated collector to use conversation logs for accurate multi-exchange tracking (761 conversations, 19,081 exchanges), added provider name normalization, verified privacy binning, sent real telemetry to production endpoint. Documentation (tel-010): added comprehensive Telemetry and Privacy section to docs/reference/environment.md covering config, opt-out methods, data collection, and privacy protections."
+    }
+  ],
+  "context_summaries": {
+    "1": "Session 1: Completed 7/10 features via voice conversation + worker agents. Key deliverables: telemetry module (voice_mode/telemetry/), config integration (VOICEMODE_TELEMETRY, DO_NOT_TRACK), opt-in UX (CLI prompts, MCP tools/resources). Research confirmed Cloudflare Workers for backend. Remaining: tel-008 (backend), tel-009 (dogfood), tel-010 (docs). Harness pattern working well with Task tool spawning workers.",
+    "2": "Session 2: Completed final 3 features. Deployed Cloudflare Worker to production with D1 database and KV rate limiting. Improved collector to use conversation logs for accurate session tracking. Added privacy documentation. All 10/10 features now passing. Telemetry system is production-ready with endpoint at https://voicemode-telemetry.late-limit-5e4c.workers.dev/telemetry."
+  }
+}

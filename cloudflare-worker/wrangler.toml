@@ -1,0 +1,39 @@
+name = "voicemode-telemetry"
+main = "worker.js"
+compatibility_date = "2024-12-01"
+
+# Account ID - REPLACE with your Cloudflare account ID
+# Find at: https://dash.cloudflare.com/ -> select account -> copy Account ID from right sidebar
+account_id = "2d152ec3e57b70274d69583b496e31ad"
+
+# Workers paid plan required for longer CPU time and higher limits
+# Free tier: 100,000 requests/day, 10ms CPU time
+# Paid tier: Unlimited requests, 50ms CPU time, $5/month base + usage
+# workers_dev = true  # Uncomment to deploy to workers.dev subdomain for testing
+
+# KV namespace for rate limiting
+# Create with: wrangler kv:namespace create "RATE_LIMITS"
+# Then replace the ID below with the one from the command output
+[[kv_namespaces]]
+binding = "KV"
+id = "cb2a5a76f7fb45e0830fadb70587c87d"
+
+# D1 database for telemetry events
+# Create with: wrangler d1 create voicemode-telemetry
+# Then replace the database_id below with the one from the command output
+[[d1_databases]]
+binding = "DB"
+database_name = "voicemode-telemetry"
+database_id = "f7681eaa-a907-40f9-8ee8-a284c9477bb1"
+
+# Cron trigger for cleanup tasks (runs daily at 2am UTC)
+[triggers]
+crons = ["0 2 * * *"]
+
+# Environment variables (optional)
+[vars]
+# ENVIRONMENT = "production"
+
+# Limits (commented out - using free tier defaults)
+# [limits]
+# cpu_ms = 10  # Free tier: 10ms, Paid tier: 50ms

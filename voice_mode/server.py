@@ -115,7 +115,15 @@ def main():
         logger.info(f"Event logging enabled, writing to {EVENT_LOG_DIR}")
     else:
         logger.info("Event logging disabled")
-    
+
+    # Telemetry: Send usage data if enabled (runs in background, non-blocking)
+    try:
+        from .telemetry import maybe_send_telemetry_background
+        maybe_send_telemetry_background()
+    except Exception as e:
+        # Telemetry should never block server startup
+        logger.debug(f"Telemetry initialization skipped: {e}")
+
     # Run the server
     mcp.run(transport="stdio")
 
