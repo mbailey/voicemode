@@ -20,7 +20,7 @@ voicemode soundfonts on        # Re-enable
 voicemode soundfonts status    # Show current state
 ```
 
-For persistent changes that survive restarts:
+To also update the persistent config in `voicemode.env`:
 
 ```bash
 voicemode soundfonts off --config   # Disable + update voicemode.env

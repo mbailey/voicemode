@@ -76,8 +76,14 @@ def _hooks_installed() -> bool:
 
 
 def _update_env_file(enabled: bool) -> None:
-    """Update VOICEMODE_SOUNDFONTS_ENABLED in ~/.voicemode/voicemode.env."""
+    """Update VOICEMODE_SOUNDFONTS_ENABLED in ~/.voicemode/voicemode.env.
+
+    Also syncs os.environ so the current process sees the new value
+    (voicemode's config.py loads voicemode.env into os.environ at startup,
+    which can leave stale values if we only update the file).
+    """
     value = 'true' if enabled else 'false'
+    os.environ['VOICEMODE_SOUNDFONTS_ENABLED'] = value
     env_file = VOICEMODE_ENV_FILE
 
     if not env_file.exists():
@@ -173,13 +179,9 @@ def soundfonts_on(config):
             click.echo("Soundfonts are already enabled.")
             return
 
-        # Check if shell env might override
-        shell_val = os.environ.get('VOICEMODE_SOUNDFONTS_ENABLED')
-        if shell_val is not None and shell_val.lower() not in ('true', '1', 'yes', 'on'):
-            click.echo()
-            click.echo("Note: VOICEMODE_SOUNDFONTS_ENABLED is also set in your shell environment.")
-            click.echo("  Shell environment takes precedence over voicemode.env.")
-            click.echo("  Check your ~/.bashrc or ~/.zshrc if soundfonts still don't work.")
+        # No need to warn about shell env — voicemode's config.py loads
+        # voicemode.env into os.environ at startup, and _update_env_file
+        # now syncs os.environ too.
     elif had_sentinel:
         click.echo("Soundfonts enabled.")
         _warn_env_var_conflict()
