@@ -17,6 +17,90 @@ from .provider_discovery import detect_provider_type
 logger = logging.getLogger("voicemode")
 
 
+async def _try_whisper_cpp_inference(base_url: str, audio_file, file_size_bytes: int) -> Optional[Dict[str, Any]]:
+    """
+    Try whisper.cpp's /inference endpoint for local Whisper servers.
+
+    whisper.cpp server uses POST /inference instead of the OpenAI-compatible
+    /v1/audio/transcriptions endpoint.
+
+    Returns:
+        Dict with transcription result or None if failed
+    """
+    import time
+    import httpx
+
+    # Only try for local endpoints that look like whisper.cpp
+    if not is_local_provider(base_url):
+        return None
+
+    # Build the inference URL - remove any /v1 suffix and add /inference
+    inference_url = base_url.rstrip('/')
+    if inference_url.endswith('/v1'):
+        inference_url = inference_url[:-3]
+    inference_url = f"{inference_url}/inference"
+
+    logger.info(f"STT: Trying whisper.cpp endpoint: {inference_url}")
+
+    try:
+        # Reset file position
+        audio_file.seek(0)
+        audio_content = audio_file.read()
+        audio_file.seek(0)  # Reset for potential retry
+
+        request_start = time.perf_counter()
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                inference_url,
+                files={"file": ("audio.wav", audio_content, "audio/wav")},
+                data={
+                    "response_format": "text",
+                    "temperature": "0.0"
+                }
+            )
+
+        request_time_ms = (time.perf_counter() - request_start) * 1000
+
+        if response.status_code == 200:
+            text = response.text.strip()
+
+            # Filter out blank audio markers
+            if text in ["[BLANK_AUDIO]", "(blank audio)", ""]:
+                logger.info(f"STT: whisper.cpp returned blank audio marker")
+                return {
+                    "error_type": "no_speech",
+                    "provider": "whisper-cpp",
+                    "metrics": {
+                        "file_size_bytes": file_size_bytes,
+                        "request_time_ms": round(request_time_ms, 1),
+                        "is_local": True,
+                    }
+                }
+
+            logger.info(f"✓ STT succeeded with whisper.cpp at {inference_url}")
+            logger.info(f"  Transcribed: {text[:100]}{'...' if len(text) > 100 else ''}")
+            logger.info(f"  Request time: {request_time_ms:.0f}ms, File size: {file_size_bytes/1024:.1f}KB")
+
+            return {
+                "text": text,
+                "provider": "whisper-cpp",
+                "endpoint": inference_url,
+                "metrics": {
+                    "file_size_bytes": file_size_bytes,
+                    "request_time_ms": round(request_time_ms, 1),
+                    "is_local": True,
+                }
+            }
+        else:
+            logger.debug(f"whisper.cpp returned {response.status_code}: {response.text[:100]}")
+            return None
+
+    except Exception as e:
+        logger.debug(f"whisper.cpp /inference failed: {e}")
+        return None
+
+
 async def simple_tts_failover(
     text: str,
     voice: str,
@@ -25,13 +109,13 @@ async def simple_tts_failover(
 ) -> Tuple[bool, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
     Simple TTS failover - try each endpoint in order until one works.
-    
+
     Returns:
         Tuple of (success, metrics, config)
     """
     logger.info(f"simple_tts_failover called with: text='{text[:50]}...', voice={voice}, model={model}")
     logger.info(f"kwargs: {kwargs}")
-    
+
     from .core import text_to_speech
     from .conversation_logger import get_conversation_logger
 
@@ -212,7 +296,21 @@ async def simple_stt_failover(
             else:
                 logger.warning(f"STT: Primary failed, attempting fallback #{i}: {base_url} ({provider_type})")
 
-            # Create client for this endpoint
+            # For local endpoints, try whisper.cpp /inference first
+            if is_local_provider(base_url):
+                whisper_cpp_result = await _try_whisper_cpp_inference(base_url, audio_file, file_size_bytes)
+                if whisper_cpp_result:
+                    # Check if it's a no_speech result
+                    if whisper_cpp_result.get("error_type") == "no_speech":
+                        successful_but_empty = True
+                        successful_provider = "whisper-cpp"
+                        if 'metrics' in whisper_cpp_result:
+                            successful_metrics = whisper_cpp_result['metrics']
+                        # Don't return yet - continue to allow potential fallback if needed
+                    else:
+                        return whisper_cpp_result
+
+            # Create client for this endpoint (OpenAI-compatible API)
             api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
 
             # Disable retries for local endpoints - they either work or don't

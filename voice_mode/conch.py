@@ -24,12 +24,20 @@ Usage:
         print("Someone is in a voice conversation")
 """
 
-import fcntl
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Platform-specific file locking
+IS_WINDOWS = sys.platform == 'win32'
+
+if IS_WINDOWS:
+    import msvcrt
+else:
+    import fcntl
 
 # Import config for lock expiry - deferred to avoid circular import
 def _get_lock_expiry() -> float:
@@ -39,6 +47,49 @@ def _get_lock_expiry() -> float:
         return CONCH_LOCK_EXPIRY
     except ImportError:
         return 120.0  # Default 2 minutes
+
+
+def _lock_file(fd: int, exclusive: bool = True, blocking: bool = False) -> bool:
+    """Platform-independent file locking.
+
+    Args:
+        fd: File descriptor
+        exclusive: If True, exclusive lock; otherwise shared
+        blocking: If True, wait for lock; otherwise fail immediately
+
+    Returns:
+        True if lock acquired, False otherwise
+    """
+    if IS_WINDOWS:
+        try:
+            # On Windows, lock the first byte of the file
+            msvcrt.locking(fd, msvcrt.LK_NBLCK if not blocking else msvcrt.LK_LOCK, 1)
+            return True
+        except (IOError, OSError):
+            return False
+    else:
+        try:
+            flags = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+            if not blocking:
+                flags |= fcntl.LOCK_NB
+            fcntl.flock(fd, flags)
+            return True
+        except (BlockingIOError, OSError):
+            return False
+
+
+def _unlock_file(fd: int) -> None:
+    """Platform-independent file unlocking."""
+    if IS_WINDOWS:
+        try:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        except (IOError, OSError):
+            pass
+    else:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
 
 
 class Conch:
@@ -93,7 +144,7 @@ class Conch:
     def try_acquire(self, agent_name: Optional[str] = None) -> bool:
         """Atomically try to acquire the conch.
 
-        Uses fcntl.flock() for true atomic locking across processes.
+        Uses file locking for true atomic locking across processes.
         Also handles stale locks: if a lock is older than CONCH_LOCK_EXPIRY
         seconds, it will be forcibly released and re-acquired.
 
@@ -117,7 +168,14 @@ class Conch:
             self._fd = os.open(str(self.LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
 
             # Try to get exclusive lock (non-blocking)
-            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if not _lock_file(self._fd, exclusive=True, blocking=False):
+                if self._fd is not None:
+                    try:
+                        os.close(self._fd)
+                    except OSError:
+                        pass
+                    self._fd = None
+                return False
 
             # Got lock - write our info
             self._acquire_time = datetime.now()
@@ -203,7 +261,7 @@ class Conch:
 
         if self._fd is not None:
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                _unlock_file(self._fd)
                 os.close(self._fd)
             except OSError:
                 pass
