@@ -344,6 +344,9 @@ class ConnectClient:
 
                     try:
                         async for raw in ws:
+                            # Auto-response "pong" comes as plain text, not JSON
+                            if raw == "pong":
+                                continue
                             try:
                                 msg = json.loads(raw)
                                 await self._handle_message(msg)
@@ -379,16 +382,17 @@ class ConnectClient:
                 retry_delay = min(retry_delay * 2, max_retry_delay)
 
     async def _heartbeat_loop(self, ws):
-        """Send periodic heartbeats to keep the connection alive."""
+        """Send periodic keepalive pings using WebSocket auto-response.
+
+        The DO's setWebSocketAutoResponse("ping", "pong") handles these during
+        hibernation WITHOUT waking the Durable Object, dramatically reducing
+        storage reads vs the old JSON heartbeat approach.
+        """
         while True:
             await asyncio.sleep(25)
             try:
-                await ws.send(
-                    json.dumps({
-                        "type": "heartbeat",
-                        "timestamp": int(time.time() * 1000),
-                    })
-                )
+                # Send literal "ping" text — auto-responded by DO runtime without waking it
+                await ws.send("ping")
             except Exception:
                 return  # Connection closed
 
