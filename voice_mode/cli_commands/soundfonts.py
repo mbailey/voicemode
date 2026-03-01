@@ -3,17 +3,91 @@
 Provides `voicemode soundfonts on/off/status` commands
 for enabling/disabling soundfont playback during Claude Code sessions.
 
-Soundfonts are enabled by default. Disabling creates a sentinel file
-at ~/.voicemode/soundfonts-disabled which the hook receiver checks
-before playing any sounds.
+Two mechanisms control soundfonts:
+1. Sentinel file (~/.voicemode/soundfonts-disabled) — quick toggle / circuit breaker
+2. Env var (VOICEMODE_SOUNDFONTS_ENABLED) — persistent config in voicemode.env
+
+The sentinel file overrides everything when present. When absent,
+the env var decides. Default (neither set) is enabled.
 """
 
+import os
 from pathlib import Path
 
 import click
 
 
 SENTINEL_FILE = Path.home() / '.voicemode' / 'soundfonts-disabled'
+VOICEMODE_ENV_FILE = Path.home() / '.voicemode' / 'voicemode.env'
+
+
+def _get_env_var_state() -> tuple:
+    """Check VOICEMODE_SOUNDFONTS_ENABLED from env and config file.
+
+    Returns:
+        (enabled: bool | None, source: str | None)
+        source is 'env' (shell), 'file' (voicemode.env), or None (not set)
+    """
+    # Shell environment takes precedence
+    env_val = os.environ.get('VOICEMODE_SOUNDFONTS_ENABLED')
+    if env_val is not None:
+        return env_val.lower() in ('true', '1', 'yes', 'on'), 'env'
+
+    # Check voicemode.env file
+    if VOICEMODE_ENV_FILE.exists():
+        for line in VOICEMODE_ENV_FILE.read_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                continue
+            if stripped.startswith('VOICEMODE_SOUNDFONTS_ENABLED='):
+                val = stripped.split('=', 1)[1].strip().strip('"').strip("'")
+                return val.lower() in ('true', '1', 'yes', 'on'), 'file'
+
+    # Not set anywhere — default is true
+    return None, None
+
+
+def _update_env_file(enabled: bool) -> None:
+    """Update VOICEMODE_SOUNDFONTS_ENABLED in ~/.voicemode/voicemode.env."""
+    value = 'true' if enabled else 'false'
+    env_file = VOICEMODE_ENV_FILE
+
+    if not env_file.exists():
+        env_file.parent.mkdir(parents=True, exist_ok=True)
+        env_file.write_text(f'VOICEMODE_SOUNDFONTS_ENABLED={value}\n')
+        return
+
+    lines = env_file.read_text().splitlines()
+    found = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('#'):
+            continue
+        if stripped.startswith('VOICEMODE_SOUNDFONTS_ENABLED='):
+            lines[i] = f'VOICEMODE_SOUNDFONTS_ENABLED={value}'
+            found = True
+            break
+
+    if not found:
+        lines.append(f'VOICEMODE_SOUNDFONTS_ENABLED={value}')
+
+    env_file.write_text('\n'.join(lines) + '\n')
+
+
+def _warn_env_var_conflict() -> None:
+    """Print warning if env var will block soundfonts."""
+    enabled, source = _get_env_var_state()
+    if enabled is False:
+        click.echo()
+        click.echo("WARNING: VOICEMODE_SOUNDFONTS_ENABLED=false", err=False)
+        if source == 'file':
+            click.echo(f"  Set in: {VOICEMODE_ENV_FILE}")
+        elif source == 'env':
+            click.echo("  Set in: shell environment")
+        click.echo("  Soundfonts will NOT play until this is changed.")
+        click.echo("  Fix with: voicemode soundfonts on --config")
+        if source == 'file':
+            click.echo(f"  Or edit:  {VOICEMODE_ENV_FILE}")
 
 
 @click.group(name='soundfonts')
@@ -26,53 +100,128 @@ def soundfonts():
 
         voicemode claude hooks add
 
-    By default, soundfonts are enabled. Use 'off' to disable
-    and 'on' to re-enable.
+    Quick toggle (session-scoped):
+        voicemode soundfonts off        # Disable immediately
+        voicemode soundfonts on         # Re-enable
 
-    Examples:
-        voicemode soundfonts status
-        voicemode soundfonts off
-        voicemode soundfonts on
+    Persistent config change:
+        voicemode soundfonts on --config   # Enable + update voicemode.env
+        voicemode soundfonts off --config  # Disable + update voicemode.env
     """
     pass
 
 
 @soundfonts.command('on')
-def soundfonts_on():
-    """Enable soundfont playback (default).
+@click.option('--config', is_flag=True,
+              help='Also update VOICEMODE_SOUNDFONTS_ENABLED in voicemode.env')
+def soundfonts_on(config):
+    """Enable soundfont playback.
 
-    Removes the sentinel file so the hook receiver plays sounds.
+    Removes the quick-toggle sentinel file. Use --config to also
+    update ~/.voicemode/voicemode.env for persistent enablement.
     """
-    if SENTINEL_FILE.exists():
+    had_sentinel = SENTINEL_FILE.exists()
+
+    if had_sentinel:
         SENTINEL_FILE.unlink()
+
+    if config:
+        _update_env_file(True)
+        if had_sentinel:
+            click.echo("Soundfonts enabled.")
+            click.echo("  Removed sentinel file.")
+            click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=true")
+        else:
+            click.echo("Soundfonts enabled.")
+            click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=true")
+        # Check if shell env might override
+        shell_val = os.environ.get('VOICEMODE_SOUNDFONTS_ENABLED')
+        if shell_val is not None and shell_val.lower() not in ('true', '1', 'yes', 'on'):
+            click.echo()
+            click.echo("Note: VOICEMODE_SOUNDFONTS_ENABLED is also set in your shell environment.")
+            click.echo("  Shell environment takes precedence over voicemode.env.")
+            click.echo("  Check your ~/.bashrc or ~/.zshrc if soundfonts still don't work.")
+    elif had_sentinel:
         click.echo("Soundfonts enabled.")
+        _warn_env_var_conflict()
     else:
-        click.echo("Soundfonts are already enabled.")
+        env_enabled, _ = _get_env_var_state()
+        if env_enabled is False:
+            click.echo("Soundfonts are already enabled (no quick toggle active).")
+            _warn_env_var_conflict()
+        else:
+            click.echo("Soundfonts are already enabled.")
 
 
 @soundfonts.command('off')
-def soundfonts_off():
+@click.option('--config', is_flag=True,
+              help='Also update VOICEMODE_SOUNDFONTS_ENABLED in voicemode.env')
+def soundfonts_off(config):
     """Disable soundfont playback.
 
     Creates a sentinel file that the hook receiver checks
-    before playing any sounds.
+    before playing any sounds. Use --config to also update
+    ~/.voicemode/voicemode.env for persistent disablement.
     """
-    if SENTINEL_FILE.exists():
-        click.echo("Soundfonts are already disabled.")
-    else:
+    had_sentinel = SENTINEL_FILE.exists()
+
+    if not had_sentinel:
         SENTINEL_FILE.parent.mkdir(parents=True, exist_ok=True)
         SENTINEL_FILE.touch()
-        click.echo("Soundfonts disabled.")
+
+    if config:
+        _update_env_file(False)
+        if had_sentinel:
+            click.echo("Soundfonts are already disabled (quick toggle).")
+            click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=false")
+        else:
+            click.echo("Soundfonts disabled.")
+            click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=false")
+    elif had_sentinel:
+        click.echo("Soundfonts are already disabled.")
+    else:
+        click.echo("Soundfonts disabled (this session).")
+        click.echo("  Re-enable with: voicemode soundfonts on")
 
 
 @soundfonts.command('status')
 def soundfonts_status():
-    """Show whether soundfonts are enabled or disabled."""
-    if SENTINEL_FILE.exists():
-        click.echo("Soundfonts: disabled")
+    """Show whether soundfonts are enabled or disabled.
+
+    Checks both the quick-toggle sentinel file and the
+    VOICEMODE_SOUNDFONTS_ENABLED configuration.
+    """
+    sentinel_exists = SENTINEL_FILE.exists()
+    env_enabled, env_source = _get_env_var_state()
+
+    if sentinel_exists and env_enabled is False:
+        # Both disabled
+        click.echo("Soundfonts: disabled (quick toggle + config)")
         click.echo(f"  Sentinel file: {SENTINEL_FILE}")
+        if env_source == 'file':
+            click.echo(f"  VOICEMODE_SOUNDFONTS_ENABLED=false in {VOICEMODE_ENV_FILE}")
+        else:
+            click.echo("  VOICEMODE_SOUNDFONTS_ENABLED=false in shell environment")
+        click.echo("  Both must be resolved to enable soundfonts.")
+    elif sentinel_exists:
+        # Quick toggle only
+        click.echo("Soundfonts: disabled (quick toggle)")
+        click.echo(f"  Sentinel file: {SENTINEL_FILE}")
+        click.echo("  Re-enable with: voicemode soundfonts on")
+    elif env_enabled is False:
+        # Config only
+        click.echo("Soundfonts: disabled (by config)")
+        if env_source == 'file':
+            click.echo(f"  VOICEMODE_SOUNDFONTS_ENABLED=false in {VOICEMODE_ENV_FILE}")
+        else:
+            click.echo("  VOICEMODE_SOUNDFONTS_ENABLED=false in shell environment")
+        click.echo("  Enable with: voicemode soundfonts on --config")
+        if env_source == 'file':
+            click.echo(f"  Or edit:     {VOICEMODE_ENV_FILE}")
     else:
+        # Enabled
         click.echo("Soundfonts: enabled")
+
     click.echo()
     click.echo("Tip: Soundfonts require Claude Code hooks:")
     click.echo("  voicemode claude hooks add")

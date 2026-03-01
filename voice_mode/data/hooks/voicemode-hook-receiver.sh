@@ -59,8 +59,11 @@ for arg in "$@"; do
   esac
 done
 
-# Quick exit if soundfonts are disabled via sentinel file
-if [ -f "$HOME/.voicemode/soundfonts-disabled" ]; then exit 0; fi
+# Quick exit if soundfonts are disabled via sentinel file (circuit breaker)
+if [ -f "$HOME/.voicemode/soundfonts-disabled" ]; then
+  [[ -n "${VOICEMODE_HOOK_DEBUG:-}" ]] && echo "[DEBUG] Soundfonts disabled via sentinel file (~/.voicemode/soundfonts-disabled)" >&2
+  exit 0
+fi
 
 DEBUG="${VOICEMODE_HOOK_DEBUG:-}"
 SOUNDFONTS_BASE="$HOME/.voicemode/soundfonts/current"
