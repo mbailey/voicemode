@@ -22,18 +22,14 @@ VOICEMODE_ENV_FILE = Path.home() / '.voicemode' / 'voicemode.env'
 
 
 def _get_env_var_state() -> tuple:
-    """Check VOICEMODE_SOUNDFONTS_ENABLED from env and config file.
+    """Check VOICEMODE_SOUNDFONTS_ENABLED from config file and env.
 
     Returns:
         (enabled: bool | None, source: str | None)
-        source is 'env' (shell), 'file' (voicemode.env), or None (not set)
+        source is 'file' (voicemode.env), 'env' (shell only), or None (not set)
     """
-    # Shell environment takes precedence
-    env_val = os.environ.get('VOICEMODE_SOUNDFONTS_ENABLED')
-    if env_val is not None:
-        return env_val.lower() in ('true', '1', 'yes', 'on'), 'env'
-
-    # Check voicemode.env file
+    # Check voicemode.env file first — more actionable source
+    file_val = None
     if VOICEMODE_ENV_FILE.exists():
         for line in VOICEMODE_ENV_FILE.read_text().splitlines():
             stripped = line.strip()
@@ -41,10 +37,42 @@ def _get_env_var_state() -> tuple:
                 continue
             if stripped.startswith('VOICEMODE_SOUNDFONTS_ENABLED='):
                 val = stripped.split('=', 1)[1].strip().strip('"').strip("'")
-                return val.lower() in ('true', '1', 'yes', 'on'), 'file'
+                file_val = val.lower() in ('true', '1', 'yes', 'on')
+                break
+
+    # Check shell environment
+    env_val = os.environ.get('VOICEMODE_SOUNDFONTS_ENABLED')
+
+    if file_val is not None:
+        # File value exists — report it as the source
+        return file_val, 'file'
+
+    if env_val is not None:
+        # Only in shell env (not from our file) — less common
+        return env_val.lower() in ('true', '1', 'yes', 'on'), 'env'
 
     # Not set anywhere — default is true
     return None, None
+
+
+def _hooks_installed() -> bool:
+    """Check if any VoiceMode hooks are installed in Claude Code settings."""
+    import json as _json
+    settings_file = Path.home() / '.claude' / 'settings.json'
+    if not settings_file.exists():
+        return False
+    try:
+        settings = _json.loads(settings_file.read_text())
+        hooks = settings.get('hooks', {})
+        for event_entries in hooks.values():
+            for entry in event_entries:
+                # VoiceMode hooks reference voicemode-hook-receiver
+                cmd = entry.get('command', '') if isinstance(entry, dict) else ''
+                if 'voicemode' in cmd.lower():
+                    return True
+        return False
+    except Exception:
+        return False
 
 
 def _update_env_file(enabled: bool) -> None:
@@ -222,6 +250,11 @@ def soundfonts_status():
         # Enabled
         click.echo("Soundfonts: enabled")
 
+    # Show hooks status — only nag if not installed
     click.echo()
-    click.echo("Tip: Soundfonts require Claude Code hooks:")
-    click.echo("  voicemode claude hooks add")
+    if _hooks_installed():
+        click.echo("Hooks: installed")
+    else:
+        click.echo("Hooks: not installed")
+        click.echo("  Soundfonts require Claude Code hooks:")
+        click.echo("  voicemode claude hooks add")
