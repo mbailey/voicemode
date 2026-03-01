@@ -306,6 +306,10 @@ In the VoiceMode Connect web app settings (app.voicemode.dev/settings), set:
 - **TTS Endpoint**: `https://<hostname>.<tailnet>.ts.net`
 - **STT Endpoint**: `https://<hostname>.<tailnet>.ts.net`
 
+## Soundfonts
+
+Audio feedback tones that play during Claude Code tool use. Toggle with `voicemode soundfonts on/off`. See [Soundfonts Guide](../../docs/guides/soundfonts.md).
+
 ## Documentation Index
 
 | Topic | Link |
@@ -318,6 +322,7 @@ In the VoiceMode Connect web app settings (app.voicemode.dev/settings), set:
 | Kokoro TTS | [Kokoro Setup](../../docs/guides/kokoro-setup.md) |
 | Pronunciation | [Pronunciation Guide](../../docs/guides/pronunciation.md) |
 | Troubleshooting | [Troubleshooting](../../docs/troubleshooting/index.md) |
+| Soundfonts | [Soundfonts Guide](../../docs/guides/soundfonts.md) |
 | CLI Reference | [CLI Docs](../../docs/reference/cli.md) |
 | DJ Mode | [Background Music](docs/dj-mode/README.md) |
 

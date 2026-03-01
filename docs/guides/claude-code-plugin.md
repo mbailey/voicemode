@@ -99,8 +99,11 @@ The plugin includes a hook receiver that plays sounds during tool execution:
 - Sounds play when tools start and complete
 - Provides audio feedback during long operations
 - Uses configurable soundfonts
+- Toggle with `voicemode soundfonts on/off`
 
 Hooks are automatically configured when the plugin is installed.
+
+See the [Soundfonts Guide](soundfonts.md) for customization, sound lookup order, and troubleshooting.
 
 ## Troubleshooting
 

@@ -295,6 +295,44 @@ voicemode livekit logs [--follow]
 ```
 
 
+## Soundfonts
+
+### soundfonts
+Toggle soundfont playback for Claude Code hooks
+
+```bash
+# Quick toggle (session-scoped)
+voicemode soundfonts off          # Disable immediately
+voicemode soundfonts on           # Re-enable
+
+# Persistent config change
+voicemode soundfonts on --config  # Enable + update voicemode.env
+voicemode soundfonts off --config # Disable + update voicemode.env
+
+# Check current state
+voicemode soundfonts status       # Shows sentinel file + env var state
+```
+
+The `off` command creates a sentinel file (`~/.voicemode/soundfonts-disabled`) that the hook receiver checks before playing sounds. The `--config` flag also updates `VOICEMODE_SOUNDFONTS_ENABLED` in `~/.voicemode/voicemode.env`.
+
+## Claude Code Integration
+
+### claude hooks
+Manage Claude Code hook integration
+
+```bash
+# Install hooks
+voicemode claude hooks add
+
+# Remove hooks
+voicemode claude hooks remove
+
+# List installed hooks
+voicemode claude hooks list
+```
+
+Hooks connect Claude Code's tool events to VoiceMode's soundfont system. The `add` command registers the hook receiver script with Claude Code's settings.
+
 ## Configuration Commands
 
 ### config

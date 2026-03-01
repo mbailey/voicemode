@@ -14,6 +14,8 @@ set -o nounset -o pipefail -o errexit
 #   VOICEMODE_HOOK_DEBUG=1 voicemode-hook-receiver --tool-name Task --event PreToolUse --subagent-type mama-bear
 #
 # Configuration:
+#   ~/.voicemode/soundfonts-disabled - Sentinel file; if present, soundfonts are disabled
+#     (managed by: voicemode soundfonts on/off)
 #   VOICEMODE_SOUNDFONTS_ENABLED - Sound fonts enabled by default, set to 'false' to disable
 #   VOICEMODE_HOOK_DEBUG - Set to '1' for debug output
 #
@@ -56,6 +58,12 @@ for arg in "$@"; do
     ;;
   esac
 done
+
+# Quick exit if soundfonts are disabled via sentinel file (circuit breaker)
+if [ -f "$HOME/.voicemode/soundfonts-disabled" ]; then
+  [[ -n "${VOICEMODE_HOOK_DEBUG:-}" ]] && echo "[DEBUG] Soundfonts disabled via sentinel file (~/.voicemode/soundfonts-disabled)" >&2
+  exit 0
+fi
 
 DEBUG="${VOICEMODE_HOOK_DEBUG:-}"
 SOUNDFONTS_BASE="$HOME/.voicemode/soundfonts/current"
