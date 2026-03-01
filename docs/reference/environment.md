@@ -59,6 +59,17 @@ Environment variables are processed in this order (highest to lowest priority):
 | `VOICEMODE_KOKORO_CACHE_DIR` | Kokoro cache directory | `~/.voicemode/cache/kokoro` | `/cache/kokoro` |
 | `VOICEMODE_KOKORO_DEFAULT_VOICE` | Default Kokoro voice | `af_sky` | `am_adam` |
 
+## Soundfonts
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `VOICEMODE_SOUNDFONTS_ENABLED` | Enable/disable soundfont playback | `true` | `false` |
+| `VOICEMODE_HOOK_DEBUG` | Enable debug output from hook receiver | unset | `1` |
+
+`VOICEMODE_SOUNDFONTS_ENABLED` can be set in `~/.voicemode/voicemode.env` or the shell environment. The sentinel file (`~/.voicemode/soundfonts-disabled`, managed by `voicemode soundfonts on/off`) takes priority when present.
+
+See the [Soundfonts Guide](../guides/soundfonts.md) for details.
+
 ## Audio Configuration
 
 ### Audio Formats
