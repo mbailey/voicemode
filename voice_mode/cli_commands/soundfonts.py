@@ -154,14 +154,25 @@ def soundfonts_on(config):
         SENTINEL_FILE.unlink()
 
     if config:
-        _update_env_file(True)
-        if had_sentinel:
+        env_enabled, _ = _get_env_var_state()
+        config_changed = env_enabled is not True  # None (unset) or False
+        if config_changed:
+            _update_env_file(True)
+
+        if had_sentinel and config_changed:
             click.echo("Soundfonts enabled.")
             click.echo("  Removed sentinel file.")
             click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=true")
-        else:
+        elif had_sentinel:
+            click.echo("Soundfonts enabled.")
+            click.echo("  Removed sentinel file.")
+        elif config_changed:
             click.echo("Soundfonts enabled.")
             click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=true")
+        else:
+            click.echo("Soundfonts are already enabled.")
+            return
+
         # Check if shell env might override
         shell_val = os.environ.get('VOICEMODE_SOUNDFONTS_ENABLED')
         if shell_val is not None and shell_val.lower() not in ('true', '1', 'yes', 'on'):
@@ -198,13 +209,21 @@ def soundfonts_off(config):
         SENTINEL_FILE.touch()
 
     if config:
-        _update_env_file(False)
-        if had_sentinel:
-            click.echo("Soundfonts are already disabled (quick toggle).")
-            click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=false")
-        else:
+        env_enabled, _ = _get_env_var_state()
+        config_changed = env_enabled is not False  # None (unset) or True
+        if config_changed:
+            _update_env_file(False)
+
+        if had_sentinel and config_changed:
             click.echo("Soundfonts disabled.")
             click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=false")
+        elif had_sentinel:
+            click.echo("Soundfonts are already disabled.")
+        elif config_changed:
+            click.echo("Soundfonts disabled.")
+            click.echo(f"  Updated {VOICEMODE_ENV_FILE}: VOICEMODE_SOUNDFONTS_ENABLED=false")
+        else:
+            click.echo("Soundfonts are already disabled.")
     elif had_sentinel:
         click.echo("Soundfonts are already disabled.")
     else:
