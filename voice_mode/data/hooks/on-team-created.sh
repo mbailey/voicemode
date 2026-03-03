@@ -20,6 +20,11 @@ if [ "${VOICEMODE_CONNECT_ENABLED:-false}" != "true" ]; then
   exit 0
 fi
 
+# Exit early if jq is not available (can't parse hook input without it)
+if ! command -v jq &>/dev/null; then
+  exit 0
+fi
+
 # Debug logging (only when VOICEMODE_DEBUG is enabled)
 if [ "${VOICEMODE_DEBUG:-false}" = "true" ]; then
   DEBUG_LOG="$HOME/.voicemode/logs/connect-hook-debug.log"

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/voice_mode/data/hooks/stop-notifications.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/voice_mode/data/hooks/stop-notifications.sh || true"
           }
         ]
       }

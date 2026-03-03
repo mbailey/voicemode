@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/voice_mode/data/hooks/connect-session-end.sh"
+            "command": "${CLAUDE_PLUGIN_ROOT}/voice_mode/data/hooks/connect-session-end.sh || true"
           }
         ]
       }
