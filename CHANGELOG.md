@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Soundfont Toggle (VM-312)
+
+- **`voicemode soundfonts on/off/status` CLI commands** - Session-scoped soundfont toggle using a sentinel file for zero-overhead checking. Disable tool-use sounds without editing config files
+- **`--config` flag for persistent toggle** - `soundfonts on/off --config` also updates `voicemode.env` so the setting persists across restarts
+- **Environment variable awareness** - Status shows the effective state from both sentinel file and `VOICEMODE_SOUNDFONTS_ENABLED` env var, warning when they conflict
+- **Hooks installation status** - `soundfonts status` now shows whether hooks are installed, replacing a static tip message
+
+#### Connect Lifecycle Hooks (VM-816, VM-820)
+
+- **SessionEnd cleanup hook** (VM-820) - Automatically removes inbox-live symlink and session identity file when a Claude Code session ends; subagent-safe (only team leads clean up)
+- **Inbox-live symlink validation** (VM-816) - `connect_status` validates that inbox-live belongs to the current session's team before setting "available" presence, preventing cross-session message routing
+
+#### Shell Completions (VM-832)
+
+- **Context-aware hook completions** - `hooks add` only suggests hooks not yet installed; `hooks remove` only suggests installed hooks
+
+#### Documentation (VM-242)
+
+- **Soundfonts guide** - New `docs/guides/soundfonts.md` covering usage, directory structure, sound lookup order, customization, and troubleshooting
+- **CLI reference updates** - Added soundfonts and claude hooks commands to `docs/reference/cli.md`
+- **Environment reference updates** - Added `VOICEMODE_SOUNDFONTS_ENABLED` and `VOICEMODE_HOOK_DEBUG` to `docs/reference/environment.md`
+
+### Changed
+
+- **Connect status queries gateway** (VM-826) - `voicemode connect status` now opens a short-lived WebSocket to the gateway for real-time presence state instead of reading stale local files. Falls back to local state when gateway is unreachable
+- **Agent-only presence model** (VM-822, VM-824) - Presence is now entirely agent-driven via the `connect_status` MCP tool. Removed standalone daemon model (`connect up/down`), filesystem user scanning, and fallback to scanning `~/.voicemode/connect/users/`
+- **Idempotent soundfont config updates** - `soundfonts on/off --config` skips writes when the value is already correct
+- **Config env sync** - `voicemode.env` updates now also sync `os.environ`, eliminating stale environment warnings
+
+### Fixed
+
+- **Hibernation-friendly keepalive** - Send literal `"ping"` text instead of JSON `{ type: "heartbeat" }` for WebSocket keepalive. The Durable Object's auto-response handles `"ping"→"pong"` during hibernation without waking the DO, eliminating ~2 storage reads per 25-second heartbeat cycle
+- **Ghost contacts on dashboard** (VM-822) - Stopped the Connect client from announcing all users found in `~/.voicemode/connect/users/` on WebSocket connect. Each agent now only announces its own registered identity
+- **Stale inbox-live symlink routing** (VM-816) - Concurrent sessions no longer risk routing messages to the wrong agent's team inbox
+
+### Removed
+
+- **`voicemode agent` CLI command group** (VM-828) - Legacy tmux-based agent management (~900 lines) that predated the plugin-based agent system. Noted as removed in 8.3.0 but code remained
+- **`voicemode history` commands** (VM-830) - Broken load/search/play commands that overlapped with exchanges
+- **`voicemode version` command** (VM-830) - Redundant with `--version` flag
+- **`voicemode update` command** (VM-830) - Over-complex; users should use `uv`/`pip` directly
+- **`voicemode diag dependencies`** (VM-830) - Redundant with `voicemode deps`
+- **`voicemode connect up/down` commands** (VM-824) - Replaced by agent-driven presence via `connect_status` MCP tool
+
 ## [8.3.0] - 2026-02-24 - Happy 1st Birthday, Claude Code!
 
 *February 24, 2026 — One year since Claude Code launched. This release celebrates with
