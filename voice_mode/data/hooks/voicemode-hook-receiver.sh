@@ -134,6 +134,16 @@ EVENT="${EVENT:-PreToolUse}"
 
 debug "Processing: event=$EVENT, tool=$TOOL_NAME, subagent=$SUBAGENT_TYPE"
 
+# Skip sounds for voicemode converse tool - voice conversations provide their own audio feedback
+# Covers all known converse tool name variants:
+#   mcp__plugin_voicemode_voicemode__converse  (plugin-namespaced, primary distribution)
+#   mcp__voicemode__converse                    (legacy/direct MCP)
+#   mcp__claude_ai_VoiceMode_Connect__converse  (VoiceMode Connect)
+if [[ "$TOOL_NAME" == *voicemode*converse* ]]; then
+  debug "Skipping sound for voicemode converse tool"
+  exit 0
+fi
+
 # Check if soundfonts are enabled
 # First check env var, then check config file
 soundfonts_enabled() {
@@ -188,7 +198,7 @@ converse_active() {
   kill -0 "$pid" 2>/dev/null
 }
 
-if converse_active; then
+if converse_active && [[ "$EVENT" != "PermissionRequest" ]]; then
   debug "Voice conversation active (conch lock) - skipping sound playback"
   exit 0
 fi
