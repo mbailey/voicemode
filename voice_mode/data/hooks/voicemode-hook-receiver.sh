@@ -135,7 +135,11 @@ EVENT="${EVENT:-PreToolUse}"
 debug "Processing: event=$EVENT, tool=$TOOL_NAME, subagent=$SUBAGENT_TYPE"
 
 # Skip sounds for voicemode converse tool - voice conversations provide their own audio feedback
-if [[ "$TOOL_NAME" == "mcp__voicemode__converse" || "$TOOL_NAME" == "mcp__claude_ai_VoiceMode_Connect__converse" ]]; then
+# Covers all known converse tool name variants:
+#   mcp__plugin_voicemode_voicemode__converse  (plugin-namespaced, primary distribution)
+#   mcp__voicemode__converse                    (legacy/direct MCP)
+#   mcp__claude_ai_VoiceMode_Connect__converse  (VoiceMode Connect)
+if [[ "$TOOL_NAME" == *voicemode*converse* ]]; then
   debug "Skipping sound for voicemode converse tool"
   exit 0
 fi
