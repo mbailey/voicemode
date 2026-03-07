@@ -48,13 +48,16 @@ async def startup_initialization():
                 base_url = 'http://127.0.0.1:8880'  # Kokoro default endpoint
                 health_url = f"{base_url}/health"
                 response = await client.get(health_url)
-                
+
                 if response.status_code == 200:
                     logger.info("Kokoro TTS is already running externally")
                 else:
-                    raise Exception("Not running")
-        except:
-            # Kokoro is not running, start it
+                    raise RuntimeError("Not running")
+        except (httpx.RequestError, httpx.HTTPStatusError, RuntimeError):
+            # httpx.RequestError: Connection refused, timeout, DNS failure
+            # httpx.HTTPStatusError: Non-200 response codes
+            # RuntimeError: Explicit "Not running" raise above
+            # All indicate Kokoro is not running - proceed to start it
             logger.info("Auto-starting Kokoro TTS service...")
             try:
                 global service_processes
