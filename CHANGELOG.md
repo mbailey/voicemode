@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.5.0] - 2026-03-08
+
 ### Added
 
 #### PermissionRequest Notification Sound (VM-892)
