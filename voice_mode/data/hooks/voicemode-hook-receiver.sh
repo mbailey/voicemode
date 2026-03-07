@@ -194,7 +194,7 @@ converse_active() {
   kill -0 "$pid" 2>/dev/null
 }
 
-if converse_active; then
+if converse_active && [[ "$EVENT" != "PermissionRequest" ]]; then
   debug "Voice conversation active (conch lock) - skipping sound playback"
   exit 0
 fi
