@@ -1536,7 +1536,7 @@ def deps(component, yes, dry_run, verbose):
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def diag():
-    """Diagnostic tools for voicemode."""
+    """Diagnostic tools (deprecated: use 'voicemode doctor')."""
     pass
 
 
@@ -1577,6 +1577,7 @@ def cli():
 from voice_mode.cli_commands import exchanges as exchanges_cmd
 from voice_mode.cli_commands import transcribe as transcribe_cmd
 from voice_mode.cli_commands import status as status_cmd
+from voice_mode.cli_commands import doctor as doctor_cmd
 from voice_mode.cli_commands import claude as claude_cmd
 from voice_mode.cli_commands import soundfonts as soundfonts_cmd
 
@@ -1588,6 +1589,8 @@ cli.add_command(transcribe_cmd.transcribe)
 voice_mode_main_cli.add_command(exchanges_cmd.exchanges)
 # Add unified status command
 voice_mode_main_cli.add_command(status_cmd.status)
+# Add doctor command
+voice_mode_main_cli.add_command(doctor_cmd.doctor)
 
 # Add Claude Code integration commands
 voice_mode_main_cli.add_command(claude_cmd.claude)
