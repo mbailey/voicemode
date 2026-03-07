@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### PermissionRequest Notification Sound (VM-892)
+
+- **PermissionRequest hook event** - Plays an audio notification when Claude Code needs user approval for a tool, so you don't miss permission prompts while away from the screen
+- **Bypasses conch lock** - PermissionRequest sounds play even during active voice conversations, ensuring you always hear when approval is needed
+
+#### Mute Converse Sounds (VM-898)
+
+- **Auto-mute voicemode converse tool sounds** - PreToolUse/PostToolUse sounds are automatically suppressed for the voicemode converse tool (both local and Connect variants), since voice conversations provide their own audio feedback. Other tool use sounds still play during voice conversations, making them more meaningful — they indicate something is happening that you wouldn't otherwise hear
+
 ## [8.4.0] - 2026-03-04
 
 ### Added

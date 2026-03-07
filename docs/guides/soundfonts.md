@@ -29,12 +29,13 @@ voicemode soundfonts on --config    # Enable + update voicemode.env
 
 ## How It Works
 
-Claude Code fires hook events (`PreToolUse`, `PostToolUse`, `PreCompact`) during operation. VoiceMode's hook receiver:
+Claude Code fires hook events (`PreToolUse`, `PostToolUse`, `PreCompact`, `PermissionRequest`) during operation. VoiceMode's hook receiver:
 
 1. Checks if soundfonts are disabled (sentinel file or env var)
 2. Looks up the right sound file based on the tool and event
 3. Plays it asynchronously (non-blocking, won't slow down Claude)
-4. Skips playback during active voice conversations
+4. Skips playback during active voice conversations (except PermissionRequest, which always plays)
+5. Skips sounds for the voicemode converse tool (voice provides its own audio feedback)
 
 The hook receiver is a fast bash script (~20ms startup) that avoids Python overhead.
 
@@ -59,6 +60,8 @@ The hook receiver is a fast bash script (~20ms startup) that avoids Python overh
         papa-bear.mp3
     PreCompact/
       default.mp3               # Before context compaction
+    PermissionRequest/
+      default.mp3               # Permission approval needed
     system-messages/
       ready-to-listen.mp3       # Voice recording started
       waiting-1-minute.mp3      # Idle timeout warning
@@ -90,9 +93,11 @@ Place numbered files (`01.mp3`, `02.mp3`, ..., `99.mp3`) alongside `default.mp3`
 Create a `MUTE.txt` file in any tool directory to suppress sounds for that tool:
 
 ```bash
-# Silence the converse tool's PreToolUse sound
-touch ~/.voicemode/soundfonts/current/PreToolUse/mcp/voicemode/converse/MUTE.txt
+# Silence the Bash tool's PreToolUse sound
+touch ~/.voicemode/soundfonts/current/PreToolUse/bash/MUTE.txt
 ```
+
+Note: The voicemode converse tool is automatically muted — no MUTE.txt needed.
 
 ## Customizing Sounds
 
