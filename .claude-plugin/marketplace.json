@@ -1,7 +1,8 @@
 {
   "name": "voicemode",
   "metadata": {
-    "description": "VoiceMode - Voice conversations for Claude Code"
+    "description": "VoiceMode - Voice conversations for Claude Code",
+    "version": "1.1.0"
   },
   "owner": {
     "name": "VoiceMode",
@@ -17,7 +18,21 @@
       },
       "source": "./",
       "category": "productivity",
-      "homepage": "https://voicemode.dev"
+      "homepage": "https://github.com/mbailey/voicemode"
+    },
+    {
+      "name": "show-me",
+      "description": "Visual context sharing between AI and users - display files/URLs/commands with 'show', observe screen context with 'look'",
+      "author": {
+        "name": "Mike Bailey",
+        "email": "mike@voicemode.dev"
+      },
+      "source": {
+        "source": "url",
+        "url": "https://github.com/mbailey/show-me.git"
+      },
+      "category": "productivity",
+      "homepage": "https://github.com/mbailey/show-me"
     }
   ]
 }
