@@ -64,46 +64,33 @@ For all parameters, see [Converse Parameters](../../docs/reference/converse-para
 
 ## Parallel Tool Calls (Zero Dead Air)
 
-When performing actions during a voice conversation, use parallel tool calls to eliminate dead air. Send the voice message and the action in the **same turn** so they execute concurrently.
+Eliminate dead air by sending voice and action calls in the **same response**:
 
-### Pattern: Speak + Act in Parallel
-
-```python
-# FAST: One turn — voice and action fire simultaneously
-# Turn 1: speak (fire-and-forget) + do the work (all parallel)
+```
+# FAST: speak + act in parallel (all fire concurrently)
 voicemode:converse("Checking that now.", wait_for_response=False)
-bash("git status")
+Bash("git status")
 Agent(prompt="Research X", run_in_background=True)
 
-# Turn 2: speak the results (with listening)
-voicemode:converse("Here's what I found: ...", wait_for_response=True)
-```
-
-```python
-# SLOW: Two turns — unnecessary sequential delay
-# Turn 1: speak
+# SLOW: sequential — unnecessary delay between speech and action
 voicemode:converse("Checking that now.", wait_for_response=False)
-# Turn 2: do the work
-bash("git status")
-# Turn 3: speak results
-voicemode:converse("Here's what I found: ...", wait_for_response=True)
+# ... waits for TTS to finish ...
+Bash("git status")
 ```
 
-### When to Use Parallel vs Sequential
+Then report results in the next response:
+```
+voicemode:converse("Here's what I found: ...", wait_for_response=True)
+```
 
 | Scenario | Approach | Why |
 |----------|----------|-----|
 | Announce + do work | **Parallel** | No dependency between speech and action |
 | Announce + spawn agent | **Parallel** | Agent runs in background anyway |
 | Check result then report | **Sequential** | Need result before speaking |
-| Listen for response | **Sequential** | `wait_for_response=True` blocks until user finishes |
+| Listen for response | **Sequential** | `wait_for_response=True` blocks until user speaks |
 
-### Key Rules
-
-- **All tool types can be parallel**: MCP, Bash, Agent, Read — mix freely in one turn
-- **Wall-clock time = longest call**, not the sum of all calls
-- **Use `wait_for_response=False`** for the speak call when combining with other tools
-- **Great for demos**: Audience hears continuous speech with no awkward silences
+**Key insight:** Wall-clock time = longest call, not the sum. All tool types (MCP, Bash, Agent, Read) can be mixed in one response.
 
 ## Handling Pauses and Wait Requests
 
