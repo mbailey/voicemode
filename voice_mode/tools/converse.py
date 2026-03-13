@@ -105,11 +105,15 @@ def is_tmux() -> bool:
 
 
 def focus_tmux_pane() -> None:
-    """Focus the current tmux pane, its window, and switch the focused client.
+    """Focus the current tmux pane, its window, and optionally switch a client.
 
-    Runs tmux select-pane, select-window, and switch-client to bring the
-    current agent's pane into view. Handles multi-session setups where each
-    terminal window is attached to a different tmux session.
+    Steps:
+    1. select-pane + select-window: activate the pane within its session
+    2. Check if any client is already showing this session — if so, stop
+    3. If no client is showing the session, switch the focused client to it
+
+    This avoids "stealing" the user's focused terminal when the agent's
+    session is already visible in another terminal window.
 
     Silent no-op if not in tmux, TMUX_PANE is unset, or tmux is not found.
     """
@@ -133,7 +137,16 @@ def focus_tmux_pane() -> None:
             return
         session_name = r.stdout.strip()
 
-        # Find the focused client and switch it to our session
+        # Check if any client is already attached to this session
+        r = subprocess.run(
+            ["tmux", "list-clients", "-t", session_name, "-F", "#{client_tty}"],
+            capture_output=True, text=True
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            # Session already visible in a terminal — don't steal focus
+            return
+
+        # No client is showing our session — switch the focused client to it
         r = subprocess.run(
             ["tmux", "list-clients", "-F", "#{client_tty} #{client_flags}"],
             capture_output=True, text=True
