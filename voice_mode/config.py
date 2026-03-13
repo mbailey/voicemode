@@ -365,6 +365,10 @@ TTS \\bAPI\\b A P I # API as individual letters
 # Download progress style: auto, rich, simple (default: auto)
 # VOICEMODE_PROGRESS_STYLE=auto
 
+# Auto-focus tmux pane when speaking (for multi-agent setups)
+# Switches tmux focus to the agent's pane after conch acquisition
+# VOICEMODE_AUTO_FOCUS_PANE=false
+
 #############
 # Credential Storage
 #############
@@ -522,6 +526,10 @@ CONCH_CHECK_INTERVAL = float(os.getenv("VOICEMODE_CONCH_CHECK_INTERVAL", "0.5"))
 # Should be longer than your typical conversation turn (listen + TTS + buffer)
 # Default 300s (5 min) covers 2 min listen + long TTS. Set to 0 to disable.
 CONCH_LOCK_EXPIRY = float(os.getenv("VOICEMODE_CONCH_LOCK_EXPIRY", "300"))
+
+# Auto-focus tmux pane when conch is acquired (for multi-agent setups)
+# When enabled, automatically switches tmux focus to the speaking agent's pane
+AUTO_FOCUS_PANE = env_bool("VOICEMODE_AUTO_FOCUS_PANE", False)
 
 # ==================== SERVICE CONFIGURATION ====================
 

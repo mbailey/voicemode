@@ -63,7 +63,8 @@ from voice_mode.config import (
     MP3_BITRATE,
     CONCH_ENABLED,
     CONCH_TIMEOUT,
-    CONCH_CHECK_INTERVAL
+    CONCH_CHECK_INTERVAL,
+    AUTO_FOCUS_PANE
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -96,6 +97,31 @@ logger = logging.getLogger("voicemode")
 
 # Log silence detection config at module load time
 logger.info(f"Module loaded with DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}")
+
+
+def is_tmux() -> bool:
+    """Check if the current process is running inside a tmux session."""
+    return bool(os.environ.get("TMUX"))
+
+
+def focus_tmux_pane() -> None:
+    """Focus the current tmux pane and its window.
+
+    Runs tmux select-pane and select-window to bring the current agent's
+    pane into view. Silent no-op if not in tmux, TMUX_PANE is unset,
+    or the tmux binary is not found.
+    """
+    import subprocess
+
+    tmux_pane = os.environ.get("TMUX_PANE", "")
+    if not tmux_pane:
+        return
+
+    try:
+        subprocess.run(["tmux", "select-pane", "-t", tmux_pane], capture_output=True)
+        subprocess.run(["tmux", "select-window", "-t", tmux_pane], capture_output=True)
+    except FileNotFoundError:
+        pass  # tmux binary not installed
 
 
 # DJ Ducking Configuration
@@ -1334,6 +1360,10 @@ consult the MCP resources listed above.
                     "pid": os.getpid(),
                     "agent": "converse"
                 })
+
+            # Auto-focus tmux pane after conch acquisition, before audio playback
+            if AUTO_FOCUS_PANE and is_tmux():
+                focus_tmux_pane()
 
         # Local microphone approach with timing
         transport = "local"
