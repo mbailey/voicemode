@@ -105,11 +105,13 @@ def is_tmux() -> bool:
 
 
 def focus_tmux_pane() -> None:
-    """Focus the current tmux pane and its window.
+    """Focus the current tmux pane, its window, and switch the focused client.
 
-    Runs tmux select-pane and select-window to bring the current agent's
-    pane into view. Silent no-op if not in tmux, TMUX_PANE is unset,
-    or the tmux binary is not found.
+    Runs tmux select-pane, select-window, and switch-client to bring the
+    current agent's pane into view. Handles multi-session setups where each
+    terminal window is attached to a different tmux session.
+
+    Silent no-op if not in tmux, TMUX_PANE is unset, or tmux is not found.
     """
     import subprocess
 
@@ -118,8 +120,33 @@ def focus_tmux_pane() -> None:
         return
 
     try:
+        # Select the pane and its window within the session
         subprocess.run(["tmux", "select-pane", "-t", tmux_pane], capture_output=True)
         subprocess.run(["tmux", "select-window", "-t", tmux_pane], capture_output=True)
+
+        # Find which session owns this pane
+        r = subprocess.run(
+            ["tmux", "display-message", "-t", tmux_pane, "-p", "#{session_name}"],
+            capture_output=True, text=True
+        )
+        if r.returncode != 0:
+            return
+        session_name = r.stdout.strip()
+
+        # Find the focused client and switch it to our session
+        r = subprocess.run(
+            ["tmux", "list-clients", "-F", "#{client_tty} #{client_flags}"],
+            capture_output=True, text=True
+        )
+        for line in r.stdout.strip().split("\n"):
+            parts = line.split(" ", 1)
+            if len(parts) == 2 and "focused" in parts[1]:
+                client_tty = parts[0]
+                subprocess.run(
+                    ["tmux", "switch-client", "-c", client_tty, "-t", session_name],
+                    capture_output=True
+                )
+                break
     except FileNotFoundError:
         pass  # tmux binary not installed
 
