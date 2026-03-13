@@ -110,11 +110,21 @@ def _is_focus_held() -> bool:
     Returns True if ~/.voicemode/focus-hold exists and was modified within
     the hold period, meaning auto-focus should be suppressed to let the
     user view what was shown (e.g. a file opened by show-me).
+
+    The hold duration is read from the file contents (written by show-me's
+    --hold flag), falling back to VOICEMODE_FOCUS_HOLD_SECONDS env var,
+    then 30 seconds.
     """
     hold_file = os.path.expanduser("~/.voicemode/focus-hold")
-    hold_seconds = float(os.environ.get("VOICEMODE_FOCUS_HOLD_SECONDS", "30"))
+    default_hold = float(os.environ.get("VOICEMODE_FOCUS_HOLD_SECONDS", "30"))
     try:
         age = time.time() - os.path.getmtime(hold_file)
+        # Read hold duration from file (written by show-me --hold)
+        try:
+            with open(hold_file) as f:
+                hold_seconds = float(f.read().strip())
+        except (ValueError, OSError):
+            hold_seconds = default_hold
         return age < hold_seconds
     except (OSError, ValueError):
         return False
