@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from .openai_error_parser import OpenAIErrorParser
 from .provider_discovery import is_local_provider
 
-from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT
+from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE
 from .provider_discovery import detect_provider_type
 
 logger = logging.getLogger("voicemode")
@@ -234,6 +234,17 @@ async def simple_stt_failover(
             }
             if STT_PROMPT:
                 transcription_kwargs["prompt"] = STT_PROMPT
+
+            # Handle language parameter based on provider
+            # - whisper.cpp: needs "auto" explicitly (default is "en")
+            # - OpenAI API: omit for auto-detect (doesn't accept "auto")
+            if WHISPER_LANGUAGE and WHISPER_LANGUAGE != "auto":
+                # Explicit language set - pass to all providers
+                transcription_kwargs["language"] = WHISPER_LANGUAGE
+            elif is_local_provider(base_url):
+                # Local whisper.cpp with auto mode - must pass "auto" explicitly
+                transcription_kwargs["language"] = "auto"
+            # For OpenAI with "auto" - don't pass parameter (auto-detect by default)
 
             transcription = await client.audio.transcriptions.create(**transcription_kwargs)
             request_time_ms = (time.perf_counter() - request_start) * 1000
