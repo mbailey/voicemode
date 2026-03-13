@@ -63,7 +63,8 @@ from voice_mode.config import (
     MP3_BITRATE,
     CONCH_ENABLED,
     CONCH_TIMEOUT,
-    CONCH_CHECK_INTERVAL
+    CONCH_CHECK_INTERVAL,
+    AUTO_FOCUS_PANE
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -96,6 +97,102 @@ logger = logging.getLogger("voicemode")
 
 # Log silence detection config at module load time
 logger.info(f"Module loaded with DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}")
+
+
+def is_tmux() -> bool:
+    """Check if the current process is running inside a tmux session."""
+    return bool(os.environ.get("TMUX"))
+
+
+def _is_focus_held() -> bool:
+    """Check if another tool recently took visual focus (the 'visual conch').
+
+    Returns True if ~/.voicemode/focus-hold exists and was modified within
+    the hold period, meaning auto-focus should be suppressed to let the
+    user view what was shown (e.g. a file opened by show-me).
+
+    The hold duration is read from the file contents (written by show-me's
+    --hold flag), falling back to VOICEMODE_FOCUS_HOLD_SECONDS env var,
+    then 30 seconds.
+    """
+    hold_file = os.path.expanduser("~/.voicemode/focus-hold")
+    default_hold = float(os.environ.get("VOICEMODE_FOCUS_HOLD_SECONDS", "30"))
+    try:
+        age = time.time() - os.path.getmtime(hold_file)
+        # Read hold duration from file (written by show-me --hold)
+        try:
+            with open(hold_file) as f:
+                hold_seconds = float(f.read().strip())
+        except (ValueError, OSError):
+            hold_seconds = default_hold
+        return age < hold_seconds
+    except (OSError, ValueError):
+        return False
+
+
+def focus_tmux_pane() -> None:
+    """Focus the current tmux pane, its window, and optionally switch a client.
+
+    Steps:
+    1. Check focus-hold sentinel — skip if another tool recently took focus
+    2. select-pane + select-window: activate the pane within its session
+    3. Check if any client is already showing this session — if so, stop
+    4. If no client is showing the session, switch the focused client to it
+
+    This avoids "stealing" the user's focused terminal when the agent's
+    session is already visible in another terminal window.
+
+    Silent no-op if not in tmux, TMUX_PANE is unset, or tmux is not found.
+    """
+    import subprocess
+
+    tmux_pane = os.environ.get("TMUX_PANE", "")
+    if not tmux_pane:
+        return
+
+    # Respect the visual conch — another tool recently took focus
+    if _is_focus_held():
+        return
+
+    try:
+        # Select the pane and its window within the session
+        subprocess.run(["tmux", "select-pane", "-t", tmux_pane], capture_output=True)
+        subprocess.run(["tmux", "select-window", "-t", tmux_pane], capture_output=True)
+
+        # Find which session owns this pane
+        r = subprocess.run(
+            ["tmux", "display-message", "-t", tmux_pane, "-p", "#{session_name}"],
+            capture_output=True, text=True
+        )
+        if r.returncode != 0:
+            return
+        session_name = r.stdout.strip()
+
+        # Check if any client is already attached to this session
+        r = subprocess.run(
+            ["tmux", "list-clients", "-t", session_name, "-F", "#{client_tty}"],
+            capture_output=True, text=True
+        )
+        if r.returncode == 0 and r.stdout.strip():
+            # Session already visible in a terminal — don't steal focus
+            return
+
+        # No client is showing our session — switch the focused client to it
+        r = subprocess.run(
+            ["tmux", "list-clients", "-F", "#{client_tty} #{client_flags}"],
+            capture_output=True, text=True
+        )
+        for line in r.stdout.strip().split("\n"):
+            parts = line.split(" ", 1)
+            if len(parts) == 2 and "focused" in parts[1]:
+                client_tty = parts[0]
+                subprocess.run(
+                    ["tmux", "switch-client", "-c", client_tty, "-t", session_name],
+                    capture_output=True
+                )
+                break
+    except FileNotFoundError:
+        pass  # tmux binary not installed
 
 
 # DJ Ducking Configuration
@@ -1334,6 +1431,10 @@ consult the MCP resources listed above.
                     "pid": os.getpid(),
                     "agent": "converse"
                 })
+
+            # Auto-focus tmux pane after conch acquisition, before audio playback
+            if AUTO_FOCUS_PANE and is_tmux():
+                focus_tmux_pane()
 
         # Local microphone approach with timing
         transport = "local"
