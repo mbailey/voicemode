@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.5.1] - 2026-03-14
+
+### Added
+
+- **Show-me plugin in marketplace** - Added show-me as an external plugin (source: mbailey/show-me) to the VoiceMode plugin marketplace
+
+### Fixed
+
+- **Pass WHISPER_LANGUAGE config to STT API** ([#253](https://github.com/mbailey/voicemode/pull/253) by @htrex) - The `VOICEMODE_WHISPER_LANGUAGE` config existed but was never passed to the transcription API. Local whisper.cpp defaults to English when no language parameter is given, producing incorrect transcriptions for non-English audio. Now passes `language="auto"` explicitly to whisper.cpp and handles the OpenAI API difference (omit parameter for auto-detect)
+
+### Changed
+
+- **Parallel tool calls guidance** - VoiceMode skill now documents the "speak + act in parallel" pattern for zero dead air during voice conversations, with examples of when to use parallel vs sequential tool calls
+
 ## [8.5.0] - 2026-03-08
 
 ### Added
