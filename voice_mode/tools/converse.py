@@ -104,13 +104,30 @@ def is_tmux() -> bool:
     return bool(os.environ.get("TMUX"))
 
 
+def _is_focus_held() -> bool:
+    """Check if another tool recently took visual focus (the 'visual conch').
+
+    Returns True if ~/.voicemode/focus-hold exists and was modified within
+    the hold period, meaning auto-focus should be suppressed to let the
+    user view what was shown (e.g. a file opened by show-me).
+    """
+    hold_file = os.path.expanduser("~/.voicemode/focus-hold")
+    hold_seconds = float(os.environ.get("VOICEMODE_FOCUS_HOLD_SECONDS", "30"))
+    try:
+        age = time.time() - os.path.getmtime(hold_file)
+        return age < hold_seconds
+    except (OSError, ValueError):
+        return False
+
+
 def focus_tmux_pane() -> None:
     """Focus the current tmux pane, its window, and optionally switch a client.
 
     Steps:
-    1. select-pane + select-window: activate the pane within its session
-    2. Check if any client is already showing this session — if so, stop
-    3. If no client is showing the session, switch the focused client to it
+    1. Check focus-hold sentinel — skip if another tool recently took focus
+    2. select-pane + select-window: activate the pane within its session
+    3. Check if any client is already showing this session — if so, stop
+    4. If no client is showing the session, switch the focused client to it
 
     This avoids "stealing" the user's focused terminal when the agent's
     session is already visible in another terminal window.
@@ -121,6 +138,10 @@ def focus_tmux_pane() -> None:
 
     tmux_pane = os.environ.get("TMUX_PANE", "")
     if not tmux_pane:
+        return
+
+    # Respect the visual conch — another tool recently took focus
+    if _is_focus_held():
         return
 
     try:
