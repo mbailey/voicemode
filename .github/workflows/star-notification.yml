@@ -24,6 +24,11 @@ jobs:
           LOCATION=$(echo "$USER_DATA" | jq -r '.location // ""')
           PUBLIC_REPOS=$(echo "$USER_DATA" | jq -r '.public_repos // 0')
 
+          # Sanitize fields -- strip newlines and control chars to avoid GITHUB_OUTPUT format errors
+          BIO=$(echo "$BIO" | tr '\n\r' '  ' | sed 's/[[:cntrl:]]//g')
+          COMPANY=$(echo "$COMPANY" | tr '\n\r' '  ' | sed 's/[[:cntrl:]]//g')
+          LOCATION=$(echo "$LOCATION" | tr '\n\r' '  ' | sed 's/[[:cntrl:]]//g')
+
           # Set outputs
           echo "followers=$FOLLOWERS" >> $GITHUB_OUTPUT
           echo "bio=$BIO" >> $GITHUB_OUTPUT
