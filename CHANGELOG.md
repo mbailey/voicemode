@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### VoiceMode Channel Server (Research Preview)
+
+- **Inbound voice calls via Claude Code channels** -- TypeScript MCP channel server that connects to VoiceMode Connect gateway and pushes voice messages into Claude Code sessions. Users can speak from their phone or web app and Claude responds conversationally. Requires explicit opt-in (`VOICEMODE_CHANNEL_ENABLED=true`) and `--dangerously-load-development-channels` flag.
+
+#### Security
+
+- **Explicit opt-in gate for channel server** -- Channel server exits immediately unless `VOICEMODE_CHANNEL_ENABLED=true` is set, preventing surprise outbound WebSocket connections when dev channels are loaded for other purposes.
+
 ## [8.5.1] - 2026-03-14
 
 ### Added
