@@ -20,9 +20,19 @@ messages in its session.
 ## Setup
 
 ```bash
+# 1. Install channel server dependencies
 cd channel
 npm install
+
+# 2. Authenticate with VoiceMode Connect (opens browser for Auth0 login)
+voicemode connect auth login
+
+# 3. Verify auth is working
+voicemode connect auth status
 ```
+
+This saves your credentials to `~/.voicemode/credentials`. The channel
+server reads these to connect to the VoiceMode gateway.
 
 ## Running
 
@@ -30,7 +40,8 @@ npm install
 
 ```bash
 # From the voicemode repo root
-claude --dangerously-load-development-channels server:voicemode-channel
+# VOICEMODE_CHANNEL_ENABLED=true is required (explicit opt-in)
+VOICEMODE_CHANNEL_ENABLED=true claude --dangerously-load-development-channels server:voicemode-channel
 ```
 
 The MCP server must be registered in `.mcp.json`:
