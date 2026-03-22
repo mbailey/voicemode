@@ -36,33 +36,21 @@ server reads these to connect to the VoiceMode gateway.
 
 ## Running
 
-### As a development channel in Claude Code
+The channel server is already registered in VoiceMode's `.mcp.json` -- no
+manual MCP configuration needed if you installed VoiceMode as a plugin.
+
+### Enable and start Claude Code
 
 ```bash
-# From the voicemode repo root
 # VOICEMODE_CHANNEL_ENABLED=true is required (explicit opt-in)
 VOICEMODE_CHANNEL_ENABLED=true claude --dangerously-load-development-channels server:voicemode-channel
 ```
 
-The MCP server must be registered in `.mcp.json`:
+### Make a call
 
-```json
-{
-  "mcpServers": {
-    "voicemode-channel": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["tsx", "channel/index.ts"]
-    }
-  }
-}
-```
-
-### Standalone
-
-```bash
-npx tsx channel/index.ts
-```
+Open **[app.voicemode.dev](https://app.voicemode.dev)** on your phone or
+browser. Sign in with the same account, tap the call button, and speak.
+Claude will respond and you'll hear TTS audio playback.
 
 ## Testing
 
