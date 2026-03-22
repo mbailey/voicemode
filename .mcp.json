@@ -10,6 +10,19 @@
       "env": {
         "#VOICEMODE_SAVE_ALL": "true"
       }
+    },
+    "voicemode-channel": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "channel/node_modules/.bin/tsx",
+        "channel/index.ts"
+      ],
+      "env": {
+        "#VOICEMODE_CHANNEL_DEBUG": "true",
+        "#VOICEMODE_AGENT_NAME": "voicemode",
+        "#VOICEMODE_AGENT_DISPLAY_NAME": "Claude Code"
+      }
     }
   }
 }
