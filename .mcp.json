@@ -19,6 +19,7 @@
         "channel/index.ts"
       ],
       "env": {
+        "#VOICEMODE_CHANNEL_ENABLED": "true",
         "#VOICEMODE_CHANNEL_DEBUG": "true",
         "#VOICEMODE_AGENT_NAME": "voicemode",
         "#VOICEMODE_AGENT_DISPLAY_NAME": "Claude Code"

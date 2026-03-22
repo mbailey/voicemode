@@ -33,6 +33,18 @@ import { homedir } from 'node:os'
 import { randomBytes } from 'node:crypto'
 import { GatewayClient } from './gateway.js'
 
+// ---------------------------------------------------------------------------
+// Explicit opt-in gate -- channel server must NOT connect to external services
+// unless the user has deliberately enabled it. This prevents surprise outbound
+// WebSocket connections when someone loads dev channels for other reasons.
+// ---------------------------------------------------------------------------
+if (process.env.VOICEMODE_CHANNEL_ENABLED !== 'true') {
+  process.stderr.write(
+    'VoiceMode channel server disabled. Set VOICEMODE_CHANNEL_ENABLED=true to enable.\n'
+  )
+  process.exit(0)
+}
+
 const CHANNEL_NAME = 'voicemode-channel'
 const CHANNEL_VERSION = '0.1.0'
 const HTTP_PORT = parseInt(process.env.VOICEMODE_CHANNEL_PORT ?? '8787', 10)

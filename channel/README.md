@@ -72,6 +72,7 @@ curl http://localhost:8787/health
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
+| `VOICEMODE_CHANNEL_ENABLED` | `false` | **Required.** Must be `true` to enable. Server exits immediately otherwise. |
 | `VOICEMODE_CHANNEL_PORT` | `8787` | HTTP test server port |
 | `VOICEMODE_CHANNEL_DEBUG` | `false` | Enable debug logging |
 | `VOICEMODE_CONNECT_WS_URL` | `wss://voicemode.dev/ws` | WebSocket gateway URL |
@@ -96,4 +97,6 @@ server). It runs as a subprocess of Claude Code and communicates via stdio.
 
 ## Status
 
-Research preview. Requires `--dangerously-load-development-channels` flag.
+Research preview. Requires both:
+1. `--dangerously-load-development-channels` flag on Claude Code
+2. `VOICEMODE_CHANNEL_ENABLED=true` environment variable (explicit opt-in)
