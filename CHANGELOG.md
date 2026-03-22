@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### VoiceMode Channel Server (Research Preview)
+
+- **Inbound voice calls via Claude Code channels** -- TypeScript MCP channel server that enables users to call their Claude Code instance from their phone or web browser
+  - Connects to VoiceMode Connect WebSocket gateway with Auth0 authentication
+  - Pushes transcribed voice messages into Claude Code sessions as channel notifications
+  - Claude responds via a reply tool that sends audio back through the same connection
+  - Full call loop: speak -> transcribe -> Claude responds -> TTS playback -> auto-listen
+  - Explicit opt-in required: set `VOICEMODE_CHANNEL_ENABLED=true` (exits immediately without it)
+  - Also requires `--dangerously-load-development-channels` flag on Claude Code
+  - See [`channel/README.md`](channel/README.md) for setup and configuration
+
 ## [8.5.1] - 2026-03-14
 
 ### Added
@@ -84,8 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.3.0] - 2026-02-24 - Happy 1st Birthday, Claude Code!
 
-*February 24, 2026 — One year since Claude Code launched. This release celebrates with
-VoiceMode Connect: make inbound voice calls to your Claude Code agents from anywhere.*
+_February 24, 2026 — One year since Claude Code launched. This release celebrates with
+VoiceMode Connect: make inbound voice calls to your Claude Code agents from anywhere._
 
 ### Added
 
@@ -622,6 +635,7 @@ _Note: Fix files not committed - use 8.0.6_
 ## [6.1.1] - 2025-11-11
 
 ### Fixed
+
 - **TTS Fallback for System Messages** - Fixed play_system_audio TTS fallback behavior
   - Changed incorrect `initial_provider=None` parameter to `model="tts-1"`
   - Ensures TTS model is properly specified when falling back from audio files
@@ -629,6 +643,7 @@ _Note: Fix files not committed - use 8.0.6_
   - Affects wait/repeat commands and other system audio playback
 
 ### Added
+
 - **Comprehensive Wait/Repeat Test Suite**
   - Added 291 lines of test coverage for wait and repeat functionality
   - Tests for play_system_audio with audio files and TTS fallback
@@ -641,7 +656,9 @@ _Note: Fix files not committed - use 8.0.6_
 ### 🎉 Major Features
 
 #### **Voice Control Commands - "Repeat" and "Wait"** (VM-199)
+
 VoiceMode now understands natural voice commands during conversations:
+
 - **"Repeat" Command**: Say phrases like "could you repeat that?" or "say that again" to replay the last message
 - **"Wait" Command**: Say "wait a minute" or "hold on" to pause the conversation for 60 seconds
 - **Instant Feedback**: Pre-recorded audio responses provide immediate confirmation (no TTS delay)
@@ -650,6 +667,7 @@ VoiceMode now understands natural voice commands during conversations:
 - **Privacy-First**: System messages use local audio files - no cloud processing for these commands
 
 ### Added
+
 - **Pre-Recorded System Audio Messages**
   - Bundled audio files for instant system feedback (no TTS latency)
   - "Repeating" - confirms replay request
@@ -665,6 +683,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Documents all CLI commands and MCP tool usage
 
 ### Fixed
+
 - **Concurrent Audio Playback** (VM-208)
   - Replaced blocking audio calls with queue-based NonBlockingAudioPlayer
   - Multiple VoiceMode instances can now play audio simultaneously
@@ -677,6 +696,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Prevents confusing "failure" status on feature branches
 
 ### Changed
+
 - **Unified Audio System**
   - All audio playback now uses NonBlockingAudioPlayer
   - Consistent audio handling for chimes, system messages, and replays
@@ -688,6 +708,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Updated skill trigger phrases to include "voice mode"
 
 ### Refactored
+
 - **Converse Tool Architecture** (VM-202)
   - Eliminated 120 lines of duplicate code between speak-only and conversation modes
   - Single unified flow with conditional STT execution
@@ -695,16 +716,19 @@ VoiceMode now understands natural voice commands during conversations:
   - Easier to maintain and extend with new features
 
 ### Developer
+
 - Added `scripts/compare-voice-modes.sh` for testing voice services against cloud
 
 ## [6.0.5] - 2025-10-27
 
 ### Added
+
 - **Makefile Target** - New `make run-installer` for quick logo preview
   - Runs installer from source with --dry-run
   - Shows logo and output without installing anything
 
 ### Fixed
+
 - **Installer Logo Alignment** - Fixed box drawing character alignment
   - Removed emoji that caused terminal width inconsistencies
   - Adjusted spacing for perfect box alignment
@@ -713,12 +737,14 @@ VoiceMode now understands natural voice commands during conversations:
 ## [6.0.4] - 2025-10-27
 
 ### Added
+
 - **Automated Installer Publishing** - voice-mode-install now publishes automatically on release
   - GitHub Actions workflow builds and publishes installer alongside main package
   - Both packages publish to PyPI when version tags are pushed
   - Supports both production and TestPyPI publishing
 
 ### Fixed
+
 - **Installer Color** - Now uses proper Claude Code orange (ANSI color 208)
   - Changed to ANSI escape code `\033[38;5;208m` for proper orange color
   - Previous `bright_yellow` was not the correct Claude Code orange
@@ -730,6 +756,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [6.0.3] - 2025-10-27
 
 ### Fixed
+
 - **CLI Defaults** - Fixed CLI not respecting environment variable configuration (#75)
   - `voicemode converse` now uses DEFAULT_LISTEN_DURATION (120s) instead of hardcoded 30s
   - `voicemode converse` now uses MIN_RECORDING_DURATION from config for min-duration
@@ -741,16 +768,19 @@ VoiceMode now understands natural voice commands during conversations:
 ## [6.0.2] - 2025-10-27
 
 ### Added
+
 - **GitHub Star Notifications** - Receive notifications when someone stars the repository
   - Integration with ntfy.sh for push notifications
   - Automatic notification on new stargazers
 
 ### Changed
+
 - **Logger Names** - Standardized logger names to use "voicemode" without hyphen
   - Consistent logging namespace across all modules
   - Improved log filtering and debugging experience
 
 ### Fixed
+
 - **Converse Tool** - Simplified prompt and improved conversation continuation handling
   - Reduced prompt complexity for better LLM understanding
   - Better handling of conversation flow and context
@@ -821,6 +851,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.1.9] - 2025-10-14
 
 ### Fixed
+
 - **Whisper model size display** - Fixed incorrect size calculation in `voicemode whisper model --all`
   - Totals were showing millions of GB instead of reasonable values
   - Changed calculation to use MB values directly from registry
@@ -837,17 +868,21 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.1.6] - 2025-10-12
 
 ### Added
+
 - **Release Management Script** - Automated script for version bumping and release preparation
 - **Homebrew Auto-Installation** - Automatic detection and installation of Homebrew on macOS
 
 ### Fixed
+
 - **dpkg False Positives** - Fixed false positive detections in dpkg checks
 - **Tart VM Targets** - Added support for Tart VM testing targets
 
 ### Changed
+
 - **Makefile Cleanup** - Reorganized and cleaned up Makefile structure
 
 ### Documentation
+
 - **Code Reading Guide** - Added comprehensive guide for understanding voicemode converse command
 
 ## [5.1.5] - 2025-10-12
@@ -855,6 +890,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.1.4] - 2025-10-12
 
 ### Added
+
 - **voice-mode-install Package** - Standalone installer package for simplified VoiceMode setup
   - New PyPI package `voice-mode-install` provides `voice-mode-install` command
   - Handles system dependency detection and installation before main package
@@ -868,6 +904,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Improved command existence checking using shutil.which
 
 ### Fixed
+
 - **Installer Package Naming Consistency**
   - Fixed wheel filename pattern in Makefile from `voicemode_install` to `voice_mode_install`
   - Corrected package name from `voicemode-install` to `voice-mode-install` in all documentation
@@ -878,6 +915,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.1.3] - 2025-10-12
 
 ### Fixed
+
 - **Kokoro First-Time Installation Timeout**
   - Fixed systemd timeout error during first kokoro installation
   - Now starts kokoro manually before systemd to download models and dependencies
@@ -888,6 +926,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.1.2] - 2025-10-12
 
 ### Fixed
+
 - **Kokoro Rust Dependency Detection**
   - Fixed `voicemode kokoro install` failing with "can't find Rust compiler" on Fedora
   - Marked Rust (cargo and rustc) as required dependencies for kokoro on Fedora
@@ -896,6 +935,7 @@ VoiceMode now understands natural voice commands during conversations:
   - `voicemode deps --component kokoro` now correctly checks for Rust compiler
 
 ### Changed
+
 - **Service Auto-Enable Default**
   - Changed `SERVICE_AUTO_ENABLE` default from `False` to `True`
   - Services now automatically enable and start after installation by default
@@ -905,6 +945,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.1.1] - 2025-10-12
 
 ### Added
+
 - **Progress Indicator for Dependency Installation**
   - Animated braille spinner shows installation activity by default
   - New `--verbose/-v` flag for `voicemode deps` to show full package manager output
@@ -913,6 +954,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Addresses user feedback about installation appearing to hang with no progress indication
 
 ### Fixed
+
 - **Kokoro Service PATH Configuration**
   - Fixed hardcoded `/home/m/.local/bin` in systemd service file
   - Now uses dynamic user home directory expansion with `os.path.expanduser()`
@@ -923,6 +965,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.1.0] - 2025-10-12
 
 ### Added
+
 - **Lazy-Loading System Dependency Management** - Complete dependency checking and installation system
   - Automatic detection and installation of system dependencies on-demand
   - Lazy dependency checking that happens when needed (core deps on converse, build deps on service install)
@@ -935,6 +978,7 @@ VoiceMode now understands natural voice commands during conversations:
   - WSL2-specific dependency handling (pulseaudio requirements)
 
 ### Fixed
+
 - **ALSA Development Libraries Now Required for Core Installation**
   - Fixed installation failures on Linux due to missing ALSA headers
   - `simpleaudio` Python package requires ALSA development libraries to compile
@@ -948,6 +992,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.0.3] - 2025-10-05
 
 ### Fixed
+
 - **Whisper Model Default** - Consolidated default Whisper model to single constant
   - Fixed inconsistency where CLI defaulted to `large-v2` while tool used `base`
   - All code now references `DEFAULT_WHISPER_MODEL = "base"` from config.py
@@ -956,6 +1001,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.0.2] - 2025-10-05
 
 ### Fixed
+
 - **CLI Error Messages** - Display meaningful OpenAI error messages in CLI commands
   - Improved error reporting throughout CLI interface
   - Better user feedback when OpenAI API calls fail
@@ -963,11 +1009,13 @@ VoiceMode now understands natural voice commands during conversations:
 ## [5.0.1] - 2025-10-04
 
 ### Fixed
+
 - **Version Command** - Fixed NameError caused by undefined `current_version` variable
 
 ## [5.0.0] - 2025-10-04
 
 ### Added
+
 - **Pre-built Core ML Model Support** - Major improvement for Apple Silicon users
   - Downloads pre-built Core ML models from Hugging Face instead of building locally
   - Eliminates need for full Xcode installation (saves ~15GB disk space)
@@ -989,27 +1037,32 @@ VoiceMode now understands natural voice commands during conversations:
   - Default model download during whisper installation
 
 ### Changed
+
 - **Version Display** - Now shows "VoiceMode" name and git status
 - **CLI Structure** - Reorganized whisper commands for better UX
 - **Installation** - Automatic Core ML support without manual configuration
 
 ### Fixed
+
 - **WSL Detection** - Improved detection to handle WSLInterop-late
 - **Error Messages** - Integration of OpenAIErrorParser for clear user feedback
 - **CLI Help** - Removed redundant subcommands list from whisper service help
 - **Progress Bars** - Improved formatting and reliability
 
 ### Removed
+
 - **install_torch Parameter** - No longer needed with automatic Core ML support
 - **Legacy Health Check Code** - Cleaned up leftover code from provider system refactoring
 
 ### Internal
+
 - **Project Structure** - Cleaned up project root and reorganized files
 - **Documentation** - Updated Core ML documentation with new download strategy
 
 ## [4.8.0] - 2025-10-03
 
 ### Added
+
 - **CI Mode for Installer** - GitHub Actions integration for automated testing
   - New `--ci` flag for non-interactive installer operation
   - Automatic dependency installation and configuration
@@ -1024,6 +1077,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Status checking for all dependencies before installation
 
 ### Fixed
+
 - **Platform Compatibility**
   - Added Debian/Ubuntu support to installer alongside Fedora
   - Simplified Python version checking (UV manages Python installation)
@@ -1031,6 +1085,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Made pip optional since UV handles package management
 
 ### Documentation
+
 - **Core ML Improvements**
   - Enhanced Core ML specification with pre-built model download strategy
   - Simplified voice selection guide by removing redundant examples
@@ -1039,16 +1094,19 @@ VoiceMode now understands natural voice commands during conversations:
 ## [4.7.1] - 2025-09-23
 
 ### Fixed
+
 - **CLI Commands**
   - Fix broken whisper model install command import path after services refactoring
 
 ### Changed
+
 - **Testing**
   - Move comprehensive help test from manual to automated testing for CI coverage
 
 ## [4.7.0] - 2025-09-22
 
 ### Fixed
+
 - **Voice Interaction**
   - Distinguish STT connection errors from genuine "no speech detected" scenarios (#62)
   - Display detailed error messages showing attempted endpoints and specific failures
@@ -1057,16 +1115,19 @@ VoiceMode now understands natural voice commands during conversations:
   - Clean up "Unclosed client session" asyncio warning on startup
 
 ### Added
+
 - **Testing**
   - Add comprehensive test coverage for STT error scenarios
   - Test connection failures, authentication errors, and fallback behavior
 
 ### Documentation
+
 - Add troubleshooting guide index with diagnostic flowchart
 
 ## [4.6.0] - 2025-09-21
 
 ### Added
+
 - **Streamlined Installation Experience**
   - Add OpenAI API key setup with browser integration for quick start
   - Add microphone detection before voice test
@@ -1080,6 +1141,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Add reference documentation for internal systems
 
 ### Changed
+
 - **Installation Flow**
   - Remove local services prompt from initial setup (moved to post-install docs)
   - Focus installation on getting users to Claude Code quickly
@@ -1093,6 +1155,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Move version utilities from tools to utils module
 
 ### Fixed
+
 - **macOS Compatibility**
   - Fix bash completion "nosort: invalid option name" error on bash 3.2
   - Remove timeout command usage (not available on macOS by default)
@@ -1107,6 +1170,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [4.5.0] - 2025-09-18
 
 ### Added
+
 - **Enhanced STT Logging**
   - Add comprehensive logging for speech-to-text operations
   - Log provider selection and fallback attempts
@@ -1123,6 +1187,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Support comma-separated lists for enabling/disabling specific tools
 
 ### Changed
+
 - **Provider Selection Architecture**
   - Consolidate dual provider selection systems into single simple failover approach
   - Remove SIMPLE_FAILOVER configuration - simple failover is now the only mode
@@ -1131,6 +1196,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Provider registry now only stores endpoint info without complex selection
 
 ### Fixed
+
 - Disable OpenAI client retries for local endpoints to avoid delays
 - Fix logger name consistency (voicemode vs voice-mode) for STT logging
 - Prevent test_installers from killing running voice services during tests
@@ -1140,18 +1206,17 @@ VoiceMode now understands natural voice commands during conversations:
 ## [4.4.0] - 2025-09-10
 
 ### Added
+
 - **MCP Registry Support**
   - Add server.json configuration for MCP registry publication
   - Add mcp-name field to README for PyPI package validation
   - Integrate MCP registry publishing into CI/CD workflow
   - Support DNS-based namespace authentication (com.failmode/voicemode)
   - Update Makefile to sync server.json version during releases
-  
 - **Cloudflare Worker for voicemode.sh**
   - Serve install script via custom domain
   - Smart user-agent detection for CLI vs browser
   - Cached script delivery with fallback
-  
 - **Selective Tool Loading**
   - Reduce token usage by loading tools on demand
   - Implement smart tool filtering based on context
@@ -1169,12 +1234,14 @@ VoiceMode now understands natural voice commands during conversations:
   - Integrate with sound fonts for agent-specific audio feedback
 
 ### Changed
+
 - Consolidate PyPI and MCP Registry publishing workflows
 - Update branch references from 'main' to 'master'
 - Improve Cloudflare Worker error handling and caching
 - Rename hook to hooks, stdin-receiver to receiver
 
 ### Fixed
+
 - Fix broken documentation links after refactor
 - Restore minimal claude command group for hook support
 - Fix Claude settings.json path configuration
@@ -1182,6 +1249,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [4.3.2] - 2025-09-03
 
 ### Fixed
+
 - Add missing pyyaml dependency to pyproject.toml
 - Remove macOS-only restriction from package
 - Add Claude hooks configuration to repository settings
@@ -1189,16 +1257,19 @@ VoiceMode now understands natural voice commands during conversations:
 ## [4.3.1] - 2025-09-03
 
 ### Fixed
+
 - Minor bug fixes and improvements
 
 ## [4.3.0] - 2025-09-03
 
 ### Added
+
 - Sound fonts with MP3 support and Three Bears sounds integration
 
 ## [4.2.0] - 2025-09-03
 
 ### Added
+
 - **🧠 Think Out Loud Mode - AI Reasoning Made Audible**
   - Revolutionary feature that transforms AI's internal thinking into spoken performances
   - Extracts and voices Claude's reasoning blocks using multiple personas
@@ -1225,6 +1296,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Foundation for advanced AI introspection features
 
 ### Changed
+
 - **Enhanced Message Extraction**
   - Generic and flexible extraction supporting full conversations
   - Multiple output formats: full messages, text only, or thinking only
@@ -1232,10 +1304,12 @@ VoiceMode now understands natural voice commands during conversations:
   - Improved integration with voice mode tools
 
 ### Removed
+
 - **Redundant get_claude_thinking MCP tool**
   - Consolidated into more powerful get_claude_messages tool
 
 ### Documentation
+
 - **Comprehensive Think Out Loud Documentation**
   - Agent specifications for theditor
   - Claude orchestration instructions
@@ -1245,6 +1319,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [4.1.0] - 2025-09-01
 
 ### Added
+
 - **Pronunciation middleware for TTS/STT text processing**
   - Configurable pronunciation rules system that processes text before TTS and after STT
   - Regex-based text substitution rules with YAML configuration
@@ -1259,6 +1334,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [4.0.1] - 2025-09-01
 
 ### Removed
+
 - Removed `whisperx` optional dependency to fix PyPI upload compatibility
   - The dependency was specified as a Git URL which is not allowed for PyPI packages
   - WhisperX functionality was recently added and not essential for core features
@@ -1266,10 +1342,11 @@ VoiceMode now understands natural voice commands during conversations:
 ## [4.0.0] - 2025-08-31
 
 ### BREAKING CHANGES
+
 - **Unified voice configuration system**
   - **BREAKING**: Replaced `.voices.txt` files with unified `.voicemode.env` configuration
   - Changed environment variable from `VOICEMODE_TTS_VOICES` to `VOICEMODE_VOICES` for simplicity
-  - Implemented cascading configuration: env vars > project configs > global config  
+  - Implemented cascading configuration: env vars > project configs > global config
   - Added directory tree walking for project-specific configuration discovery
   - Supports runtime configuration reloading via MCP tools
   - **Migration Required**: Users must migrate from `.voices.txt` to `.voicemode.env` with `VOICEMODE_VOICES=voice1,voice2` format
@@ -1278,10 +1355,9 @@ VoiceMode now understands natural voice commands during conversations:
 
 - **Comprehensive test coverage reporting system**
   - Integration with pytest-cov for coverage measurement
-  - HTML coverage reports generated in htmlcov/ directory  
+  - HTML coverage reports generated in htmlcov/ directory
   - Coverage badges and metrics for monitoring code quality
   - Automated coverage reporting in CI/CD pipeline
-  
 - **Word-level timestamps for transcription**
   - Enhanced transcription output with word-level timing information
   - Support for SubRip (SRT) format output with precise word timestamps
@@ -1292,8 +1368,9 @@ VoiceMode now understands natural voice commands during conversations:
 - **Enhanced voice selection guide**
   - Comprehensive documentation for voice selection across different providers
   - Clear migration instructions from old `.voices.txt` system
-  
-### Removed  
+
+### Removed
+
 - **Legacy voice preference system**
   - Removed 578 lines of old `voice_preferences.py` system
   - Eliminated unreliable `.voices.txt` file parsing
@@ -1302,6 +1379,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [3.34.3] - 2025-08-26
 
 ### Changed
+
 - **Service management code cleanup**
   - Removed references to non-existent `start.sh` script in Kokoro service discovery
   - Improved Kokoro start script detection by checking for GPU/CPU specific scripts only
@@ -1312,6 +1390,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.34.1] - 2025-08-26
 
 ### Fixed
+
 - **Whisper service enable command**
   - Fixed `voicemode whisper enable` using incorrect template variable names
   - Changed from WHISPER_BIN/MODEL_FILE to START_SCRIPT_PATH/INSTALL_DIR to match plist template
@@ -1319,6 +1398,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Fixes KeyError 'START_SCRIPT_PATH' when enabling whisper service after installation
 
 ### Changed
+
 - **Installer reliability**
   - Added `--force` flag to `uv tool install --upgrade` command
   - Ensures voicemode is fully reinstalled even if already present
@@ -1328,6 +1408,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.34.0] - 2025-08-26
 
 ### Changed
+
 - **Installer improvements**
   - Refactored installer to use permanent `uv tool install --upgrade` instead of `uvx --refresh`
   - Added `uv tool update-shell` for automatic PATH configuration
@@ -1335,10 +1416,11 @@ VoiceMode now understands natural voice commands during conversations:
   - Added Homebrew zsh completion directory support on macOS
   - Implemented XDG-compliant paths for bash completions
   - Removed fish shell support to simplify maintenance (bash/zsh only)
-  - Zsh completions now correctly use underscore prefix (_voicemode)
+  - Zsh completions now correctly use underscore prefix (\_voicemode)
   - MCP configuration now uses plain `voice-mode` command for better performance
 
 ### Fixed
+
 - **Service file updates on reinstall**
   - Fixed whisper and kokoro installers to always update service files (plist/systemd) even when service is already installed
   - Ensures paths are properly expanded (no `~` symbols) in service files
@@ -1348,6 +1430,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.33.4] - 2025-08-26
 
 ### Fixed
+
 - **CoreML support restoration**
   - Re-enabled CoreML acceleration after fixing plist template path issues
   - Improved CoreML compilation flags handling in whisper installer
@@ -1355,11 +1438,13 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.33.3] - 2025-08-26
 
 ### Changed
+
 - Version bump for testing installer fixes
 
 ## [2.33.2] - 2025-08-26
 
 ### Fixed
+
 - **Whisper service installation**
   - Corrected plist template path in whisper installer
   - Fixed CoreML support compilation flags (disabled then re-enabled after testing)
@@ -1368,6 +1453,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.33.1] - 2025-08-26
 
 ### Fixed
+
 - **Whisper service LaunchAgent fixes**
   - Fixed LaunchAgent plist to call start-whisper-server.sh script instead of binary directly
   - Script provides dynamic model selection via VOICEMODE_WHISPER_MODEL environment variable
@@ -1375,6 +1461,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Resolved Signal 15 (SIGTERM) restart loop caused by missing parameters
 
 ### Changed
+
 - **Service configuration templates**
   - Refactored Whisper installer to use plist template file instead of inline generation
   - Template approach improves maintainability and makes configuration easier to find
@@ -1384,6 +1471,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.33.0] - 2025-08-26
 
 ### Fixed
+
 - **CoreML acceleration improvements**
   - Re-enabled CoreML acceleration in installer after fixing template loading issues
   - Fixed CoreML conversion with dedicated Python environment to avoid dependency conflicts
@@ -1405,6 +1493,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Removed mention of response_duration from converse prompt to avoid confusion
 
 ### Changed
+
 - **Web documentation improvements**
   - Updated Quick Start to use `curl -O && bash install.sh` for proper interactive prompts
   - Clarified OpenAI API key is optional and serves as backup when local services unavailable
@@ -1418,6 +1507,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.32.0] - 2025-08-25
 
 ### Added
+
 - **Safe shell completions in installer**
   - Re-enabled shell completion setup with runtime command availability checks
   - Completions only activate if `voicemode` command is found in PATH
@@ -1430,6 +1520,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Clear user choice between Core ML acceleration and standard Metal performance
 
 ### Changed
+
 - **CLI consistency improvements**
   - Replaced all user-facing "voice-mode" references with "voicemode"
   - Updated shell completion environment variables from `_VOICE_MODE_COMPLETE` to `_VOICEMODE_COMPLETE`
@@ -1438,6 +1529,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Logger name remains "voice-mode" for backward compatibility
 
 ### Fixed
+
 - **Installer script reliability**
   - Fixed false positive failure detection when Whisper shows "Make clean" warning
   - Improved service installation success detection
@@ -1452,6 +1544,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.30.0] - 2025-08-25
 
 ### Added
+
 - **Intelligent update command**
   - Automatic detection of installation method (UV tool, UV pip, or standard pip)
   - Uses appropriate update strategy based on installation type
@@ -1460,6 +1553,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.29.0] - 2025-08-25
 
 ### Added
+
 - **CoreML acceleration support for Whisper on Apple Silicon**
   - Added optional dependency group 'coreml' with PyTorch and CoreMLTools
   - Enhanced whisper_model_install tool with install_torch and auto_confirm parameters
@@ -1475,6 +1569,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Professional presentation with centered text and visual hierarchy
 
 ### Fixed
+
 - **Improved converse tool documentation**
   - Simplified listen_duration parameter documentation
   - Removed confusing duration recommendations that led to unnecessary overrides
@@ -1484,6 +1579,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.28.3] - 2025-08-24
 
 ### Fixed
+
 - **Parameter type handling for MCP tools**
   - Fixed vad_aggressiveness parameter to accept string values from LLMs
   - Fixed port parameters in kokoro_install and livekit_install
@@ -1500,6 +1596,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.28.2] - 2025-08-24
 
 ### Added
+
 - **Configurable audio feedback pip delays**
   - Added VOICEMODE_PIP_LEADING_SILENCE and VOICEMODE_PIP_TRAILING_SILENCE environment variables
   - Allows customization of silence before and after audio feedback chimes
@@ -1507,6 +1604,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Helps prevent audio cutoff on Bluetooth devices and other audio systems with delay
 
 ### Fixed
+
 - **Audio feedback for Bluetooth devices**
   - Added silence buffer before chimes to prevent Bluetooth audio cutoff
   - Improved compatibility with devices that have audio activation delay
@@ -1515,6 +1613,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.28.1] - 2025-08-24
 
 ### Added
+
 - **Standardized project naming as VoiceMode MCP**
   - Consistent branding across all documentation and code
   - Updated project descriptions and metadata
@@ -1522,6 +1621,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Maintains backward compatibility with existing installations
 
 ### Fixed
+
 - **CoreML fallback for whisper.cpp on Apple Silicon**
   - Added proper error handling when CoreML models fail to load
   - Automatically falls back to CPU processing if CoreML initialization fails
@@ -1531,6 +1631,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.28.0] - 2025-08-23
 
 ### Added
+
 - **Comprehensive CLI help support**
   - Added `-h` and `--help` options to all CLI commands and subcommands
   - Consistent help functionality across all command groups (kokoro, whisper, livekit, config, etc.)
@@ -1543,21 +1644,18 @@ VoiceMode now understands natural voice commands during conversations:
   - Provides ~3x faster encoding performance with Core ML acceleration
   - Core ML models automatically converted during installation
   - Falls back gracefully if Core ML conversion fails
-  
 - **Enhanced whisper status command**
   - Shows whisper.cpp version information
   - Displays Core ML support status (enabled/disabled)
   - Shows if Core ML model is active for current model
   - Reports GPU acceleration type (Metal/CUDA)
   - Helper utility in `whisper_version.py` for capability detection
-  
 - **Audio conversion optimization for local whisper**
   - Automatically detects truly local whisper (not SSH-forwarded)
   - Skips WAV to MP3 conversion for local whisper, sending WAV directly
   - Adds timing measurements for audio format conversion
   - Logs conversion time at INFO level for performance monitoring
   - Significantly reduces STT processing time for local deployments
-  
 - **Whisper model benchmark command**
   - New `whisper model benchmark` CLI command
   - Compares performance across multiple models
@@ -1568,11 +1666,11 @@ VoiceMode now understands natural voice commands during conversations:
   - Provides personalized recommendations based on results
 
 ### Fixed
+
 - **MCP server configuration**
   - Fixed .mcp.json to use `uv run voicemode` for local development
   - Removed hardcoded paths for better portability
   - Works correctly with project-local development version
-  
 - **Whisper model management**
   - Fixed model active command to properly update configuration
   - Fixed naming conflict in model install CLI command
@@ -1582,41 +1680,37 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.27.0] - 2025-08-20
 
 ### Added
+
 - **CLI version and update commands**
   - New `voice-mode version` command to display current version
   - New `voice-mode update` command to upgrade to latest version
   - Comprehensive bats tests for version and update functionality
   - Automatic version detection from package metadata
-  
 - **Shell completion support for CLI**
   - New `voice-mode completion` command group with bash, zsh, and fish subcommands
   - Automatic tab completion for all commands, options, and arguments
   - Install.sh automatically configures shell completions during setup
   - Native Click completion mechanism for dynamic suggestions
-  
 - **Parallel operations documentation**
   - Documented `wait_for_response=False` pattern in converse tool
   - Enables speaking while performing other operations simultaneously
   - Creates more natural conversations by eliminating dead air
   - Marked as RECOMMENDED pattern with clear usage examples
-  
 - **Comprehensive Whisper model management system**
   - New `whisper models` CLI command to list all available models with status
-  - `whisper model active` command to get/set the active model  
+  - `whisper model active` command to get/set the active model
   - `whisper model install` and `whisper model remove` commands
   - Model registry with complete size/hash metadata for all Whisper models
   - Color-coded output showing installed/available models (green=installed, yellow=selected)
   - Support for English-only models and all multilingual variants
   - Automatic Core ML conversion on Apple Silicon for improved performance
   - Shell completion support for all model management commands
-  
 - **MCP tools for model management**
   - `list_models` tool to list all available Whisper models with status
   - Enhanced `download_model` tool with registry validation
   - Force download option to re-download corrupted models
   - Skip Core ML option for testing
   - Parity between CLI and MCP interfaces
-  
 - **Infrastructure improvements**
   - Centralized model registry in `whisper/models.py` with all model metadata
   - Model categorization: tiny, base, small, medium, large, turbo
@@ -1627,54 +1721,57 @@ VoiceMode now understands natural voice commands during conversations:
   - Comprehensive test suite for model management
 
 ### Changed
+
 - **Configuration file naming**
   - Renamed `.voicemode.env` to `voicemode.env` (removed leading dot)
   - Added backwards compatibility to check for old filename
   - Shows deprecation warning when old filename is used
   - Updated all documentation to reference new filename
   - Updated systemd service templates
-  
 - Replaced static shell completions with Click-generated dynamic completions
 - Shell completion files now generated from CLI structure
 - Whisper model downloads now use centralized registry for validation
 - Model status checks now verify both file existence and selection
 
 ### Fixed
+
 - **macOS installation improvements**
   - Added coreutils dependency for timeout command support
   - Fixed duplicate launchctl load in service installers
   - Improved zsh PATH configuration by sourcing profile after UV/npm additions
   - Skip sudo prompts on macOS to prevent installation issues
-  
 - **Test suite fixes**
   - Fixed deprecation warning appearing in help output
   - Renamed deprecated `.voicemode.env` to `voicemode.env` to fix test failures
-  
 - Whisper model management now properly uses voicemode.env configuration file
 - Test suite updated for all API changes and return value structures
 - Resolved all CI test failures related to service status and diagnostics
 
 ### Removed
-- Old static shell completion files  
+
+- Old static shell completion files
 - SERVICE_COMMANDS.md (replaced by integrated CLI commands)
 - Shell aliases file (functionality moved to Click commands)
 
 ## [2.26.0] - 2025-08-18
 
 ### Added
+
 - **CLI converse command** - Direct voice conversations from the command line
   - New `voice-mode converse` command for testing voice interactions
   - Supports all MCP tool options (voice, speed, audio format, etc.)
   - Continuous conversation mode with `--continuous` flag
   - Useful for testing TTS/STT services without MCP client
   - Full control over voice parameters and silence detection
-  
+
 ### Changed
+
 - **Gitignore update** - Added `*.prof` files to gitignore for profiling output
 
 ## [2.25.1] - 2025-08-18
 
 ### Fixed
+
 - **WSL2 detection display** - Fixed incorrect WSL2 label on non-WSL systems
   - Parameter expansion bug was showing "(WSL2)" on all Linux systems
   - Now properly checks if IS_WSL equals "true" before adding WSL2 label
@@ -1686,6 +1783,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.25.0] - 2025-08-18
 
 ### Fixed
+
 - **uvx command refresh flag** - Add --refresh flag to all uvx commands in installer
   - Ensures latest version is always fetched when running voice-mode commands
   - Fixes issues with cached old versions being used
@@ -1705,6 +1803,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.24.0] - 2025-08-16
 
 ### Added
+
 - **Enhanced Voice Activity Detection** - Improved silence detection behavior
   - VAD now waits indefinitely for speech before starting silence detection
   - No more timeouts when user hasn't started speaking yet
@@ -1721,6 +1820,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.23.0] - 2025-08-16
 
 ### Added
+
 - **`skip_tts` parameter** - Dynamic control over text-to-speech in converse tool
   - Add optional `skip_tts` parameter to override global `VOICEMODE_SKIP_TTS` setting
   - When `True`: Skip TTS for faster text-only responses
@@ -1733,6 +1833,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Useful for rapid development iterations or when voice isn't needed
 
 ### Fixed
+
 - **Service status detection** - Correctly identify SSH-forwarded vs locally running services
   - SSH processes listening on service ports are now recognized as port forwards
   - Status command now shows 🔄 for forwarded services vs ✅ for local services
@@ -1741,6 +1842,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.22.3] - 2025-08-16
 
 ### Fixed
+
 - **Service auto-enable error** - Fix 'FunctionTool' object is not callable
   - Changed whisper and kokoro installers to use `enable_service` function instead of MCP tool
   - Services can now be properly auto-enabled after installation
@@ -1755,6 +1857,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.22.2] - 2025-08-16
 
 ### Fixed
+
 - **CLI deprecation warnings** - Suppress known warnings for cleaner output
   - Hide audioop, pkg_resources, and psutil deprecation warnings by default
   - Warnings can be shown with `VOICEMODE_DEBUG=true` or `--debug` flag
@@ -1764,6 +1867,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.22.1] - 2025-08-16
 
 ### Fixed
+
 - **Package size reduction** - Exclude unnecessary files from wheel distribution
   - Exclude `__pycache__`, `node_modules`, `.next/cache` directories
   - Exclude test files, logs, and build artifacts
@@ -1779,6 +1883,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.22.0] - 2025-08-16
 
 ### Added
+
 - **LiveKit service integration** - Complete support for LiveKit as a managed service
   - Install/uninstall LiveKit server with `voice-mode livekit install/uninstall`
   - Service management commands: `start/stop/status/restart/enable/disable/logs`
@@ -1805,12 +1910,14 @@ VoiceMode now understands natural voice commands during conversations:
   - Service installation feature documentation
 
 ### Fixed
+
 - **LiveKit local development** - Added dummy API key support for local services
 - **Frontend dependency handling** - Improved error messages and dependency resolution
 - **Service enable command** - Resolved frontend service enable command issues
 - **LiveKit WebSocket URL** - Hardcoded to wss://x1:8443 for reliable connections
 
 ### Changed
+
 - **Whisper default port** - Updated from 2000 to 2022 in shell aliases
 - **Install.sh robustness** - Always use `uvx voice-mode` for consistency
 - **Test infrastructure** - Skip failing tests temporarily to maintain green CI
@@ -1822,6 +1929,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.21.0] - 2025-08-13
 
 ### Added
+
 - **CLI service commands** - New subcommands for managing Whisper and Kokoro services
   - `voice-mode service whisper start/stop/status/restart/enable/disable/logs`
   - `voice-mode service kokoro start/stop/status/restart/enable/disable/logs`
@@ -1834,6 +1942,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.20.1] - 2025-08-11
 
 ### Fixed
+
 - **Speed parameter validation error** - Fixed MCP validation error when passing speed parameter as string
   - Added type conversion from string to float for speed parameter
   - Now properly handles speed values passed by MCP clients (e.g., via uvx)
@@ -1842,6 +1951,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.20.0] - 2025-08-10
 
 ### Added
+
 - **VAD aggressiveness control**
   - New `vad_aggressiveness` parameter in converse tool for controlling Voice Activity Detection sensitivity (0-3)
   - 0 = least aggressive filtering (more permissive), 3 = most aggressive (strict)
@@ -1849,6 +1959,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Also configurable via VOICEMODE_VAD_AGGRESSIVENESS environment variable
 
 ### Changed
+
 - **Improved VAD documentation**
   - Clarified that aggressiveness controls how strictly VAD filters out non-speech
   - Updated examples to better demonstrate appropriate use cases
@@ -1857,6 +1968,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.19.0] - 2025-08-10
 
 ### Added
+
 - **MCP prompt command: /release-notes**
   - New command to display recent changelog entries directly in Claude Code
   - Shows 5 most recent versions by default (configurable with parameter)
@@ -1865,11 +1977,13 @@ VoiceMode now understands natural voice commands during conversations:
   - Includes comprehensive test coverage
 
 ### Fixed
+
 - Release notes prompt now handles empty string parameters correctly
 - Command works properly with both source and installed packages
 - Changelog is now accessible as an MCP resource when package is installed
 
 ### Changed
+
 - Release notes output format now matches Claude Code's clean, minimal style
 - Removed decorative headers and footers for cleaner terminal output
 - Release notes displayed in chronological order (oldest first)
@@ -1877,6 +1991,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.18.0] - 2025-08-10
 
 ### Added
+
 - **TTS speed control**
   - New `speed` parameter in converse tool for controlling speech rate (0.25 to 4.0)
   - Currently supported by Kokoro TTS and any OpenAI-compatible services that support speed
@@ -1886,12 +2001,14 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.17.3] - 2025-08-07
 
 ### Fixed
+
 - **STT audio saving with simple failover**
   - Fixed critical bug where STT audio files were not being saved when VOICEMODE_SIMPLE_FAILOVER=true
   - Simple failover now properly saves audio recordings before processing
   - Ensures consistent audio archival behavior across all failover modes
 
 ### Changed
+
 - **Post-release improvements from 2.17.2**
   - Improved installer output formatting when Voice Mode is already configured
   - Fixed installer test that was failing due to complex mock setup
@@ -1901,6 +2018,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.17.2] - 2025-07-29
 
 ### Added
+
 - **Universal installer script** for automatic setup
   - Single command installation: `curl -O https://getvoicemode.com/install.sh && bash install.sh`
   - Cross-platform support: Linux (Ubuntu/Fedora), macOS, and Windows WSL
@@ -1918,6 +2036,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Services fail cleanly when installation directory is moved or deleted
 
 ### Changed
+
 - **Installation improvements**
   - Installer now detects `ffmpeg` by command presence on Fedora (handles RPM Fusion installs)
   - Fixed installer exiting early due to `dnf check-update` exit codes
@@ -1930,6 +2049,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Added clear explanation of free, open-source alternatives
 
 ### Fixed
+
 - **Configuration directory creation**
   - Removed redundant `config/` directory creation (config stored in `voicemode.env`)
   - Fixed issue where services created unexpected directory structures
@@ -1938,6 +2058,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Installer now works with all Claude Code versions
 
 ### Developer
+
 - Added comprehensive tests for GPU detection and missing script scenarios
 - Updated service file versions to 1.1.1 with improved systemd configuration
 
@@ -1946,6 +2067,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.17.0] - 2025-07-29
 
 ### 🎯 Major Voice Activity Detection Improvement
+
 - **Dramatically improved silence detection accuracy** by fixing audio resampling bug
   - VAD was receiving corrupted audio due to improper downsampling from 24kHz to 16kHz
   - Now uses proper signal resampling instead of simple truncation
@@ -1953,6 +2075,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Background noise (fans, traffic) is now properly filtered out
 
 ### Added
+
 - **Automatic configuration file loading**
   - Voice Mode now creates `~/.voicemode/voicemode.env` on first run
   - Template file includes all available settings with documentation
@@ -1980,6 +2103,7 @@ VoiceMode now understands natural voice commands during conversations:
   - No performance penalty as connection failures are instant
 
 ### Changed
+
 - **Major project structure reorganization**
   - Moved external dependencies to `vendor/` directory (industry standard naming)
     - `bin/livekit-admin-mcp` → `vendor/livekit-admin-mcp/`
@@ -2007,6 +2131,7 @@ VoiceMode now understands natural voice commands during conversations:
   - All configuration stored in `~/.voicemode/voicemode.env`
 
 ### Fixed
+
 - Fixed `wait_for_response=false` being ignored in converse tool
   - Added proper string-to-boolean conversion for MCP parameters
 - Fixed critical TTS failover issue when Kokoro is stopped
@@ -2026,6 +2151,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.16.0] - 2025-07-28 [YANKED]
 
 ### Added
+
 - Version management for whisper.cpp and kokoro-fastapi services
   - Track installed versions and support upgrades
   - Install only tagged releases by default (not latest commits)
@@ -2039,6 +2165,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Built into installers, no separate tool needed
 
 ### Changed
+
 - Reorganized helper functions from tools/ to utils/
   - `voice_mode/tools/services/common.py` → `voice_mode/utils/services/common.py`
   - `voice_mode/tools/services/*/helpers.py` → `voice_mode/utils/services/*_helpers.py`
@@ -2046,6 +2173,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Helper functions are no longer exposed as MCP tools
 
 ### Fixed
+
 - Fixed test failures caused by version management implementation
   - Fixed version parsing bug with mixed int/string comparisons
   - Updated test mocks to use correct import paths
@@ -2059,9 +2187,11 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.14.0] - 2025-07-20
 
 ### Added
+
 - New `VOICEMODE_DEFAULT_LISTEN_DURATION` environment variable to customize default listening time (defaults to 120s)
 
 ### Changed
+
 - Changed default listen_duration parameter from 45s to 120s for more natural conversations
 - Updated recommended listen durations in converse tool documentation
   - Normal conversational responses: 20s → 30s
@@ -2074,6 +2204,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Affects both standalone files and those in `.voicemode` directories
 
 ### Fixed
+
 - Improved error messages when OpenAI API key is missing to provide helpful guidance
   - Now explicitly mentions need to set OPENAI_API_KEY or use local services
   - Differentiates between missing API key and other connection failures
@@ -2081,6 +2212,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.13.0] - 2025-07-14
 
 ### Added
+
 - Unified CLI system with shared exchanges library
   - New `voicemode` command with multiple subcommands (`show`, `tell`, `diagnose`, etc.)
   - Centralized exchange processing library for consistent behavior across scripts
@@ -2092,18 +2224,21 @@ VoiceMode now understands natural voice commands during conversations:
   - Additional metadata in exchange logs for better analysis
 
 ### Changed
+
 - Migrated all standalone scripts to use the unified CLI system
   - Scripts now accessible as subcommands of the main `voicemode` command
   - Consistent argument parsing and help documentation across all commands
   - Improved code reuse through shared libraries
 
 ### Fixed
+
 - Fixed undefined `audio_path` variable in STT logging
 - Fixed incorrect hardcoded audio format in STT logs (now uses actual format)
 
 ## [2.12.0] - 2025-07-06
 
 ### Fixed
+
 - Fixed TypeError in `refresh_provider_registry` tool that prevented TTS service detection (#6)
   - Changed incorrect `url=` parameter to `base_url=` when creating EndpointInfo objects
   - Added unit tests to prevent regression
@@ -2111,6 +2246,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.11.0] - 2025-07-06
 
 ### Added
+
 - Password protection for LiveKit voice assistant frontend
   - Prevents unauthorized access to voice conversation interface
   - Configurable via `LIVEKIT_ACCESS_PASSWORD` environment variable
@@ -2123,10 +2259,12 @@ VoiceMode now understands natural voice commands during conversations:
   - Examples for Spanish, French, Italian, Portuguese, Chinese, Japanese, and Hindi
 
 ### Changed
+
 - Updated convention paths from `.conventions/` to `docs/conventions/` in CLAUDE.md
 - Enhanced language voice selection documentation with explicit requirements
 
 ### Documentation
+
 - Added Spanish voice conversation example demonstrating language-specific voice selection
 - Added blind community outreach contacts and resources for accessibility collaboration
 - Updated LiveKit frontend README with password protection instructions
@@ -2134,6 +2272,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.10.0] - 2025-07-06
 
 ### Added
+
 - All 67 Kokoro TTS voices now available for local text-to-speech
   - Complete set of high-quality voices across multiple accents and languages
   - Voices include various English accents (American, British, Australian, Indian, Nigerian, Scottish)
@@ -2159,10 +2298,12 @@ VoiceMode now understands natural voice commands during conversations:
   - Better error messages when audio recording fails
 
 ### Fixed
+
 - Mock voice preferences in provider selection tests to prevent test pollution
 - Skip conversation browser playback test when Flask is not installed
 
 ### Documentation
+
 - Updated Roo Code integration guide with comprehensive MCP interface instructions
 - Added visual guide to MCP settings and troubleshooting section
 - Added comprehensive Voice Preferences section to configuration documentation
@@ -2173,9 +2314,11 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.9.0] - 2025-07-03
 
 ### Added
+
 - Version logging on server startup for better debugging and support
 
 ### Fixed
+
 - Cleaned up debug output by removing duplicate print statements
 - Suppressed known upstream deprecation warnings from dependencies:
   - pydub SyntaxWarnings for invalid escape sequences
@@ -2186,22 +2329,26 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.8.0] - 2025-07-03
 
 ### Changed
+
 - Changed default `min_listen_duration` from 1.0 to 2.0 seconds to provide more time for users to think before responding
 
 ## [2.7.1] - 2025-07-03
 
 ### Changed
+
 - Changed default `min_listen_duration` from 0.0 to 1.0 seconds to prevent premature cutoffs
 
 ## [2.7.1] - 2025-07-03
 
 ### Fixed
+
 - Fixed failing test for stdio restoration on recording error
 - Added Flask to project dependencies for conversation browser script
 
 ## [2.7.0] - 2025-07-03
 
 ### Added
+
 - Minimum listen duration control for voice responses
   - New `min_listen_duration` parameter in `converse()` tool (default: 0.0)
   - Prevents silence detection from stopping recording before minimum duration
@@ -2216,12 +2363,14 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.6.0] - 2025-06-30
 
 ### Changed
+
 - Updated Discord link to new community server
 - Increased default listen duration to 45 seconds for better user experience
 - Fixed config import issue in conversation tool
 - Improved FFmpeg detection for MCP mode
 
 ### Added
+
 - Screencast preparation materials including title cards
 - Initial screencast planning documentation
 
@@ -2230,6 +2379,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.5.0] - 2025-06-28
 
 ### Added
+
 - Automatic silence detection for voice recording
   - Uses WebRTC VAD (Voice Activity Detection) to detect when user stops speaking
   - Automatically stops recording after configurable silence threshold (default: 1000ms)
@@ -2260,6 +2410,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Helps diagnose provider connection issues
 
 ### Fixed
+
 - Fixed WebRTC VAD sample rate compatibility issue
   - VAD requires 8kHz, 16kHz, or 32kHz but voice_mode uses 24kHz
   - Implemented proper sample extraction for VAD processing
@@ -2285,16 +2436,19 @@ VoiceMode now understands natural voice commands during conversations:
   - More responsive recording start times
 
 ### Changed
+
 - Replaced all localhost URLs with 127.0.0.1 for better IPv6 compatibility
   - Prevents issues with SSH port forwarding on dual-stack systems
   - Affects TTS, STT, and LiveKit default URLs throughout codebase
 
 ### Removed
+
 - Cleaned up temporary and development files
   - Removed unused debug scripts and test files
   - Removed obsolete documentation and analysis files
 
 ### Planned
+
 - In-memory buffer for conversation timing metrics
   - Track full conversation lifecycle including Claude response times
   - Maintain recent interaction history without persistent storage
@@ -2309,6 +2463,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.4.0] - 2025-06-25
 
 ### Added
+
 - Unified event logging system for tracking voice interaction events
   - JSONL format for easy parsing and analysis
   - Automatic daily log rotation
@@ -2332,6 +2487,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Better error tracking and debugging information
 
 ### Changed
+
 - TTS provider selection algorithm now uses URL-priority based selection
   - Iterates through TTS_BASE_URLS in preference order
   - Supports both voice and model preference matching
@@ -2345,16 +2501,19 @@ VoiceMode now understands natural voice commands during conversations:
   - Clear examples of when to specify parameters
 
 ### Fixed
+
 - Negative response time calculation in conversation metrics
   - Response time now correctly measured from end of recording
   - Event-based timing provides more accurate measurements
 
 ### Removed
+
 - VOICE_ALLOW_EMOTIONS environment variable (emotional TTS now automatic with gpt-4o-mini-tts)
 
 ## [2.3.0] - 2025-06-23
 
 ### Added
+
 - Comprehensive uv/uvx documentation (`docs/uv.md`)
   - Installation and version management guide
   - Development setup instructions
@@ -2364,11 +2523,13 @@ VoiceMode now understands natural voice commands during conversations:
 - Test script for direct STT verification
 
 ### Fixed
+
 - STT audio format now defaults to MP3 when base format is PCM, fixing OpenAI Whisper compatibility
   - OpenAI Whisper API doesn't support PCM format for uploads
   - Automatic fallback ensures STT continues to work with default configuration
 
 ### Changed
+
 - Simplified audio feedback configuration to boolean AUDIO_FEEDBACK_ENABLED
 - Removed voice feedback functionality, keeping only chime feedback
 - Updated provider base URL specification to use comma-separated lists
@@ -2382,6 +2543,7 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.2.0] - 2025-06-22
 
 ### Added
+
 - Configurable audio format support with PCM as the default for TTS streaming
 - Environment variables for audio format configuration:
   - `VOICEMODE_AUDIO_FORMAT` - Primary format (default: pcm)
@@ -2412,6 +2574,7 @@ VoiceMode now understands natural voice commands during conversations:
   - Memory-efficient storage (maintains last 1000 interactions)
 
 ### Changed
+
 - **BREAKING**: All `VOICE_MODE_` environment variables renamed to `VOICEMODE_`
   - `VOICE_MODE_DEBUG` → `VOICEMODE_DEBUG`
   - `VOICE_MODE_SAVE_AUDIO` → `VOICEMODE_SAVE_AUDIO`
@@ -2434,6 +2597,7 @@ VoiceMode now understands natural voice commands during conversations:
   - `~/voice-mcp_audio/` → `~/voicemode_audio/`
 
 ### Benefits
+
 - Zero-latency TTS streaming with PCM format
 - Best real-time performance for voice conversations
 - Universal compatibility with all audio systems
@@ -2441,6 +2605,7 @@ VoiceMode now understands natural voice commands during conversations:
 - Cleaner, consistent environment variable naming
 
 ### Known Issues
+
 - OpenAI TTS with Opus format produces poor audio quality - NOT recommended for streaming
   - Use PCM (default) or MP3 for TTS instead
   - Opus still works well for STT uploads and file storage
@@ -2452,15 +2617,18 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.1.1] - 2025-06-20
 
 ### Fixed
+
 - Fixed `voice_status` tool error where `get_provider_display_status` was called with incorrect arguments
 - Updated `.mcp.json` to use local package installation with `--refresh` flag
 
 ### Added
+
 - Audio feedback chimes for recording start/stop (inspired by PR #1 from @jtuffin)
 - New `VOICE_MODE_AUDIO_FEEDBACK` configuration with options: `chime` (default), `voice`, `both`, `none`
 - Backward compatibility for boolean audio feedback values
 
 ### Changed
+
 - Replaced all references from `voice-mcp` to `voice-mode` throughout documentation
 - Updated MCP configuration examples to use `uvx` instead of outdated `./mcp-servers/` directory
 - Removed hardcoded version from `server_new.py`
@@ -2476,28 +2644,32 @@ VoiceMode now understands natural voice commands during conversations:
 ## [2.0.1] - 2025-06-20
 
 ### Changed
+
 - Consolidated package structure from three to two pyproject.toml files
 - Removed unpublishable `voicemode` package configuration
 - Made `voice-mode` the primary package (in pyproject.toml)
 - Moved `voice-mcp` to secondary configuration (pyproject-voice-mcp.toml)
 
 ### Added
+
 - Documentation for local development with uvx (`docs/local-development-uvx.md`)
 
 ## [2.0.0] - 2025-06-20
 
 ### 🎉 Major Project Rebrand: VoiceMCP → VoiceMode
 
-We're excited to announce that **voice-mcp** has been rebranded to **VoiceMode**! 
+We're excited to announce that **voice-mcp** has been rebranded to **VoiceMode**!
 
 This change reflects our vision for the project's future. While MCP (Model Context Protocol) describes the underlying technology, VoiceMode better captures what this tool actually delivers - a seamless voice interaction mode for AI assistants.
 
 #### Why the Change?
+
 - **Clarity**: VoiceMode immediately communicates the tool's purpose
 - **Timelessness**: The name isn't tied to a specific protocol that may evolve
 - **Simplicity**: Easier to remember and more intuitive for users
 
 #### What's Changed?
+
 - Primary command renamed from `voice-mcp` to `voicemode`
 - GitHub repository moved to `mbailey/voicemode`
 - Primary PyPI package is now `voice-mode` (hyphenated due to naming restrictions)
@@ -2506,21 +2678,25 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 - Simplified package structure to dual-package configuration
 
 #### Backward Compatibility
+
 - The `voice-mcp` command remains available for existing users
 - Both `voice-mode` and `voice-mcp` packages available on PyPI
 - All packages provide the `voicemode` command
 
 ### Changed
+
 - Consolidated package configuration to two pyproject.toml files
 - Made `voice-mode` the primary package with VoiceMode branding
 - Updated package descriptions to reflect the rebrand
 
 ### Added
+
 - Local development documentation for uvx usage
 
 ## [0.1.30] - 2025-06-19
 
 ### Added
+
 - Audio feedback with whispered responses by default
 - Configurable audio feedback style (whisper or shout) via VOICE_MODE_FEEDBACK_STYLE environment variable
 - Support for overriding audio feedback settings per conversation
@@ -2528,12 +2704,14 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 ## [0.1.29] - 2025-06-17
 
 ### Changed
+
 - Refactored MCP prompt names to use kebab-case convention (kokoro-start, kokoro-stop, kokoro-status, voice-status)
 - Renamed Kokoro tool functions to follow consistent naming pattern (start_kokoro → kokoro_start, stop_kokoro → kokoro_stop)
 
 ## [0.1.28] - 2025-06-17
 
 ### Added
+
 - MCP prompts for Kokoro TTS management:
   - `kokoro-start` - Start the local Kokoro TTS service
   - `kokoro-stop` - Stop the local Kokoro TTS service
@@ -2544,31 +2722,36 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 ## [0.1.27] - 2025-06-17
 
 ### Added
+
 - Voice chat prompt/command (`/voice-mcp:converse`) for interactive voice conversations
 - Automatic local provider preference with VOICE_MODE_PREFER_LOCAL environment variable
 - Documentation improvements with better organization and cross-linking
 
 ### Changed
+
 - Renamed voice_chat prompt to converse for clarity
 - Simplified voice_chat prompt to take no arguments
-
 
 ## [0.1.26] - 2025-06-17
 
 ### Fixed
+
 - Added missing voice_mode() function to cli.py for voice-mode command
 
 ## [0.1.25] - 2025-06-17
 
 ### Added
+
 - Build tooling improvements for dual package maintenance
 
 ### Fixed
+
 - Missing psutil dependency in voice-mode package
 
 ## [0.1.24] - 2025-06-17
 
 ### Fixed
+
 - Improved signal handling for proper Ctrl-C shutdown
   - First Ctrl-C attempts graceful shutdown
   - Second Ctrl-C forces immediate exit
@@ -2576,6 +2759,7 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 ## [0.1.23] - 2025-06-17
 
 ### Added
+
 - Provider registry system MVP for managing TTS/STT providers
   - Dynamic provider discovery and registration
   - Automatic availability checking
@@ -2596,34 +2780,39 @@ This change reflects our vision for the project's future. While MCP (Model Conte
   - Checks API/service availability for each provider
 
 ### Changed
+
 - Default TTS voices updated: alloy for OpenAI, af_sky for Kokoro
 
 ## [0.1.22] - 2025-06-16
 
 ### Added
+
 - Local STT/TTS configuration support in .mcp.json
 - Split TTS metrics into generation and playback components for better performance insights
   - Tracks TTS generation time (API call) separately from playback time
   - Displays metrics as tts_gen, tts_play, and tts_total
 
 ### Changed
+
 - Modified text_to_speech() to return (success, metrics) tuple
 - Updated all tests to handle new TTS return format
 
 ## [0.1.21] - 2025-06-16
 
 ### Added
+
 - VOICE_MODE_SAVE_AUDIO environment variable to save all TTS/STT audio files
 - Audio files saved to ~/voice-mcp_audio/ with timestamps
 - Improved voice selection documentation and guidance
 
 ### Changed
-- Voice parameter changed from Literal to str for flexibility in voice selection
 
+- Voice parameter changed from Literal to str for flexibility in voice selection
 
 ## [0.1.19] - 2025-06-15
 
 ### Added
+
 - TTS provider selection parameter to converse function ("openai" or "kokoro")
 - Auto-detection of TTS provider based on voice selection
 - Support for multiple TTS endpoints with provider-specific clients
@@ -2631,11 +2820,13 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 ## [0.1.18] - 2025-06-15
 
 ### Changed
+
 - Removed mcp-neovim-server from .mcp.json configuration
 
 ## [0.1.17] - 2025-06-15
 
 ### Changed
+
 - Minor version bump (no functional changes)
 
 ## [0.1.16] - 2025-06-15
@@ -2643,11 +2834,13 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 ## [0.1.16] - 2025-06-15
 
 ### Added
+
 - Voice parameter to converse function for dynamic TTS voice selection
 - Support for Kokoro voices: af_sky, af_sarah, am_adam, af_nicole, am_michael
 - Python 3.13 support with conditional audioop-lts dependency
 
 ### Fixed
+
 - BrokenResourceError when concurrent voice operations interfere with MCP stdio communication
 - Enhanced sounddevice stderr redirection workaround to prevent stdio corruption
 - Added concurrency lock to serialize audio operations and prevent race conditions
@@ -2658,22 +2851,26 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 ## [0.1.15] - 2025-06-14
 
 ### Fixed
+
 - Removed load_dotenv call that was causing import error
 
 ## [0.1.14] - 2025-06-14
 
 ### Fixed
+
 - Updated GitHub workflows for new project structure
 
 ## [0.1.13] - 2025-06-14
 
 ### Added
+
 - Performance timing in voice responses showing TTS, recording, and STT durations
 - Local STT/TTS documentation for Whisper.cpp and Kokoro
 - CONTRIBUTING.md with development setup instructions
 - CHANGELOG.md for tracking changes
 
 ### Changed
+
 - Refactored from python-package subdirectory to top-level Python package
 - Moved MCP server symlinks from mcp-servers/ to bin/ directory
 - Updated wrapper script to properly resolve symlinks for venv detection
@@ -2681,6 +2878,7 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 - Configure build to only include essential files in package
 
 ### Fixed
+
 - Audio playback dimension mismatch when adding silence buffer
 - MCP server connection persistence (was disconnecting after each request)
 - Event loop cleanup errors on shutdown
@@ -2688,6 +2886,7 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 - Critical syntax errors in voice-mcp script
 
 ### Removed
+
 - Unused python-dotenv dependency
 - Temporary test files (test_audio.py, test_minimal_mcp.py)
 - Redundant test dependencies in pyproject.toml
@@ -2696,16 +2895,19 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 ## [0.1.12] - 2025-06-14
 
 ### Added
+
 - Kokoro TTS support with configuration examples
 - Export examples in .env.example for various setups
 - Centralized version management and automatic PyPI publishing
 
 ### Changed
+
 - Simplified project structure with top-level package
 
 ## [0.1.11] - 2025-06-13
 
 ### Added
+
 - Initial voice-mcp implementation
 - OpenAI-compatible STT/TTS support
 - LiveKit integration for room-based voice communication
@@ -2716,6 +2918,7 @@ This change reflects our vision for the project's future. While MCP (Model Conte
 ## [0.1.0 - 0.1.10] - 2025-06-13
 
 ### Added
+
 - Initial development and iteration of voice-mcp
 - Basic MCP server structure
 - OpenAI API integration for STT/TTS
