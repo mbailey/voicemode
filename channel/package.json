@@ -1,0 +1,20 @@
+{
+  "name": "voicemode-channel",
+  "version": "0.1.0",
+  "description": "VoiceMode Channel Server -- MCP channel for inbound voice events via VoiceMode Connect",
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx index.ts",
+    "typecheck": "npx tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
