@@ -52,27 +52,11 @@ Open **[app.voicemode.dev](https://app.voicemode.dev)** on your phone or
 browser. Sign in with the same account, tap the call button, and speak.
 Claude will respond and you'll hear TTS audio playback.
 
-## Testing
-
-The server starts a local HTTP endpoint on port 8787 (configurable via
-`VOICEMODE_CHANNEL_PORT`) for simulating inbound voice events.
-
-```bash
-# Send a test voice event
-curl -X POST http://localhost:8787/event \
-  -H 'Content-Type: application/json' \
-  -d '{"caller": "mike", "transcript": "Hey Claude, what time is it?", "device_id": "abc123"}'
-
-# Health check
-curl http://localhost:8787/health
-```
-
 ## Configuration
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
 | `VOICEMODE_CHANNEL_ENABLED` | `false` | **Required.** Must be `true` to enable. Server exits immediately otherwise. |
-| `VOICEMODE_CHANNEL_PORT` | `8787` | HTTP test server port |
 | `VOICEMODE_CHANNEL_DEBUG` | `false` | Enable debug logging |
 | `VOICEMODE_CONNECT_WS_URL` | `wss://voicemode.dev/ws` | WebSocket gateway URL |
 | `VOICEMODE_AGENT_NAME` | `voicemode` | Agent identity for gateway registration |

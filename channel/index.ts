@@ -6,18 +6,11 @@
  * Claude Code session. Declares the experimental claude/channel capability
  * and sends notifications/claude/channel notifications.
  *
+ * Connects to VoiceMode Connect gateway via WebSocket (authenticated).
+ * No local HTTP server -- all events come through the gateway.
+ *
  * Usage:
- *   npx tsx channel/index.ts
- *
- * Load as a development channel:
- *   claude --dangerously-load-development-channels server:voicemode-channel
- *
- * For testing, the server listens on a local HTTP port (default 8787) so you
- * can simulate inbound voice events with curl:
- *
- *   curl -X POST http://localhost:8787/event \
- *     -H 'Content-Type: application/json' \
- *     -d '{"caller": "mike", "transcript": "Hey Claude, what time is it?", "device_id": "abc123"}'
+ *   VOICEMODE_CHANNEL_ENABLED=true claude --dangerously-load-development-channels server:voicemode-channel
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
@@ -26,7 +19,6 @@ import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -47,7 +39,6 @@ if (process.env.VOICEMODE_CHANNEL_ENABLED !== 'true') {
 
 const CHANNEL_NAME = 'voicemode-channel'
 const CHANNEL_VERSION = '0.1.0'
-const HTTP_PORT = parseInt(process.env.VOICEMODE_CHANNEL_PORT ?? '8787', 10)
 
 const INSTRUCTIONS = [
   'Events from VoiceMode appear as <channel source="voicemode-channel" caller="NAME">TRANSCRIPT</channel>.',
@@ -203,82 +194,6 @@ async function push_voice_event(
 }
 
 // ---------------------------------------------------------------------------
-// Local HTTP server for testing (simulates inbound voice events)
-// ---------------------------------------------------------------------------
-
-interface VoiceEventPayload {
-  caller: string
-  transcript: string
-  device_id?: string
-}
-
-function is_voice_event(body: unknown): body is VoiceEventPayload {
-  if (typeof body !== 'object' || body === null) return false
-  const obj = body as Record<string, unknown>
-  return typeof obj.caller === 'string' && typeof obj.transcript === 'string'
-}
-
-function start_http_server(): void {
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    // Health check
-    if (req.method === 'GET' && req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ status: 'ok', channel: CHANNEL_NAME, version: CHANNEL_VERSION }))
-      return
-    }
-
-    // Voice event endpoint
-    if (req.method === 'POST' && req.url === '/event') {
-      let body = ''
-      req.on('data', (chunk: Buffer) => { body += chunk.toString() })
-      req.on('end', () => {
-        try {
-          const payload: unknown = JSON.parse(body)
-          if (!is_voice_event(payload)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' })
-            res.end(JSON.stringify({ error: 'Invalid payload. Required: { caller: string, transcript: string, device_id?: string }' }))
-            return
-          }
-
-          push_voice_event(payload.caller, payload.transcript, payload.device_id)
-            .then(() => {
-              res.writeHead(200, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ status: 'sent' }))
-            })
-            .catch((err: unknown) => {
-              const message = err instanceof Error ? err.message : String(err)
-              log(`Error pushing notification: ${message}`)
-              res.writeHead(500, { 'Content-Type': 'application/json' })
-              res.end(JSON.stringify({ error: message }))
-            })
-        } catch {
-          res.writeHead(400, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ error: 'Invalid JSON' }))
-        }
-      })
-      return
-    }
-
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Not found. Try POST /event or GET /health' }))
-  })
-
-  server.listen(HTTP_PORT, '127.0.0.1', () => {
-    log(`HTTP test server listening on http://127.0.0.1:${HTTP_PORT}`)
-    log(`  POST /event  -- push a voice event`)
-    log(`  GET  /health -- health check`)
-  })
-
-  server.on('error', (err: Error) => {
-    if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-      log(`Port ${HTTP_PORT} in use, skipping HTTP test server (set VOICEMODE_CHANNEL_PORT to change)`)
-    } else {
-      log(`HTTP server error: ${err.message}`)
-    }
-  })
-}
-
-// ---------------------------------------------------------------------------
 // Logging
 // ---------------------------------------------------------------------------
 
@@ -401,9 +316,6 @@ async function main(): Promise<void> {
 
   // Connect to the voicemode.dev WebSocket gateway
   start_gateway()
-
-  // Start local HTTP server for testing inbound events
-  start_http_server()
 }
 
 main().catch((err: unknown) => {
