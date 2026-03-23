@@ -154,7 +154,7 @@ class ConnectRegistry:
             return
 
         if creds is None:
-            self._status_message = "Not connected (no credentials - run: voicemode connect login)"
+            self._status_message = "Not connected (no credentials - run: voicemode connect auth login)"
             logger.debug("Connect registry: no credentials available")
             return
 

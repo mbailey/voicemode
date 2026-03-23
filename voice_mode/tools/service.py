@@ -307,7 +307,7 @@ async def status_service(service_name: str) -> str:
         parts.append(client.get_status_text())
 
         if not parts:
-            return "❌ Connect is not available (no credentials - run: voicemode connect login)"
+            return "❌ Connect is not available (no credentials - run: voicemode connect auth login)"
         return "\n\n".join(parts)
     else:
         if service_name == "whisper":
@@ -784,7 +784,7 @@ async def enable_service(service_name: str) -> str:
             # Validate OAuth credentials exist before enabling connect service
             credentials_file = Path.home() / ".voicemode" / "credentials"
             if not credentials_file.exists():
-                return "❌ No credentials found. Run 'voicemode connect login' first to authenticate."
+                return "❌ No credentials found. Run 'voicemode connect auth login' first to authenticate."
 
             start_script = config_vars.get("START_SCRIPT", "")
             if not start_script or not Path(start_script).exists():

@@ -693,7 +693,7 @@ class TestFormatExpiry:
 
 
 class TestLoginCLI:
-    """Test the 'voicemode connect login' CLI command."""
+    """Test the 'voicemode connect auth login' CLI command."""
 
     def test_login_command_exists(self):
         """Test that login command is registered under connect group."""

@@ -10,7 +10,7 @@ Agents and humans use the same CLI interface:
 voicemode connect up       # Start connection to voicemode.dev
 voicemode connect down     # Stop connection
 voicemode connect status   # Show connection status and devices
-voicemode connect login    # Authenticate with voicemode.dev
+voicemode connect auth login    # Authenticate with voicemode.dev
 voicemode connect logout   # Clear stored credentials
 
 voicemode connect user add <name>    # Register an agent user
@@ -38,7 +38,7 @@ Start the connection to voicemode.dev. This is a long-running process that:
 - Delivers incoming messages to agent inboxes
 - Reconnects automatically on disconnection
 
-Requires authentication (`voicemode connect login` first).
+Requires authentication (`voicemode connect auth login` first).
 
 ## voicemode connect status
 

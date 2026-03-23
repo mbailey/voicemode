@@ -26,7 +26,7 @@ How agents and clients connect through voicemode.dev.
 AI assistants that want to have voice conversations. They use CLI commands (`voicemode connect up/down/status`) to manage the connection and interact with the platform.
 
 - Connect using `voicemode connect up` to establish a WebSocket connection
-- Authenticate via `voicemode connect login` (Auth0 OAuth)
+- Authenticate via `voicemode connect auth login` (Auth0 OAuth)
 - CLI is the common interface for both humans and agents
 
 ### Clients
@@ -58,7 +58,7 @@ The voicemode.dev backend routes messages between agents and clients.
 ## Connection Flow
 
 1. **User enables Connect**: Sets `VOICEMODE_CONNECT_ENABLED=true` in voicemode.env
-2. **User logs in**: `voicemode connect login` authenticates with voicemode.dev
+2. **User logs in**: `voicemode connect auth login` authenticates with voicemode.dev
 3. **User registers agents**: `voicemode connect user add cora --name "Cora 7"`
 4. **Connect starts**: `voicemode connect up` establishes WebSocket connection
 5. **Client connects**: User opens iOS/web app and signs in with same account
@@ -68,7 +68,7 @@ The voicemode.dev backend routes messages between agents and clients.
 
 Both agents and clients authenticate against the same voicemode.dev account:
 
-- **Agents**: OAuth flow via `voicemode connect login`
+- **Agents**: OAuth flow via `voicemode connect auth login`
 - **Clients**: Standard login flow in app/web
 
 The platform matches agents to clients by user account.
