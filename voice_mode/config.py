@@ -1322,6 +1322,13 @@ SERVE_TOKEN = os.getenv("VOICEMODE_SERVE_TOKEN", "")
 # Transport protocol (streamable-http or sse)
 SERVE_TRANSPORT = os.getenv("VOICEMODE_SERVE_TRANSPORT", "streamable-http")
 
+# ==================== CHANNEL CONFIGURATION ====================
+
+# Enable Claude Code channel notification support (experimental)
+# When enabled, VoiceMode declares the claude/channel experimental capability
+# and can send channel notifications to Claude Code sessions.
+CHANNEL_ENABLED = env_bool("VOICEMODE_CHANNEL_ENABLED", False)
+
 # ==================== THINK OUT LOUD CONFIGURATION ====================
 
 # Enable Think Out Loud mode

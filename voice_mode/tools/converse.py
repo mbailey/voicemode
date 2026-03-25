@@ -24,6 +24,7 @@ except ImportError as e:
     webrtcvad = None
     VAD_AVAILABLE = False
 
+from fastmcp import Context
 from voice_mode.server import mcp
 from voice_mode.conch import Conch
 from voice_mode.conversation_logger import get_conversation_logger
@@ -63,7 +64,8 @@ from voice_mode.config import (
     MP3_BITRATE,
     CONCH_ENABLED,
     CONCH_TIMEOUT,
-    CONCH_CHECK_INTERVAL
+    CONCH_CHECK_INTERVAL,
+    CHANNEL_ENABLED,
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -1074,6 +1076,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
 
 @mcp.tool()
 async def converse(
+    ctx: Context,
     message: str,
     wait_for_response: Union[bool, str] = True,
     listen_duration_max: float = DEFAULT_LISTEN_DURATION,
@@ -1881,6 +1884,18 @@ consult the MCP resources listed above.
                 event_logger.end_session()
             
             if response_text:
+                # Send channel notification so inbound voice appears in Claude Code conversation
+                if CHANNEL_ENABLED:
+                    try:
+                        from voice_mode.channel import send_channel_notification
+                        await send_channel_notification(
+                            ctx.session,
+                            content=response_text,
+                            meta={"source": "voicemode", "caller": "user"},
+                        )
+                    except Exception as _channel_exc:
+                        logger.warning("Channel notification failed: %s", _channel_exc)
+
                 # Save conversation transcription if enabled
                 if SAVE_TRANSCRIPTIONS:
                     conversation_text = f"Assistant: {message}\n\nUser: {response_text}"

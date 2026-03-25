@@ -25,13 +25,26 @@ logger = logging.getLogger("voicemode")
 
 mcp = FastMCP("voicemode")
 
-# Import shared configuration and utilities
+# Import shared configuration and utilities (loads .voicemode.env files)
 from . import config
+
+# Initialize channel support if enabled
+# Must happen after config import (which loads .voicemode.env files)
+# but before tools/prompts/resources registration
+if config.CHANNEL_ENABLED:
+    from .channel import CHANNEL_INSTRUCTIONS, patch_experimental_capabilities
+    patch_experimental_capabilities(mcp)
+    # Append channel instructions to server instructions
+    if mcp._mcp_server.instructions:
+        mcp._mcp_server.instructions += "\n\n" + CHANNEL_INSTRUCTIONS
+    else:
+        mcp._mcp_server.instructions = CHANNEL_INSTRUCTIONS
+    logger.info("Channel notifications enabled (VOICEMODE_CHANNEL_ENABLED=true)")
 
 # Auto-import all tools, prompts, and resources
 # The __init__.py files in each directory handle the imports
 from . import tools
-from . import prompts 
+from . import prompts
 from . import resources
 
 # Main entry point
