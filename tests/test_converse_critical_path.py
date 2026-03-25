@@ -13,7 +13,7 @@ class TestConverseOpenAIErrors:
     """Test that converse properly handles and reports OpenAI errors."""
 
     @pytest.mark.asyncio
-    async def test_converse_reports_insufficient_quota_clearly(self):
+    async def test_converse_reports_insufficient_quota_clearly(self, mock_ctx):
         """Test that insufficient quota errors are clearly reported to users."""
         from voice_mode.tools.converse import converse
 
@@ -28,6 +28,7 @@ class TestConverseOpenAIErrors:
             with patch('voice_mode.config.TTS_BASE_URLS', ['https://api.openai.com/v1']):
                 with patch('voice_mode.config.OPENAI_API_KEY', 'test-api-key'):
                     result = await converse.fn(
+                        ctx=mock_ctx,
                         message="Test message",
                         wait_for_response=False
                     )
@@ -38,7 +39,7 @@ class TestConverseOpenAIErrors:
                 ]), f"Error message doesn't clearly indicate quota issue: {result}"
 
     @pytest.mark.asyncio
-    async def test_converse_reports_invalid_api_key_clearly(self):
+    async def test_converse_reports_invalid_api_key_clearly(self, mock_ctx):
         """Test that invalid API key errors are clearly reported."""
         from voice_mode.tools.converse import converse
 
@@ -53,6 +54,7 @@ class TestConverseOpenAIErrors:
             with patch('voice_mode.config.TTS_BASE_URLS', ['https://api.openai.com/v1']):
                 with patch('voice_mode.config.OPENAI_API_KEY', 'invalid-key'):
                     result = await converse.fn(
+                        ctx=mock_ctx,
                         message="Test message",
                         wait_for_response=False
                     )
@@ -63,7 +65,7 @@ class TestConverseOpenAIErrors:
                     ]), f"Error message doesn't indicate API key issue: {result}"
 
     @pytest.mark.asyncio
-    async def test_converse_reports_rate_limit_clearly(self):
+    async def test_converse_reports_rate_limit_clearly(self, mock_ctx):
         """Test that rate limit errors are clearly reported."""
         from voice_mode.tools.converse import converse
 
@@ -77,6 +79,7 @@ class TestConverseOpenAIErrors:
 
             with patch('voice_mode.config.TTS_BASE_URLS', ['https://api.openai.com/v1']):
                 result = await converse.fn(
+                    ctx=mock_ctx,
                     message="Test message",
                     wait_for_response=False
                 )
@@ -91,7 +94,7 @@ class TestConverseFailoverBehavior:
     """Test the failover behavior when providers fail."""
 
     @pytest.mark.asyncio
-    async def test_converse_tries_all_configured_endpoints(self):
+    async def test_converse_tries_all_configured_endpoints(self, mock_ctx):
         """Test that converse tries all configured endpoints before giving up."""
         from voice_mode.tools.converse import converse
 
@@ -112,6 +115,7 @@ class TestConverseFailoverBehavior:
 
             with patch('voice_mode.config.TTS_BASE_URLS', test_urls):
                 result = await converse.fn(
+                    ctx=mock_ctx,
                     message="Test message",
                     wait_for_response=False
                 )
@@ -122,7 +126,7 @@ class TestConverseFailoverBehavior:
                 assert len(mock_tts.return_value[2]['attempted_endpoints']) >= len(test_urls) - 1
 
     @pytest.mark.asyncio
-    async def test_converse_succeeds_with_second_endpoint(self):
+    async def test_converse_succeeds_with_second_endpoint(self, mock_ctx):
         """Test that converse succeeds when first endpoint fails but second works."""
         from voice_mode.tools.converse import converse
 
@@ -131,6 +135,7 @@ class TestConverseFailoverBehavior:
             mock_tts.return_value = (True, {'duration_ms': 100}, {'provider': 'openai'})
 
             result = await converse.fn(
+                ctx=mock_ctx,
                 message="Test message",
                 wait_for_response=False
             )
@@ -144,7 +149,7 @@ class TestConverseErrorMessages:
     """Test that error messages are helpful and actionable."""
 
     @pytest.mark.asyncio
-    async def test_error_message_suggests_checking_services(self):
+    async def test_error_message_suggests_checking_services(self, mock_ctx):
         """Test that errors suggest checking if services are running."""
         from voice_mode.tools.converse import converse
 
@@ -159,6 +164,7 @@ class TestConverseErrorMessages:
 
             with patch('voice_mode.config.OPENAI_API_KEY', None):
                 result = await converse.fn(
+                    ctx=mock_ctx,
                     message="Test",
                     wait_for_response=False
                 )
@@ -169,7 +175,7 @@ class TestConverseErrorMessages:
                 ]), f"Error doesn't suggest solutions: {result}"
 
     @pytest.mark.asyncio
-    async def test_error_message_includes_provider_info(self):
+    async def test_error_message_includes_provider_info(self, mock_ctx):
         """Test that errors indicate which provider failed."""
         from voice_mode.tools.converse import converse
 
@@ -186,6 +192,7 @@ class TestConverseErrorMessages:
             })
 
             result = await converse.fn(
+                ctx=mock_ctx,
                 message="Test",
                 wait_for_response=False
             )
@@ -198,7 +205,7 @@ class TestConverseSTTFailures:
     """Test STT (speech-to-text) failure handling."""
 
     @pytest.mark.asyncio
-    async def test_stt_failure_reports_clearly(self):
+    async def test_stt_failure_reports_clearly(self, mock_ctx):
         """Test that STT failures are reported clearly."""
         from voice_mode.tools.converse import converse
         import numpy as np
@@ -224,6 +231,7 @@ class TestConverseSTTFailures:
                     }
 
                     result = await converse.fn(
+                        ctx=mock_ctx,
                         message="Test",
                         wait_for_response=True
                     )
@@ -234,7 +242,7 @@ class TestConverseSTTFailures:
                     ]), f"Result doesn't indicate STT failure: {result}"
 
     @pytest.mark.asyncio
-    async def test_stt_no_speech_detected(self):
+    async def test_stt_no_speech_detected(self, mock_ctx):
         """Test handling when no speech is detected."""
         from voice_mode.tools.converse import converse
         import numpy as np
@@ -253,6 +261,7 @@ class TestConverseSTTFailures:
                     }
 
                     result = await converse.fn(
+                        ctx=mock_ctx,
                         message="Are you there?",
                         wait_for_response=True
                     )
@@ -265,7 +274,7 @@ class TestConverseMetrics:
     """Test that converse properly tracks and reports metrics."""
 
     @pytest.mark.asyncio
-    async def test_converse_includes_timing_metrics(self):
+    async def test_converse_includes_timing_metrics(self, mock_ctx):
         """Test that converse includes timing information when successful."""
         from voice_mode.tools.converse import converse
 
@@ -276,6 +285,7 @@ class TestConverseMetrics:
             }, {'provider': 'openai'})
 
             result = await converse.fn(
+                ctx=mock_ctx,
                 message="Test",
                 wait_for_response=False
             )

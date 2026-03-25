@@ -70,7 +70,7 @@ class TestProviderToolsUsage:
     """Test how provider tools use EndpointInfo attributes."""
 
     @pytest.mark.asyncio
-    async def test_providers_tool_accesses_healthy_field(self):
+    async def test_providers_tool_accesses_healthy_field(self, mock_ctx):
         """Test that provider tools access the healthy field correctly."""
         from voice_mode.tools.providers import refresh_provider_registry
 
@@ -96,7 +96,7 @@ class TestProviderToolsUsage:
             assert "healthy" in str(result) or "✅" in result or "❌" in result
 
     @pytest.mark.asyncio
-    async def test_devices_tool_accesses_healthy_field(self):
+    async def test_devices_tool_accesses_healthy_field(self, mock_ctx):
         """Test that devices tool accesses the healthy field correctly."""
         from voice_mode.provider_discovery import EndpointInfo
 
@@ -128,7 +128,7 @@ class TestConverseIntegrationWithEndpointInfo:
     """Test the converse tool's integration with EndpointInfo."""
 
     @pytest.mark.asyncio
-    async def test_converse_handles_missing_endpoint_gracefully(self):
+    async def test_converse_handles_missing_endpoint_gracefully(self, mock_ctx):
         """Test that converse handles missing endpoints gracefully."""
         from voice_mode.tools.converse import converse
 
@@ -148,6 +148,7 @@ class TestConverseIntegrationWithEndpointInfo:
 
             # This should handle the error gracefully
             result = await converse.fn(
+                ctx=mock_ctx,
                 message="Test message",
                 wait_for_response=False
             )
@@ -156,7 +157,7 @@ class TestConverseIntegrationWithEndpointInfo:
             assert "Error" in result or "failed" in result.lower()
 
     @pytest.mark.asyncio
-    async def test_converse_with_openai_quota_error(self):
+    async def test_converse_with_openai_quota_error(self, mock_ctx):
         """Test that converse properly reports OpenAI quota errors."""
         from voice_mode.tools.converse import converse
 
@@ -174,6 +175,7 @@ class TestConverseIntegrationWithEndpointInfo:
             })
 
             result = await converse.fn(
+                ctx=mock_ctx,
                 message="Test message",
                 wait_for_response=False
             )

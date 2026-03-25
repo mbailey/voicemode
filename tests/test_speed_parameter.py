@@ -13,13 +13,14 @@ class TestSpeedParameter:
     """Test speed parameter type conversion and validation."""
     
     @pytest.mark.asyncio
-    async def test_speed_accepts_float(self):
+    async def test_speed_accepts_float(self, mock_ctx):
         """Test that speed parameter accepts float values."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
                 mock_tts.return_value = (True, {'generation': 1.0, 'playback': 2.0}, {})
                 
                 result = await converse(
+                    ctx=mock_ctx,
                     message="Test",
                     wait_for_response=False,
                     speed=1.5
@@ -31,7 +32,7 @@ class TestSpeedParameter:
                 assert kwargs['speed'] == 1.5
     
     @pytest.mark.asyncio
-    async def test_speed_converts_string_to_float(self):
+    async def test_speed_converts_string_to_float(self, mock_ctx):
         """Test that string speed values are converted to float."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
@@ -39,6 +40,7 @@ class TestSpeedParameter:
                 
                 # This is what happens when MCP passes the parameter
                 result = await converse(
+                    ctx=mock_ctx,
                     message="Test",
                     wait_for_response=False,
                     speed="1.5"  # String value
@@ -51,10 +53,11 @@ class TestSpeedParameter:
                 assert isinstance(kwargs['speed'], float)
     
     @pytest.mark.asyncio
-    async def test_speed_invalid_string_error(self):
+    async def test_speed_invalid_string_error(self, mock_ctx):
         """Test that invalid string speed values return error."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             result = await converse(
+                ctx=mock_ctx,
                 message="Test",
                 wait_for_response=False,
                 speed="invalid"
@@ -63,11 +66,12 @@ class TestSpeedParameter:
             assert "Error: speed must be a number" in result
     
     @pytest.mark.asyncio
-    async def test_speed_out_of_range_error(self):
+    async def test_speed_out_of_range_error(self, mock_ctx):
         """Test that out of range speed values return error."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             # Test too low
             result = await converse(
+                ctx=mock_ctx,
                 message="Test",
                 wait_for_response=False,
                 speed=0.1
@@ -76,6 +80,7 @@ class TestSpeedParameter:
             
             # Test too high
             result = await converse(
+                ctx=mock_ctx,
                 message="Test",
                 wait_for_response=False,
                 speed=5.0
@@ -83,7 +88,7 @@ class TestSpeedParameter:
             assert "Error: speed must be between 0.25 and 4.0" in result
     
     @pytest.mark.asyncio
-    async def test_speed_none_is_valid(self):
+    async def test_speed_none_is_valid(self, mock_ctx):
         """Test that None speed value is valid (uses default from config)."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
@@ -91,6 +96,7 @@ class TestSpeedParameter:
                     mock_tts.return_value = (True, {'generation': 1.0, 'playback': 2.0}, {})
 
                     result = await converse(
+                        ctx=mock_ctx,
                         message="Test",
                         wait_for_response=False,
                         speed=None
@@ -102,7 +108,7 @@ class TestSpeedParameter:
                     assert kwargs['speed'] is None
     
     @pytest.mark.asyncio
-    async def test_speed_edge_cases(self):
+    async def test_speed_edge_cases(self, mock_ctx):
         """Test speed parameter edge cases."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
@@ -110,6 +116,7 @@ class TestSpeedParameter:
                 
                 # Test minimum valid speed
                 result = await converse(
+                    ctx=mock_ctx,
                     message="Test",
                     wait_for_response=False,
                     speed=0.25
@@ -118,6 +125,7 @@ class TestSpeedParameter:
                 
                 # Test maximum valid speed
                 result = await converse(
+                    ctx=mock_ctx,
                     message="Test",
                     wait_for_response=False,
                     speed=4.0
@@ -126,6 +134,7 @@ class TestSpeedParameter:
                 
                 # Test integer speed (should work)
                 result = await converse(
+                    ctx=mock_ctx,
                     message="Test",
                     wait_for_response=False,
                     speed=2
@@ -133,7 +142,7 @@ class TestSpeedParameter:
                 assert "Message spoken successfully" in result
 
     @pytest.mark.asyncio
-    async def test_speed_reads_from_config(self):
+    async def test_speed_reads_from_config(self, mock_ctx):
         """Test that speed reads from TTS_SPEED config when not provided."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
@@ -141,6 +150,7 @@ class TestSpeedParameter:
                     mock_tts.return_value = (True, {'generation': 1.0, 'playback': 2.0}, {})
 
                     result = await converse(
+                        ctx=mock_ctx,
                         message="Test",
                         wait_for_response=False,
                         speed=None
@@ -152,7 +162,7 @@ class TestSpeedParameter:
                     assert kwargs['speed'] == 1.3
 
     @pytest.mark.asyncio
-    async def test_speed_explicit_overrides_config(self):
+    async def test_speed_explicit_overrides_config(self, mock_ctx):
         """Test that explicit speed parameter overrides TTS_SPEED config."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
@@ -160,6 +170,7 @@ class TestSpeedParameter:
                     mock_tts.return_value = (True, {'generation': 1.0, 'playback': 2.0}, {})
 
                     result = await converse(
+                        ctx=mock_ctx,
                         message="Test",
                         wait_for_response=False,
                         speed=2.0  # Explicit speed should win
@@ -171,11 +182,12 @@ class TestSpeedParameter:
                     assert kwargs['speed'] == 2.0
 
     @pytest.mark.asyncio
-    async def test_speed_config_out_of_range_error(self):
+    async def test_speed_config_out_of_range_error(self, mock_ctx):
         """Test that out-of-range TTS_SPEED config value returns error with source."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.TTS_SPEED', 10.0):  # Invalid value
                 result = await converse(
+                    ctx=mock_ctx,
                     message="Test",
                     wait_for_response=False,
                     speed=None
@@ -186,11 +198,12 @@ class TestSpeedParameter:
                 assert "VOICEMODE_TTS_SPEED environment variable" in result
 
     @pytest.mark.asyncio
-    async def test_speed_explicit_out_of_range_no_env_mention(self):
+    async def test_speed_explicit_out_of_range_no_env_mention(self, mock_ctx):
         """Test that explicit out-of-range speed doesn't mention environment variable."""
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
             with patch('voice_mode.tools.converse.TTS_SPEED', 1.5):  # Valid config value
                 result = await converse(
+                    ctx=mock_ctx,
                     message="Test",
                     wait_for_response=False,
                     speed=10.0  # Explicit invalid value

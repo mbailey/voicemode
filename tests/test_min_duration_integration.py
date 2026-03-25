@@ -15,7 +15,7 @@ sys.modules['livekit'] = MagicMock()
 class TestMinDurationIntegration:
     """Test minimum duration functionality in converse tool."""
     
-    async def test_converse_validates_min_duration(self):
+    async def test_converse_validates_min_duration(self, mock_ctx):
         """Test that converse validates listen_duration_min parameter."""
         from voice_mode.tools.converse import converse
         
@@ -30,6 +30,7 @@ class TestMinDurationIntegration:
             
             # Test negative listen_duration_min
             result = await converse_func(
+                ctx=mock_ctx,
                 message="Test",
                 wait_for_response=True,
                 listen_duration_min=-1.0
@@ -46,6 +47,7 @@ class TestMinDurationIntegration:
                             mock_stt.return_value = {"text": "Test response", "provider": "whisper"}
                             
                             result = await converse_func(
+                                ctx=mock_ctx,
                                 message="Test",
                                 wait_for_response=True,
                                 listen_duration_max=5.0,
@@ -58,7 +60,7 @@ class TestMinDurationIntegration:
                             assert "listen_duration_min" in warning_msg
                             assert "greater than listen_duration" in warning_msg
     
-    async def test_converse_passes_min_duration_to_recording(self):
+    async def test_converse_passes_min_duration_to_recording(self, mock_ctx):
         """Test that converse passes listen_duration_min to recording function."""
         from voice_mode.tools.converse import converse
         
@@ -80,6 +82,7 @@ class TestMinDurationIntegration:
                         
                         # Test with specific listen_duration_min
                         result = await converse_func(
+                            ctx=mock_ctx,
                             message="Test question",
                             wait_for_response=True,
                             listen_duration_max=30.0,

@@ -145,6 +145,16 @@ def temp_dir():
 
 
 @pytest.fixture
+def mock_ctx():
+    """Create a mock FastMCP Context for testing tools that require ctx."""
+    ctx = MagicMock()
+    ctx.session = MagicMock()
+    ctx.session._write_stream = MagicMock()
+    ctx.session._write_stream.send = AsyncMock()
+    return ctx
+
+
+@pytest.fixture
 def mock_mcp():
     """Create a mock FastMCP instance for testing tools."""
     from fastmcp import FastMCP
