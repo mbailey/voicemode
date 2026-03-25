@@ -114,3 +114,69 @@ def patch_experimental_capabilities(mcp_server: Any) -> None:
 
     low_level.create_initialization_options = patched_create_init_opts
     logger.info("Channel capability registered: experimental['claude/channel']")
+
+
+# ---------------------------------------------------------------------------
+# Session capture for background notifications
+# ---------------------------------------------------------------------------
+
+_active_session: "ServerSession | None" = None
+_gateway: Any = None  # ChannelGateway instance (avoid circular import)
+
+
+def capture_session(session: "ServerSession") -> None:
+    """Store the MCP session for use by background tasks (e.g. gateway).
+
+    Called from any tool handler via `capture_session(ctx.session)`.
+    The session stays valid for the lifetime of the stdio connection.
+    """
+    global _active_session
+    if _active_session is None:
+        _active_session = session
+        logger.info("MCP session captured for channel notifications")
+
+        # If gateway is waiting for a session, it can now send notifications
+        if _gateway and _gateway.state == "connected":
+            logger.info("Gateway already connected -- channel notifications active")
+
+
+def get_active_session() -> "ServerSession | None":
+    """Get the captured MCP session (or None if not yet captured)."""
+    return _active_session
+
+
+async def _on_voice_event(caller: str, transcript: str, device_id: str | None) -> None:
+    """Callback for gateway voice events -- sends channel notification."""
+    session = _active_session
+    if session is None:
+        logger.warning("Voice event received but no MCP session captured yet")
+        return
+
+    meta: dict[str, str] = {"caller": caller}
+    if device_id:
+        meta["device_id"] = device_id
+
+    await send_channel_notification(session, transcript, meta)
+
+
+def start_gateway() -> Any:
+    """Start the WebSocket gateway client as a background task.
+
+    Returns the ChannelGateway instance.
+    """
+    global _gateway
+    if _gateway is not None:
+        logger.warning("Gateway already started")
+        return _gateway
+
+    from .channel_gateway import ChannelGateway
+
+    _gateway = ChannelGateway(on_voice_event=_on_voice_event)
+    _gateway.start()
+    logger.info("Channel gateway started -- connecting to VoiceMode Connect")
+    return _gateway
+
+
+def get_gateway() -> Any:
+    """Get the gateway instance (or None if not started)."""
+    return _gateway
