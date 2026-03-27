@@ -1578,6 +1578,7 @@ from voice_mode.cli_commands import transcribe as transcribe_cmd
 from voice_mode.cli_commands import status as status_cmd
 from voice_mode.cli_commands import claude as claude_cmd
 from voice_mode.cli_commands import soundfonts as soundfonts_cmd
+from voice_mode.cli_commands import voice_notify as voice_notify_cmd
 
 # Add subcommands to legacy CLI
 cli.add_command(exchanges_cmd.exchanges)
@@ -1593,6 +1594,9 @@ voice_mode_main_cli.add_command(claude_cmd.claude)
 
 # Add soundfonts toggle commands
 voice_mode_main_cli.add_command(soundfonts_cmd.soundfonts)
+
+# Add voice notification command (for Claude Code hooks)
+voice_mode_main_cli.add_command(voice_notify_cmd.notify)
 
 # Note: We'll add these commands after the groups are defined
 # audio group will get transcribe and play commands

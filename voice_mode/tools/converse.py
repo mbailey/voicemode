@@ -402,6 +402,13 @@ async def text_to_speech_with_failover(
         pronounce_mgr = get_pronounce_manager()
         message = pronounce_mgr.process_tts(message)
 
+    # Polyglot TTS: synthesize mixed-language text with per-language voices
+    from voice_mode.polyglot_tts import POLYGLOT_ENABLED
+    if POLYGLOT_ENABLED:
+        polyglot_result = await _try_polyglot_tts(message, model, audio_format, speed)
+        if polyglot_result is not None:
+            return polyglot_result
+
     # Always use simple failover (the only mode now)
     from voice_mode.simple_failover import simple_tts_failover
     return await simple_tts_failover(
@@ -416,6 +423,105 @@ async def text_to_speech_with_failover(
         audio_dir=AUDIO_DIR if SAVE_AUDIO else None,
         speed=speed
     )
+
+
+async def _try_polyglot_tts(
+    message: str,
+    model: Optional[str],
+    audio_format: Optional[str],
+    speed: Optional[float],
+) -> Optional[Tuple[bool, Optional[dict], Optional[dict]]]:
+    """
+    Attempt polyglot synthesis. Returns a tts_with_failover-compatible tuple on
+    success, or None if polyglot is not applicable / failed (caller falls through
+    to regular TTS).
+    """
+    import io
+    import tempfile
+    import time as _time
+    from voice_mode.polyglot_tts import (
+        detect_language_segments,
+        POLYGLOT_PRIMARY_LANG,
+        polyglot_text_to_speech,
+    )
+    from voice_mode.config import TTS_BASE_URLS, OPENAI_API_KEY, TTS_MODELS
+
+    segments = detect_language_segments(message, POLYGLOT_PRIMARY_LANG)
+    has_mixed = any(lang != POLYGLOT_PRIMARY_LANG for lang, _ in segments)
+    if not has_mixed:
+        return None  # Nothing to do
+
+    # Find the first Kokoro-compatible URL
+    kokoro_urls = [
+        u for u in TTS_BASE_URLS
+        if "127.0.0.1:8880" in u or "localhost:8880" in u or "kokoro" in u.lower()
+    ]
+    if not kokoro_urls:
+        logger.debug("Polyglot TTS: no Kokoro URL found in TTS_BASE_URLS, skipping")
+        return None
+
+    used_format = audio_format if audio_format in ("mp3", "wav", "opus", "flac") else "wav"
+    gen_start = _time.perf_counter()
+
+    audio_bytes = await polyglot_text_to_speech(
+        text=message,
+        base_url=kokoro_urls[0],
+        model=model or (TTS_MODELS[0] if TTS_MODELS else "tts-1"),
+        api_key=OPENAI_API_KEY or "dummy-key-for-local",
+        audio_format=used_format,
+        speed=speed,
+    )
+
+    if audio_bytes is None:
+        return None
+
+    gen_time = _time.perf_counter() - gen_start
+
+    # Play the combined audio
+    try:
+        from pydub import AudioSegment
+        import numpy as np
+        from voice_mode.audio_player import NonBlockingAudioPlayer
+        from voice_mode.config import CHIME_LEADING_SILENCE
+
+        play_start = _time.perf_counter()
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format=used_format)
+        samples = np.array(audio.get_array_of_samples(), dtype=np.float32)
+        if audio.channels == 2:
+            samples = samples.reshape((-1, 2))
+        samples /= 32767.0
+
+        silence_samples = int(audio.frame_rate * CHIME_LEADING_SILENCE)
+        if samples.ndim == 1:
+            silence = np.zeros(silence_samples, dtype=np.float32)
+            samples = np.concatenate([silence, samples])
+        else:
+            silence = np.zeros((silence_samples, samples.shape[1]), dtype=np.float32)
+            samples = np.vstack([silence, samples])
+
+        player = NonBlockingAudioPlayer()
+        player.play(samples, audio.frame_rate, blocking=False)
+        player.wait()
+        play_time = _time.perf_counter() - play_start
+
+        metrics = {
+            "ttfa": gen_time,
+            "generation": gen_time,
+            "playback": play_time,
+        }
+        config = {
+            "provider": "kokoro",
+            "provider_type": "kokoro",
+            "voice": "polyglot",
+            "model": model or (TTS_MODELS[0] if TTS_MODELS else "tts-1"),
+            "base_url": kokoro_urls[0],
+        }
+        logger.info(f"Polyglot TTS played successfully — gen {gen_time:.2f}s, play {play_time:.2f}s")
+        return True, metrics, config
+
+    except Exception as exc:
+        logger.warning(f"Polyglot TTS playback failed: {exc}")
+        return None
 
 
 def prepare_audio_for_stt(audio_data: np.ndarray, output_format: str = "mp3") -> bytes:
@@ -1072,6 +1178,30 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         # For fallback, assume speech is present since we can't detect
         return (record_audio(max_duration), True)
 
+
+def record_audio_smart(
+    max_duration: float,
+    disable_silence_detection: bool = False,
+    min_duration: float = 0.0,
+    vad_aggressiveness: Optional[int] = None,
+) -> Tuple[np.ndarray, bool]:
+    """
+    Smart recording: use Push-to-Talk if enabled, otherwise fall back to VAD.
+
+    This is a thin dispatcher — callers use this instead of calling
+    record_audio_with_silence_detection directly so that PTT mode is
+    transparently supported without duplicating logic everywhere.
+    """
+    from voice_mode.ptt import PTT_ENABLED, PushToTalkRecorder
+    if PTT_ENABLED:
+        logger.info("PTT mode active — using PushToTalkRecorder")
+        recorder = PushToTalkRecorder(sample_rate=SAMPLE_RATE, channels=CHANNELS)
+        return recorder.record(max_duration=max_duration)
+    return record_audio_with_silence_detection(
+        max_duration, disable_silence_detection, min_duration, vad_aggressiveness
+    )
+
+
 @mcp.tool()
 async def converse(
     message: str,
@@ -1106,6 +1236,18 @@ BLOCKING REQUIREMENT: After receiving voice input, check if any available skills
 
 Example: If user says "search for tasks created yesterday", check for and invoke the taskmaster skill before using bash or other tools.
 </voice_skills_instructions>
+
+<voice_brevity_rules>
+MANDATORY BREVITY FOR VOICE INTERACTIONS:
+- Keep every message passed to `converse(message=...)` as SHORT as possible — 1 to 2 sentences maximum
+- NEVER summarize what tools just did; the user can read tool output themselves
+- NEVER use filler phrases: "Sure!", "Of course!", "Great question!", "Absolutely!"
+- For simple task confirmations use one word: "Feito", "Ok", "Pronto", "Done"
+- Only speak a longer explanation when the user EXPLICITLY requests it ("explain", "why", "how does", "tell me more")
+- When about to run tools: call the tool SILENTLY unless you need to ask for clarification first
+- After running tools: speak only if there is something the user must know that is NOT visible in the result
+- If the user's request is clear, execute it and only speak the outcome (e.g. "Arquivo criado" not "I have successfully created the file as requested")
+</voice_brevity_rules>
 
 
 🔌 ENDPOINT: STT/TTS services must expose OpenAI-compatible endpoints:
@@ -1235,7 +1377,14 @@ consult the MCP resources listed above.
     
     # Run startup initialization if needed
     await startup_initialization()
-    
+
+    # Mark voice session as active (used by voice_notify hooks)
+    try:
+        from voice_mode.cli_commands.voice_notify import touch_voice_session
+        touch_voice_session()
+    except Exception:
+        pass
+
     # Refresh audio device cache to pick up any device changes (AirPods, etc.)
     # This takes ~1ms and ensures we use the current default device
     import sounddevice as sd
@@ -1507,7 +1656,7 @@ consult the MCP resources listed above.
                 record_start = time.perf_counter()
                 logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
                 audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                    None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                    None, record_audio_smart, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                 )
                 timings['record'] = time.perf_counter() - record_start
                 
@@ -1687,7 +1836,7 @@ consult the MCP resources listed above.
                         # Record audio
                         record_start = time.perf_counter()
                         audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                            None, record_audio_smart, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                         )
                         record_time = time.perf_counter() - record_start
                         timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
@@ -1743,7 +1892,7 @@ consult the MCP resources listed above.
                         # Record audio
                         record_start = time.perf_counter()
                         audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                            None, record_audio_smart, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                         )
                         record_time = time.perf_counter() - record_start
                         timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
