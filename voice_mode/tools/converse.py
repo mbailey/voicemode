@@ -92,6 +92,14 @@ from voice_mode.utils import (
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
 
+# Eagerly import ptt so the global key listener starts at server startup,
+# not lazily on the first recording cycle. This is required for the PTT key
+# to interrupt TTS playback on the very first response.
+try:
+    import voice_mode.ptt as _ptt  # noqa: F401 — side effect: starts global listener
+except Exception:
+    pass
+
 logger = logging.getLogger("voicemode")
 
 # Log silence detection config at module load time
@@ -403,11 +411,15 @@ async def text_to_speech_with_failover(
         message = pronounce_mgr.process_tts(message)
 
     # Polyglot TTS: synthesize mixed-language text with per-language voices
-    from voice_mode.polyglot_tts import POLYGLOT_ENABLED
+    from voice_mode.polyglot_tts import POLYGLOT_ENABLED, strip_language_tags
     if POLYGLOT_ENABLED:
         polyglot_result = await _try_polyglot_tts(message, model, audio_format, speed)
         if polyglot_result is not None:
             return polyglot_result
+
+    # Strip <en>/<pt> tags before sending to regular TTS — they are for routing
+    # only and must never be read aloud by the synthesizer.
+    message = strip_language_tags(message)
 
     # Always use simple failover (the only mode now)
     from voice_mode.simple_failover import simple_tts_failover
@@ -1248,6 +1260,25 @@ MANDATORY BREVITY FOR VOICE INTERACTIONS:
 - After running tools: speak only if there is something the user must know that is NOT visible in the result
 - If the user's request is clear, execute it and only speak the outcome (e.g. "Arquivo criado" not "I have successfully created the file as requested")
 </voice_brevity_rules>
+
+<voice_polyglot_rules>
+POLYGLOT TTS — TAG ENGLISH WORDS IN PORTUGUESE SPEECH:
+When the session language is Portuguese and you include English words/terms in your message,
+wrap the English portions in <en>...</en> tags so they are synthesized with the correct accent.
+The tags are stripped from the spoken text — only the content inside is read aloud.
+
+Examples of correct tagging:
+  converse(message="O <en>backend</en> retornou um erro de <en>timeout</en>.")
+  converse(message="Implementei o <en>push-to-talk</en> com sucesso.")
+  converse(message="O <en>pull request</en> foi aprovado.")
+
+Tag guidelines:
+- Tag English nouns, verbs, and phrases that are read in English: backend, frontend, deploy,
+  push, pull, commit, merge, branch, build, bug, fix, feature, release, sprint, review,
+  timeout, retry, fallback, cache, queue, worker, token, payload, endpoint, etc.
+- Do NOT tag: numbers, URLs, code variables, proper names pronounced the same in both languages.
+- Do NOT tag entire sentences — only the English words within a Portuguese sentence.
+</voice_polyglot_rules>
 
 
 🔌 ENDPOINT: STT/TTS services must expose OpenAI-compatible endpoints:

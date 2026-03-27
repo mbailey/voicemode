@@ -1,15 +1,23 @@
 """
 Polyglot TTS - Language-aware text-to-speech synthesis.
 
-Detects language segments within text (e.g., English words inside Portuguese sentences)
-and synthesizes each segment with the appropriate voice, then concatenates the audio.
+Synthesizes text that contains explicit language tags (e.g., <en>word</en> inside
+Portuguese sentences) using the appropriate voice per segment.
+
+The primary detection strategy is tag-based: Claude annotates English words/phrases
+with <en>...</en> tags, which are stripped from the spoken text and used to route
+synthesis to the correct voice.
+
+Heuristic auto-detection (regex/stopword scoring) is available as a fallback but
+disabled by default because it produces false positives in Portuguese text.
 
 Controlled by:
-  VOICEMODE_POLYGLOT=true|false        (default: false)
-  VOICEMODE_POLYGLOT_PT_VOICE=pf_dora  (voice for Portuguese segments)
-  VOICEMODE_POLYGLOT_EN_VOICE=af_sky   (voice for English segments)
-  VOICEMODE_POLYGLOT_PRIMARY_LANG=pt   (primary language: pt or en)
-  VOICEMODE_POLYGLOT_MIN_EN_WORDS=2    (min consecutive English words to switch voice)
+  VOICEMODE_POLYGLOT=true|false           (default: false)
+  VOICEMODE_POLYGLOT_PT_VOICE=pf_dora     (voice for Portuguese segments)
+  VOICEMODE_POLYGLOT_EN_VOICE=af_sky      (voice for English segments)
+  VOICEMODE_POLYGLOT_PRIMARY_LANG=pt      (primary language: pt or en)
+  VOICEMODE_POLYGLOT_MIN_EN_WORDS=2       (min consecutive words for heuristic mode)
+  VOICEMODE_POLYGLOT_HEURISTIC=false      (enable heuristic fallback, default: false)
 """
 
 import logging
@@ -29,6 +37,7 @@ POLYGLOT_PT_VOICE = os.environ.get("VOICEMODE_POLYGLOT_PT_VOICE", "pf_dora")
 POLYGLOT_EN_VOICE = os.environ.get("VOICEMODE_POLYGLOT_EN_VOICE", "af_sky")
 POLYGLOT_PRIMARY_LANG = os.environ.get("VOICEMODE_POLYGLOT_PRIMARY_LANG", "pt").lower()
 POLYGLOT_MIN_EN_WORDS = int(os.environ.get("VOICEMODE_POLYGLOT_MIN_EN_WORDS", "2"))
+POLYGLOT_HEURISTIC = os.environ.get("VOICEMODE_POLYGLOT_HEURISTIC", "false").lower() in ("true", "1", "yes")
 
 # ---------------------------------------------------------------------------
 # Language detection helpers
@@ -174,12 +183,82 @@ def _score_word_english(word: str) -> float:
     return 0.0
 
 
+# ---------------------------------------------------------------------------
+# Tag-based language detection (primary strategy)
+# ---------------------------------------------------------------------------
+
+# Matches <en>...</en> or <pt>...</pt> tags (case-insensitive)
+_LANG_TAG_RE = re.compile(r'<(en|pt)>(.*?)</\1>', re.IGNORECASE | re.DOTALL)
+
+
+def parse_tag_segments(text: str, primary_lang: str = "pt") -> Optional[List[Tuple[str, str]]]:
+    """
+    Parse explicit language tags from text.
+
+    Recognizes <en>...</en> and <pt>...</pt> tags inserted by Claude.
+    Tags are stripped from the output text — only the inner content is synthesized.
+
+    Returns:
+        List of (lang, text) pairs if any tags were found, otherwise None.
+    """
+    if not _LANG_TAG_RE.search(text):
+        return None
+
+    segments: List[Tuple[str, str]] = []
+    last_end = 0
+
+    for match in _LANG_TAG_RE.finditer(text):
+        start, end = match.span()
+        lang = match.group(1).lower()
+        content = match.group(2)
+
+        # Text before this tag → primary language
+        before = text[last_end:start]
+        if before.strip():
+            # Merge with previous segment if same language
+            if segments and segments[-1][0] == primary_lang:
+                segments[-1] = (primary_lang, segments[-1][1] + before)
+            else:
+                segments.append((primary_lang, before))
+        elif before and segments:
+            prev_lang, prev_text = segments[-1]
+            segments[-1] = (prev_lang, prev_text + before)
+
+        # Tagged content
+        if content.strip():
+            if segments and segments[-1][0] == lang:
+                segments[-1] = (lang, segments[-1][1] + content)
+            else:
+                segments.append((lang, content))
+
+        last_end = end
+
+    # Remaining text after last tag
+    after = text[last_end:]
+    if after.strip():
+        if segments and segments[-1][0] == primary_lang:
+            segments[-1] = (primary_lang, segments[-1][1] + after)
+        else:
+            segments.append((primary_lang, after))
+    elif after and segments:
+        prev_lang, prev_text = segments[-1]
+        segments[-1] = (prev_lang, prev_text + after)
+
+    return segments if segments else None
+
+
 def detect_language_segments(text: str, primary_lang: str = "pt") -> List[Tuple[str, str]]:
     """
     Split text into [(lang, segment)] pairs.
 
+    Strategy (in order):
+    1. Tag-based: parse <en>...</en> / <pt>...</pt> tags inserted by Claude.
+       Tags are stripped from the output text. This is the preferred approach.
+    2. Heuristic: word-level scoring via regex/stopwords. Only used when
+       VOICEMODE_POLYGLOT_HEURISTIC=true (disabled by default).
+
     Args:
-        text: Input text (may contain mixed PT/EN content)
+        text: Input text (may contain language tags or mixed PT/EN content)
         primary_lang: The dominant language ("pt" or "en")
 
     Returns:
@@ -187,6 +266,17 @@ def detect_language_segments(text: str, primary_lang: str = "pt") -> List[Tuple[
         language_code is "pt" or "en".
     """
     if not text.strip():
+        return [(primary_lang, text)]
+
+    # --- Strategy 1: explicit tags ---
+    tag_segments = parse_tag_segments(text, primary_lang)
+    if tag_segments is not None:
+        logger.debug(f"Polyglot: using tag-based detection ({len(tag_segments)} segment(s))")
+        return tag_segments
+
+    # --- Strategy 2: heuristic (opt-in only) ---
+    if not POLYGLOT_HEURISTIC:
+        logger.debug("Polyglot: no tags found and heuristic disabled — returning single segment")
         return [(primary_lang, text)]
 
     # Split into tokens preserving whitespace/punctuation
@@ -262,6 +352,16 @@ def detect_language_segments(text: str, primary_lang: str = "pt") -> List[Tuple[
         segments[-1] = (prev_lang, prev_text + current_text)
 
     return segments if segments else [(primary_lang, text)]
+
+
+def strip_language_tags(text: str) -> str:
+    """
+    Remove <en>...</en> and <pt>...</pt> tags, keeping only the inner content.
+
+    Called before non-polyglot TTS synthesis to prevent the tags from being
+    read aloud. Example: "O <en>backend</en> caiu" → "O backend caiu".
+    """
+    return _LANG_TAG_RE.sub(r'\2', text)
 
 
 def get_voice_for_lang(lang: str) -> str:
