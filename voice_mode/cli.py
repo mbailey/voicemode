@@ -2124,6 +2124,190 @@ complete -c voicemode -f -a '(__fish_voicemode_complete)'
         click.echo(completion_script)
 
 
+# Connect (VoiceMode Connect auth) command group
+@voice_mode_main_cli.group(epilog="""\b
+Examples:
+  voicemode connect auth login       Sign in to VoiceMode Connect
+  voicemode connect auth status      Show account and token info
+  voicemode connect auth logout      Sign out
+""")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def connect():
+    """VoiceMode Connect -- remote voice for Claude.
+
+    Authenticate with VoiceMode Connect to enable remote voice
+    conversations from mobile apps, web browsers, and other clients.
+
+    VoiceMode Connect is optional. Core VoiceMode works locally
+    without authentication.
+    """
+    pass
+
+
+@connect.group(epilog="""\b
+Examples:
+  voicemode connect auth login              Sign in (opens browser)
+  voicemode connect auth login --no-browser Print URL instead
+  voicemode connect auth status             Show account info
+  voicemode connect auth logout             Sign out
+""")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def auth():
+    """Manage authentication with VoiceMode Connect.
+
+    Sign in to enable remote voice conversations from the
+    VoiceMode web app, iOS app, and other clients.
+
+    Credentials are stored securely in your OS keychain
+    (or ~/.voicemode/credentials as fallback).
+    """
+    pass
+
+
+@auth.command(epilog="""\b
+Examples:
+  voicemode connect auth login              Opens browser to sign in
+  voicemode connect auth login --no-browser Print the URL instead
+""")
+@click.help_option('-h', '--help', help='Show this message and exit')
+@click.option('--no-browser', is_flag=True, help='Print URL instead of opening browser')
+def login(no_browser: bool):
+    """Sign in to VoiceMode Connect.
+
+    Opens your browser to authenticate via Auth0. After signing in,
+    credentials are stored locally and used automatically by the
+    voicemode-channel plugin.
+    """
+    from voice_mode.auth import login as auth_login, AuthError, format_expiry
+
+    click.echo("Starting authentication with VoiceMode Connect...")
+
+    def on_browser_open(url: str) -> None:
+        """Called when browser should be opened."""
+        if no_browser:
+            click.echo()
+            click.echo("Open this URL in your browser to authenticate:")
+            click.echo()
+            click.echo(f"  {url}")
+            click.echo()
+        else:
+            click.echo("Opening browser...")
+
+    def on_waiting() -> None:
+        """Called while waiting for user to complete auth."""
+        click.echo()
+        click.echo("Waiting for authentication...")
+        click.echo("Complete the login in your browser, then return here.")
+        click.echo("Press Ctrl+C to cancel.")
+        click.echo()
+
+    try:
+        credentials = auth_login(
+            open_browser=not no_browser,
+            on_browser_open=on_browser_open,
+            on_waiting=on_waiting,
+        )
+
+        click.echo("✓ Authentication successful!")
+        click.echo()
+
+        if credentials.user_info:
+            email = credentials.user_info.get("email", "unknown")
+            name = credentials.user_info.get("name", "")
+            if name:
+                click.echo(f"  Logged in as: {name} ({email})")
+            else:
+                click.echo(f"  Logged in as: {email}")
+        else:
+            click.echo("  Logged in successfully")
+
+        click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+
+    except KeyboardInterrupt:
+        click.echo()
+        click.echo("Authentication cancelled.")
+        sys.exit(1)
+
+    except AuthError as e:
+        click.echo()
+        click.echo(f"Authentication failed: {e}", err=True)
+        sys.exit(1)
+
+    except Exception as e:
+        click.echo()
+        click.echo(f"Unexpected error during authentication: {e}", err=True)
+        sys.exit(1)
+
+
+@auth.command(epilog="""\b
+Examples:
+  voicemode connect auth logout
+""")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def logout():
+    """Sign out from VoiceMode Connect.
+
+    Removes locally stored authentication tokens.
+    """
+    from voice_mode.auth import load_credentials, clear_credentials
+
+    credentials = load_credentials()
+
+    if clear_credentials():
+        click.echo("✓ Logged out successfully.")
+        if credentials and credentials.user_info:
+            email = credentials.user_info.get("email")
+            if email:
+                click.echo(f"  Removed credentials for: {email}")
+    else:
+        click.echo("Already logged out (no credentials stored).")
+
+
+@auth.command("status", epilog="""\b
+Examples:
+  voicemode connect auth status
+""")
+@click.help_option('-h', '--help', help='Show this message and exit')
+def auth_status():
+    """Show authentication state and account info."""
+    from voice_mode.auth import get_valid_credentials, format_expiry, AuthError
+    import time as time_module
+
+    try:
+        credentials = get_valid_credentials(auto_refresh=False)
+    except AuthError:
+        credentials = None
+
+    if not credentials:
+        click.echo("Not logged in to VoiceMode Connect")
+        click.echo()
+        click.echo("Run: voicemode connect auth login")
+        return
+
+    click.echo("✓ Logged in to VoiceMode Connect")
+
+    if credentials.user_info:
+        name = credentials.user_info.get("name", "")
+        email = credentials.user_info.get("email", "")
+        if name and email:
+            click.echo(f"  Account: {name} ({email})")
+        elif email:
+            click.echo(f"  Account: {email}")
+        else:
+            click.echo("  Account: (no user info available)")
+    else:
+        click.echo("  Account: (no user info available)")
+
+    if credentials.expires_at:
+        if credentials.expires_at < time_module.time():
+            click.echo("  Token: expired (will be refreshed automatically)")
+        else:
+            click.echo(f"  Token expires: {format_expiry(credentials.expires_at)}")
+
+    if credentials.refresh_token:
+        click.echo("  Refresh token: present")
+
+
 # DJ (Background Music) command group
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
