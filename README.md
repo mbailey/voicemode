@@ -1,5 +1,7 @@
 # VoiceMode
 
+[![SafeSkill 81/100](https://img.shields.io/badge/SafeSkill-81%2F100_Passes%20with%20Notes-yellow)](https://safeskill.dev/scan/mbailey-voicemode)
+
 > Natural voice conversations with Claude Code (and other MCP capable agents)
 
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode)](https://pepy.tech/project/voice-mode)
