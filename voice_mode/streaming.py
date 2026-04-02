@@ -40,6 +40,7 @@ class StreamMetrics:
     chunks_received: int = 0
     chunks_played: int = 0
     audio_path: Optional[str] = None  # Path to saved audio file
+    interrupted: bool = False  # True when playback was stopped by PTT key press
 
 
 class AudioStreamPlayer:
@@ -260,44 +261,71 @@ async def stream_pcm_audio(
             # Note: Can't use callback and write() together
         )
         stream.start()
-        
+
+        # Register stream with PTT module so key press can abort it immediately
+        try:
+            from voice_mode.ptt import set_active_sd_stream
+            set_active_sd_stream(stream)
+            _ptt_interrupt = __import__('voice_mode.ptt', fromlist=['interrupt_streaming']).interrupt_streaming
+        except Exception:
+            _ptt_interrupt = None
+
         # Log TTS playback start when we start the stream
         event_logger = get_event_logger()
         if event_logger:
             event_logger.log_event(event_logger.TTS_PLAYBACK_START)
-        
+
         # Don't add stream parameter - Kokoro defaults to true, OpenAI doesn't support it
-        
+
         logger.info("Starting true HTTP streaming with iter_bytes()")
-        
+
         # Use the streaming response API
         async with openai_client.audio.speech.with_streaming_response.create(
             **request_params
         ) as response:
             chunk_count = 0
             bytes_received = 0
-            
+
             # Stream chunks as they arrive
             async for chunk in response.iter_bytes(chunk_size=STREAM_CHUNK_SIZE):
+                # Check for PTT interrupt (user pressed key during playback)
+                if _ptt_interrupt is not None and _ptt_interrupt.is_set():
+                    logger.info("PCM stream: PTT interrupt received, stopping playback")
+                    try:
+                        stream.abort()
+                    except Exception:
+                        pass
+                    metrics.interrupted = True
+                    break
+
                 if chunk:
                     # Track first chunk received
                     if first_chunk_time is None:
                         first_chunk_time = time.perf_counter()
                         chunk_receive_time = first_chunk_time - start_time
                         logger.info(f"First audio chunk received after {chunk_receive_time:.3f}s")
-                        
+
                         # Log TTS first audio event
                         event_logger = get_event_logger()
                         if event_logger:
                             event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
-                    
+
                     # Convert bytes to numpy array for sounddevice
                     # PCM data is already in the right format
                     audio_array = np.frombuffer(chunk, dtype=np.int16)
-                    
+
                     # Play the chunk immediately
-                    stream.write(audio_array)
-                    
+                    try:
+                        stream.write(audio_array)
+                    except Exception as write_err:
+                        # Stream was aborted by PTT interrupt from listener thread
+                        if _ptt_interrupt is not None and _ptt_interrupt.is_set():
+                            logger.info(f"PCM stream: write interrupted by PTT: {write_err}")
+                            metrics.interrupted = True
+                        else:
+                            logger.warning(f"PCM stream: write error: {write_err}")
+                        break
+
                     # Save chunk if enabled
                     if save_buffer:
                         save_buffer.write(chunk)
@@ -310,9 +338,19 @@ async def stream_pcm_audio(
                     if debug and chunk_count % 10 == 0:
                         logger.debug(f"Streamed {chunk_count} chunks, {bytes_received} bytes")
         
-        # Wait for playback to finish
-        stream.stop()
-        
+        # Wait for playback to finish (or was already aborted by PTT)
+        try:
+            stream.stop()
+        except Exception:
+            pass
+
+        # Deregister from PTT module
+        try:
+            from voice_mode.ptt import clear_active_sd_stream
+            clear_active_sd_stream()
+        except Exception:
+            pass
+
         end_time = time.perf_counter()
 
         # Log TTS playback end with metrics
@@ -473,17 +511,31 @@ async def stream_with_buffering(
             dtype='float32'
         )
         stream.start()
-        
+
+        # Register stream with PTT module so key press can abort it immediately
+        try:
+            from voice_mode.ptt import set_active_sd_stream
+            set_active_sd_stream(stream)
+            _ptt_interrupt = __import__('voice_mode.ptt', fromlist=['interrupt_streaming']).interrupt_streaming
+        except Exception:
+            _ptt_interrupt = None
+
         # Don't add stream parameter - Kokoro defaults to true, OpenAI doesn't support it
-        
+
         # Use the streaming response API for true HTTP streaming
         async with openai_client.audio.speech.with_streaming_response.create(
             **request_params
         ) as response:
             first_chunk_time = None
-            
+
             # Stream chunks as they arrive
             async for chunk in response.iter_bytes(chunk_size=STREAM_CHUNK_SIZE):
+                # Check for PTT interrupt
+                if _ptt_interrupt is not None and _ptt_interrupt.is_set():
+                    logger.info("Buffered stream: PTT interrupt received, stopping playback")
+                    stream.abort()
+                    break
+
                 if chunk:
                     # Track first chunk for TTFA
                     if first_chunk_time is None:
@@ -540,7 +592,14 @@ async def stream_with_buffering(
         
         metrics.generation_time = time.perf_counter() - start_time
         metrics.playback_time = metrics.generation_time  # Approximate
-        
+
+        # Deregister from PTT module
+        try:
+            from voice_mode.ptt import clear_active_sd_stream
+            clear_active_sd_stream()
+        except Exception:
+            pass
+
         # Save audio if enabled
         if save_audio and save_buffer and audio_dir:
             try:

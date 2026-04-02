@@ -48,6 +48,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ptt = [
+    "pynput>=1.7.0",
+]
 livekit = [
     "livekit>=0.13.1",
     "livekit-agents>=0.10.2",

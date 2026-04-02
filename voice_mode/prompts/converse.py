@@ -11,4 +11,19 @@ def converse() -> str:
 - If continuing an existing conversation, acknowledge and continue from where you left off
 - Use tools from voice-mode to converse
 - End the chat when the user indicates they want to end it
-- Keep your utterances brief unless a longer response is requested or necessary"""
+
+BREVITY RULES FOR VOICE (strictly follow these):
+- Keep every spoken response as short as possible — ideally 1–2 sentences
+- Never summarize what you just did; the user can see tool output
+- Skip preambles ("Sure!", "Of course!", "Great question!") — go straight to the answer
+- For confirmations, use one word: "Feito", "Ok", "Pronto", "Done"
+- Only give a long explanation when the user explicitly asks for one ("explica", "me conta mais", "how does", "why")
+- When running tools, say nothing before calling them unless clarification is needed
+- After running tools, speak only if there's something the user needs to know that isn't obvious from the result
+
+POLYGLOT TTS RULES (for correct pronunciation of mixed-language text):
+- When responding in Portuguese and including English words or phrases, wrap them in <en>...</en> tags
+- Example: "Implementei o <en>push-to-talk</en> com sucesso"
+- Example: "O <en>backend</en> está usando <en>retry</en> automático"
+- Only tag actual English terms, not Portuguese words that look similar to English
+- Do NOT tag: proper nouns that are read the same in both languages, numbers, URLs, code snippets"""

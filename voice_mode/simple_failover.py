@@ -5,6 +5,7 @@ This module provides a direct try-and-failover approach without health checks.
 Connection refused errors are instant, so there's no performance penalty.
 """
 
+import asyncio
 import logging
 from typing import Optional, Tuple, Dict, Any
 from openai import AsyncOpenAI
@@ -85,37 +86,61 @@ async def simple_tts_failover(
         # Create clients dict for text_to_speech
         openai_clients = {'tts': client}
 
-        # Try TTS with this endpoint
-        # Wrap in try/catch to get actual exception details
+        # Try TTS with this endpoint — retry on connection errors (e.g. local
+        # service restarting after hitting UVICORN_LIMIT_MAX_REQUESTS).
         last_exception = None
-        try:
-            success, metrics = await text_to_speech(
-                text=text,
-                openai_clients=openai_clients,
-                tts_model=model,
-                tts_voice=selected_voice,
-                tts_base_url=base_url,
-                conversation_id=conversation_id,
-                **kwargs
-            )
+        _is_local = is_local_provider(base_url)
+        _retry_delays = [2, 4, 8] if _is_local else []  # up to ~14s total wait
 
-            if success:
-                config = {
-                    'base_url': base_url,
-                    'provider': provider_type,
-                    'voice': selected_voice,  # Return the voice actually used
-                    'model': model,
-                    'endpoint': f"{base_url}/audio/speech"
-                }
-                logger.info(f"TTS succeeded with {base_url} using voice {selected_voice}")
-                return True, metrics, config
-            else:
-                # text_to_speech returned False, but we don't have exception details
-                # Create a generic error message
-                last_exception = Exception("TTS request failed")
+        for attempt in range(1 + len(_retry_delays)):
+            if attempt > 0:
+                delay = _retry_delays[attempt - 1]
+                logger.info(f"TTS connection error on {base_url}, retrying in {delay}s (attempt {attempt+1})...")
+                await asyncio.sleep(delay)
+                # Re-create client for the retry
+                client = AsyncOpenAI(
+                    api_key=api_key,
+                    base_url=base_url,
+                    timeout=30.0,
+                    max_retries=0
+                )
+                openai_clients = {'tts': client}
 
-        except Exception as e:
-            last_exception = e
+            last_exception = None
+            try:
+                success, metrics = await text_to_speech(
+                    text=text,
+                    openai_clients=openai_clients,
+                    tts_model=model,
+                    tts_voice=selected_voice,
+                    tts_base_url=base_url,
+                    conversation_id=conversation_id,
+                    **kwargs
+                )
+
+                if success:
+                    config = {
+                        'base_url': base_url,
+                        'provider': provider_type,
+                        'voice': selected_voice,
+                        'model': model,
+                        'endpoint': f"{base_url}/audio/speech"
+                    }
+                    logger.info(f"TTS succeeded with {base_url} using voice {selected_voice}")
+                    return True, metrics, config
+                else:
+                    last_exception = Exception("TTS request failed")
+                    break  # Non-connection failure — don't retry
+
+            except Exception as e:
+                last_exception = e
+                error_str = str(e).lower()
+                is_connection_error = any(w in error_str for w in (
+                    "connection error", "connection refused", "connect call failed",
+                    "cannot connect", "network is unreachable", "connection reset"
+                ))
+                if not (_is_local and is_connection_error):
+                    break  # Not a retriable connection error
 
         # Handle the error (either from exception or False return)
         if last_exception:
