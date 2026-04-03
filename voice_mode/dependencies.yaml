@@ -259,6 +259,12 @@ voicemode:
           required: true
           check_command: pkg-config --exists alsa
 
+        - name: nvidia-cuda-toolkit
+          description: NVIDIA CUDA compiler (for GPU acceleration)
+          required: false
+          check_command: nvcc --version
+          note: Optional - needed for GPU acceleration on NVIDIA hardware (enabled by default when GPU detected)
+
     fedora:
       packages:
         - name: cmake
@@ -299,6 +305,12 @@ voicemode:
           description: Advanced Linux Sound Architecture
           required: true
           check_command: pkg-config --exists alsa
+
+        - name: cuda-toolkit
+          description: NVIDIA CUDA compiler (for GPU acceleration)
+          required: false
+          check_command: nvcc --version
+          note: Optional - needed for GPU acceleration on NVIDIA hardware (enabled by default when GPU detected)
 
     darwin:
       packages:
