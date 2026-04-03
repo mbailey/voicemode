@@ -6,7 +6,79 @@ import os
 import logging
 from typing import Dict, List, Tuple, Optional
 
+import numpy as np
+
 logger = logging.getLogger("voicemode")
+
+
+def check_recording_health(audio_data: np.ndarray, sample_rate: int) -> dict:
+    """Analyze recorded audio to distinguish genuine silence from device failure.
+
+    When macOS denies microphone permission to a process, sounddevice/PortAudio
+    returns zero-filled buffers without raising an error. This function detects
+    that condition so callers can report an actionable diagnostic instead of the
+    misleading "No speech detected".
+
+    Args:
+        audio_data: Flattened numpy array of int16 audio samples.
+        sample_rate: Recording sample rate in Hz.
+
+    Returns:
+        dict with keys:
+            status: "ok" | "no_audio" | "very_quiet"
+            rms: float — root mean square of audio
+            peak: int — absolute peak sample value
+            duration_s: float — recording duration in seconds
+            message: str | None — actionable diagnostic if status is not "ok"
+    """
+    if len(audio_data) == 0:
+        return {
+            "status": "no_audio",
+            "rms": 0.0,
+            "peak": 0,
+            "duration_s": 0.0,
+            "message": "No audio data recorded. Recording may have failed to start.",
+        }
+
+    rms = float(np.sqrt(np.mean(audio_data.astype(np.float64) ** 2)))
+    peak = int(np.max(np.abs(audio_data)))
+    duration_s = len(audio_data) / sample_rate
+
+    if rms < 1.0 and peak == 0:
+        return {
+            "status": "no_audio",
+            "rms": rms,
+            "peak": peak,
+            "duration_s": duration_s,
+            "message": (
+                "Microphone returned no audio data (all zeros). "
+                "This usually means the process doesn't have microphone permission. "
+                "On macOS: System Settings > Privacy & Security > Microphone — "
+                "add the app running VoiceMode (e.g. Python.app or your terminal). "
+                "Run 'voicemode devices' for details."
+            ),
+        }
+
+    if rms < 50.0 and peak < 100:
+        return {
+            "status": "very_quiet",
+            "rms": rms,
+            "peak": peak,
+            "duration_s": duration_s,
+            "message": (
+                f"Audio level is extremely low (RMS={rms:.1f}, peak={peak}). "
+                "Check that the correct input device is selected and not muted. "
+                "Run 'voicemode devices' for details."
+            ),
+        }
+
+    return {
+        "status": "ok",
+        "rms": rms,
+        "peak": peak,
+        "duration_s": duration_s,
+        "message": None,
+    }
 
 
 def check_system_audio_packages() -> Dict[str, bool]:

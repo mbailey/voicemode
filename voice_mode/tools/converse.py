@@ -98,6 +98,55 @@ logger = logging.getLogger("voicemode")
 logger.info(f"Module loaded with DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}")
 
 
+# Microphone health probe — checks once per session on first converse call
+_mic_health_checked = False
+_mic_health_ok = False
+
+
+def _ensure_mic_health() -> Tuple[bool, Optional[str]]:
+    """Quick mic probe on first use. Detects permission-denied silent failures.
+
+    Records 200ms of audio and checks if the device returned all zeros,
+    which indicates the process lacks microphone permission (common on macOS
+    when the MCP server runs as a subprocess of another app).
+
+    Returns:
+        (ok, message) — ok is True if mic appears functional,
+        message contains actionable diagnostic if not.
+    """
+    global _mic_health_checked, _mic_health_ok
+    if _mic_health_checked:
+        return _mic_health_ok, None
+
+    from voice_mode.utils.audio_diagnostics import check_recording_health
+
+    try:
+        probe = sd.rec(
+            int(0.2 * SAMPLE_RATE),
+            samplerate=SAMPLE_RATE,
+            channels=CHANNELS,
+            dtype=np.int16,
+        )
+        sd.wait()
+        health = check_recording_health(probe.flatten(), SAMPLE_RATE)
+
+        _mic_health_checked = True
+        _mic_health_ok = health["status"] in ("ok", "very_quiet")
+
+        if health["status"] == "no_audio":
+            logger.error(f"Mic probe failed: {health['message']}")
+            return False, health["message"]
+        elif health["status"] == "very_quiet":
+            logger.warning(f"Mic probe warning: {health['message']}")
+
+        return _mic_health_ok, health.get("message")
+    except Exception as e:
+        logger.error(f"Mic probe exception: {e}")
+        _mic_health_checked = True
+        _mic_health_ok = False
+        return False, f"Microphone probe failed: {e}"
+
+
 # DJ Ducking Configuration
 DJ_SOCKET_PATH = "/tmp/voicemode-mpv.sock"
 DJ_VOLUME_DUCK_AMOUNT = int(os.environ.get("VOICEMODE_DJ_DUCK_AMOUNT", "20"))  # Volume reduction during TTS
@@ -716,7 +765,15 @@ def record_audio(duration: float) -> np.ndarray:
             # Check if recording contains actual audio (not silence)
             rms = np.sqrt(np.mean(flattened.astype(float) ** 2))
             logger.debug(f"RMS level: {rms:.2f} ({'likely silence' if rms < 100 else 'audio detected'})")
-        
+
+        # Check for silent device (permission denied, wrong device, etc.)
+        from voice_mode.utils.audio_diagnostics import check_recording_health
+        health = check_recording_health(flattened, SAMPLE_RATE)
+        if health["status"] == "no_audio":
+            logger.error(f"⚠️  {health['message']}")
+        elif health["status"] == "very_quiet":
+            logger.warning(f"⚠️  {health['message']}")
+
         return flattened
         
     except Exception as e:
@@ -985,20 +1042,29 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                 full_recording = np.concatenate(chunks)
                 
                 if not speech_detected:
-                    logger.info(f"✓ Recording completed ({recording_duration:.1f}s) - No speech detected")
+                    # Check if this is a device problem vs genuine silence
+                    from voice_mode.utils.audio_diagnostics import check_recording_health
+                    health = check_recording_health(full_recording, SAMPLE_RATE)
+                    if health["status"] == "no_audio":
+                        logger.error(f"⚠️  {health['message']}")
+                        return (full_recording, False, health["message"])
+                    elif health["status"] == "very_quiet":
+                        logger.warning(f"⚠️  {health['message']}")
+                    else:
+                        logger.info(f"✓ Recording completed ({recording_duration:.1f}s) - No speech detected")
                     if VAD_DEBUG:
                         logger.info(f"[VAD_DEBUG] FINAL STATE: No speech was ever detected during recording")
                 else:
                     logger.info(f"✓ Recorded {len(full_recording)} samples ({recording_duration:.1f}s) with speech")
                     if VAD_DEBUG:
                         logger.info(f"[VAD_DEBUG] FINAL STATE: Speech was detected, recording complete")
-                
+
                 if DEBUG:
                     # Calculate RMS for debug
                     rms = np.sqrt(np.mean(full_recording.astype(float) ** 2))
                     logger.debug(f"Recording stats - RMS: {rms:.2f}, Speech detected: {speech_detected}")
-                
-                # Return tuple: (audio_data, speech_detected)
+
+                # Return tuple: (audio_data, speech_detected) or (audio_data, speech_detected, diagnostic)
                 return (full_recording, speech_detected)
             else:
                 logger.warning("No audio chunks recorded")
@@ -1500,15 +1566,27 @@ consult the MCP resources listed above.
                 # Record response
                 logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
 
+                # Quick mic health probe on first use — catches permission-denied
+                # before wasting the full recording duration
+                mic_ok, mic_diagnostic = _ensure_mic_health()
+                if not mic_ok:
+                    return f"Microphone issue: {mic_diagnostic}"
+
                 # Log recording start
                 if event_logger:
                     event_logger.log_event(event_logger.RECORDING_START)
 
                 record_start = time.perf_counter()
                 logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                record_result = await asyncio.get_event_loop().run_in_executor(
                     None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                 )
+                # Handle optional 3rd element (diagnostic message from health check)
+                mic_diagnostic = None
+                if len(record_result) == 3:
+                    audio_data, speech_detected, mic_diagnostic = record_result
+                else:
+                    audio_data, speech_detected = record_result
                 timings['record'] = time.perf_counter() - record_start
                 
                 # Log recording end
@@ -1686,9 +1764,13 @@ consult the MCP resources listed above.
 
                         # Record audio
                         record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                        record_result = await asyncio.get_event_loop().run_in_executor(
                             None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                         )
+                        if len(record_result) == 3:
+                            audio_data, speech_detected, mic_diagnostic = record_result
+                        else:
+                            audio_data, speech_detected = record_result
                         record_time = time.perf_counter() - record_start
                         timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
 
@@ -1742,9 +1824,13 @@ consult the MCP resources listed above.
 
                         # Record audio
                         record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                        record_result = await asyncio.get_event_loop().run_in_executor(
                             None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
                         )
+                        if len(record_result) == 3:
+                            audio_data, speech_detected, mic_diagnostic = record_result
+                        else:
+                            audio_data, speech_detected = record_result
                         record_time = time.perf_counter() - record_start
                         timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
 
@@ -1916,7 +2002,10 @@ consult the MCP resources listed above.
                     result = f"Voice response: {response_text}{stt_info} | Timing: {timing_str}"
                 success = True
             else:
-                if effective_metrics_level == "minimal":
+                if mic_diagnostic:
+                    # Device issue detected — give actionable feedback
+                    result = f"Microphone issue: {mic_diagnostic}"
+                elif effective_metrics_level == "minimal":
                     result = "No speech detected"
                 else:
                     result = f"No speech detected | Timing: {timing_str}"
