@@ -2045,13 +2045,37 @@ consult the MCP resources listed above.
             result = f"Error: {str(e)}"
             return result
         
+    except asyncio.CancelledError:
+        # Tool call was cancelled by the MCP client (e.g. user pressed ESC).
+        #
+        # We intentionally DO NOT re-raise. Under FastMCP 2.x stdio transport,
+        # an uncaught CancelledError escaping the tool handler tears down the
+        # MCP server process, leaving the client with a failed connection that
+        # requires `/mcp` reconnect. That surfaces to the user as VoiceMode
+        # "disappearing" after every ESC (see VM-1026 / GH issue #337).
+        #
+        # Swallowing cancellation here is safe because this function is a leaf
+        # coroutine invoked by FastMCP -- there is no outer task that needs to
+        # observe the cancellation signal. The `finally` block below still
+        # releases the conch, logs TOOL_REQUEST_END, and updates timing state,
+        # so cleanup invariants hold.
+        logger.info("Converse cancelled by client (ESC or tool-call cancel)")
+        if event_logger:
+            event_logger.log_event("TOOL_CANCELLED", {
+                "tool_name": "converse",
+                "reason": "client_cancel",
+            })
+        result = "Cancelled by user."
+        success = False
+        return result
+
     except Exception as e:
         logger.error(f"Unexpected error in converse: {e}")
         if DEBUG:
             logger.error(f"Full traceback: {traceback.format_exc()}")
         result = f"Unexpected error: {str(e)}"
         return result
-        
+
     finally:
         # Release the conch to signal voice conversation has ended
         if CONCH_ENABLED and conch._acquired:
