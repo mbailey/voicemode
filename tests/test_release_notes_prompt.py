@@ -27,7 +27,7 @@ def test_release_notes_prompt_parses_changelog():
 - First version
 """
     
-    with patch("voice_mode.prompts.release_notes.changelog_resource") as mock_resource:
+    with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = mock_changelog
         
         result = release_notes_prompt.fn(versions="2")
@@ -51,7 +51,7 @@ def test_release_notes_prompt_parses_changelog():
 
 def test_release_notes_prompt_handles_missing_changelog():
     """Test that the prompt handles missing CHANGELOG gracefully."""
-    with patch("voice_mode.prompts.release_notes.changelog_resource") as mock_resource:
+    with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = "CHANGELOG.md not found in package."
         
         result = release_notes_prompt.fn()
@@ -61,7 +61,7 @@ def test_release_notes_prompt_handles_missing_changelog():
 
 def test_release_notes_prompt_handles_error():
     """Test that the prompt handles errors from the resource."""
-    with patch("voice_mode.prompts.release_notes.changelog_resource") as mock_resource:
+    with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = "Error reading CHANGELOG.md: Permission denied"
         
         result = release_notes_prompt.fn()
@@ -98,7 +98,7 @@ def test_release_notes_prompt_default_versions():
 - Version 1
 """
     
-    with patch("voice_mode.prompts.release_notes.changelog_resource") as mock_resource:
+    with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = mock_changelog
         
         result = release_notes_prompt.fn()  # No versions specified
@@ -141,7 +141,7 @@ def test_release_notes_prompt_handles_empty_string():
 - Version 1
 """
     
-    with patch("voice_mode.prompts.release_notes.changelog_resource") as mock_resource:
+    with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = mock_changelog
         
         # Test with empty string (what Claude Code sends)
@@ -173,7 +173,7 @@ def test_release_notes_prompt_respects_version_limit():
 - Version 1
 """
     
-    with patch("voice_mode.prompts.release_notes.changelog_resource") as mock_resource:
+    with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = mock_changelog
         
         # Test with 1 version
