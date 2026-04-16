@@ -1,17 +1,28 @@
 """Release notes prompt for displaying recent CHANGELOG entries."""
 
 from voice_mode.server import mcp
-# Import the resource at module level to ensure it's registered
-from voice_mode.resources.changelog import changelog_resource
 
 
 @mcp.prompt(name="release-notes")
 def release_notes_prompt(versions: str = "5") -> str:
     """View recent release notes from Voice Mode's CHANGELOG."""
+    # Lazy import to break a circular import:
+    #
+    #   voice_mode/resources/changelog.py
+    #     -> imports voice_mode/server.py
+    #       -> auto-imports voice_mode/prompts/ (this package)
+    #         -> loads release_notes.py (this module)
+    #
+    # Under pytest 9's stricter collection, importing changelog at
+    # module load time fails with "cannot import name 'changelog_resource'
+    # from partially initialized module". Deferring to call time breaks
+    # the cycle because server/prompts finish initializing first.
+    from voice_mode.resources.changelog import changelog_resource
+
     # Handle empty string from Claude Code
     if not versions or versions == "":
         versions = "5"
-    
+
     # Get the changelog content from the resource
     # Resources decorated with @mcp.resource need to access the fn attribute
     if hasattr(changelog_resource, 'fn'):
