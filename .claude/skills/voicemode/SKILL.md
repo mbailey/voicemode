@@ -297,6 +297,22 @@ voicemode:converse("Transferring you back to the assistant.", wait_for_response=
 3. **Distinct voices**: Different voices make handoffs audible
 4. **Provide context**: Tell receiving agent why user is being transferred
 
+### Auto-focus tmux pane on speak (opt-in)
+
+When you run multiple voice agents in separate tmux panes, set
+`VOICEMODE_AUTO_FOCUS_PANE=true` to make tmux follow the speaker. Focus
+switches **after conch acquisition**, so agents waiting on the conch never
+steal focus -- only the agent about to speak does. It also respects the
+`~/.voicemode/focus-hold` sentinel written by the show-me plugin, so a
+file you just opened stays on screen for its hold window.
+
+```bash
+# ~/.voicemode/voicemode.env
+VOICEMODE_AUTO_FOCUS_PANE=true
+```
+
+Off by default. Silent no-op outside tmux.
+
 ### Detailed Documentation
 
 See [Call Routing](../../../docs/guides/agents/call-routing/) for comprehensive guides:
