@@ -23,13 +23,13 @@ Natural voice conversations with Claude Code using speech-to-text (STT) and text
 
 ## When to Use MCP vs CLI
 
-| Task | Use | Why |
-|------|-----|-----|
+| Task                | Use                      | Why                             |
+| ------------------- | ------------------------ | ------------------------------- |
 | Voice conversations | MCP `voicemode:converse` | Faster - server already running |
-| Service start/stop | MCP `voicemode:service` | Works within Claude Code |
-| Installation | CLI `voice-mode-install` | One-time setup |
-| Configuration | CLI `voicemode config` | Edit settings directly |
-| Diagnostics | CLI `voicemode diag` | Administrative tasks |
+| Service start/stop  | MCP `voicemode:service`  | Works within Claude Code        |
+| Installation        | CLI `voice-mode-install` | One-time setup                  |
+| Configuration       | CLI `voicemode config`   | Edit settings directly          |
+| Diagnostics         | CLI `voicemode diag`     | Administrative tasks            |
 
 ## Usage
 
@@ -46,11 +46,20 @@ voicemode:converse("Searching the codebase now...", wait_for_response=False)
 For most conversations, just pass your message - defaults handle everything else.
 Use default converse tool parameters unless there's a good reason not to. Timing parameters (`listen_duration_max`, `listen_duration_min`) use smart defaults with silence detection - don't override unless the user requests it or you see a clear need. Defaults are configurable by the user via `~/.voicemode/voicemode.env`.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `message` | required | Text to speak |
-| `wait_for_response` | true | Listen after speaking |
-| `voice` | auto | TTS voice |
+| Parameter           | Default  | Description                                                          |
+| ------------------- | -------- | -------------------------------------------------------------------- |
+| `message`           | required | Text to speak                                                        |
+| `wait_for_response` | true     | Listen after speaking                                                |
+| `voice`             | auto     | TTS voice -- **must be lowercase** (e.g. `af_river`, not `AF_River`) |
+
+**Voice name rule:** If you specify a `voice`, it MUST be lowercase with
+underscores. Kokoro rejects capitalized names like `AF_River` with a 400
+error. Valid examples: `af_river`, `af_sky`, `bm_daniel`, `bf_emma`.
+The prefix encodes language+gender: `af_` = American female, `am_` =
+American male, `bf_` = British female, `bm_` = British male.
+
+When in doubt, omit `voice` entirely -- auto-select picks a working
+default.
 
 For all parameters, see [Converse Parameters](../../docs/reference/converse-parameters.md).
 
@@ -83,12 +92,12 @@ Then report results in the next response:
 voicemode:converse("Here's what I found: ...", wait_for_response=True)
 ```
 
-| Scenario | Approach | Why |
-|----------|----------|-----|
-| Announce + do work | **Parallel** | No dependency between speech and action |
-| Announce + spawn agent | **Parallel** | Agent runs in background anyway |
-| Check result then report | **Sequential** | Need result before speaking |
-| Listen for response | **Sequential** | `wait_for_response=True` blocks until user speaks |
+| Scenario                 | Approach       | Why                                                 |
+| ------------------------ | -------------- | --------------------------------------------------- |
+| Announce + do work       | **Parallel**   | No dependency between speech and action             |
+| Announce + spawn agent   | **Parallel**   | Agent runs in background anyway                     |
+| Check result then report | **Sequential** | Need result before speaking                         |
+| Listen for response      | **Sequential** | `wait_for_response=True` blocks until user speaks   |
 
 **Key insight:** Wall-clock time = longest call, not the sum. All tool types (MCP, Bash, Agent, Read) can be mixed in one response.
 
@@ -99,10 +108,13 @@ When the user asks you to wait or give them time:
 **Short pauses (up to 60 seconds):** If the user says something ending with "wait" (e.g., "hang on", "give me a sec", "wait"), VoiceMode automatically pauses for 60 seconds then resumes listening. This is built-in.
 
 **Longer pauses (2+ minutes):** Use `bash sleep N` where N is seconds. For example, if the user says "give me 5 minutes":
+
 ```bash
 sleep 300  # Wait 5 minutes
 ```
+
 Then call converse again when the wait is over:
+
 ```python
 voicemode:converse("Five minutes is up. Ready when you are.")
 ```
@@ -124,18 +136,21 @@ fi
 ```
 
 **Requirements:**
+
 - Audio saving must be enabled via one of:
   - `VOICEMODE_SAVE_AUDIO=true` in `~/.voicemode/voicemode.env`
   - `VOICEMODE_SAVE_ALL=true` (saves all audio and transcriptions)
   - `VOICEMODE_DEBUG=true` (enables debug mode with audio saving)
 
 **How it works:**
+
 - VoiceMode saves all STT recordings to `~/.voicemode/audio/` with timestamps
 - The `latest-STT.wav` symlink always points to the most recent recording
 - If the STT API fails, the recording is still saved for manual recovery
 - This lets you recover the user's speech without asking them to repeat
 
 **When to use:**
+
 - STT service timeout or connection failure
 - Transcription returned empty but user definitely spoke
 - Need to verify what was actually said vs. what was transcribed
@@ -175,10 +190,10 @@ voicemode:service("kokoro", "start")
 voicemode:service("whisper", "logs", lines=50)
 ```
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| whisper | 2022 | Speech-to-text |
-| kokoro | 8880 | Text-to-speech |
+| Service   | Port | Purpose         |
+| --------- | ---- | --------------- |
+| whisper   | 2022 | Speech-to-text  |
+| kokoro    | 8880 | Text-to-speech  |
 | voicemode | 8765 | HTTP/SSE server |
 
 **Actions:** status, start, stop, restart, logs, enable, disable
@@ -255,6 +270,7 @@ voicemode dj mfp play 49            # Music For Programming
 Transfer voice conversations between Claude Code agents for multi-agent workflows.
 
 **Use cases:**
+
 - Personal assistant routing to project-specific foremen
 - Foremen delegating to workers for focused tasks
 - Returning control when work is complete
@@ -272,6 +288,7 @@ spawn_agent(path="/path", prompt="Load voicemode skill, use converse to greet us
 ```
 
 **Hand-back:**
+
 ```python
 voicemode:converse("Transferring you back to the assistant.", wait_for_response=False)
 # Stop conversing, exit or go idle
@@ -303,6 +320,7 @@ Off by default. Silent no-op outside tmux.
 ### Detailed Documentation
 
 See [Call Routing](../../../docs/guides/agents/call-routing/) for comprehensive guides:
+
 - [Handoff Pattern](../../../docs/guides/agents/call-routing/handoff.md) - Complete hand-off and hand-back process
 - [Voice Proxy](../../../docs/guides/agents/call-routing/proxy.md) - Relay pattern for agents without voice
 - [Call Routing Overview](../../../docs/guides/agents/call-routing/README.md) - All routing patterns
@@ -336,6 +354,7 @@ tailscale serve reset
 ### Endpoints
 
 After setup, endpoints are available at:
+
 - **TTS:** `https://<hostname>.<tailnet>.ts.net/v1/audio/speech`
 - **STT:** `https://<hostname>.<tailnet>.ts.net/v1/audio/transcriptions`
 
@@ -349,6 +368,7 @@ After setup, endpoints are available at:
 ### Use with VoiceMode Connect
 
 In the VoiceMode Connect web app settings (app.voicemode.dev/settings), set:
+
 - **TTS Endpoint**: `https://<hostname>.<tailnet>.ts.net`
 - **STT Endpoint**: `https://<hostname>.<tailnet>.ts.net`
 
@@ -372,19 +392,19 @@ When local voice isn't an option -- no mic/speaker on the machine, can't install
 
 ## Documentation Index
 
-| Topic | Link |
-|-------|------|
+| Topic               | Link                                                          |
+| ------------------- | ------------------------------------------------------------- |
 | Converse Parameters | [All Parameters](../../docs/reference/converse-parameters.md) |
-| Installation | [Getting Started](../../docs/tutorials/getting-started.md) |
-| Configuration | [Configuration Guide](../../docs/guides/configuration.md) |
-| Claude Code Plugin | [Plugin Guide](../../docs/guides/claude-code-plugin.md) |
-| Whisper STT | [Whisper Setup](../../docs/guides/whisper-setup.md) |
-| Kokoro TTS | [Kokoro Setup](../../docs/guides/kokoro-setup.md) |
-| Pronunciation | [Pronunciation Guide](../../docs/guides/pronunciation.md) |
-| Troubleshooting | [Troubleshooting](../../docs/troubleshooting/index.md) |
-| Soundfonts | [Soundfonts Guide](../../docs/guides/soundfonts.md) |
-| CLI Reference | [CLI Docs](../../docs/reference/cli.md) |
-| DJ Mode | [Background Music](docs/dj-mode/README.md) |
+| Installation        | [Getting Started](../../docs/tutorials/getting-started.md)    |
+| Configuration       | [Configuration Guide](../../docs/guides/configuration.md)     |
+| Claude Code Plugin  | [Plugin Guide](../../docs/guides/claude-code-plugin.md)       |
+| Whisper STT         | [Whisper Setup](../../docs/guides/whisper-setup.md)           |
+| Kokoro TTS          | [Kokoro Setup](../../docs/guides/kokoro-setup.md)             |
+| Pronunciation       | [Pronunciation Guide](../../docs/guides/pronunciation.md)     |
+| Troubleshooting     | [Troubleshooting](../../docs/troubleshooting/index.md)        |
+| Soundfonts          | [Soundfonts Guide](../../docs/guides/soundfonts.md)           |
+| CLI Reference       | [CLI Docs](../../docs/reference/cli.md)                       |
+| DJ Mode             | [Background Music](docs/dj-mode/README.md)                    |
 
 ## Related Skills
 
