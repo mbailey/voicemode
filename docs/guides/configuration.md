@@ -169,6 +169,32 @@ VOICEMODE_MIN_RECORDING_TIME=0.5    # Minimum recording
 VOICEMODE_MAX_RECORDING_TIME=120.0  # Maximum recording
 ```
 
+### Multi-Agent Voice
+
+When running multiple voice agents (e.g. separate Claude Code sessions in
+different tmux panes), the "conch" mechanism serialises speech so only one
+agent talks at a time, and `VOICEMODE_AUTO_FOCUS_PANE` can visually follow
+the speaker.
+
+```bash
+# Auto-focus tmux pane when an agent starts speaking (default: false)
+# Switches tmux focus to the speaking agent's pane *after* conch acquisition,
+# so agents waiting on the conch never steal focus. Respects the focus-hold
+# sentinel written by show-me (~/.voicemode/focus-hold) so a shown file is
+# not yanked away. Silent no-op outside tmux.
+VOICEMODE_AUTO_FOCUS_PANE=false
+
+# Override the default focus-hold duration if the sentinel file has no
+# explicit value (default: 30 seconds)
+VOICEMODE_FOCUS_HOLD_SECONDS=30
+
+# Conch coordination (serialises speech across agents)
+VOICEMODE_CONCH_ENABLED=true
+VOICEMODE_CONCH_TIMEOUT=60           # Seconds to wait for the conch
+VOICEMODE_CONCH_CHECK_INTERVAL=0.5   # Polling interval
+VOICEMODE_CONCH_LOCK_EXPIRY=300      # Stale-lock expiry (0 disables)
+```
+
 ### LiveKit Configuration
 
 ```bash
