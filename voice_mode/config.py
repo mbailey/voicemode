@@ -321,6 +321,38 @@ TTS \\bAPI\\b A P I # API as individual letters
 # VOICEMODE_THINKING_ANNOUNCE_VOICE=true
 
 #############
+# Hotwords Mode (Experimental)
+#############
+
+# Turn the listen-side of a converse() turn into an idle "wake-word"
+# loop. After the end-of-speak chime, VoiceMode silently waits for one
+# of the configured hotwords before capturing the user's message.
+# After VOICEMODE_HOTWORDS_TIMEOUT_SECONDS of no recognized hotword,
+# VoiceMode speaks a terse summary of the agent's prompt plus
+# "your session timed out" and returns a timeout marker.
+# Local STT (Whisper) is strongly recommended when enabling this.
+# VOICEMODE_HOTWORDS_ENABLED=false
+
+# Phrase that starts capturing the actual message (word-aligned match).
+# VOICEMODE_HOTWORD_BEGIN_DICTATION=flip
+
+# Phrase that ends capture when it appears in the dictation transcript
+# (silence detection still applies; this is an explicit override).
+# VOICEMODE_HOTWORD_END_DICTATION=flop
+
+# Phrase that signals the agent to terminate the chat session.
+# VOICEMODE_HOTWORD_CLOSE_SESSION=close session
+
+# Max idle seconds waiting for a hotword before VoiceMode times out.
+# VOICEMODE_HOTWORDS_TIMEOUT_SECONDS=300
+
+# Max seconds per utterance in the idle hotword-detection loop.
+# VOICEMODE_HOTWORDS_LISTEN_WINDOW_SECONDS=10
+
+# Hard ceiling on dictation capture length (VAD still applies).
+# VOICEMODE_HOTWORDS_DICTATION_MAX_SECONDS=180
+
+#############
 # Service Management
 #############
 
@@ -1354,3 +1386,57 @@ THINKING_STYLE = os.getenv("VOICEMODE_THINKING_STYLE", "sequential")
 
 # Whether to announce which voice is speaking
 THINKING_ANNOUNCE_VOICE = env_bool("VOICEMODE_THINKING_ANNOUNCE_VOICE", True)
+
+# ==================== HOTWORDS MODE CONFIGURATION ====================
+# Hotwords mode turns the listen-side of a converse() turn into an idle
+# "wake-word" loop: instead of immediately recording the user, VoiceMode
+# waits (after the end-of-speak chime) for the user to say one of three
+# configurable hotwords:
+#   - begin-dictation hotword:  start full utterance capture
+#   - close-session hotword:    signal the agent to terminate the chat
+#   - end-dictation hotword:    explicit end-of-utterance marker (stripped
+#                               from the returned transcript); optional
+# After HOTWORDS_TIMEOUT_SECONDS of no recognized hotword, VoiceMode
+# speaks a terse summary of the agent's own prompt plus
+# "your session timed out" and returns a timeout marker.
+#
+# Disabled by default. Local STT (Whisper) is strongly recommended when
+# enabled since the idle loop transcribes many short utterances.
+
+HOTWORDS_ENABLED = env_bool("VOICEMODE_HOTWORDS_ENABLED", False)
+
+# Phrase that begins capturing the user's actual message (lower-cased,
+# word-aligned fuzzy match against the STT transcript).
+HOTWORD_BEGIN_DICTATION = os.getenv(
+    "VOICEMODE_HOTWORD_BEGIN_DICTATION", "flip"
+)
+
+# Phrase that ends capture when it appears in the dictation transcript.
+# Silence detection still applies; this is an explicit override marker.
+HOTWORD_END_DICTATION = os.getenv(
+    "VOICEMODE_HOTWORD_END_DICTATION", "flop"
+)
+
+# Phrase that signals the agent to terminate the whole chat session.
+HOTWORD_CLOSE_SESSION = os.getenv(
+    "VOICEMODE_HOTWORD_CLOSE_SESSION", "close session"
+)
+
+# Maximum idle time (seconds) waiting for a hotword before VoiceMode
+# times the turn out and returns a timeout marker to the agent.
+HOTWORDS_TIMEOUT_SECONDS = float(
+    os.getenv("VOICEMODE_HOTWORDS_TIMEOUT_SECONDS", "300")
+)
+
+# Max seconds to listen for a single utterance during the idle
+# hotword-detection loop (short, since we only expect 1-3 word phrases).
+HOTWORDS_LISTEN_WINDOW_SECONDS = float(
+    os.getenv("VOICEMODE_HOTWORDS_LISTEN_WINDOW_SECONDS", "10")
+)
+
+# Max seconds to record the actual dictation utterance once the
+# begin-dictation hotword fires. Standard VAD silence detection still
+# applies; this is just the hard ceiling.
+HOTWORDS_DICTATION_MAX_SECONDS = float(
+    os.getenv("VOICEMODE_HOTWORDS_DICTATION_MAX_SECONDS", "180")
+)

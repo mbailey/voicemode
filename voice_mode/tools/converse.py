@@ -64,7 +64,14 @@ from voice_mode.config import (
     CONCH_ENABLED,
     CONCH_TIMEOUT,
     CONCH_CHECK_INTERVAL,
-    AUTO_FOCUS_PANE
+    AUTO_FOCUS_PANE,
+    HOTWORDS_ENABLED,
+    HOTWORD_BEGIN_DICTATION,
+    HOTWORD_END_DICTATION,
+    HOTWORD_CLOSE_SESSION,
+    HOTWORDS_TIMEOUT_SECONDS,
+    HOTWORDS_LISTEN_WINDOW_SECONDS,
+    HOTWORDS_DICTATION_MAX_SECONDS,
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -1169,6 +1176,343 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         # For fallback, assume speech is present since we can't detect
         return (record_audio(max_duration), True)
 
+# ---------------------------------------------------------------------------
+# Hotwords mode helpers
+# ---------------------------------------------------------------------------
+
+_HOTWORD_NORMALIZE_RE = None  # Lazy compile
+
+
+def _normalize_for_hotword(text: Optional[str]) -> str:
+    """Lower-case and strip non-alphanumeric chars, collapse whitespace.
+
+    This is used for fuzzy matching hotwords against STT output. STT
+    transcripts often include punctuation, casing and trailing silence
+    markers; normalization keeps the match resilient to those.
+    """
+    import re
+    global _HOTWORD_NORMALIZE_RE
+    if _HOTWORD_NORMALIZE_RE is None:
+        _HOTWORD_NORMALIZE_RE = re.compile(r"[^a-z0-9\s]")
+    if not text:
+        return ""
+    s = _HOTWORD_NORMALIZE_RE.sub(" ", text.lower())
+    return " ".join(s.split())
+
+
+# Common Whisper mis-hearings. Each entry maps a normalized word in a
+# hotword to a set of accepted alternative transcriptions. Keeps the
+# matcher resilient to short-utterance STT errors (e.g. "flip" being
+# heard as "flop" is intentionally NOT aliased - they're distinct).
+_HOTWORD_WORD_ALIASES = {
+    "flip": {"flipp", "clip", "flipped"},
+    "flop": {"flopp", "flopped", "flap"},
+    "close": {"clothes", "closed"},
+    "session": {"sessions"},
+}
+
+
+def _word_matches_with_aliases(spoken: str, target: str) -> bool:
+    """Return True if `spoken` is either exactly `target` or a known
+    Whisper-mis-hearing alias of it."""
+    if spoken == target:
+        return True
+    return spoken in _HOTWORD_WORD_ALIASES.get(target, set())
+
+
+def _matches_hotword(transcript: Optional[str], hotword: str) -> bool:
+    """Return True if the `hotword` phrase appears in the normalized
+    transcript. Short single-word hotwords ('flip', 'flop') match any
+    standalone occurrence (prevents 'flipper' from triggering 'flip'
+    via substring but still catches 'flip.', ' flip ', etc.). Longer
+    multi-word hotwords fall back to a word-aligned match that tolerates
+    known Whisper mis-hearings via `_HOTWORD_WORD_ALIASES`."""
+    if not hotword:
+        return False
+    norm_t = _normalize_for_hotword(transcript)
+    norm_h = _normalize_for_hotword(hotword)
+    if not norm_t or not norm_h:
+        return False
+
+    t_words = norm_t.split()
+    h_words = norm_h.split()
+    if not h_words:
+        return False
+
+    # Sliding-window match with alias tolerance.
+    for i in range(len(t_words) - len(h_words) + 1):
+        if all(
+            _word_matches_with_aliases(t_words[i + j], h_words[j])
+            for j in range(len(h_words))
+        ):
+            return True
+    return False
+
+
+def _strip_hotword(transcript: str, hotword: str) -> str:
+    """Remove occurrences of `hotword` (any casing/punctuation) from
+    the transcript. Preserves surrounding punctuation & casing of the
+    non-matching parts via a normalized re pattern."""
+    import re
+    if not transcript or not hotword:
+        return transcript
+    # Build a pattern that matches the hotword ignoring casing and any
+    # run of non-alphanumeric separators between words.
+    parts = [re.escape(w) for w in hotword.split() if w]
+    if not parts:
+        return transcript
+    pattern = r"[^a-zA-Z0-9]*".join(parts)
+    cleaned = re.sub(pattern, " ", transcript, flags=re.IGNORECASE)
+    # Tidy up double spaces / stray punctuation runs
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-;:!?")
+    return cleaned
+
+
+def _terse_summary(message: str, max_words: int = 12) -> str:
+    """Produce a very short summary of the agent's own message for the
+    timeout announcement. Uses first sentence truncated to max_words."""
+    if not message:
+        return "Voice turn"
+    # First sentence
+    import re
+    sentence = re.split(r"(?<=[.!?])\s+", message.strip(), maxsplit=1)[0]
+    words = sentence.split()
+    if len(words) > max_words:
+        sentence = " ".join(words[:max_words]) + "..."
+    # Trim trailing punctuation for clean prepending to ": your session timed out"
+    return sentence.rstrip(" .!?,;:")
+
+
+async def _hotword_listen_loop(
+    *,
+    agent_message: str,
+    openai_clients,
+    chime_enabled,
+    chime_leading_silence: Optional[float],
+    chime_trailing_silence: Optional[float],
+    vad_aggressiveness: Optional[int],
+    transport: str,
+    event_logger,
+    timings: Dict,
+) -> Dict:
+    """Idle hotword-detection loop.
+
+    Behaviour:
+      - Waits silently (VAD) for the user to speak.
+      - Transcribes each utterance with local STT.
+      - If the utterance contains the close-session hotword, returns
+        ``{"action": "close_session"}``.
+      - If the utterance contains the begin-dictation hotword, plays a
+        second "listening" chime, records the user's actual message
+        with standard silence-detection, transcribes it, strips any
+        end-dictation hotword, and returns
+        ``{"action": "dictation", "text": "..."}``.
+      - If neither hotword appears, continues the idle loop.
+      - After HOTWORDS_TIMEOUT_SECONDS with no recognized hotword,
+        speaks "<terse summary>: your session timed out" and returns
+        ``{"action": "timeout", "summary": "..."}``.
+    """
+    loop = asyncio.get_event_loop()
+    start = time.time()
+    deadline = start + HOTWORDS_TIMEOUT_SECONDS
+    # Min duration for idle utterances: zero, so short hotwords like
+    # "close session" (~0.8s) aren't rejected.
+    idle_min_duration = 0.0
+    # Whisper "silence-hallucinations" that should be treated as noise
+    # rather than real utterances. Normalized lower-case.
+    _SILENCE_HALLUCINATIONS = frozenset({
+        "thank you", "thanks", "you", ".", "bye", "okay", "ok",
+        "uh", "um", "hmm", "mm", "mhm",
+    })
+
+    # Use WARNING so these surface in Cursor's MCP log (it drops INFO).
+    logger.warning(
+        "🔊 Hotwords idle loop active "
+        f"(begin='{HOTWORD_BEGIN_DICTATION}', "
+        f"end='{HOTWORD_END_DICTATION}', "
+        f"close='{HOTWORD_CLOSE_SESSION}', "
+        f"timeout={HOTWORDS_TIMEOUT_SECONDS}s)"
+    )
+    if event_logger:
+        event_logger.log_event("HOTWORDS_IDLE_START", {
+            "timeout_seconds": HOTWORDS_TIMEOUT_SECONDS,
+        })
+
+    hotword_record_total = 0.0
+    hotword_stt_total = 0.0
+
+    while True:
+        now = time.time()
+        remaining = deadline - now
+        if remaining <= 0:
+            summary = _terse_summary(agent_message)
+            logger.info(f"⏰ Hotwords idle timeout after {HOTWORDS_TIMEOUT_SECONDS}s")
+            if event_logger:
+                event_logger.log_event("HOTWORDS_TIMEOUT", {
+                    "waited_seconds": time.time() - start,
+                    "summary": summary,
+                })
+            # Speak the timeout message so the user hears it even
+            # though they've walked away.
+            try:
+                with DJDucker():
+                    await text_to_speech_with_failover(
+                        message=f"{summary}: your session timed out.",
+                        voice=None,
+                        model=None,
+                        instructions=None,
+                        audio_format=None,
+                        initial_provider=None,
+                        speed=None,
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to speak hotwords timeout notice: {e}")
+            timings['hotword_record'] = hotword_record_total
+            timings['hotword_stt'] = hotword_stt_total
+            return {"action": "timeout", "summary": summary}
+
+        # Cap the single-utterance window by whichever is smaller:
+        # the configured window or what's left of the overall timeout.
+        window = min(HOTWORDS_LISTEN_WINDOW_SECONDS, max(remaining, 1.0))
+
+        rec_start = time.perf_counter()
+        audio_data, speech_detected = await loop.run_in_executor(
+            None,
+            record_audio_with_silence_detection,
+            window,
+            False,          # disable_silence_detection
+            idle_min_duration,
+            vad_aggressiveness,
+        )
+        hotword_record_total += time.perf_counter() - rec_start
+
+        if not speech_detected or len(audio_data) == 0:
+            # No speech in this window - go around again (until deadline).
+            continue
+
+        stt_start = time.perf_counter()
+        stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+        hotword_stt_total += time.perf_counter() - stt_start
+
+        transcript = None
+        if isinstance(stt_result, dict):
+            err_type = stt_result.get("error_type")
+            if err_type == "connection_failed":
+                # Don't mask STT failures; break out with timeout behaviour.
+                logger.error(
+                    "STT connection failed during hotword loop; aborting "
+                    "hotwords mode for this turn"
+                )
+                timings['hotword_record'] = hotword_record_total
+                timings['hotword_stt'] = hotword_stt_total
+                return {"action": "stt_failed", "error": stt_result}
+            if err_type != "no_speech":
+                transcript = stt_result.get("text")
+
+        # Log at WARNING so operators can see what Whisper is hearing
+        # during hotword matching - INFO is filtered in Cursor's MCP log.
+        logger.warning(f"🗝  Hotword utterance: {transcript!r} (speech={speech_detected})")
+
+        # Drop obvious Whisper silence-hallucinations so they don't
+        # contaminate the loop (they'd never match hotwords anyway but
+        # make the log noisy).
+        if transcript:
+            norm = _normalize_for_hotword(transcript)
+            if norm in _SILENCE_HALLUCINATIONS:
+                logger.warning(f"   (dropped as silence-hallucination)")
+                transcript = None
+
+        if not transcript:
+            continue
+
+        if _matches_hotword(transcript, HOTWORD_CLOSE_SESSION):
+            logger.info("🛑 Close-session hotword matched")
+            if event_logger:
+                event_logger.log_event("HOTWORDS_CLOSE_SESSION", {"transcript": transcript})
+            timings['hotword_record'] = hotword_record_total
+            timings['hotword_stt'] = hotword_stt_total
+            return {"action": "close_session", "transcript": transcript}
+
+        if _matches_hotword(transcript, HOTWORD_BEGIN_DICTATION):
+            logger.info("🎙  Begin-dictation hotword matched; capturing message")
+            if event_logger:
+                event_logger.log_event("HOTWORDS_BEGIN_DICTATION", {"transcript": transcript})
+
+            # Second listening chime so the user knows we're recording
+            # their real message now.
+            await play_audio_feedback(
+                "listening",
+                openai_clients,
+                chime_enabled,
+                "whisper",
+                chime_leading_silence=chime_leading_silence,
+                chime_trailing_silence=chime_trailing_silence,
+            )
+
+            # If the user said their whole message on the same breath as
+            # the hotword ("begin dictation, how do I reboot the server"),
+            # strip the hotword prefix and use what's left.
+            inline_text = _strip_hotword(transcript, HOTWORD_BEGIN_DICTATION)
+            inline_words = inline_text.split() if inline_text else []
+
+            dict_rec_start = time.perf_counter()
+            dict_audio, dict_speech = await loop.run_in_executor(
+                None,
+                record_audio_with_silence_detection,
+                HOTWORDS_DICTATION_MAX_SECONDS,
+                False,
+                2.0,  # sane min-duration for real messages
+                vad_aggressiveness,
+            )
+            hotword_record_total += time.perf_counter() - dict_rec_start
+
+            await play_audio_feedback(
+                "finished",
+                openai_clients,
+                chime_enabled,
+                "whisper",
+                chime_leading_silence=chime_leading_silence,
+                chime_trailing_silence=chime_trailing_silence,
+            )
+
+            dict_text = ""
+            if dict_speech and len(dict_audio) > 0:
+                dict_stt_start = time.perf_counter()
+                dict_stt = await speech_to_text(dict_audio, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                hotword_stt_total += time.perf_counter() - dict_stt_start
+                if isinstance(dict_stt, dict) and dict_stt.get("error_type") != "connection_failed":
+                    dict_text = dict_stt.get("text") or ""
+
+            # Combine inline-with-hotword speech + post-hotword speech
+            if inline_words and dict_text:
+                full_text = f"{inline_text} {dict_text}".strip()
+            else:
+                full_text = (dict_text or inline_text or "").strip()
+
+            # Strip end-dictation hotword if present
+            full_text = _strip_hotword(full_text, HOTWORD_END_DICTATION)
+
+            # Also double-check the close-session hotword didn't land
+            # inside the dictation (escape hatch).
+            if _matches_hotword(full_text, HOTWORD_CLOSE_SESSION):
+                logger.info("🛑 Close-session hotword matched inside dictation")
+                timings['hotword_record'] = hotword_record_total
+                timings['hotword_stt'] = hotword_stt_total
+                return {"action": "close_session", "transcript": full_text}
+
+            if event_logger:
+                event_logger.log_event("HOTWORDS_END_DICTATION", {
+                    "final_text_len": len(full_text),
+                })
+
+            timings['hotword_record'] = hotword_record_total
+            timings['hotword_stt'] = hotword_stt_total
+            return {"action": "dictation", "text": full_text}
+
+        # Not a recognized hotword - loop back and keep waiting.
+        logger.debug("Utterance did not match any hotword; continuing idle loop")
+
+
 @mcp.tool()
 async def converse(
     message: str,
@@ -1189,7 +1533,8 @@ async def converse(
     chime_leading_silence: Optional[float] = None,
     chime_trailing_silence: Optional[float] = None,
     metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
-    wait_for_conch: Union[bool, str] = False
+    wait_for_conch: Union[bool, str] = False,
+    hotwords_mode: Optional[Union[bool, str]] = None,
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -1233,6 +1578,22 @@ KEY PARAMETERS:
 • wait_for_conch (bool, default: false): Multi-agent coordination
   - false: If another agent is speaking, return status immediately
   - true: Wait until the other agent finishes, then speak
+• hotwords_mode (bool, default: follows VOICEMODE_HOTWORDS_ENABLED env):
+  Enable the idle "wake-word" listen loop for this turn. After the
+  end-of-speak chime, VoiceMode waits silently until the user speaks
+  one of three configurable hotwords:
+    - begin-dictation hotword (default "flip"): start capturing the
+      user's real message (can be said in the same breath, e.g.
+      "flip, what time is it")
+    - close-session hotword (default "close session"): the user is
+      done - VoiceMode returns a SESSION_CLOSED_BY_USER marker
+    - end-dictation hotword (default "flop"): optional explicit
+      end-of-utterance marker; stripped from the transcript
+  After VOICEMODE_HOTWORDS_TIMEOUT_SECONDS of no recognized hotword,
+  VoiceMode speaks "<terse summary>: your session timed out" and
+  returns a SESSION_TIMED_OUT marker.
+  IMPORTANT: If the return value starts with SESSION_CLOSED_BY_USER
+  or SESSION_TIMED_OUT, do NOT call converse again this session.
 
 TIMING PARAMETERS (usually leave at defaults):
   Silence detection handles most cases automatically. Only override these if
@@ -1261,6 +1622,14 @@ consult the MCP resources listed above.
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
     if isinstance(wait_for_conch, str):
         wait_for_conch = wait_for_conch.lower() in ('true', '1', 'yes', 'on')
+
+    # Resolve hotwords_mode: explicit param overrides global config.
+    if hotwords_mode is None:
+        hotwords_mode_active = HOTWORDS_ENABLED
+    elif isinstance(hotwords_mode, str):
+        hotwords_mode_active = hotwords_mode.lower() in ('true', '1', 'yes', 'on')
+    else:
+        hotwords_mode_active = bool(hotwords_mode)
 
     # Convert vad_aggressiveness to integer if provided as string
     if vad_aggressiveness is not None and isinstance(vad_aggressiveness, str):
@@ -1597,51 +1966,165 @@ consult the MCP resources listed above.
                     chime_leading_silence=chime_leading_silence,
                     chime_trailing_silence=chime_trailing_silence
                 )
-                
-                # Record response
-                logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
 
-                # Log recording start
-                if event_logger:
-                    event_logger.log_event(event_logger.RECORDING_START)
+                # ---- HOTWORDS MODE BRANCH ----
+                # When hotwords are enabled, replace the single-shot
+                # record-and-transcribe flow with an idle hotword loop.
+                # The loop may:
+                #   - capture a dictated message and fall through below
+                #     (we set up response_text / stt_provider and continue
+                #     the normal result-formatting path),
+                #   - signal session close or idle timeout (return early
+                #     with a marker string the agent should heed),
+                #   - or fail on STT - we surface the error immediately.
+                if hotwords_mode_active:
+                    vad_agg_int = vad_aggressiveness if isinstance(vad_aggressiveness, int) else None
+                    hw_result = await _hotword_listen_loop(
+                        agent_message=message,
+                        openai_clients=openai_clients,
+                        chime_enabled=chime_enabled,
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence,
+                        vad_aggressiveness=vad_agg_int,
+                        transport=transport,
+                        event_logger=event_logger,
+                        timings=timings,
+                    )
 
-                record_start = time.perf_counter()
-                logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                    None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                )
-                timings['record'] = time.perf_counter() - record_start
-                
-                # Log recording end
-                if event_logger:
-                    event_logger.log_event(event_logger.RECORDING_END, {
-                        "duration": timings['record'],
-                        "samples": len(audio_data)
-                    })
-                
-                # Play "finished" feedback sound
-                await play_audio_feedback(
-                    "finished",
-                    openai_clients,
-                    chime_enabled,
-                    "whisper",
-                    chime_leading_silence=chime_leading_silence,
-                    chime_trailing_silence=chime_trailing_silence
-                )
-                
-                # Mark the end of recording - this is when user expects response to start
-                user_done_time = time.perf_counter()
-                logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
-                
-                if len(audio_data) == 0:
-                    result = "Error: Could not record audio"
-                    return result
-                
-                # Track STT-specific metrics (defined here to be in scope for event logging later)
-                stt_metrics = None
+                    action = hw_result.get("action")
 
-                # Check if no speech was detected
-                if not speech_detected:
+                    if action == "close_session":
+                        track_voice_interaction(
+                            message=message,
+                            response="[hotword: close session]",
+                            timing_str=None,
+                            transport=transport,
+                            voice_provider=tts_provider,
+                            voice_name=voice,
+                            model=tts_model,
+                            success=True,
+                            error_message=None,
+                        )
+                        if event_logger and session_id:
+                            event_logger.end_session()
+                        return (
+                            "SESSION_CLOSED_BY_USER: The user spoke the "
+                            f"close-session hotword ('{HOTWORD_CLOSE_SESSION}'). "
+                            "Do NOT call the converse tool again in this "
+                            "session - end the conversation now with a brief "
+                            "text acknowledgement only."
+                        )
+
+                    if action == "timeout":
+                        summary = hw_result.get("summary", "Voice turn")
+                        track_voice_interaction(
+                            message=message,
+                            response="[hotword: timeout]",
+                            timing_str=None,
+                            transport=transport,
+                            voice_provider=tts_provider,
+                            voice_name=voice,
+                            model=tts_model,
+                            success=True,
+                            error_message="Hotwords idle timeout",
+                        )
+                        if event_logger and session_id:
+                            event_logger.end_session()
+                        return (
+                            f"SESSION_TIMED_OUT: No hotword heard in "
+                            f"{int(HOTWORDS_TIMEOUT_SECONDS)}s. Spoke: "
+                            f"'{summary}: your session timed out.' "
+                            "Do NOT call the converse tool again in this "
+                            "session; wait for the user to start a new one."
+                        )
+
+                    if action == "stt_failed":
+                        err = hw_result.get("error", {})
+                        if event_logger and session_id:
+                            event_logger.end_session()
+                        error_lines = ["STT service connection failed during hotwords idle loop:"]
+                        for attempt in err.get("attempted_endpoints", []):
+                            error_lines.append(f"  - {attempt.get('endpoint')}: {attempt.get('error')}")
+                        return "\n".join(error_lines)
+
+                    # action == "dictation" - fall through with the captured text.
+                    response_text = hw_result.get("text") or ""
+                    stt_provider = "whisper"  # local STT when hotwords active
+                    timings['record'] = timings.get('hotword_record', 0.0)
+                    timings['stt'] = timings.get('hotword_stt', 0.0)
+                    # Fake audio_data / speech_detected so the downstream
+                    # logging paths that reference them don't KeyError.
+                    audio_data = np.array([], dtype=np.int16)
+                    speech_detected = bool(response_text)
+                    stt_metrics = None
+
+                    # Skip the normal record/STT block - jump to logging.
+                    # We accomplish that via a flag checked in the original
+                    # record path; easier: set listen_duration_max=0 so the
+                    # record call below is a no-op... but cleaner: we
+                    # reproduce the tail end inline. To keep the diff
+                    # minimal we instead branch around it with the flag.
+
+                    _hotwords_skip_recording = True
+                else:
+                    _hotwords_skip_recording = False
+
+                if _hotwords_skip_recording:
+                    # In hotwords mode the record+STT already happened
+                    # inside `_hotword_listen_loop` and `response_text`
+                    # is set. We still need a few locals the downstream
+                    # logging and repeat/wait phrase handling reference.
+                    user_done_time = time.perf_counter()
+                    stt_metrics = None
+                else:
+                    # Record response
+                    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+
+                    # Log recording start
+                    if event_logger:
+                        event_logger.log_event(event_logger.RECORDING_START)
+
+                    record_start = time.perf_counter()
+                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
+                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                    )
+                    timings['record'] = time.perf_counter() - record_start
+
+                    # Log recording end
+                    if event_logger:
+                        event_logger.log_event(event_logger.RECORDING_END, {
+                            "duration": timings['record'],
+                            "samples": len(audio_data)
+                        })
+
+                    # Play "finished" feedback sound
+                    await play_audio_feedback(
+                        "finished",
+                        openai_clients,
+                        chime_enabled,
+                        "whisper",
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence
+                    )
+
+                    # Mark the end of recording - this is when user expects response to start
+                    user_done_time = time.perf_counter()
+                    logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
+
+                    if len(audio_data) == 0:
+                        result = "Error: Could not record audio"
+                        return result
+
+                    # Track STT-specific metrics (defined here to be in scope for event logging later)
+                    stt_metrics = None
+
+                # Check if no speech was detected (shared path)
+                if _hotwords_skip_recording:
+                    # response_text was already set above from hotword dictation;
+                    # nothing to transcribe here.
+                    pass
+                elif not speech_detected:
                     logger.info("No speech detected during recording - skipping STT processing")
                     response_text = None
                     timings['stt'] = 0.0
