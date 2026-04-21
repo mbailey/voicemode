@@ -131,16 +131,18 @@ def _is_focus_held() -> bool:
 
 
 def focus_tmux_pane() -> None:
-    """Focus the current tmux pane, its window, and optionally switch a client.
+    """Make the agent's tmux window visible, and optionally switch a client.
 
     Steps:
     1. Check focus-hold sentinel — skip if another tool recently took focus
-    2. select-pane + select-window: activate the pane within its session
+    2. select-window: make the agent's window current (without changing active pane)
     3. Check if any client is already showing this session — if so, stop
     4. If no client is showing the session, switch the focused client to it
 
-    This avoids "stealing" the user's focused terminal when the agent's
-    session is already visible in another terminal window.
+    Deliberately does NOT call select-pane — this avoids stealing focus from
+    whichever pane the user is currently working in.  The window becomes
+    visible so the user can see the agent is speaking, but their cursor stays
+    where it was.
 
     Silent no-op if not in tmux, TMUX_PANE is unset, or tmux is not found.
     """
@@ -155,8 +157,9 @@ def focus_tmux_pane() -> None:
         return
 
     try:
-        # Select the pane and its window within the session
-        subprocess.run(["tmux", "select-pane", "-t", tmux_pane], capture_output=True)
+        # Select the window containing our pane (without changing active pane).
+        # This makes the window visible but doesn't steal focus from whichever
+        # pane the user is currently looking at.
         subprocess.run(["tmux", "select-window", "-t", tmux_pane], capture_output=True)
 
         # Find which session owns this pane
