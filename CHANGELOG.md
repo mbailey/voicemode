@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.6.1] - 2026-04-21
+
+### Fixed
+
+- **Tmux auto-focus no longer steals pane focus** -- When `VOICEMODE_AUTO_FOCUS_PANE` is enabled, converse now only raises the agent's tmux window without changing which pane has focus. Previously, `select-pane` was called alongside `select-window`, which would yank the cursor away from whatever pane the user was working in — especially disruptive in multi-pane layouts.
+
 ## [8.6.0] - 2026-04-16
 
 ### Added
