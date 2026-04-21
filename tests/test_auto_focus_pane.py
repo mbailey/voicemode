@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 def _mk_run(display_session="worker", clients_on_session="", all_clients=""):
     """Build a subprocess.run side_effect that returns scripted results by argv.
 
-    - select-pane / select-window: rc=0, no stdout needed
+    - select-window: rc=0, no stdout needed
     - display-message: returns the session name
     - list-clients -t <session>: stdout lists clients already on that session
     - list-clients -F ...: stdout lists all clients with flags
@@ -53,19 +53,21 @@ class TestIsTmux:
 class TestFocusTmuxPane:
     """Test the focus_tmux_pane() function."""
 
-    def test_selects_pane_and_window(self):
-        """select-pane and select-window always run when TMUX_PANE is set."""
+    def test_selects_window_without_pane(self):
+        """select-window runs but select-pane does NOT (avoids stealing focus)."""
         with patch.dict("os.environ", {"TMUX_PANE": "%5"}, clear=False):
             with patch("subprocess.run", side_effect=_mk_run(clients_on_session="/dev/ttys001\n")) as mock_run:
                 from voice_mode.tools.converse import focus_tmux_pane
                 focus_tmux_pane()
 
                 mock_run.assert_any_call(
-                    ["tmux", "select-pane", "-t", "%5"], capture_output=True
-                )
-                mock_run.assert_any_call(
                     ["tmux", "select-window", "-t", "%5"], capture_output=True
                 )
+                # select-pane should NOT be called — it steals focus
+                for c in mock_run.call_args_list:
+                    argv = c.args[0]
+                    assert argv[:2] != ["tmux", "select-pane"], \
+                        "select-pane should not be called (it steals focus from user's active pane)"
 
     def test_skips_switch_client_when_session_already_visible(self):
         """If a client is already attached to the agent's session, don't steal focus."""
