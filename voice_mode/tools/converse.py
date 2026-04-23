@@ -417,6 +417,19 @@ async def startup_initialization():
 async def get_tts_config(provider: Optional[str] = None, voice: Optional[str] = None, model: Optional[str] = None, instructions: Optional[str] = None):
     """Get TTS configuration - simplified to use direct config"""
     from voice_mode.provider_discovery import detect_provider_type
+    from voice_mode.voice_profiles import is_clone_voice, get_profile
+
+    # Check if this is a clone voice — override provider/model/base_url
+    if voice and is_clone_voice(voice):
+        profile = get_profile(voice)
+        logger.info(f"Voice '{voice}' is a clone profile: {profile.description}")
+        return {
+            'base_url': profile.base_url,
+            'model': profile.model,
+            'voice': voice,
+            'instructions': None,
+            'provider_type': 'clone'
+        }
 
     # Validate instructions usage
     if instructions and model != "gpt-4o-mini-tts":
