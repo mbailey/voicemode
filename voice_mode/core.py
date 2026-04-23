@@ -176,7 +176,8 @@ async def text_to_speech(
     instructions: Optional[str] = None,
     audio_format: Optional[str] = None,
     conversation_id: Optional[str] = None,
-    speed: Optional[float] = None
+    speed: Optional[float] = None,
+    clone_profile: Optional[object] = None
 ) -> tuple[bool, Optional[dict]]:
     """Convert text to speech and play it.
     
@@ -250,6 +251,14 @@ async def text_to_speech(
         if speed is not None:
             request_params["speed"] = speed
             logger.info(f"  • Speed: {speed}x")
+
+        # Add voice cloning parameters if a clone profile is active
+        if clone_profile:
+            request_params["extra_body"] = {
+                "ref_audio": clone_profile.ref_audio,
+                "ref_text": clone_profile.ref_text,
+            }
+            logger.info(f"  • Voice clone: {clone_profile.name} (ref: {clone_profile.ref_audio})")
         
         # Track generation time
         generation_start = time.perf_counter()
