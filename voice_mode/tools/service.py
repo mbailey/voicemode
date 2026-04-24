@@ -12,7 +12,7 @@ from typing import Literal, Optional, Dict, Any, Union
 import psutil
 
 from voice_mode.server import mcp
-from voice_mode.config import WHISPER_PORT, KOKORO_PORT, SERVICE_AUTO_ENABLE
+from voice_mode.config import WHISPER_PORT, KOKORO_PORT, CLONE_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
 
 # Default port for VoiceMode serve command (HTTP MCP server)
@@ -79,6 +79,15 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "START_SCRIPT": str(start_script) if start_script and start_script.exists() else "",
             "KOKORO_DIR": kokoro_dir,
             "KOKORO_MAX_REQUESTS": str(KOKORO_MAX_REQUESTS),
+        }
+    elif service_name == "clone":
+        clone_dir = os.path.join(voicemode_dir, "services", "clone")
+        start_script = os.path.join(clone_dir, "bin", "start-clone-server.sh")
+
+        return {
+            "HOME": home,
+            "START_SCRIPT": start_script,
+            "CLONE_DIR": clone_dir,
         }
     elif service_name == "voicemode":
         # VoiceMode serve service - runs the HTTP MCP server
@@ -198,6 +207,9 @@ async def status_service(service_name: str) -> str:
         process_name = "whisper-server"
     elif service_name == "kokoro":
         port = KOKORO_PORT
+        process_name = None
+    elif service_name == "clone":
+        port = CLONE_PORT
         process_name = None
     elif service_name == "voicemode":
         port = VOICEMODE_SERVE_PORT
@@ -346,6 +358,8 @@ async def start_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "clone":
+        port = CLONE_PORT
     elif service_name == "voicemode":
         port = VOICEMODE_SERVE_PORT
     else:
@@ -462,6 +476,15 @@ async def start_service(service_name: str) -> str:
 
         cmd = [str(start_script)]
 
+    elif service_name == "clone":
+        # Find clone start script
+        voicemode_dir = os.path.expanduser(os.environ.get("VOICEMODE_BASE_DIR", "~/.voicemode"))
+        clone_dir = os.path.join(voicemode_dir, "services", "clone")
+        start_script = Path(clone_dir) / "bin" / "start-clone-server.sh"
+        if not start_script.exists():
+            return "❌ Clone start script not found. Please run clone_install first."
+        cmd = [str(start_script)]
+
     elif service_name == "voicemode":
         # Start voicemode serve command directly
         # Use sys.executable to ensure we use the same Python that's running this script
@@ -476,6 +499,8 @@ async def start_service(service_name: str) -> str:
         cwd = None
         if service_name == "kokoro":
             cwd = Path(kokoro_dir)
+        elif service_name == "clone":
+            cwd = Path(clone_dir)
 
         process = subprocess.Popen(
             cmd,
@@ -509,6 +534,8 @@ async def stop_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
+    elif service_name == "clone":
+        port = CLONE_PORT
     elif service_name == "voicemode":
         port = VOICEMODE_SERVE_PORT
     else:
@@ -612,6 +639,11 @@ async def enable_service(service_name: str) -> str:
             start_script = config_vars.get("START_SCRIPT", "")
             if not start_script or not Path(start_script).exists():
                 return "❌ Kokoro start script not found. Please run kokoro_install first."
+
+        elif service_name == "clone":
+            start_script = config_vars.get("START_SCRIPT", "")
+            if not start_script or not Path(start_script).exists():
+                return "❌ Clone start script not found. Please run clone_install first."
 
         elif service_name == "voicemode":
             start_script = config_vars.get("START_SCRIPT", "")
@@ -809,7 +841,7 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 
 @mcp.tool()
 async def service(
-    service_name: Literal["whisper", "kokoro", "voicemode"],
+    service_name: Literal["whisper", "kokoro", "clone", "voicemode"],
     action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs"] = "status",
     lines: Optional[Union[int, str]] = None
 ) -> str:

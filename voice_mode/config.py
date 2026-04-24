@@ -633,6 +633,12 @@ KOKORO_CACHE_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_CACHE_DIR", str(BASE_
 KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
 KOKORO_MAX_REQUESTS = int(os.getenv("VOICEMODE_KOKORO_MAX_REQUESTS", "25"))
 
+# ==================== CLONE TTS CONFIGURATION ====================
+
+# Clone TTS (Qwen3-TTS via mlx-audio) configuration
+CLONE_PORT = int(os.getenv("VOICEMODE_CLONE_PORT", "8890"))
+CLONE_MODEL = os.getenv("VOICEMODE_CLONE_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16")
+
 # ==================== SERVICE MANAGEMENT CONFIGURATION ====================
 
 # Auto-enable services after installation

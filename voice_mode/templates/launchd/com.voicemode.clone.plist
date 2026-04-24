@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.voicemode.clone.plist v1.0.0 -->
+<!-- Last updated: 2026-04-24 -->
+<!-- Clone TTS service (Qwen3-TTS via mlx-audio) -->
+<!-- Simplified: start script handles config via voicemode.env -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicemode.clone</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{START_SCRIPT}</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{CLONE_DIR}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{HOME}/.voicemode/logs/clone/clone.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{HOME}/.voicemode/logs/clone/clone.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>

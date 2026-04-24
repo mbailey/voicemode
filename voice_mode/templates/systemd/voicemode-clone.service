@@ -1,0 +1,32 @@
+# voicemode-clone.service v1.0.0
+# Last updated: 2026-04-24
+# Clone TTS service (Qwen3-TTS via mlx-audio)
+# Simplified: start script handles config via voicemode.env
+
+[Unit]
+Description=Voice Mode Clone TTS Service (Qwen3-TTS)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={START_SCRIPT}
+WorkingDirectory={CLONE_DIR}
+Restart=on-failure
+RestartSec=10
+# Don't restart if the executable is missing
+RestartPreventExitStatus=127
+
+# Environment - start script sources voicemode.env for port config
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# Resource limits
+MemoryLimit=8G
+CPUQuota=100%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-clone
+
+[Install]
+WantedBy=default.target
