@@ -6,13 +6,11 @@ import urllib.request
 import urllib.error
 from typing import Any, Dict
 
-from voice_mode.server import mcp
 from voice_mode.config import CLONE_PORT
 
 logger = logging.getLogger("voicemode")
 
 
-@mcp.tool()
 async def clone_status() -> Dict[str, Any]:
     """Check the status of the clone TTS service (Qwen3-TTS via mlx-audio).
 

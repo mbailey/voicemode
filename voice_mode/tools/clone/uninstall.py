@@ -7,14 +7,12 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Union
 
-from voice_mode.server import mcp
 from voice_mode.config import CLONE_PORT, BASE_DIR
 from voice_mode.utils.services.common import find_process_by_port
 
 logger = logging.getLogger("voicemode")
 
 
-@mcp.tool()
 async def clone_uninstall(
     remove_model: Union[bool, str] = False,
 ) -> Dict[str, Any]:
