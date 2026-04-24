@@ -252,11 +252,22 @@ async def text_to_speech(
             request_params["speed"] = speed
             logger.info(f"  • Speed: {speed}x")
 
-        # Add voice cloning parameters if a clone profile is active
+        # Add voice cloning parameters if a clone profile is active.
+        # mlx-audio requires `stream: true` in the request body to emit
+        # chunks progressively; without it the server buffers the full
+        # generation before responding, defeating streaming playback.
+        # Kokoro streams by default, OpenAI ignores the flag — so we only
+        # add it on the clone path (which always targets mlx-audio).
+        # `streaming_interval` controls how much audio the server buffers
+        # before flushing each chunk. The server default is 2.0s, which
+        # gives TTFA ~1.8s; 0.3s gives TTFA ~0.4s with no underruns in
+        # testing on ms2.
         if clone_profile:
             request_params["extra_body"] = {
                 "ref_audio": clone_profile.ref_audio,
                 "ref_text": clone_profile.ref_text,
+                "stream": True,
+                "streaming_interval": 0.3,
             }
             logger.info(f"  • Voice clone: {clone_profile.name} (ref: {clone_profile.ref_audio})")
         
