@@ -302,6 +302,243 @@ def sayas_cli() -> None:
 
 
 # ============================================================================
+# Clone Voice Service Command Group
+# ============================================================================
+# Service management and voice profile CRUD for clone TTS (Qwen3-TTS):
+#   voicemode clone install      Install clone TTS service
+#   voicemode clone status       Check clone TTS service status
+#   voicemode clone uninstall    Uninstall clone TTS service
+#   voicemode clone add          Add a voice profile
+#   voicemode clone list         List voice profiles
+#   voicemode clone remove       Remove a voice profile
+
+
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def clone():
+    """Voice cloning service management.
+
+    \b
+    Service:
+      install    Install clone TTS service (Qwen3-TTS via mlx-audio)
+      status     Check clone TTS service status
+      uninstall  Uninstall clone TTS service
+
+    \b
+    Voice Profiles:
+      add        Add a clone voice profile from a reference audio clip
+      list       List available clone voices
+      remove     Remove a clone voice profile
+
+    \b
+    Quick Start:
+      voicemode clone install                     # Install service
+      voicemode clone add mike ~/clip.wav         # Add a voice
+      sayas mike "Hello world"                    # Use the voice
+    """
+    pass
+
+
+@clone.command()
+@click.help_option('-h', '--help')
+@click.option('--port', default=8890, help='Service port (default: 8890)')
+@click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
+@click.option('--model', default=None, help='Hugging Face model ID override')
+@click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
+def install(port, force, model, auto_enable):
+    """Install clone TTS service (Qwen3-TTS via mlx-audio).
+
+    Sets up a local clone TTS service powered by Qwen3-TTS running on mlx-audio.
+    Requires Apple Silicon (M1/M2/M3/M4).
+
+    \b
+    Steps:
+      1. Creates virtual environment at ~/.voicemode/services/clone
+      2. Installs mlx-audio in the venv
+      3. Downloads the Qwen3-TTS model (~3.4GB)
+      4. Creates a launchd/systemd service for automatic startup
+    """
+    from voice_mode.tools.clone.install import clone_install
+    result = asyncio.run(clone_install(
+        port=port,
+        model=model,
+        force_reinstall=force,
+        auto_enable=auto_enable,
+    ))
+
+    if result.get('success'):
+        if result.get('already_installed'):
+            click.echo(f"Already installed at {result['install_path']}")
+            click.echo(f"   Model: {result.get('model', 'unknown')}")
+            if result.get('service_files_updated'):
+                click.echo("   Service files updated")
+        else:
+            click.echo("Clone TTS installed successfully!")
+            click.echo(f"   Install path: {result['install_path']}")
+            click.echo(f"   Model: {result.get('model', 'unknown')}")
+            click.echo(f"   Endpoint: {result.get('service_url', 'unknown')}")
+
+        if result.get('enabled'):
+            click.echo("   Auto-start: Enabled")
+
+        if result.get('launchagent'):
+            click.echo(f"   LaunchAgent: {os.path.basename(result['launchagent'])}")
+        if result.get('systemd_service'):
+            click.echo(f"   Systemd service: {os.path.basename(result['systemd_service'])}")
+    else:
+        click.echo(f"Installation failed: {result.get('error', 'Unknown error')}", err=True)
+        if result.get('platform'):
+            click.echo(f"   Platform: {result['platform']} ({result.get('system', 'unknown')})", err=True)
+        raise SystemExit(1)
+
+
+@clone.command()
+@click.help_option('-h', '--help')
+def status():
+    """Check clone TTS service status.
+
+    Checks if the clone TTS service is running and the endpoint is healthy.
+    """
+    from voice_mode.tools.clone.status import clone_status
+    result = asyncio.run(clone_status())
+
+    if result.get('healthy'):
+        click.echo(f"Clone TTS is running on port {result.get('port', 'unknown')}")
+        click.echo(f"   URL: {result.get('url', 'unknown')}")
+        models = result.get('models', {})
+        if models and 'data' in models:
+            for m in models['data']:
+                click.echo(f"   Model: {m.get('id', 'unknown')}")
+    else:
+        status_val = result.get('status', 'unknown')
+        if status_val == 'not_running':
+            click.echo("Clone TTS service is not running")
+            click.echo("   Run 'voicemode clone install' to set it up")
+        elif status_val == 'unhealthy':
+            click.echo(f"Clone TTS service is unhealthy (HTTP {result.get('http_status', '?')})")
+        else:
+            click.echo(f"Clone TTS service status: {status_val}")
+            if result.get('error'):
+                click.echo(f"   Error: {result['error']}")
+
+
+@clone.command()
+@click.help_option('-h', '--help')
+@click.option('--remove-model', is_flag=True, help='Also remove the cached Qwen3-TTS model (~3.4GB)')
+@click.confirmation_option(prompt='Are you sure you want to uninstall the clone TTS service?')
+def uninstall(remove_model):
+    """Uninstall clone TTS service.
+
+    Stops the service, removes service configuration (launchd/systemd),
+    and removes the clone installation directory.
+    """
+    from voice_mode.tools.clone.uninstall import clone_uninstall
+    result = asyncio.run(clone_uninstall(remove_model=remove_model))
+
+    if result.get('success'):
+        click.echo("Clone TTS service uninstalled successfully!")
+        for item in result.get('removed_items', []):
+            click.echo(f"   {item}")
+    else:
+        click.echo(f"Uninstall failed: {result.get('message', 'Unknown error')}", err=True)
+        for err in result.get('errors', []):
+            click.echo(f"   {err}", err=True)
+        raise SystemExit(1)
+
+
+@clone.command()
+@click.help_option('-h', '--help')
+@click.argument('name')
+@click.argument('audio_file', type=click.Path(exists=True))
+@click.option('--description', '-d', default='', help='Description of the voice')
+@click.option('--ref-text', default=None, help='Transcript of the audio (auto-transcribed if omitted)')
+@click.option('--model', default=None, help='TTS model override')
+@click.option('--base-url', default=None, help='TTS endpoint override')
+def add(name, audio_file, description, ref_text, model, base_url):
+    """Add a clone voice profile from a reference audio clip.
+
+    Copies the audio file to ~/.voicemode/voices/ and auto-transcribes it
+    via the local Whisper STT service (unless --ref-text is provided).
+
+    \b
+    Examples:
+      voicemode clone add fleabag ~/clip.wav -d "Phoebe as Fleabag"
+      voicemode clone add mike ~/mike.wav --ref-text "Hello everyone"
+    """
+    from voice_mode.tools.clone.profiles import clone_add
+    result = asyncio.run(clone_add(
+        name=name,
+        audio_file=audio_file,
+        description=description,
+        ref_text=ref_text,
+        model=model,
+        base_url=base_url,
+    ))
+
+    if result.get('success'):
+        click.echo(f"Voice profile '{result['name']}' added successfully!")
+        click.echo(f"   Audio: {result.get('ref_audio', 'unknown')}")
+        click.echo(f"   Text:  {result.get('ref_text', 'unknown')}")
+        if result.get('description'):
+            click.echo(f"   Desc:  {result['description']}")
+    else:
+        click.echo(f"Failed to add voice profile: {result.get('error', 'Unknown error')}", err=True)
+        if result.get('hint'):
+            click.echo(f"   Hint: {result['hint']}", err=True)
+        raise SystemExit(1)
+
+
+@clone.command('list')
+@click.help_option('-h', '--help')
+def list_voices():
+    """List available clone voice profiles.
+
+    Shows all voice profiles from ~/.voicemode/voices.json.
+    """
+    from voice_mode.tools.clone.profiles import clone_list
+    result = asyncio.run(clone_list())
+
+    voices = result.get('voices', [])
+    if not voices:
+        click.echo("No voice profiles found.")
+        click.echo("Add one with: voicemode clone add <name> <audio-file>")
+        return
+
+    click.echo(f"Clone voice profiles ({result.get('count', len(voices))}):")
+    for v in voices:
+        desc = v.get('description', '')
+        if desc:
+            click.echo(f"  {v['name']}  -- {desc}")
+        else:
+            click.echo(f"  {v['name']}")
+
+
+@clone.command()
+@click.help_option('-h', '--help')
+@click.argument('name')
+@click.option('--keep-audio', is_flag=True, help='Keep the reference audio file')
+def remove(name, keep_audio):
+    """Remove a clone voice profile.
+
+    Removes the profile from voices.json and optionally the reference audio file.
+    By default, the audio file is also deleted.
+    """
+    from voice_mode.tools.clone.profiles import clone_remove
+    result = asyncio.run(clone_remove(
+        name=name,
+        remove_audio=not keep_audio,
+    ))
+
+    if result.get('success'):
+        click.echo(f"Voice profile '{result['name']}' removed.")
+        for item in result.get('removed_items', []):
+            click.echo(f"   {item}")
+    else:
+        click.echo(f"Failed to remove voice profile: {result.get('error', 'Unknown error')}", err=True)
+        raise SystemExit(1)
+
+
+# ============================================================================
 # Unified Service Command Group
 # ============================================================================
 # All service management commands under a single group:
