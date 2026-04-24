@@ -98,8 +98,9 @@ def voice_mode() -> None:
 @click.option("-l", "--list", "list_voices", is_flag=True, help="List available voices")
 @click.option("-p", "--preview", is_flag=True, help="Preview the reference audio clip")
 @click.option("-o", "--output", type=click.Path(), help="Save audio to file instead of playing")
+@click.option("-s", "--stream", is_flag=True, help="Stream audio to mpv for reduced latency")
 @click.option("--completion", is_flag=True, help="Print bash completion script to stdout")
-def sayas_command(voice, text, list_voices, preview, output, completion):
+def sayas_command(voice, text, list_voices, preview, output, stream, completion):
     """Speak as someone using voice cloning.
 
     \b
@@ -207,6 +208,37 @@ def sayas_command(voice, text, list_voices, preview, output, completion):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+
+    if stream and not output:
+        # Stream mode: pipe HTTP response directly to mpv for low-latency playback
+        import shutil
+
+        mpv_path = shutil.which("mpv")
+        if not mpv_path:
+            click.echo("--stream requires mpv. Install with: brew install mpv", err=True)
+            raise SystemExit(1)
+
+        try:
+            proc = subprocess.Popen(
+                [mpv_path, "--no-video", "--really-quiet", "-"],
+                stdin=subprocess.PIPE,
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                while True:
+                    chunk = resp.read(4096)
+                    if not chunk:
+                        break
+                    proc.stdin.write(chunk)
+            proc.stdin.close()
+            proc.wait()
+        except urllib.error.URLError as e:
+            click.echo(f"Failed to reach clone TTS service at {endpoint}", err=True)
+            click.echo(f"Error: {e}", err=True)
+            click.echo("Is the clone service running? Try: voicemode clone status", err=True)
+            raise SystemExit(1)
+        except BrokenPipeError:
+            pass  # mpv exited early, that's fine
+        return
 
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
