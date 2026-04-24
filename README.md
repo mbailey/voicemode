@@ -2,6 +2,9 @@
 
 > Natural voice conversations with Claude Code (and other MCP capable agents)
 
+> [!WARNING]
+> **Known Issue (2026-04-13):** Claude Code 2.1.105+ kills VoiceMode's MCP server when you press ESC to cancel a voice conversation. **Workaround:** Pin to Claude Code 2.1.104. See [discussion #349](https://github.com/mbailey/voicemode/discussions/349) for details.
+
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode)](https://pepy.tech/project/voice-mode)
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode/month)](https://pepy.tech/project/voice-mode)
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode/week)](https://pepy.tech/project/voice-mode)
