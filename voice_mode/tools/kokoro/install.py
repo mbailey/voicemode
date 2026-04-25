@@ -104,11 +104,17 @@ async def kokoro_install(
     skip_deps: Union[bool, str] = False
 ) -> Dict[str, Any]:
     """
-    Install and setup remsky/kokoro-fastapi TTS service using the simple 3-step approach.
+    Install and setup mbailey/Kokoro-FastAPI TTS service using the simple 3-step approach.
 
     1. Clones the repository to ~/.voicemode/services/kokoro
     2. Uses the appropriate start script (start-gpu_mac.sh on macOS)
     3. Installs a launchagent on macOS for automatic startup
+
+    Note: voicemode installs from a fork of remsky/Kokoro-FastAPI because the
+    upstream has been unmaintained since 2026-01-04 (no commits, no PR review,
+    134 open issues). The fork tracks upstream master with one critical patch
+    cherry-picked from upstream PR #448: a fix for OGG/Opus tail truncation
+    that causes the last 1-2 seconds of audio to be silently dropped.
 
     Args:
         install_dir: Directory to install kokoro-fastapi (default: ~/.voicemode/services/kokoro)
@@ -176,7 +182,7 @@ async def kokoro_install(
         
         # Resolve version if "latest" is specified
         if version == "latest":
-            tags = get_git_tags("https://github.com/remsky/kokoro-fastapi")
+            tags = get_git_tags("https://github.com/mbailey/Kokoro-FastAPI")
             if not tags:
                 return {
                     "success": False,
@@ -284,7 +290,7 @@ async def kokoro_install(
         if not os.path.exists(install_dir):
             logger.info(f"Cloning kokoro-fastapi repository (version {version})...")
             subprocess.run([
-                "git", "clone", "https://github.com/remsky/kokoro-fastapi.git", install_dir
+                "git", "clone", "https://github.com/mbailey/Kokoro-FastAPI.git", install_dir
             ], check=True)
             # Checkout the specific version
             if not checkout_version(Path(install_dir), version):

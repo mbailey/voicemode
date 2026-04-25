@@ -287,7 +287,7 @@ async def check_updates(
             # Check latest from GitHub
             import httpx
             response = httpx.get(
-                "https://api.github.com/repos/remsky/Kokoro-FastAPI/commits/main",
+                "https://api.github.com/repos/mbailey/Kokoro-FastAPI/commits/master",
                 headers={"Accept": "application/vnd.github.v3+json"},
                 timeout=5.0
             )
