@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 WHISPER_REPO = "https://github.com/ggerganov/whisper.cpp"
-KOKORO_REPO = "https://github.com/remsky/kokoro-fastapi"
+KOKORO_REPO = "https://github.com/ai-cora/Kokoro-FastAPI"
 
 
 @mcp.tool(
