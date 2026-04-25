@@ -570,7 +570,15 @@ async def stream_with_buffering(
                     
                 stream.write(samples)
                 metrics.chunks_played += len(samples) // 1024
-                
+
+                # Drain PortAudio's output buffer before the finally block stops
+                # the stream. stream.write() returns when samples are queued, not
+                # when they have played; on macOS CoreAudio stream.stop() can
+                # truncate the tail (~100-300ms). Sleep for the reported output
+                # latency plus a small safety margin.
+                drain_secs = (stream.latency or 0.0) + 0.3
+                await asyncio.sleep(drain_secs)
+
             except Exception as e:
                 logger.error(f"Failed to decode final buffer: {e}")
         
