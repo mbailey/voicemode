@@ -30,6 +30,16 @@ from .utils import get_event_logger, update_latest_symlinks
 
 
 
+def _pydub_format(fmt: str) -> str:
+    """Map TTS response_format to the container format pydub/ffmpeg expects.
+
+    Opus is always wrapped in an Ogg (or WebM) container -- ffmpeg has no
+    raw 'opus' demuxer. TTS providers (Kokoro, OpenAI) return Ogg/Opus when
+    response_format='opus', so we tell pydub format='ogg' for decoding.
+    """
+    return "ogg" if fmt == "opus" else fmt
+
+
 @dataclass
 class StreamMetrics:
     """Metrics for streaming playback performance."""
@@ -172,7 +182,7 @@ class AudioStreamPlayer:
             # This is tricky because we need complete frames
             try:
                 # Try to decode what we have
-                audio = AudioSegment.from_file(io.BytesIO(data), format=self.format)
+                audio = AudioSegment.from_file(io.BytesIO(data), format=_pydub_format(self.format))
                 samples = np.array(audio.get_array_of_samples()).astype(np.float32) / 32768.0
                 return samples
             except Exception:
@@ -498,26 +508,32 @@ async def stream_with_buffering(
                     if save_buffer:
                         save_buffer.write(chunk)
                     
-                    # Try to decode when we have enough data (e.g., 32KB)
-                    if buffer.tell() > 32768 and not audio_started:
+                    # Try to decode when we have enough data (e.g., 32KB).
+                    # Skip for Opus/Ogg: the container has codec-setup pages only at the
+                    # start, so resetting the buffer after a partial decode leaves the
+                    # remaining bytes unparseable. For Opus we buffer the full response
+                    # and decode once below (matches the docstring's stated intent).
+                    if (buffer.tell() > 32768
+                            and not audio_started
+                            and format != "opus"):
                         buffer.seek(0)
                         try:
                             # Attempt to decode what we have
-                            audio = AudioSegment.from_file(buffer, format=format)
+                            audio = AudioSegment.from_file(buffer, format=_pydub_format(format))
                             samples = np.array(audio.get_array_of_samples()).astype(np.float32) / 32768.0
-                            
+
                             # Start playback
                             metrics.ttfa = time.perf_counter() - start_time
                             audio_started = True
                             logger.info(f"Buffered streaming started - TTFA: {metrics.ttfa:.3f}s")
-                            
+
                             # Play audio
                             stream.write(samples)
                             metrics.chunks_played += len(samples) // 1024
-                            
+
                             # Reset buffer for next batch
                             buffer = io.BytesIO()
-                            
+
                         except Exception as e:
                             # Not enough valid data yet
                             buffer.seek(0, io.SEEK_END)
@@ -526,9 +542,9 @@ async def stream_with_buffering(
         if buffer.tell() > 0:
             buffer.seek(0)
             try:
-                audio = AudioSegment.from_file(buffer, format=format)
+                audio = AudioSegment.from_file(buffer, format=_pydub_format(format))
                 samples = np.array(audio.get_array_of_samples()).astype(np.float32) / 32768.0
-                
+
                 if not audio_started:
                     metrics.ttfa = time.perf_counter() - start_time
                     
