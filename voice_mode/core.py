@@ -268,6 +268,12 @@ async def text_to_speech(
                 "ref_text": clone_profile.ref_text,
                 "stream": True,
                 "streaming_interval": 0.3,
+                # mlx-audio's server default for lang_code is "a", which is
+                # Kokoro's code for US English and is meaningless to Qwen3-TTS.
+                # Qwen3 uses word codes from its codec_language_id ("auto",
+                # "english", "chinese", etc.). "auto" lets the model detect
+                # language from the input text.
+                "lang_code": "auto",
             }
             logger.info(f"  • Voice clone: {clone_profile.name} (ref: {clone_profile.ref_audio})")
         
