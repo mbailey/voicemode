@@ -24,6 +24,7 @@ from .config import (
     STREAM_BUFFER_MS,
     STREAM_MAX_BUFFER,
     SAMPLE_RATE,
+    TTS_TRAILING_SILENCE,
     logger
 )
 from .utils import get_event_logger, update_latest_symlinks
@@ -565,17 +566,30 @@ async def stream_with_buffering(
                     audio = audio.set_sample_width(2)
                 samples = np.array(audio.get_array_of_samples()).astype(np.float32) / 32768.0
 
+                # Append trailing silence to guarantee the real content plays out
+                # before the stream is stopped. On macOS CoreAudio (and especially
+                # with aggregate devices), `stream.stop()` does not always wait for
+                # the host buffer to drain, and PortAudio's `stream.latency`
+                # underestimates the true end-to-end latency, so the time-based
+                # drain sleep below isn't always sufficient. Padding the samples
+                # with silence makes the fix robust regardless of how the device
+                # chain buffers — even if the tail is truncated, only silence
+                # is lost.
+                if TTS_TRAILING_SILENCE > 0:
+                    pad = np.zeros(int(sample_rate * TTS_TRAILING_SILENCE), dtype=np.float32)
+                    samples = np.concatenate([samples, pad])
+
                 if not audio_started:
                     metrics.ttfa = time.perf_counter() - start_time
-                    
+
                 stream.write(samples)
                 metrics.chunks_played += len(samples) // 1024
 
-                # Drain PortAudio's output buffer before the finally block stops
-                # the stream. stream.write() returns when samples are queued, not
-                # when they have played; on macOS CoreAudio stream.stop() can
-                # truncate the tail (~100-300ms). Sleep for the reported output
-                # latency plus a small safety margin.
+                # Belt-and-braces drain in addition to the silence padding above.
+                # Sleep for the reported output latency plus a small safety margin
+                # so that even if a future change removes the silence pad, the
+                # tail still plays through on systems where stream.stop() drains
+                # correctly.
                 drain_secs = (stream.latency or 0.0) + 0.3
                 await asyncio.sleep(drain_secs)
 

@@ -747,6 +747,15 @@ STREAM_CHUNK_SIZE = int(os.getenv("VOICEMODE_STREAM_CHUNK_SIZE", "4096"))  # Dow
 STREAM_BUFFER_MS = int(os.getenv("VOICEMODE_STREAM_BUFFER_MS", "150"))  # Initial buffer before playback
 STREAM_MAX_BUFFER = float(os.getenv("VOICEMODE_STREAM_MAX_BUFFER", "2.0"))  # Max buffer in seconds
 
+# Trailing silence appended to TTS audio before stream stop.
+# On macOS CoreAudio (especially with aggregate devices), stream.stop() does
+# not always wait for the host buffer to drain, and PortAudio's reported
+# `stream.latency` underestimates the true end-to-end latency through the
+# aggregate-device chain. Padding the audio with trailing silence guarantees
+# the actual content plays out even if the tail of the buffer is dropped.
+# This is silence — it adds no perceived delay to the user.
+TTS_TRAILING_SILENCE = float(os.getenv("VOICEMODE_TTS_TRAILING_SILENCE", "0.5"))
+
 # ==================== EVENT LOGGING CONFIGURATION ====================
 
 # Event logging configuration
