@@ -520,6 +520,17 @@ async def stream_with_buffering(
                         try:
                             # Attempt to decode what we have
                             audio = AudioSegment.from_file(buffer, format=_pydub_format(format))
+                            # Normalize decoded audio to match the playback stream:
+                            #   - frame rate: Opus always decodes to 48kHz; the stream is
+                            #     opened at sample_rate (24kHz default). Without resampling,
+                            #     audio plays at 2x speed and sounds chipmunk-like.
+                            #   - sample width: Opus decodes to 32-bit, but the / 32768.0
+                            #     normalization assumes 16-bit, producing ~12,000x amplitude
+                            #     and instant clipping. Force 16-bit to match.
+                            if audio.frame_rate != sample_rate:
+                                audio = audio.set_frame_rate(sample_rate)
+                            if audio.sample_width != 2:
+                                audio = audio.set_sample_width(2)
                             samples = np.array(audio.get_array_of_samples()).astype(np.float32) / 32768.0
 
                             # Start playback
@@ -543,6 +554,15 @@ async def stream_with_buffering(
             buffer.seek(0)
             try:
                 audio = AudioSegment.from_file(buffer, format=_pydub_format(format))
+                # Normalize decoded audio to match the playback stream. Opus always
+                # decodes to 48kHz / 32-bit, but the stream is opened at sample_rate
+                # (24kHz default) and the / 32768.0 line below assumes 16-bit. Without
+                # both conversions, audio is at 2x speed and ~12,000x amplitude
+                # (chipmunk-like and clipped to silence-by-distortion).
+                if audio.frame_rate != sample_rate:
+                    audio = audio.set_frame_rate(sample_rate)
+                if audio.sample_width != 2:
+                    audio = audio.set_sample_width(2)
                 samples = np.array(audio.get_array_of_samples()).astype(np.float32) / 32768.0
 
                 if not audio_started:
