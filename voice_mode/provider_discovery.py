@@ -14,6 +14,7 @@ import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from openai import AsyncOpenAI
@@ -34,6 +35,8 @@ def detect_provider_type(base_url: str) -> str:
         return "kokoro"
     elif ":2022" in base_url:
         return "whisper"
+    elif urlparse(base_url).port == 8890 or "mlx_audio" in base_url or "mlx-audio" in base_url:
+        return "mlx-audio"
     elif "127.0.0.1" in base_url or "localhost" in base_url:
         # Try to infer from port if not already detected
         if base_url.endswith("/v1"):
