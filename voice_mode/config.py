@@ -547,6 +547,8 @@ TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:88
 STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
 TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
+STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
+STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
 
 # STT prompt for vocabulary biasing (helps with specialized terminology)
 # See: https://platform.openai.com/docs/guides/speech-to-text#prompting
