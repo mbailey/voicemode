@@ -283,16 +283,17 @@ async def text_to_speech(
                 metrics['ttfa'] = stream_metrics.ttfa
                 metrics['generation'] = stream_metrics.generation_time
                 metrics['playback'] = stream_metrics.playback_time - stream_metrics.generation_time
-                
+
                 # Pass through audio path if it exists
                 if stream_metrics.audio_path:
                     metrics['audio_path'] = stream_metrics.audio_path
-                
-                logger.info(f"✓ TTS streamed successfully - TTFA: {metrics['ttfa']:.3f}s")
-                
-                # Save debug files if needed (we'd need to capture the full audio)
-                # For now, skip debug saving in streaming mode
-                
+
+                if stream_metrics.interrupted:
+                    logger.info("TTS streaming interrupted by PTT — skipping buffered fallback")
+                    metrics['interrupted'] = True
+                else:
+                    logger.info(f"✓ TTS streamed successfully - TTFA: {metrics['ttfa']:.3f}s")
+
                 return True, metrics
             else:
                 logger.warning("Streaming failed, falling back to buffered playback")

@@ -14,6 +14,10 @@ import sounddevice as sd
 
 logger = logging.getLogger("voicemode.audio_player")
 
+# Currently active player — set during play(), cleared on stop()/wait() completion.
+# Accessed by ptt.py to interrupt playback when the PTT key is pressed.
+_current_playback: Optional['NonBlockingAudioPlayer'] = None
+
 
 class NonBlockingAudioPlayer:
     """Non-blocking audio player using callback-based playback.
@@ -102,9 +106,11 @@ class NonBlockingAudioPlayer:
         Raises:
             Exception: If playback error occurs
         """
+        global _current_playback
         # Reset state
         self.playback_complete.clear()
         self.playback_error = None
+        _current_playback = self
 
         # Ensure samples are float32
         if samples.dtype != np.float32:
@@ -155,6 +161,7 @@ class NonBlockingAudioPlayer:
         Raises:
             Exception: If playback error occurred
         """
+        global _current_playback
         # Wait for playback to complete
         if not self.playback_complete.wait(timeout=timeout):
             logger.warning("Playback wait timed out")
@@ -165,12 +172,16 @@ class NonBlockingAudioPlayer:
             self.stream.close()
             self.stream = None
 
+        if _current_playback is self:
+            _current_playback = None
+
         # Raise any error that occurred during playback
         if self.playback_error:
             raise self.playback_error
 
     def stop(self):
         """Stop playback immediately."""
+        global _current_playback
         self.playback_complete.set()
         if self.stream:
             self.stream.stop()
@@ -184,3 +195,6 @@ class NonBlockingAudioPlayer:
                     self.audio_queue.get_nowait()
                 except queue.Empty:
                     break
+
+        if _current_playback is self:
+            _current_playback = None
