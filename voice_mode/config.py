@@ -601,12 +601,14 @@ def reload_configuration():
     load_voicemode_env()
     
     # Update global configuration variables
-    global TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS
+    global TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS
     TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
     STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
     TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
     TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
-    
+    STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
+    STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
+
     logger.info("Configuration reloaded successfully")
 
 # Legacy variables have been removed - use the new list-based configuration:
