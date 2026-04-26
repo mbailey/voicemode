@@ -1,0 +1,33 @@
+# voicemode-mlx-audio.service v1.0.0
+# Last updated: 2026-04-26
+# mlx-audio: unified Whisper STT + Kokoro TTS + Qwen3-TTS clone-voice
+# Apple Silicon only -- the runtime gates Intel/Linux at install time.
+# This unit is provided for parity with the launchd plist; on Linux,
+# mlx-audio is not currently runnable (no MLX support outside macOS arm64).
+
+[Unit]
+Description=Voice Mode mlx-audio Service (Whisper + Kokoro + Qwen3-TTS)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/sh -c 'set -a; [ -f "%h/.voicemode/voicemode.env" ] && . "%h/.voicemode/voicemode.env"; set +a; exec "%h/.local/bin/mlx_audio.server" --host "${{VOICEMODE_MLX_AUDIO_HOST:-127.0.0.1}}" --port "${{VOICEMODE_MLX_AUDIO_PORT:-8890}}"'
+Restart=on-failure
+RestartSec=10
+# Don't restart if the executable is missing
+RestartPreventExitStatus=127
+
+# Environment - command sources voicemode.env for port/host config
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+# Resource limits
+MemoryLimit=8G
+CPUQuota=100%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-mlx-audio
+
+[Install]
+WantedBy=default.target

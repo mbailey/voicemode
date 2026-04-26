@@ -1,16 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- com.voicemode.mlx-audio.plist v1.0.0 -->
+<!-- com.voicemode.mlx-audio.plist v2.0.0 -->
 <!-- Last updated: 2026-04-26 -->
 <!-- mlx-audio: unified Whisper STT + Kokoro TTS + Qwen3-TTS clone-voice on Apple Silicon -->
-<!-- Simplified: start script handles config via voicemode.env -->
+<!-- Calls mlx_audio.server directly from `uv tool install mlx-audio` location. -->
+<!-- Sources voicemode.env for VOICEMODE_MLX_AUDIO_HOST / VOICEMODE_MLX_AUDIO_PORT. -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.voicemode.mlx-audio</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{START_SCRIPT}</string>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>set -a; [ -f "$HOME/.voicemode/voicemode.env" ] &amp;&amp; . "$HOME/.voicemode/voicemode.env"; set +a; exec "$HOME/.local/bin/mlx_audio.server" --host "${{VOICEMODE_MLX_AUDIO_HOST:-127.0.0.1}}" --port "${{VOICEMODE_MLX_AUDIO_PORT:-8890}}"</string>
     </array>
     <key>RunAtLoad</key>
     <true/>

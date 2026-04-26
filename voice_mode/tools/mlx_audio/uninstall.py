@@ -1,9 +1,9 @@
 """Uninstall tool for the mlx-audio service.
 
-Cleans up the launchd plist (or systemd unit), the uv venv, and -- on
-``remove_all_data`` -- the log directory. User-level model caches and
-voice profiles are intentionally preserved unless ``remove_models`` is
-set.
+Cleans up the launchd plist (or systemd unit), the ``uv tool``
+installation, and -- on ``remove_all_data`` -- the log directory.
+User-level model caches and voice profiles are intentionally preserved
+unless ``remove_models`` is set.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Union
 from voice_mode.server import mcp
 from voice_mode.config import BASE_DIR, MLX_AUDIO_PORT
 from voice_mode.utils.services.common import find_process_by_port
+
+MLX_AUDIO_PIP_PACKAGE = "mlx-audio"
 
 logger = logging.getLogger("voicemode")
 
@@ -91,16 +93,16 @@ async def mlx_audio_uninstall(
             / ".config"
             / "systemd"
             / "user"
-            / "voicemode-mlx_audio.service"
+            / "voicemode-mlx-audio.service"
         )
         if unit_path.exists():
             try:
                 subprocess.run(
-                    ["systemctl", "--user", "stop", "voicemode-mlx_audio.service"],
+                    ["systemctl", "--user", "stop", "voicemode-mlx-audio.service"],
                     capture_output=True,
                 )
                 subprocess.run(
-                    ["systemctl", "--user", "disable", "voicemode-mlx_audio.service"],
+                    ["systemctl", "--user", "disable", "voicemode-mlx-audio.service"],
                     capture_output=True,
                 )
                 unit_path.unlink()
@@ -112,7 +114,33 @@ async def mlx_audio_uninstall(
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"Failed to remove {unit_path}: {exc}")
 
-    # 3. Remove the install directory (venv + start script).
+    # 3. Uninstall the uv-tool-managed package (drops ~/.local/bin entry
+    #    points and the tool's isolated environment).
+    if shutil.which("uv"):
+        try:
+            result = subprocess.run(
+                ["uv", "tool", "uninstall", MLX_AUDIO_PIP_PACKAGE],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                removed_items.append(f"Uninstalled uv tool: {MLX_AUDIO_PIP_PACKAGE}")
+            else:
+                # ``uv tool uninstall`` returns nonzero when the tool is
+                # not installed; treat that as a no-op rather than an error.
+                stderr = (result.stderr or "").strip()
+                if "is not installed" in stderr or "not found" in stderr.lower():
+                    logger.debug("mlx-audio uv tool already absent: %s", stderr)
+                else:
+                    errors.append(f"`uv tool uninstall {MLX_AUDIO_PIP_PACKAGE}` failed: {stderr}")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Failed to run uv tool uninstall: {exc}")
+    else:
+        logger.debug("uv not on PATH; skipping `uv tool uninstall`")
+
+    # 4. Remove the service install directory (logs/state under
+    #    ``~/.voicemode/services/mlx-audio``). Logs themselves live under
+    #    ``~/.voicemode/logs/mlx-audio`` and are gated by ``remove_all_data``.
     install_dir = BASE_DIR / "services" / "mlx-audio"
     if install_dir.exists():
         try:
@@ -121,7 +149,7 @@ async def mlx_audio_uninstall(
         except Exception as exc:  # noqa: BLE001
             errors.append(f"Failed to remove {install_dir}: {exc}")
 
-    # 4. Optionally remove cached MLX models from the HF hub cache.
+    # 5. Optionally remove cached MLX models from the HF hub cache.
     if remove_models_bool:
         hf_hub_cache = Path.home() / ".cache" / "huggingface" / "hub"
         if hf_hub_cache.exists():
@@ -134,7 +162,7 @@ async def mlx_audio_uninstall(
                     except Exception as exc:  # noqa: BLE001
                         errors.append(f"Failed to remove {entry}: {exc}")
 
-    # 5. Optionally remove logs (voices/profiles are always preserved).
+    # 6. Optionally remove logs (voices/profiles are always preserved).
     if remove_all_data_bool:
         log_dir = BASE_DIR / "logs" / "mlx-audio"
         if log_dir.exists():

@@ -6,13 +6,11 @@ by MLX models for Whisper STT, Kokoro TTS, and Qwen3-TTS clone-voice.
 
 Install layout::
 
-    ~/.voicemode/services/mlx-audio/
-        venv/                # uv venv
-        bin/start-mlx-audio.sh
-        logs/                # served by launchd
+    ~/.local/bin/mlx_audio.server     # uv-tool-managed entry point
+    ~/.voicemode/services/mlx-audio/  # logs (and any future on-disk state)
 
-This is the *scaffolding only*. Model downloads are handled by VM-1082;
-provider discovery integration is VM-1084.
+Models are not downloaded by this tool -- VM-1082 owns
+``mlx_audio_model_install``. Provider discovery is VM-1084.
 """
 
 from __future__ import annotations
@@ -34,6 +32,7 @@ logger = logging.getLogger("voicemode")
 
 MLX_AUDIO_DEFAULT_PORT = 8890
 MLX_AUDIO_PIP_PACKAGE = "mlx-audio"
+MLX_AUDIO_ENTRY_POINT = "mlx_audio.server"
 
 
 def _is_apple_silicon() -> bool:
@@ -93,23 +92,12 @@ def _ensure_uv_available() -> Optional[str]:
     return None
 
 
-def _install_start_script(install_dir: Path) -> Path:
-    """Copy the start-mlx-audio.sh template into the install dir's bin/."""
-    template_path = (
-        Path(__file__).parent.parent.parent
-        / "templates"
-        / "scripts"
-        / "start-mlx-audio.sh"
-    )
-    if not template_path.exists():
-        raise FileNotFoundError(f"start-mlx-audio.sh template not found: {template_path}")
+def _entry_point_path() -> Path:
+    """Return the expected path of the ``mlx_audio.server`` entry point.
 
-    bin_dir = install_dir / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    dest = bin_dir / "start-mlx-audio.sh"
-    dest.write_text(template_path.read_text())
-    dest.chmod(0o755)
-    return dest
+    ``uv tool install`` puts entry points in ``~/.local/bin`` on Linux/macOS.
+    """
+    return Path.home() / ".local" / "bin" / MLX_AUDIO_ENTRY_POINT
 
 
 async def _update_mlx_audio_service_files(
@@ -155,7 +143,6 @@ async def _update_mlx_audio_service_files(
 
 @mcp.tool()
 async def mlx_audio_install(
-    install_dir: Optional[str] = None,
     port: Union[int, str] = MLX_AUDIO_DEFAULT_PORT,
     bind_lan: Union[bool, str] = False,
     force_reinstall: Union[bool, str] = False,
@@ -164,22 +151,22 @@ async def mlx_audio_install(
 ) -> Dict[str, Any]:
     """Install mlx-audio as an opt-in Apple Silicon voicemode service.
 
-    Creates a uv-managed venv at ``~/.voicemode/services/mlx-audio/venv`` and
-    installs ``mlx-audio`` from PyPI. Mirrors the kokoro install pattern --
-    one launchd plist, one start script, one process serving Whisper STT +
-    Kokoro TTS + Qwen3-TTS clone-voice.
+    Installs the ``mlx-audio`` package as a uv-managed tool. Console entry
+    points (``mlx_audio.server`` and friends) land in ``~/.local/bin``,
+    which means there is no service-local venv to manage. The launchd
+    plist (or systemd unit) is rendered to call ``mlx_audio.server``
+    directly with config sourced from ``~/.voicemode/voicemode.env``.
 
     No models are downloaded by this tool. Use ``mlx_audio_model_install``
     (VM-1082) to download specific models on demand.
 
     Args:
-        install_dir: Override install location
-            (default: ``~/.voicemode/services/mlx-audio``).
         port: Local TCP port (default 8890 -- the upstream mlx-audio
             convention, mirroring kokoro-fastapi's 8880 default).
         bind_lan: Bind to ``0.0.0.0`` instead of ``127.0.0.1`` (default
             ``False``). LAN exposure is opt-in -- see VM-1076 Q2.
-        force_reinstall: Wipe the existing venv and reinstall from scratch.
+        force_reinstall: ``uv tool install --force`` -- reinstall even if
+            already present.
         auto_enable: Enable the launchd service after install. ``None``
             falls back to ``VOICEMODE_SERVICE_AUTO_ENABLE``.
         version: ``mlx-audio`` PyPI version, or ``"latest"`` for the
@@ -215,15 +202,15 @@ async def mlx_audio_install(
     )
     voicemode_dir.mkdir(parents=True, exist_ok=True)
 
-    install_path = (
-        Path(install_dir).expanduser()
-        if install_dir
-        else voicemode_dir / "services" / "mlx-audio"
-    )
-    venv_path = install_path / "venv"
+    # Logs and any future on-disk state for the service live here. The
+    # uv-tool-managed binary itself lives in ``~/.local/bin``.
+    install_path = voicemode_dir / "services" / "mlx-audio"
+    log_dir = voicemode_dir / "logs" / "mlx-audio"
+    install_path.mkdir(parents=True, exist_ok=True)
+    log_dir.mkdir(parents=True, exist_ok=True)
 
-    # Apply the bind/port choices to this process's env so the start script,
-    # rendered immediately below, picks them up via voicemode.env semantics.
+    # Apply the bind/port choices to this process's env so any tools
+    # invoked downstream (status checks, etc.) see the same values.
     os.environ["VOICEMODE_MLX_AUDIO_PORT"] = str(port_int)
     os.environ["VOICEMODE_MLX_AUDIO_HOST"] = "0.0.0.0" if bind_lan_bool else "127.0.0.1"
 
@@ -232,51 +219,38 @@ async def mlx_audio_install(
     if uv_error:
         return {"success": False, "error": uv_error}
 
-    if force_bool and venv_path.exists():
-        logger.info("force_reinstall: removing existing venv at %s", venv_path)
-        shutil.rmtree(venv_path)
+    # Build the ``uv tool install`` command. ``--force`` reinstalls even
+    # when already present; without it, uv is a no-op on existing installs
+    # which is what we want for idempotent runs.
+    pip_target = (
+        MLX_AUDIO_PIP_PACKAGE
+        if version == "latest"
+        else f"{MLX_AUDIO_PIP_PACKAGE}=={version}"
+    )
+    cmd = ["uv", "tool", "install", pip_target]
+    if force_bool:
+        cmd.append("--force")
 
-    install_path.mkdir(parents=True, exist_ok=True)
-
-    # Create venv if missing.
-    if not venv_path.exists():
-        logger.info("Creating mlx-audio venv at %s", venv_path)
-        try:
-            subprocess.run(
-                ["uv", "venv", str(venv_path)],
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError as exc:
-            return {
-                "success": False,
-                "error": "uv venv failed",
-                "stderr": (exc.stderr or b"").decode(errors="replace"),
-            }
-
-    # Install mlx-audio into the venv. uv pip install --python <python> is the
-    # recommended way to target an external venv from a different cwd.
-    pip_target = f"{MLX_AUDIO_PIP_PACKAGE}" if version == "latest" else f"{MLX_AUDIO_PIP_PACKAGE}=={version}"
-    venv_python = venv_path / "bin" / "python"
-    logger.info("Installing %s into %s", pip_target, venv_path)
+    logger.info("Running: %s", " ".join(cmd))
     try:
-        subprocess.run(
-            ["uv", "pip", "install", "--python", str(venv_python), pip_target],
-            check=True,
-            capture_output=True,
-        )
+        subprocess.run(cmd, check=True, capture_output=True)
     except subprocess.CalledProcessError as exc:
         return {
             "success": False,
-            "error": f"uv pip install {pip_target} failed",
+            "error": f"`{' '.join(cmd)}` failed",
             "stderr": (exc.stderr or b"").decode(errors="replace"),
         }
 
-    # Install start script.
-    try:
-        start_script_path = _install_start_script(install_path)
-    except FileNotFoundError as exc:
-        return {"success": False, "error": str(exc)}
+    # Verify the entry point landed where we expect.
+    entry_point = _entry_point_path()
+    if not entry_point.exists():
+        return {
+            "success": False,
+            "error": (
+                f"`uv tool install {pip_target}` succeeded but "
+                f"{entry_point} is missing. Check `uv tool list`."
+            ),
+        }
 
     # Install/update the launchd plist (or systemd unit if/when supported).
     service_result = await _update_mlx_audio_service_files(auto_enable_bool)
@@ -291,15 +265,15 @@ async def mlx_audio_install(
     return {
         "success": True,
         "install_path": str(install_path),
-        "venv_path": str(venv_path),
-        "start_script": str(start_script_path),
+        "entry_point": str(entry_point),
         "service_path": service_result.get("service_path"),
         "service_url": f"http://{bind_host}:{port_int}",
         "host": bind_host,
         "port": port_int,
         "auto_enabled": service_result.get("enabled", False),
         "message": (
-            f"mlx-audio installed at {install_path}. "
+            f"mlx-audio installed via uv tool install. "
+            f"Entry point: {entry_point}. "
             f"Service URL: http://{bind_host}:{port_int}. "
             "Use mlx_audio_model_install to download Whisper / Kokoro / Qwen3-TTS models."
         ),

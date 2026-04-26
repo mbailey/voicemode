@@ -102,13 +102,12 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "START_SCRIPT": start_script,
         }
     elif service_name == "mlx_audio":
-        # mlx-audio: unified Whisper + Kokoro + Qwen3-TTS server (Apple Silicon)
-        mlx_audio_dir = os.path.join(voicemode_dir, "services", "mlx-audio")
-        start_script = os.path.join(mlx_audio_dir, "bin", "start-mlx-audio.sh")
-
+        # mlx-audio: unified Whisper + Kokoro + Qwen3-TTS server (Apple Silicon).
+        # The plist/systemd unit calls ``mlx_audio.server`` directly from the
+        # ``uv tool install``-managed entry point (~/.local/bin); no start
+        # script is required.
         return {
             "HOME": home,
-            "START_SCRIPT": start_script,
         }
     else:
         raise ValueError(f"Unknown service: {service_name}")
@@ -493,6 +492,21 @@ async def start_service(service_name: str) -> str:
         import sys
         cmd = [sys.executable, "-m", "voice_mode", "serve", "--port", str(port)]
 
+    elif service_name == "mlx_audio":
+        # mlx-audio runs from the uv-tool-managed entry point at
+        # ``~/.local/bin/mlx_audio.server``. Bind defaults from config; the
+        # launchd plist sources voicemode.env at boot, but for ad-hoc starts
+        # we honour whatever's already in the current process env (the
+        # install tool exports the right values).
+        from voice_mode.config import MLX_AUDIO_HOST
+        entry_point = Path.home() / ".local" / "bin" / "mlx_audio.server"
+        if not entry_point.exists():
+            return (
+                "❌ mlx-audio entry point not found at "
+                f"{entry_point}. Please run mlx_audio_install first."
+            )
+        cmd = [str(entry_point), "--host", MLX_AUDIO_HOST, "--port", str(port)]
+
     else:
         return f"❌ Unknown service: {service_name}"
 
@@ -649,6 +663,15 @@ async def enable_service(service_name: str) -> str:
                     return f"❌ Failed to install VoiceMode start script: {install_result.get('error', 'Unknown error')}"
                 start_script = install_result.get("start_script", "")
                 logger.info(f"Auto-installed VoiceMode start script at {start_script}")
+
+        elif service_name == "mlx_audio":
+            # mlx-audio uses the uv-tool-managed entry point; no start script.
+            entry_point = Path.home() / ".local" / "bin" / "mlx_audio.server"
+            if not entry_point.exists():
+                return (
+                    "❌ mlx-audio entry point not found at "
+                    f"{entry_point}. Please run mlx_audio_install first."
+                )
 
         # Create parent directories
         service_path.parent.mkdir(parents=True, exist_ok=True)
