@@ -96,7 +96,7 @@ def voice_mode() -> None:
 #   voicemode service status [service]
 # etc.
 
-VALID_SERVICES = ['whisper', 'kokoro', 'voicemode']
+VALID_SERVICES = ['whisper', 'kokoro', 'voicemode', 'mlx_audio']
 
 
 @voice_mode_main_cli.group()
@@ -341,11 +341,13 @@ def service_install(service_name, force):
       whisper    whisper.cpp speech-to-text server
       kokoro     Kokoro text-to-speech server
       voicemode  Already installed (enables the HTTP server)
+      mlx_audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
 
     \b
     Examples:
       voicemode service install whisper
       voicemode service install kokoro --force
+      voicemode service install mlx_audio
     """
     if service_name == 'whisper':
         from voice_mode.tools.whisper.install import whisper_install
@@ -381,6 +383,20 @@ def service_install(service_name, force):
                 click.echo(f"   Start script: {result['start_script']}")
         else:
             click.echo(f"❌ VoiceMode installation failed: {result.get('error', 'Unknown error')}")
+    elif service_name == 'mlx_audio':
+        from voice_mode.tools.mlx_audio.install import mlx_audio_install
+        result = asyncio.run(mlx_audio_install.fn(force_reinstall=force))
+        if isinstance(result, dict):
+            if result.get("success"):
+                click.echo("✅ mlx-audio installed successfully")
+                if result.get('entry_point'):
+                    click.echo(f"   Entry point: {result['entry_point']}")
+                if result.get('service_url'):
+                    click.echo(f"   Service URL: {result['service_url']}")
+            else:
+                click.echo(f"❌ mlx-audio installation failed: {result.get('error', 'Unknown error')}")
+        else:
+            click.echo(result)
     else:
         click.echo(f"❌ Unknown service: {service_name}")
 
