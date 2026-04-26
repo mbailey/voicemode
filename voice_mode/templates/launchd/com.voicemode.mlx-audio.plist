@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- com.voicemode.mlx-audio.plist v2.0.0 -->
+<!-- com.voicemode.mlx-audio.plist v2.1.0 -->
 <!-- Last updated: 2026-04-26 -->
 <!-- mlx-audio: unified Whisper STT + Kokoro TTS + Qwen3-TTS clone-voice on Apple Silicon -->
 <!-- Calls mlx_audio.server directly from `uv tool install mlx-audio` location. -->
@@ -13,8 +13,10 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>set -a; [ -f "$HOME/.voicemode/voicemode.env" ] &amp;&amp; . "$HOME/.voicemode/voicemode.env"; set +a; exec "$HOME/.local/bin/mlx_audio.server" --host "${{VOICEMODE_MLX_AUDIO_HOST:-127.0.0.1}}" --port "${{VOICEMODE_MLX_AUDIO_PORT:-8890}}"</string>
+        <string>set -a; [ -f "$HOME/.voicemode/voicemode.env" ] &amp;&amp; . "$HOME/.voicemode/voicemode.env"; set +a; LOG_DIR="$HOME/.voicemode/logs/mlx-audio"; mkdir -p "$LOG_DIR"; cd "$LOG_DIR"; exec "$HOME/.local/bin/mlx_audio.server" --host "${{VOICEMODE_MLX_AUDIO_HOST:-127.0.0.1}}" --port "${{VOICEMODE_MLX_AUDIO_PORT:-8890}}" --log-dir "$LOG_DIR"</string>
     </array>
+    <key>WorkingDirectory</key>
+    <string>{HOME}/.voicemode/logs/mlx-audio</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>

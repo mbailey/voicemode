@@ -254,3 +254,8 @@ class TestMlxAudioServiceFile:
         # Shell-side variable expansion survives Python str.format escaping.
         assert "${VOICEMODE_MLX_AUDIO_HOST:-127.0.0.1}" in content
         assert "${VOICEMODE_MLX_AUDIO_PORT:-8890}" in content
+        # mlx_audio.server creates a ``logs`` dir relative to CWD; the
+        # plist must cd into a writable dir AND pass --log-dir explicitly,
+        # otherwise launchd's CWD (``/``) makes startup fail with EROFS.
+        assert "--log-dir" in content
+        assert ".voicemode/logs/mlx-audio" in content
