@@ -14,6 +14,7 @@ import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
 from openai import AsyncOpenAI
@@ -34,6 +35,8 @@ def detect_provider_type(base_url: str) -> str:
         return "kokoro"
     elif ":2022" in base_url:
         return "whisper"
+    elif urlparse(base_url).port == 8890 or "mlx_audio" in base_url or "mlx-audio" in base_url:
+        return "mlx-audio"
     elif "127.0.0.1" in base_url or "localhost" in base_url:
         # Try to infer from port if not already detected
         if base_url.endswith("/v1"):
@@ -52,9 +55,18 @@ def is_local_provider(base_url: str) -> bool:
     if not base_url:
         return False
     provider_type = detect_provider_type(base_url)
-    return provider_type in ["kokoro", "whisper", "local"] or \
+    return provider_type in ["kokoro", "whisper", "mlx-audio", "local"] or \
            "127.0.0.1" in base_url or \
            "localhost" in base_url
+
+
+def _default_stt_models(base_url: str) -> List[str]:
+    # Display-only seed. mlx-audio rejects "whisper-1" (it expects a full HF
+    # repo id), so advertise its websocket default instead. Wire payloads are
+    # unaffected -- VM-1100 owns the per-endpoint resolver.
+    if detect_provider_type(base_url) == "mlx-audio":
+        return ["mlx-community/whisper-large-v3-turbo"]
+    return ["whisper-1"]
 
 
 @dataclass
@@ -105,7 +117,7 @@ class ProviderRegistry:
                 provider_type = detect_provider_type(url)
                 self.registry["stt"][url] = EndpointInfo(
                     base_url=url,
-                    models=["whisper-1"],
+                    models=_default_stt_models(url),
                     voices=[],  # STT doesn't have voices
                     provider_type=provider_type
                 )
@@ -168,13 +180,13 @@ class ProviderRegistry:
                                 response = await http_client.get(base_url.rstrip('/v1'))
                                 if response.status_code == 200:
                                     logger.debug(f"Local whisper endpoint {base_url} is responding")
-                                    models = ["whisper-1"]  # Default model name
+                                    models = _default_stt_models(base_url)
                                 else:
                                     raise Exception(f"Whisper endpoint returned status {response.status_code}")
                         else:
                             # For OpenAI, models.list failure likely means auth issue
                             # We'll still mark it as healthy since the endpoint exists
-                            models = ["whisper-1"]  # OpenAI's whisper model
+                            models = _default_stt_models(base_url)
                             logger.debug(f"Assuming OpenAI whisper endpoint {base_url} is available")
                     except Exception as health_error:
                         logger.debug(f"STT health check failed for {base_url}: {health_error}")
@@ -182,7 +194,7 @@ class ProviderRegistry:
             
             # Ensure STT endpoints have at least the default whisper model
             if service_type == "stt" and not models:
-                models = ["whisper-1"]
+                models = _default_stt_models(base_url)
             
             # For TTS, discover voices
             voices = []
