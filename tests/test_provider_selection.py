@@ -5,7 +5,11 @@ from unittest.mock import Mock, patch, AsyncMock
 from datetime import datetime, timezone
 
 from voice_mode.provider_discovery import ProviderRegistry, EndpointInfo, detect_provider_type
-from voice_mode.providers import get_tts_client_and_voice, _select_model_for_endpoint
+from voice_mode.providers import (
+    get_tts_client_and_voice,
+    _select_model_for_endpoint,
+    _select_stt_model_for_endpoint,
+)
 
 
 class TestProviderTypeDetection:
@@ -204,3 +208,111 @@ class TestModelSelection:
         
         # No models at all, fallback to tts-1
         assert _select_model_for_endpoint(endpoint) == "tts-1"
+
+
+class TestSttModelSelection:
+    """Tests for _select_stt_model_for_endpoint resolver branches."""
+
+    def _make_endpoint(self, base_url: str, provider_type: str) -> EndpointInfo:
+        return EndpointInfo(
+            base_url=base_url,
+            models=[],
+            voices=[],
+            provider_type=provider_type,
+            last_check="",
+            last_error=None,
+        )
+
+    def test_openai_override_returns_whisper_1_regardless_of_requested(self):
+        """Branch 1: provider_type == 'openai' always returns 'whisper-1',
+        even when caller passes a different model and STT_MODELS configures
+        a positional override."""
+        endpoint = self._make_endpoint("https://api.openai.com/v1", "openai")
+        with patch(
+            "voice_mode.providers.STT_BASE_URLS",
+            ["https://api.openai.com/v1"],
+        ), patch(
+            "voice_mode.providers.STT_MODELS",
+            ["mlx-community/whisper-large-v3-turbo"],
+        ), patch("voice_mode.providers.STT_MODEL", "global-default"):
+            assert _select_stt_model_for_endpoint(endpoint) == "whisper-1"
+            assert (
+                _select_stt_model_for_endpoint(endpoint, "caller-passed")
+                == "whisper-1"
+            )
+
+    def test_caller_passed_wins_for_non_openai(self):
+        """Branch 2: caller-passed requested_model is honored for non-OpenAI
+        providers (whisper.cpp, mlx-audio, openai-compatible, unknown)."""
+        for provider_type in (
+            "whisper",
+            "mlx-audio",
+            "openai-compatible",
+            "unknown-provider",
+        ):
+            endpoint = self._make_endpoint(
+                "http://127.0.0.1:2022/v1", provider_type
+            )
+            with patch(
+                "voice_mode.providers.STT_BASE_URLS",
+                ["http://127.0.0.1:2022/v1"],
+            ), patch(
+                "voice_mode.providers.STT_MODELS", ["positional-model"]
+            ), patch("voice_mode.providers.STT_MODEL", "global-default"):
+                assert (
+                    _select_stt_model_for_endpoint(endpoint, "caller-model")
+                    == "caller-model"
+                ), f"caller-passed should win for provider_type={provider_type}"
+
+    def test_positional_stt_models_used_when_caller_passed_is_none(self):
+        """Branch 3: when caller-passed is None and the endpoint URL is in
+        STT_BASE_URLS at index N, return STT_MODELS[N] if non-empty."""
+        urls = [
+            "http://127.0.0.1:8890/v1",
+            "http://127.0.0.1:2022/v1",
+            "https://api.openai.com/v1",
+        ]
+        models = [
+            "mlx-community/whisper-large-v3-turbo",
+            "custom-cpp-model",
+            "whisper-1",
+        ]
+        with patch("voice_mode.providers.STT_BASE_URLS", urls), patch(
+            "voice_mode.providers.STT_MODELS", models
+        ), patch("voice_mode.providers.STT_MODEL", "global-default"):
+            mlx = self._make_endpoint(urls[0], "mlx-audio")
+            cpp = self._make_endpoint(urls[1], "whisper")
+            assert (
+                _select_stt_model_for_endpoint(mlx)
+                == "mlx-community/whisper-large-v3-turbo"
+            )
+            assert _select_stt_model_for_endpoint(cpp) == "custom-cpp-model"
+
+    def test_global_stt_model_fallback_when_no_positional(self):
+        """Branch 4: fallback to global STT_MODEL when caller-passed is None
+        and no positional STT_MODELS entry applies (URL not in STT_BASE_URLS,
+        index out of range, or positional entry empty)."""
+        with patch(
+            "voice_mode.providers.STT_BASE_URLS",
+            ["http://127.0.0.1:2022/v1"],
+        ), patch("voice_mode.providers.STT_MODELS", []), patch(
+            "voice_mode.providers.STT_MODEL", "global-default"
+        ):
+            # URL not in STT_BASE_URLS
+            unknown = self._make_endpoint(
+                "http://10.0.0.5:9999/v1", "unknown-provider"
+            )
+            assert _select_stt_model_for_endpoint(unknown) == "global-default"
+            # URL in STT_BASE_URLS but STT_MODELS empty (idx out of range)
+            cpp = self._make_endpoint("http://127.0.0.1:2022/v1", "whisper")
+            assert _select_stt_model_for_endpoint(cpp) == "global-default"
+
+        # Positional entry exists but is empty -> falls back to global
+        with patch(
+            "voice_mode.providers.STT_BASE_URLS",
+            ["http://127.0.0.1:2022/v1"],
+        ), patch("voice_mode.providers.STT_MODELS", [""]), patch(
+            "voice_mode.providers.STT_MODEL", "global-default"
+        ):
+            cpp = self._make_endpoint("http://127.0.0.1:2022/v1", "whisper")
+            assert _select_stt_model_for_endpoint(cpp) == "global-default"

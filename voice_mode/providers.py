@@ -9,7 +9,7 @@ import logging
 from typing import Dict, Optional, List, Any, Tuple
 from openai import AsyncOpenAI
 
-from .config import TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, OPENAI_API_KEY, get_voice_preferences
+from .config import TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS, OPENAI_API_KEY, get_voice_preferences
 from .provider_discovery import provider_registry, EndpointInfo, is_local_provider
 
 logger = logging.getLogger("voicemode")
@@ -183,7 +183,7 @@ async def get_stt_client(
         if not endpoint_info:
             raise ValueError(f"Requested base URL {base_url} is not configured")
 
-        selected_model = model or "whisper-1"  # Default STT model
+        selected_model = _select_stt_model_for_endpoint(endpoint_info, model)
 
         # Disable retries for local endpoints - they either work or don't
         max_retries = 0 if is_local_provider(base_url) else 2
@@ -201,7 +201,7 @@ async def get_stt_client(
         raise ValueError("No STT endpoints available")
 
     endpoint_info = endpoints[0]
-    selected_model = model or "whisper-1"
+    selected_model = _select_stt_model_for_endpoint(endpoint_info, model)
     
     api_key = OPENAI_API_KEY if endpoint_info.provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
     # Disable retries for local endpoints - they either work or don't
@@ -235,18 +235,45 @@ def _select_model_for_endpoint(endpoint_info: EndpointInfo, requested_model: Opt
     # If specific model requested and supported, use it
     if requested_model and requested_model in endpoint_info.models:
         return requested_model
-    
+
     # Try to find a preferred model
     for model in TTS_MODELS:
         if model in endpoint_info.models:
             return model
-    
+
     # Otherwise use first available model
     if endpoint_info.models:
         return endpoint_info.models[0]
-    
+
     # Fallback
     return "tts-1"
+
+
+def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model: Optional[str] = None) -> str:
+    """Select the STT model name to send to an endpoint.
+
+    Resolution order:
+      1. provider_type == "openai" -> always "whisper-1" (OpenAI's only STT model id)
+      2. caller-passed requested_model wins
+      3. positional STT_MODELS entry matching this endpoint's index in STT_BASE_URLS
+      4. global STT_MODEL fallback
+
+    Note: the OpenAI override keys off endpoint_info.provider_type. If an
+    OpenAI-compatible endpoint ever sets provider_type="openai" this branch
+    would be too broad -- revisit when VM-1106-style provider detection lands.
+    """
+    if endpoint_info.provider_type == "openai":
+        return "whisper-1"
+
+    if requested_model is not None:
+        return requested_model
+
+    if endpoint_info.base_url in STT_BASE_URLS:
+        idx = STT_BASE_URLS.index(endpoint_info.base_url)
+        if idx < len(STT_MODELS) and STT_MODELS[idx]:
+            return STT_MODELS[idx]
+
+    return STT_MODEL
 
 
 # Compatibility functions for existing code

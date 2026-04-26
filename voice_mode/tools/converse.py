@@ -692,7 +692,6 @@ async def speech_to_text(
             with open(tmp_path, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
-                    model="whisper-1"
                 )
         finally:
             # Clean up temp file (we keep the WAV)
@@ -713,7 +712,6 @@ async def speech_to_text(
             with open(tmp_path, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
-                    model="whisper-1"
                 )
         finally:
             # Clean up temp file
