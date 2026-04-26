@@ -151,6 +151,17 @@ def load_tool(tool_name: str) -> bool:
                 except ImportError:
                     pass
 
+            # Special case for mlx_audio directory (has underscore in name)
+            if tool_name.startswith("mlx_audio_"):
+                tool_file = tool_name.replace("mlx_audio_", "")
+                module_path = f".mlx_audio.{tool_file}"
+                try:
+                    logger.debug(f"Loading mlx_audio tool: {tool_name}")
+                    importlib.import_module(module_path, package=__name__)
+                    return True
+                except ImportError:
+                    pass
+
             # Standard subdirectory pattern
             parts = tool_name.split("_", 1)
             if len(parts) == 2:
