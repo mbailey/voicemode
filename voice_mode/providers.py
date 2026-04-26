@@ -183,7 +183,7 @@ async def get_stt_client(
         if not endpoint_info:
             raise ValueError(f"Requested base URL {base_url} is not configured")
 
-        selected_model = model or "whisper-1"  # Default STT model
+        selected_model = _select_stt_model_for_endpoint(endpoint_info, model)
 
         # Disable retries for local endpoints - they either work or don't
         max_retries = 0 if is_local_provider(base_url) else 2
@@ -201,7 +201,7 @@ async def get_stt_client(
         raise ValueError("No STT endpoints available")
 
     endpoint_info = endpoints[0]
-    selected_model = model or "whisper-1"
+    selected_model = _select_stt_model_for_endpoint(endpoint_info, model)
     
     api_key = OPENAI_API_KEY if endpoint_info.provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
     # Disable retries for local endpoints - they either work or don't
