@@ -55,7 +55,7 @@ def is_local_provider(base_url: str) -> bool:
     if not base_url:
         return False
     provider_type = detect_provider_type(base_url)
-    return provider_type in ["kokoro", "whisper", "local"] or \
+    return provider_type in ["kokoro", "whisper", "mlx-audio", "local"] or \
            "127.0.0.1" in base_url or \
            "localhost" in base_url
 
