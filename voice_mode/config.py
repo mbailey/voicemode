@@ -206,8 +206,8 @@ def load_voicemode_env():
 # mlx-audio Configuration (Apple Silicon)
 #############
 
-# mlx-audio server port (default: 8891 -- avoids ms2:8890 SSH-tunnel collision)
-# VOICEMODE_MLX_AUDIO_PORT=8891
+# mlx-audio server port (default: 8890 -- the upstream mlx-audio convention)
+# VOICEMODE_MLX_AUDIO_PORT=8890
 
 # mlx-audio bind host (default: 127.0.0.1; set to 0.0.0.0 for LAN exposure)
 # VOICEMODE_MLX_AUDIO_HOST=127.0.0.1
@@ -646,9 +646,10 @@ KOKORO_MAX_REQUESTS = int(os.getenv("VOICEMODE_KOKORO_MAX_REQUESTS", "25"))
 # ==================== MLX-AUDIO CONFIGURATION ====================
 
 # mlx-audio is the unified Apple-Silicon-only voice service (Whisper STT +
-# Kokoro TTS + Qwen3-TTS clone-voice in one process). Default port 8891 avoids
-# colliding with the existing ms2:8890 SSH-tunnel convention. See VM-1076.
-MLX_AUDIO_PORT = int(os.getenv("VOICEMODE_MLX_AUDIO_PORT", "8891"))
+# Kokoro TTS + Qwen3-TTS clone-voice in one process). Default port 8890 matches
+# the upstream mlx-audio convention (and the existing ms2 install) -- mirrors
+# how kokoro-fastapi defaults to 8880. See VM-1076.
+MLX_AUDIO_PORT = int(os.getenv("VOICEMODE_MLX_AUDIO_PORT", "8890"))
 MLX_AUDIO_HOST = os.getenv("VOICEMODE_MLX_AUDIO_HOST", "127.0.0.1")
 
 # ==================== SERVICE MANAGEMENT CONFIGURATION ====================
