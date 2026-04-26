@@ -12,7 +12,8 @@ from .openai_error_parser import OpenAIErrorParser
 from .provider_discovery import is_local_provider
 
 from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE
-from .provider_discovery import detect_provider_type
+from .provider_discovery import detect_provider_type, EndpointInfo
+from .providers import _select_stt_model_for_endpoint
 
 logger = logging.getLogger("voicemode")
 
@@ -157,7 +158,7 @@ async def simple_tts_failover(
 
 async def simple_stt_failover(
     audio_file,
-    model: str = "whisper-1",
+    model: Optional[str] = None,
     **kwargs
 ) -> Optional[Dict[str, Any]]:
     """
@@ -224,11 +225,21 @@ async def simple_stt_failover(
                 max_retries=max_retries
             )
 
+            # Resolve the per-endpoint STT model: OpenAI override -> caller-passed
+            # -> positional STT_MODELS -> global STT_MODEL.
+            endpoint_info = EndpointInfo(
+                base_url=base_url,
+                models=[],
+                voices=[],
+                provider_type=provider_type,
+            )
+            resolved_model = _select_stt_model_for_endpoint(endpoint_info, model)
+
             # Try STT with this endpoint - track timing
             request_start = time.perf_counter()
             # Build transcription kwargs with optional prompt for vocabulary biasing
             transcription_kwargs = {
-                "model": model,
+                "model": resolved_model,
                 "file": audio_file,
                 "response_format": "text"
             }
