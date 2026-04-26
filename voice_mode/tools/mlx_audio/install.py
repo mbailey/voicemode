@@ -32,7 +32,7 @@ from voice_mode.config import SERVICE_AUTO_ENABLE
 logger = logging.getLogger("voicemode")
 
 
-MLX_AUDIO_DEFAULT_PORT = 8891
+MLX_AUDIO_DEFAULT_PORT = 8890
 MLX_AUDIO_PIP_PACKAGE = "mlx-audio"
 
 
@@ -175,8 +175,8 @@ async def mlx_audio_install(
     Args:
         install_dir: Override install location
             (default: ``~/.voicemode/services/mlx-audio``).
-        port: Local TCP port (default 8891 -- avoids the ms2:8890 SSH
-            tunnel collision).
+        port: Local TCP port (default 8890 -- the upstream mlx-audio
+            convention, mirroring kokoro-fastapi's 8880 default).
         bind_lan: Bind to ``0.0.0.0`` instead of ``127.0.0.1`` (default
             ``False``). LAN exposure is opt-in -- see VM-1076 Q2.
         force_reinstall: Wipe the existing venv and reinstall from scratch.
