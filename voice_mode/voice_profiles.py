@@ -49,8 +49,12 @@ REMOTE_VOICES_DIR = os.environ.get("VOICEMODE_REMOTE_VOICES_DIR", "")
 DEFAULT_CLONE_BASE_URL = os.environ.get(
     "VOICEMODE_CLONE_BASE_URL", "http://127.0.0.1:8890/v1"
 )
+# 1.7B-Base-4bit: ~2× realtime on M-series, clean audio, ~2.2GB on disk.
+# Picked as the default from the Apr 2026 quant matrix bench. The
+# auto-generated voicemode.env lists alternatives (5-bit, 6-bit, bf16,
+# 0.6B-5bit).
 DEFAULT_CLONE_MODEL = os.environ.get(
-    "VOICEMODE_CLONE_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+    "VOICEMODE_CLONE_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
 )
 
 # Matches ``name[0]``, ``name[12]``. Captures (name, index).
