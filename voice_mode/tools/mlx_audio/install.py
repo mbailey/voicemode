@@ -47,7 +47,9 @@ MLX_AUDIO_ENTRY_POINT = "mlx_audio.server"
 # reviewability -- ``uv tool install`` resolves them as a single set.
 MLX_AUDIO_EXTRAS: List[str] = [
     "misaki[en]",          # Kokoro G2P (text -> phonemes)
-    "en-core-web-sm",      # spaCy English model used by misaki
+    # spaCy English model used by misaki -- not on PyPI, install from GitHub release wheel.
+    # When upgrading spaCy, also bump the en_core_web_sm version below to a compatible release.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "uvicorn",             # ASGI server for the FastAPI app
     "fastapi",             # web framework -- mlx-audio doesn't pin it
     "webrtcvad",           # voice activity detection

@@ -1,5 +1,5 @@
---- /Users/admin/.local/share/uv/tools/mlx-audio/lib/python3.12/site-packages/mlx_audio/server.py.pre-pr594.bak	2026-04-27 10:58:14
-+++ /Users/admin/.local/share/uv/tools/mlx-audio/lib/python3.12/site-packages/mlx_audio/server.py	2026-04-27 11:14:33
+--- a/server.py
++++ b/server.py
 @@ -35,7 +35,7 @@
      WebSocketDisconnect,
  )
