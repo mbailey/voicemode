@@ -22,6 +22,7 @@ from voice_mode.tools.mlx_audio.install import (
     _apply_server_patch,
     _build_install_cmd,
     _is_apple_silicon,
+    _query_installed_version,
     mlx_audio_install,
 )
 from voice_mode.tools.service import (
@@ -266,17 +267,18 @@ class TestPatchFailureError:
 
         def fake_run(cmd, **kwargs):
             # First subprocess.run call is `patch -p1 ...` and fails.
-            # Second is `uv tool list` for the version lookup.
+            # Second is `uv tool run --from mlx-audio python -c ...` for
+            # the importlib.metadata version lookup.
             if cmd and cmd[0] == "patch":
                 return type("R", (), {
                     "returncode": 1,
                     "stdout": "",
                     "stderr": "Hunk #1 FAILED at 35.",
                 })()
-            if cmd[:3] == ["uv", "tool", "list"]:
+            if cmd[:4] == ["uv", "tool", "run", "--from"]:
                 return type("R", (), {
                     "returncode": 0,
-                    "stdout": "mlx-audio v0.4.2\n",
+                    "stdout": "0.4.2\n",
                     "stderr": "",
                 })()
             raise AssertionError(f"unexpected subprocess.run call: {cmd}")
@@ -292,7 +294,84 @@ class TestPatchFailureError:
         # The error must point at the patch file + the installed version
         # so the operator can investigate without source-diving.
         assert "mlx_audio_server.patch" in result["error"]
-        assert "v0.4.2" in result["error"] or "unknown" in result["error"]
+        assert "0.4.2" in result["error"] or "unknown" in result["error"]
+
+
+class TestQueryInstalledVersion:
+    """``_query_installed_version`` reads the version from the tool's venv."""
+
+    def test_returns_version_from_importlib_metadata(self):
+        from voice_mode.tools.mlx_audio import install as install_mod
+
+        def fake_run(cmd, **kwargs):
+            # Confirms we go through ``uv tool run --from mlx-audio python``.
+            assert cmd[:4] == ["uv", "tool", "run", "--from"]
+            assert cmd[4] == "mlx-audio"
+            assert cmd[5] == "python"
+            return type("R", (), {
+                "returncode": 0,
+                "stdout": "0.4.2\n",
+                "stderr": "",
+            })()
+
+        with patch(
+            "voice_mode.tools.mlx_audio.install.subprocess.run",
+            side_effect=fake_run,
+        ):
+            assert install_mod._query_installed_version() == "0.4.2"
+
+    def test_returns_none_when_uv_missing(self):
+        from voice_mode.tools.mlx_audio import install as install_mod
+
+        with patch(
+            "voice_mode.tools.mlx_audio.install.subprocess.run",
+            side_effect=FileNotFoundError("uv"),
+        ):
+            assert install_mod._query_installed_version() is None
+
+    def test_returns_none_on_nonzero_exit(self):
+        from voice_mode.tools.mlx_audio import install as install_mod
+
+        def fake_run(cmd, **kwargs):
+            return type("R", (), {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "tool not found",
+            })()
+
+        with patch(
+            "voice_mode.tools.mlx_audio.install.subprocess.run",
+            side_effect=fake_run,
+        ):
+            assert install_mod._query_installed_version() is None
+
+    def test_returns_none_when_stdout_is_garbage(self):
+        # Defends against future uv versions that might prepend banners or
+        # warnings -- if the last line isn't a PEP 440 version, return None.
+        from voice_mode.tools.mlx_audio import install as install_mod
+
+        def fake_run(cmd, **kwargs):
+            return type("R", (), {
+                "returncode": 0,
+                "stdout": "warning: something\nNot-a-version\n",
+                "stderr": "",
+            })()
+
+        with patch(
+            "voice_mode.tools.mlx_audio.install.subprocess.run",
+            side_effect=fake_run,
+        ):
+            assert install_mod._query_installed_version() is None
+
+    def test_returns_none_on_timeout(self):
+        from voice_mode.tools.mlx_audio import install as install_mod
+        import subprocess as _sp
+
+        with patch(
+            "voice_mode.tools.mlx_audio.install.subprocess.run",
+            side_effect=_sp.TimeoutExpired(cmd="uv", timeout=30),
+        ):
+            assert install_mod._query_installed_version() is None
 
 
 # ============================================================================

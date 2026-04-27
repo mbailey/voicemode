@@ -271,25 +271,45 @@ def _apply_server_patch(server_py: Path) -> Dict[str, Any]:
 
 
 def _query_installed_version() -> Optional[str]:
-    """Best-effort: ask ``uv tool list`` what version of mlx-audio is installed."""
+    """Best-effort: read mlx-audio's installed version from inside its venv.
+
+    Earlier versions parsed ``uv tool list`` stdout, which is fragile across
+    uv releases (column shape, prefix decoration, locale, etc.). uv 0.9.x
+    has no ``uv tool show`` subcommand and ``uv tool list --output-format
+    json`` is unrecognized -- so we ask the tool's own venv via
+    ``importlib.metadata`` instead. That bypasses uv's CLI surface entirely
+    and gets us the canonical PEP 440 string.
+
+    Returns ``None`` on any failure (subprocess error, parse error, missing
+    install) -- callers should treat it as "unknown version" rather than
+    aborting the install/patch flow.
+    """
     try:
         completed = subprocess.run(
-            ["uv", "tool", "list"],
+            [
+                "uv",
+                "tool",
+                "run",
+                "--from",
+                MLX_AUDIO_PIP_PACKAGE,
+                "python",
+                "-c",
+                "import importlib.metadata as m; "
+                f"print(m.version('{MLX_AUDIO_PIP_PACKAGE}'))",
+            ],
             capture_output=True,
             text=True,
+            timeout=30,
         )
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if completed.returncode != 0:
         return None
-    for line in completed.stdout.splitlines():
-        # Expected shape: ``mlx-audio v0.4.2``
-        stripped = line.strip()
-        if stripped.startswith("mlx-audio "):
-            parts = stripped.split()
-            if len(parts) >= 2:
-                return parts[1]
-    return None
+    version = completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
+    # Sanity check: PEP 440 versions start with a digit.
+    if not version or not version[0].isdigit():
+        return None
+    return version
 
 
 async def _update_mlx_audio_service_files(
