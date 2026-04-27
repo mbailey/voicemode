@@ -43,9 +43,15 @@ VOICES_DIR = Path(os.path.expanduser(
 # the server can find the file on its own filesystem.
 REMOTE_VOICES_DIR = os.environ.get("VOICEMODE_REMOTE_VOICES_DIR", "")
 
-# Default mlx-audio endpoint (Qwen3-TTS on ms2)
-DEFAULT_CLONE_BASE_URL = "http://ms2:8890/v1"
-DEFAULT_CLONE_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+# Default mlx-audio endpoint for clone voices (Qwen3-TTS).
+# Override via env vars when you want to point at a different server
+# (e.g. local mlx-audio on 127.0.0.1:8890 instead of ms2).
+DEFAULT_CLONE_BASE_URL = os.environ.get(
+    "VOICEMODE_CLONE_BASE_URL", "http://ms2:8890/v1"
+)
+DEFAULT_CLONE_MODEL = os.environ.get(
+    "VOICEMODE_CLONE_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+)
 
 # Matches ``name[0]``, ``name[12]``. Captures (name, index).
 _INDEX_RE = re.compile(r"^([^/\[\]]+)\[(\d+)\]$")
