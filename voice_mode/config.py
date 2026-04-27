@@ -637,6 +637,23 @@ KOKORO_CACHE_DIR = expand_path(os.getenv("VOICEMODE_KOKORO_CACHE_DIR", str(BASE_
 KOKORO_DEFAULT_VOICE = os.getenv("VOICEMODE_KOKORO_DEFAULT_VOICE", "af_sky")
 KOKORO_MAX_REQUESTS = int(os.getenv("VOICEMODE_KOKORO_MAX_REQUESTS", "25"))
 
+# ==================== MLX-AUDIO SERVICE CONFIGURATION ====================
+
+# mlx-audio is the unified Whisper STT + Kokoro TTS + Qwen3-TTS
+# clone-voice service used on Apple Silicon. The launchd plist /
+# systemd unit reads VOICEMODE_MLX_AUDIO_HOST / VOICEMODE_MLX_AUDIO_PORT
+# from voicemode.env so changes here are picked up at next service start.
+MLX_AUDIO_HOST = os.getenv("VOICEMODE_MLX_AUDIO_HOST", "127.0.0.1")
+MLX_AUDIO_PORT = int(os.getenv("VOICEMODE_MLX_AUDIO_PORT", "8890"))
+
+# ==================== CLONE VOICE CONFIGURATION ====================
+
+# Default Qwen3-TTS model for the clone-voice feature. This is a
+# *cloning* setting (which weights to ask the mlx-audio service to use),
+# not a service setting -- the mlx-audio service itself doesn't pin a
+# model.
+CLONE_MODEL = os.getenv("VOICEMODE_CLONE_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16")
+
 # ==================== SERVICE MANAGEMENT CONFIGURATION ====================
 
 # Auto-enable services after installation
