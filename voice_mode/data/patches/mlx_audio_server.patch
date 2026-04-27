@@ -1,0 +1,106 @@
+--- /Users/admin/.local/share/uv/tools/mlx-audio/lib/python3.12/site-packages/mlx_audio/server.py.pre-pr594.bak	2026-04-27 10:58:14
++++ /Users/admin/.local/share/uv/tools/mlx-audio/lib/python3.12/site-packages/mlx_audio/server.py	2026-04-27 11:14:33
+@@ -35,7 +35,7 @@
+     WebSocketDisconnect,
+ )
+ from fastapi.middleware.cors import CORSMiddleware
+-from fastapi.responses import StreamingResponse
++from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+ from pydantic import BaseModel
+ 
+ from mlx_audio.audio_io import read as audio_read
+@@ -196,7 +196,15 @@
+ # Initialize the ModelProvider
+ model_provider = ModelProvider()
+ 
++# MLX's Metal backend is not thread-safe. Concurrent inference calls from
++# multiple coroutines share the same Metal command buffer, triggering:
++#   "A command encoder is already encoding to this command buffer"
++# This is a known upstream issue: https://github.com/ml-explore/mlx/issues/2133
++# Serialise all inference through this lock so only one request uses the GPU
++# at a time.
++_inference_lock = asyncio.Lock()
+ 
++
+ @app.get("/")
+ async def root():
+     return {
+@@ -261,6 +269,12 @@
+ 
+ 
+ async def generate_audio(model, payload: SpeechRequest):
++    async with _inference_lock:
++        async for chunk in _generate_audio_inner(model, payload):
++            yield chunk
++
++
++async def _generate_audio_inner(model, payload: SpeechRequest):
+     # Load reference audio if provided
+     ref_audio = payload.ref_audio
+     audio_chunks = []
+@@ -381,6 +395,7 @@
+     context: Optional[str] = Form(None),
+     prefill_step_size: int = Form(2048),
+     text: Optional[str] = Form(None),
++    response_format: str = Form("json"),
+ ):
+     """Transcribe audio using an STT model in OpenAI format."""
+     # Create TranscriptionRequest from form fields
+@@ -413,9 +428,56 @@
+     # Filter kwargs to only include parameters the model's generate method accepts
+     signature = inspect.signature(stt_model.generate)
+     gen_kwargs = {k: v for k, v in gen_kwargs.items() if k in signature.parameters}
++
++    # Honor OpenAI-style response_format. mlx-audio normally streams ndjson with
++    # full segments + metadata. For text/json/verbose_json we collect the result
++    # and reshape to match the OpenAI Audio API.
++    if response_format in ("text", "json", "verbose_json"):
++        async with _inference_lock:
++            chunks = list(generate_transcription_stream(stt_model, tmp_path, gen_kwargs))
++        # Each chunk is a JSON line. The last full-result chunk has the whole payload.
++        # Collect text from streaming chunks if any; otherwise use the single full result.
++        full = None
++        accumulated = ""
++        for line in chunks:
++            try:
++                obj = json.loads(line)
++            except Exception:
++                continue
++            if "segments" in obj or "language" in obj:
++                full = obj
++            elif "text" in obj:
++                accumulated += obj.get("text") or ""
++        if full is None:
++            full = {"text": accumulated}
++
++        def _drop_hallucinated_silence(payload: dict) -> dict:
++            """Whisper hallucinates empty/'.'-only segments on trailing silence.
++            Strip them so callers don't drown in noise."""
++            segs = payload.get("segments") or []
++            filtered = [s for s in segs
++                        if (s.get("text") or "").strip() not in ("", ".", "...")]
++            if filtered:
++                payload = {**payload, "segments": filtered}
++                payload["text"] = "".join(s.get("text", "") for s in filtered)
++            return payload
++
++        full = _drop_hallucinated_silence(full)
+ 
++        if response_format == "text":
++            return PlainTextResponse((full.get("text") or "").strip())
++        if response_format == "json":
++            return JSONResponse({"text": (full.get("text") or "").strip()})
++        # verbose_json: keep segments + language but drop the silence hallucinations
++        return JSONResponse(full)
++
++    async def locked_transcription_stream():
++        async with _inference_lock:
++            for chunk in generate_transcription_stream(stt_model, tmp_path, gen_kwargs):
++                yield chunk
++
+     return StreamingResponse(
+-        generate_transcription_stream(stt_model, tmp_path, gen_kwargs),
++        locked_transcription_stream(),
+         media_type="application/x-ndjson",
+     )
+ 
