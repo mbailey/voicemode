@@ -1,6 +1,11 @@
-"""Unit tests for the voicemode clone CLI subcommand group."""
+"""Unit tests for the voicemode clone CLI subcommand group.
 
-import json
+Note: as of VM-1108 the clone group only manages voice profiles
+(add/list/remove). Service install/status/uninstall moved to
+``voicemode service install mlx-audio`` -- those branches live in
+test_mlx_audio_install.py.
+"""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -27,184 +32,26 @@ class TestCloneGroupRegistered:
         """The 'clone' subcommand should appear in voicemode --help."""
         result = runner.invoke(voice_mode_main_cli, ["clone", "--help"])
         assert result.exit_code == 0
-        assert "Voice cloning service management" in result.output
+        assert "Voice cloning profile management" in result.output
 
-    def test_clone_help_lists_all_subcommands(self, runner):
-        """clone --help should list install, status, uninstall, add, list, remove."""
+    def test_clone_help_lists_profile_subcommands(self, runner):
+        """clone --help lists add, list, remove (service ops moved to service group)."""
         result = runner.invoke(voice_mode_main_cli, ["clone", "--help"])
         assert result.exit_code == 0
-        for cmd in ("install", "status", "uninstall", "add", "list", "remove"):
+        for cmd in ("add", "list", "remove"):
             assert cmd in result.output, f"Missing subcommand '{cmd}' in clone --help"
 
-
-# ============================================================================
-# clone install
-# ============================================================================
-
-
-class TestCloneInstall:
-    """Test clone install subcommand."""
-
-    def test_install_help(self, runner):
-        result = runner.invoke(voice_mode_main_cli, ["clone", "install", "--help"])
-        assert result.exit_code == 0
-        assert "--port" in result.output
-        assert "--force" in result.output
-        assert "--model" in result.output
-
-    @patch("voice_mode.tools.clone.install.clone_install", new_callable=AsyncMock)
-    def test_install_success(self, mock_install, runner):
-        mock_install.return_value = {
-            "success": True,
-            "install_path": "/home/user/.voicemode/services/clone",
-            "model": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
-            "service_url": "http://127.0.0.1:8890",
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "install"])
-        assert result.exit_code == 0
-        assert "Clone TTS installed successfully" in result.output
-        mock_install.assert_called_once()
-
-    @patch("voice_mode.tools.clone.install.clone_install", new_callable=AsyncMock)
-    def test_install_already_installed(self, mock_install, runner):
-        mock_install.return_value = {
-            "success": True,
-            "already_installed": True,
-            "install_path": "/home/user/.voicemode/services/clone",
-            "model": "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16",
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "install"])
-        assert result.exit_code == 0
-        assert "Already installed" in result.output
-
-    @patch("voice_mode.tools.clone.install.clone_install", new_callable=AsyncMock)
-    def test_install_failure(self, mock_install, runner):
-        mock_install.return_value = {
-            "success": False,
-            "error": "Clone TTS requires Apple Silicon (M1/M2/M3/M4).",
-            "platform": "x86_64",
-            "system": "Linux",
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "install"])
-        assert result.exit_code == 1
-        assert "Installation failed" in result.output
-        assert "Apple Silicon" in result.output
-
-    @patch("voice_mode.tools.clone.install.clone_install", new_callable=AsyncMock)
-    def test_install_custom_port(self, mock_install, runner):
-        mock_install.return_value = {
-            "success": True,
-            "install_path": "/tmp/clone",
-            "model": "test-model",
-            "service_url": "http://127.0.0.1:9999",
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "install", "--port", "9999"])
-        assert result.exit_code == 0
-        call_kwargs = mock_install.call_args
-        assert call_kwargs.kwargs.get("port") == 9999
-
-    @patch("voice_mode.tools.clone.install.clone_install", new_callable=AsyncMock)
-    def test_install_with_force(self, mock_install, runner):
-        mock_install.return_value = {
-            "success": True,
-            "install_path": "/tmp/clone",
-            "model": "test-model",
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "install", "--force"])
-        assert result.exit_code == 0
-        call_kwargs = mock_install.call_args
-        assert call_kwargs.kwargs.get("force_reinstall") is True or call_kwargs[1].get("force_reinstall") is True
-
-
-# ============================================================================
-# clone status
-# ============================================================================
-
-
-class TestCloneStatus:
-    """Test clone status subcommand."""
-
-    def test_status_help(self, runner):
-        result = runner.invoke(voice_mode_main_cli, ["clone", "status", "--help"])
-        assert result.exit_code == 0
-        assert "Check clone TTS service status" in result.output
-
-    @patch("voice_mode.tools.clone.status.clone_status", new_callable=AsyncMock)
-    def test_status_running(self, mock_status, runner):
-        mock_status.return_value = {
-            "healthy": True,
-            "status": "running",
-            "port": 8890,
-            "url": "http://127.0.0.1:8890",
-            "models": {"data": [{"id": "test-model"}]},
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "status"])
-        assert result.exit_code == 0
-        assert "Clone TTS is running" in result.output
-        assert "8890" in result.output
-
-    @patch("voice_mode.tools.clone.status.clone_status", new_callable=AsyncMock)
-    def test_status_not_running(self, mock_status, runner):
-        mock_status.return_value = {
-            "healthy": False,
-            "status": "not_running",
-            "port": 8890,
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "status"])
-        assert result.exit_code == 0
-        assert "not running" in result.output
-
-    @patch("voice_mode.tools.clone.status.clone_status", new_callable=AsyncMock)
-    def test_status_unhealthy(self, mock_status, runner):
-        mock_status.return_value = {
-            "healthy": False,
-            "status": "unhealthy",
-            "http_status": 500,
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "status"])
-        assert result.exit_code == 0
-        assert "unhealthy" in result.output
-
-
-# ============================================================================
-# clone uninstall
-# ============================================================================
-
-
-class TestCloneUninstall:
-    """Test clone uninstall subcommand."""
-
-    def test_uninstall_help(self, runner):
-        result = runner.invoke(voice_mode_main_cli, ["clone", "uninstall", "--help"])
-        assert result.exit_code == 0
-        assert "--remove-model" in result.output
-
-    @patch("voice_mode.tools.clone.uninstall.clone_uninstall", new_callable=AsyncMock)
-    def test_uninstall_success(self, mock_uninstall, runner):
-        mock_uninstall.return_value = {
-            "success": True,
-            "message": "Clone TTS service uninstalled",
-            "removed_items": ["Stopped running clone TTS service", "Removed launchd configuration"],
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "uninstall", "--yes"])
-        assert result.exit_code == 0
-        assert "uninstalled successfully" in result.output
-
-    @patch("voice_mode.tools.clone.uninstall.clone_uninstall", new_callable=AsyncMock)
-    def test_uninstall_failure(self, mock_uninstall, runner):
-        mock_uninstall.return_value = {
-            "success": False,
-            "message": "Failed to uninstall",
-            "errors": ["Permission denied"],
-        }
-        result = runner.invoke(voice_mode_main_cli, ["clone", "uninstall", "--yes"])
-        assert result.exit_code == 1
-        assert "Uninstall failed" in result.output
-
-    def test_uninstall_confirmation_prompt(self, runner):
-        """Without --yes, uninstall should prompt for confirmation."""
-        result = runner.invoke(voice_mode_main_cli, ["clone", "uninstall"], input="n\n")
-        assert result.exit_code != 0  # Aborted
+    def test_clone_no_longer_has_service_subcommands(self, runner):
+        """install/status/uninstall live under `voicemode service` now -- they
+        must not be invokable as `voicemode clone <op>`."""
+        for op in ("install", "status", "uninstall"):
+            result = runner.invoke(voice_mode_main_cli, ["clone", op, "--help"])
+            # Click returns nonzero with "No such command" when the subcommand
+            # is absent from the group.
+            assert result.exit_code != 0, (
+                f"`voicemode clone {op}` still resolves -- it should have "
+                "moved to `voicemode service install mlx-audio`."
+            )
 
 
 # ============================================================================
