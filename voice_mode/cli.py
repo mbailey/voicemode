@@ -88,6 +88,380 @@ def voice_mode() -> None:
 
 
 # ============================================================================
+# sayas CLI -- standalone entry point for voice cloning TTS
+# ============================================================================
+
+
+@click.command()
+@click.argument("voice", required=False)
+@click.argument("text", nargs=-1)
+@click.option("-l", "--list", "list_voices", is_flag=True, help="List available voices")
+@click.option("-p", "--preview", is_flag=True, help="Preview the reference audio clip")
+@click.option("-o", "--output", type=click.Path(), help="Save audio to file instead of playing")
+@click.option("-s", "--stream", is_flag=True, help="Stream audio to mpv for reduced latency")
+@click.option("--completion", is_flag=True, help="Print bash completion script to stdout")
+def sayas_command(voice, text, list_voices, preview, output, stream, completion):
+    """Speak as someone using voice cloning.
+
+    \b
+    Usage:
+      sayas <voice> "text to speak"
+      sayas <voice> -p              # preview reference audio
+      sayas -l                       # list available voices
+      sayas --completion             # print bash completion
+
+    \b
+    Examples:
+      sayas fleabag "Hair is everything, darling"
+      sayas mike "Good evening everyone"
+      sayas odawg "Welcome to the show" -o output.mp3
+    """
+    import json
+    import tempfile
+    import urllib.request
+    import urllib.error
+
+    from voice_mode.tools.clone.profiles import (
+        _load_voices_json,
+        DEFAULT_CLONE_BASE_URL,
+        DEFAULT_CLONE_MODEL,
+    )
+
+    # --completion: print the bash completion script and exit
+    if completion:
+        from importlib.resources import files as _pkg_files
+
+        completion_script = (
+            _pkg_files("voice_mode.data.completions")
+            .joinpath("sayas.bash")
+            .read_text()
+        )
+        click.echo(completion_script)
+        return
+
+    # -l / --list: print available voices and exit
+    if list_voices:
+        data = _load_voices_json()
+        voices = data.get("voices", {})
+        if not voices:
+            click.echo("No voice profiles found.")
+            click.echo("Add one with: voicemode clone add <name> <audio-file>")
+            return
+        click.echo("Available voices:")
+        for name in sorted(voices):
+            desc = voices[name].get("description", "")
+            click.echo(f"  {name}  -- {desc}")
+        return
+
+    # Voice name is required for all other operations
+    if not voice:
+        ctx = click.get_current_context()
+        click.echo(ctx.get_help())
+        ctx.exit(1)
+
+    # Look up the voice profile
+    data = _load_voices_json()
+    voices = data.get("voices", {})
+    profile = voices.get(voice)
+    if profile is None:
+        click.echo(f"Unknown voice: {voice}", err=True)
+        click.echo("", err=True)
+        click.echo("Available voices:", err=True)
+        for name in sorted(voices):
+            desc = voices[name].get("description", "")
+            click.echo(f"  {name}  -- {desc}", err=True)
+        raise SystemExit(1)
+
+    # -p / --preview: stream and play reference audio
+    if preview:
+        _sayas_preview(voice, profile)
+        return
+
+    # Text is required for generation
+    input_text = " ".join(text).strip()
+    if not input_text:
+        click.echo(f"No text provided.", err=True)
+        click.echo(f'Usage: sayas {voice} "text to speak"', err=True)
+        raise SystemExit(1)
+
+    # Build the API request
+    ref_audio = profile.get("ref_audio", "")
+    ref_text = profile.get("ref_text", "")
+    base_url = profile.get("base_url", DEFAULT_CLONE_BASE_URL)
+    model = profile.get("model", DEFAULT_CLONE_MODEL)
+
+    # Ensure the URL ends with /audio/speech
+    endpoint = base_url.rstrip("/")
+    if not endpoint.endswith("/audio/speech"):
+        endpoint = f"{endpoint}/audio/speech"
+
+    payload = json.dumps({
+        "model": model,
+        "input": input_text,
+        "ref_audio": ref_audio,
+        "ref_text": ref_text,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    if stream and not output:
+        # Stream mode: pipe HTTP response directly to mpv for low-latency playback
+        import shutil
+
+        mpv_path = shutil.which("mpv")
+        if not mpv_path:
+            click.echo("--stream requires mpv. Install with: brew install mpv", err=True)
+            raise SystemExit(1)
+
+        try:
+            proc = subprocess.Popen(
+                [mpv_path, "--no-video", "--really-quiet", "-"],
+                stdin=subprocess.PIPE,
+            )
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                while True:
+                    chunk = resp.read(4096)
+                    if not chunk:
+                        break
+                    proc.stdin.write(chunk)
+            proc.stdin.close()
+            proc.wait()
+        except urllib.error.URLError as e:
+            click.echo(f"Failed to reach clone TTS service at {endpoint}", err=True)
+            click.echo(f"Error: {e}", err=True)
+            click.echo("Is the clone service running? Try: voicemode clone status", err=True)
+            raise SystemExit(1)
+        except BrokenPipeError:
+            pass  # mpv exited early, that's fine
+        return
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            audio_data = resp.read()
+    except urllib.error.URLError as e:
+        click.echo(f"Failed to reach clone TTS service at {endpoint}", err=True)
+        click.echo(f"Error: {e}", err=True)
+        click.echo("Is the clone service running? Try: voicemode clone status", err=True)
+        raise SystemExit(1)
+
+    if output:
+        # Save to file
+        outpath = Path(output)
+        outpath.write_bytes(audio_data)
+        click.echo(f"Saved to {outpath}")
+    else:
+        # Play directly via temp file
+        suffix = ".mp3"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(audio_data)
+            tmp_path = tmp.name
+
+        try:
+            _play_audio(tmp_path)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _sayas_preview(voice: str, profile: dict) -> None:
+    """Preview the reference audio clip for a voice profile."""
+    import re
+    import tempfile
+
+    desc = profile.get("description", "")
+    ref_text = profile.get("ref_text", "")
+    ref_audio = profile.get("ref_audio", "")
+    base_url = profile.get("base_url", "")
+
+    click.echo(f"Preview: {voice} -- {desc}")
+    click.echo(f"Ref text: {ref_text}")
+    click.echo()
+
+    # Extract host from base_url, default to ms2
+    host = "ms2"
+    if base_url:
+        m = re.match(r"https?://([^:/]+)", base_url)
+        if m:
+            host = m.group(1)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp_path = tmp.name
+    tmp.close()
+
+    try:
+        result = subprocess.run(
+            ["scp", "-q", f"{host}:{ref_audio}", tmp_path],
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            click.echo(f"Failed to fetch reference audio from {host}:{ref_audio}", err=True)
+            raise SystemExit(1)
+        _play_audio(tmp_path)
+    except FileNotFoundError:
+        click.echo("scp not found. Cannot fetch remote reference audio.", err=True)
+        raise SystemExit(1)
+    except subprocess.TimeoutExpired:
+        click.echo(f"Timed out fetching reference audio from {host}", err=True)
+        raise SystemExit(1)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def _play_audio(path: str) -> None:
+    """Play an audio file using the best available player."""
+    if shutil.which("afplay"):
+        subprocess.run(["afplay", path], check=False)
+    elif shutil.which("mpv"):
+        subprocess.run(["mpv", "--no-video", "--really-quiet", path], check=False)
+    else:
+        click.echo(f"No audio player found (tried afplay, mpv). File saved at: {path}")
+
+
+def sayas_cli() -> None:
+    """Entry point for the sayas command (registered in pyproject.toml)."""
+    sayas_command()
+
+
+# ============================================================================
+# Clone Voice Profile Command Group
+# ============================================================================
+# Voice profile CRUD for the clone-voice feature. The underlying TTS
+# *service* is mlx-audio -- install it via:
+#   voicemode service install mlx-audio
+# Profile commands:
+#   voicemode clone add          Add a voice profile
+#   voicemode clone list         List voice profiles
+#   voicemode clone remove       Remove a voice profile
+
+
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help', help='Show this message and exit')
+def clone():
+    """Voice cloning profile management.
+
+    \b
+    Voice Profiles:
+      add        Add a clone voice profile from a reference audio clip
+      list       List available clone voices
+      remove     Remove a clone voice profile
+
+    \b
+    Service install lives under `voicemode service`:
+      voicemode service install mlx-audio   # install the TTS/STT backend
+
+    \b
+    Quick Start:
+      voicemode service install mlx-audio    # Install backend
+      voicemode clone add mike ~/clip.wav    # Add a voice
+      sayas mike "Hello world"               # Use the voice
+    """
+    pass
+
+
+@clone.command()
+@click.help_option('-h', '--help')
+@click.argument('name')
+@click.argument('audio_file', type=click.Path(exists=True))
+@click.option('--description', '-d', default='', help='Description of the voice')
+@click.option('--ref-text', default=None, help='Transcript of the audio (auto-transcribed if omitted)')
+@click.option('--model', default=None, help='TTS model override')
+@click.option('--base-url', default=None, help='TTS endpoint override')
+def add(name, audio_file, description, ref_text, model, base_url):
+    """Add a clone voice profile from a reference audio clip.
+
+    Copies the audio file to ~/.voicemode/voices/ and auto-transcribes it
+    via the local Whisper STT service (unless --ref-text is provided).
+
+    \b
+    Examples:
+      voicemode clone add fleabag ~/clip.wav -d "Phoebe as Fleabag"
+      voicemode clone add mike ~/mike.wav --ref-text "Hello everyone"
+    """
+    from voice_mode.tools.clone.profiles import clone_add
+    result = asyncio.run(clone_add(
+        name=name,
+        audio_file=audio_file,
+        description=description,
+        ref_text=ref_text,
+        model=model,
+        base_url=base_url,
+    ))
+
+    if result.get('success'):
+        click.echo(f"Voice profile '{result['name']}' added successfully!")
+        click.echo(f"   Audio: {result.get('ref_audio', 'unknown')}")
+        click.echo(f"   Text:  {result.get('ref_text', 'unknown')}")
+        if result.get('description'):
+            click.echo(f"   Desc:  {result['description']}")
+    else:
+        click.echo(f"Failed to add voice profile: {result.get('error', 'Unknown error')}", err=True)
+        if result.get('hint'):
+            click.echo(f"   Hint: {result['hint']}", err=True)
+        raise SystemExit(1)
+
+
+@clone.command('list')
+@click.help_option('-h', '--help')
+def list_voices():
+    """List available clone voice profiles.
+
+    Shows all voice profiles from ~/.voicemode/voices.json.
+    """
+    from voice_mode.tools.clone.profiles import clone_list
+    result = asyncio.run(clone_list())
+
+    voices = result.get('voices', [])
+    if not voices:
+        click.echo("No voice profiles found.")
+        click.echo("Add one with: voicemode clone add <name> <audio-file>")
+        return
+
+    click.echo(f"Clone voice profiles ({result.get('count', len(voices))}):")
+    for v in voices:
+        desc = v.get('description', '')
+        if desc:
+            click.echo(f"  {v['name']}  -- {desc}")
+        else:
+            click.echo(f"  {v['name']}")
+
+
+@clone.command()
+@click.help_option('-h', '--help')
+@click.argument('name')
+@click.option('--keep-audio', is_flag=True, help='Keep the reference audio file')
+def remove(name, keep_audio):
+    """Remove a clone voice profile.
+
+    Removes the profile from voices.json and optionally the reference audio file.
+    By default, the audio file is also deleted.
+    """
+    from voice_mode.tools.clone.profiles import clone_remove
+    result = asyncio.run(clone_remove(
+        name=name,
+        remove_audio=not keep_audio,
+    ))
+
+    if result.get('success'):
+        click.echo(f"Voice profile '{result['name']}' removed.")
+        for item in result.get('removed_items', []):
+            click.echo(f"   {item}")
+    else:
+        click.echo(f"Failed to remove voice profile: {result.get('error', 'Unknown error')}", err=True)
+        raise SystemExit(1)
+
+
+# ============================================================================
 # Unified Service Command Group
 # ============================================================================
 # All service management commands under a single group:
@@ -96,7 +470,18 @@ def voice_mode() -> None:
 #   voicemode service status [service]
 # etc.
 
-VALID_SERVICES = ['whisper', 'kokoro', 'voicemode']
+# Public CLI service names. ``mlx-audio`` uses kebab-case for ergonomics
+# at the command line; the internal Python identifier is ``mlx_audio``.
+VALID_SERVICES = ['whisper', 'kokoro', 'voicemode', 'mlx-audio']
+
+
+def _normalize_service_name(name: str) -> str:
+    """Map CLI-form service names to Python-internal identifiers.
+
+    ``mlx-audio`` -> ``mlx_audio``; everything else passes through. Keeps
+    the CLI ergonomic without forcing snake_case onto users.
+    """
+    return name.replace("-", "_") if name else name
 
 
 @voice_mode_main_cli.group()
@@ -109,6 +494,7 @@ def service():
       whisper    Local speech-to-text (STT) on port 2022
       kokoro     Local text-to-speech (TTS) on port 8880
       voicemode  HTTP MCP server for remote access on port 8765
+      mlx-audio  Apple Silicon: unified Whisper + Kokoro + Qwen3-TTS on port 8890
 
     \b
     Quick Start:
@@ -118,7 +504,7 @@ def service():
 
     \b
     Service Lifecycle:
-      install  Install service software (whisper, kokoro)
+      install  Install service software (whisper, kokoro, mlx-audio)
       start    Start a service
       stop     Stop a service
       restart  Restart a service
@@ -142,9 +528,10 @@ def service_start(service_name):
       whisper    Local speech-to-text (STT)
       kokoro     Local text-to-speech (TTS)
       voicemode  HTTP MCP server for remote access
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
     """
     from voice_mode.tools.service import start_service
-    result = asyncio.run(start_service(service_name))
+    result = asyncio.run(start_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -159,9 +546,10 @@ def service_stop(service_name):
       whisper    Local speech-to-text (STT)
       kokoro     Local text-to-speech (TTS)
       voicemode  HTTP MCP server for remote access
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
     """
     from voice_mode.tools.service import stop_service
-    result = asyncio.run(stop_service(service_name))
+    result = asyncio.run(stop_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -176,9 +564,10 @@ def service_restart(service_name):
       whisper    Local speech-to-text (STT)
       kokoro     Local text-to-speech (TTS)
       voicemode  HTTP MCP server for remote access
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
     """
     from voice_mode.tools.service import restart_service
-    result = asyncio.run(restart_service(service_name))
+    result = asyncio.run(restart_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -208,14 +597,14 @@ def service_status(service_name):
 
     if service_name:
         # Show specific service
-        result = asyncio.run(status_service(service_name))
+        result = asyncio.run(status_service(_normalize_service_name(service_name)))
         click.echo(result)
     else:
         # Show all services
         click.echo("VoiceMode Service Status")
         click.echo("=" * 50)
         for svc in VALID_SERVICES:
-            result = asyncio.run(status_service(svc))
+            result = asyncio.run(status_service(_normalize_service_name(svc)))
             click.echo(f"\n{svc.upper()}:")
             click.echo(result)
 
@@ -237,7 +626,7 @@ def service_enable(service_name):
       voicemode  HTTP MCP server for remote access
     """
     from voice_mode.tools.service import enable_service
-    result = asyncio.run(enable_service(service_name))
+    result = asyncio.run(enable_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -258,7 +647,7 @@ def service_disable(service_name):
       voicemode  HTTP MCP server for remote access
     """
     from voice_mode.tools.service import disable_service
-    result = asyncio.run(disable_service(service_name))
+    result = asyncio.run(disable_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -279,7 +668,7 @@ def service_logs(service_name, lines):
       voicemode service logs voicemode -n 100  # Last 100 lines
     """
     from voice_mode.tools.service import view_logs
-    result = asyncio.run(view_logs(service_name, lines))
+    result = asyncio.run(view_logs(_normalize_service_name(service_name), lines))
     click.echo(result)
 
 
@@ -341,11 +730,13 @@ def service_install(service_name, force):
       whisper    whisper.cpp speech-to-text server
       kokoro     Kokoro text-to-speech server
       voicemode  Already installed (enables the HTTP server)
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
 
     \b
     Examples:
       voicemode service install whisper
       voicemode service install kokoro --force
+      voicemode service install mlx-audio
     """
     if service_name == 'whisper':
         from voice_mode.tools.whisper.install import whisper_install
@@ -381,6 +772,26 @@ def service_install(service_name, force):
                 click.echo(f"   Start script: {result['start_script']}")
         else:
             click.echo(f"❌ VoiceMode installation failed: {result.get('error', 'Unknown error')}")
+    elif service_name == 'mlx-audio':
+        from voice_mode.tools.mlx_audio.install import mlx_audio_install
+        result = asyncio.run(mlx_audio_install(force_reinstall=force))
+        if isinstance(result, dict):
+            if result.get("success"):
+                click.echo("✅ mlx-audio installed successfully")
+                if result.get('entry_point'):
+                    click.echo(f"   Entry point: {result['entry_point']}")
+                if result.get('service_url'):
+                    click.echo(f"   Service URL: {result['service_url']}")
+                patch = result.get('patch') or {}
+                if patch.get('already_patched'):
+                    click.echo("   server.py: already patched (sentinel present)")
+                elif patch.get('success'):
+                    click.echo("   server.py: patched (backup at "
+                               f"{patch.get('backup_path', '?')})")
+            else:
+                click.echo(f"❌ mlx-audio installation failed: {result.get('error', 'Unknown error')}")
+        else:
+            click.echo(result)
     else:
         click.echo(f"❌ Unknown service: {service_name}")
 

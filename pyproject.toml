@@ -103,6 +103,7 @@ Issues = "https://github.com/mbailey/voicemode/issues"
 [project.scripts]
 voice-mode = "voice_mode.cli:voice_mode"
 voicemode = "voice_mode.cli:voice_mode"
+sayas = "voice_mode.cli:sayas_cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voice_mode"]
@@ -117,6 +118,8 @@ include = [
   "voice_mode/data/**/*.cue",
   "voice_mode/data/**/*.ffmeta",
   "voice_mode/data/**/*.sha256",
+  "voice_mode/data/**/*.bash",
+  "voice_mode/data/**/*.patch",
 ]
 # artifacts overrides .gitignore for VCS-ignored files that should be packaged
 artifacts = [
