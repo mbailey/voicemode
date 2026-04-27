@@ -334,12 +334,12 @@ def sayas_cli() -> None:
 
 
 # ============================================================================
-# Clone Voice Service Command Group
+# Clone Voice Profile Command Group
 # ============================================================================
-# Service management and voice profile CRUD for clone TTS (Qwen3-TTS):
-#   voicemode clone install      Install clone TTS service
-#   voicemode clone status       Check clone TTS service status
-#   voicemode clone uninstall    Uninstall clone TTS service
+# Voice profile CRUD for the clone-voice feature. The underlying TTS
+# *service* is mlx-audio -- install it via:
+#   voicemode service install mlx-audio
+# Profile commands:
 #   voicemode clone add          Add a voice profile
 #   voicemode clone list         List voice profiles
 #   voicemode clone remove       Remove a voice profile
@@ -348,13 +348,7 @@ def sayas_cli() -> None:
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
 def clone():
-    """Voice cloning service management.
-
-    \b
-    Service:
-      install    Install clone TTS service (Qwen3-TTS via mlx-audio)
-      status     Check clone TTS service status
-      uninstall  Uninstall clone TTS service
+    """Voice cloning profile management.
 
     \b
     Voice Profiles:
@@ -363,119 +357,16 @@ def clone():
       remove     Remove a clone voice profile
 
     \b
-    Quick Start:
-      voicemode clone install                     # Install service
-      voicemode clone add mike ~/clip.wav         # Add a voice
-      sayas mike "Hello world"                    # Use the voice
-    """
-    pass
-
-
-@clone.command()
-@click.help_option('-h', '--help')
-@click.option('--port', default=8890, help='Service port (default: 8890)')
-@click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
-@click.option('--model', default=None, help='Hugging Face model ID override')
-@click.option('--auto-enable/--no-auto-enable', default=None, help='Enable service at boot/login')
-def install(port, force, model, auto_enable):
-    """Install clone TTS service (Qwen3-TTS via mlx-audio).
-
-    Sets up a local clone TTS service powered by Qwen3-TTS running on mlx-audio.
-    Requires Apple Silicon (M1/M2/M3/M4).
+    Service install lives under `voicemode service`:
+      voicemode service install mlx-audio   # install the TTS/STT backend
 
     \b
-    Steps:
-      1. Creates virtual environment at ~/.voicemode/services/clone
-      2. Installs mlx-audio in the venv
-      3. Downloads the Qwen3-TTS model (~3.4GB)
-      4. Creates a launchd/systemd service for automatic startup
+    Quick Start:
+      voicemode service install mlx-audio    # Install backend
+      voicemode clone add mike ~/clip.wav    # Add a voice
+      sayas mike "Hello world"               # Use the voice
     """
-    from voice_mode.tools.clone.install import clone_install
-    result = asyncio.run(clone_install(
-        port=port,
-        model=model,
-        force_reinstall=force,
-        auto_enable=auto_enable,
-    ))
-
-    if result.get('success'):
-        if result.get('already_installed'):
-            click.echo(f"Already installed at {result['install_path']}")
-            click.echo(f"   Model: {result.get('model', 'unknown')}")
-            if result.get('service_files_updated'):
-                click.echo("   Service files updated")
-        else:
-            click.echo("Clone TTS installed successfully!")
-            click.echo(f"   Install path: {result['install_path']}")
-            click.echo(f"   Model: {result.get('model', 'unknown')}")
-            click.echo(f"   Endpoint: {result.get('service_url', 'unknown')}")
-
-        if result.get('enabled'):
-            click.echo("   Auto-start: Enabled")
-
-        if result.get('launchagent'):
-            click.echo(f"   LaunchAgent: {os.path.basename(result['launchagent'])}")
-        if result.get('systemd_service'):
-            click.echo(f"   Systemd service: {os.path.basename(result['systemd_service'])}")
-    else:
-        click.echo(f"Installation failed: {result.get('error', 'Unknown error')}", err=True)
-        if result.get('platform'):
-            click.echo(f"   Platform: {result['platform']} ({result.get('system', 'unknown')})", err=True)
-        raise SystemExit(1)
-
-
-@clone.command()
-@click.help_option('-h', '--help')
-def status():
-    """Check clone TTS service status.
-
-    Checks if the clone TTS service is running and the endpoint is healthy.
-    """
-    from voice_mode.tools.clone.status import clone_status
-    result = asyncio.run(clone_status())
-
-    if result.get('healthy'):
-        click.echo(f"Clone TTS is running on port {result.get('port', 'unknown')}")
-        click.echo(f"   URL: {result.get('url', 'unknown')}")
-        models = result.get('models', {})
-        if models and 'data' in models:
-            for m in models['data']:
-                click.echo(f"   Model: {m.get('id', 'unknown')}")
-    else:
-        status_val = result.get('status', 'unknown')
-        if status_val == 'not_running':
-            click.echo("Clone TTS service is not running")
-            click.echo("   Run 'voicemode clone install' to set it up")
-        elif status_val == 'unhealthy':
-            click.echo(f"Clone TTS service is unhealthy (HTTP {result.get('http_status', '?')})")
-        else:
-            click.echo(f"Clone TTS service status: {status_val}")
-            if result.get('error'):
-                click.echo(f"   Error: {result['error']}")
-
-
-@clone.command()
-@click.help_option('-h', '--help')
-@click.option('--remove-model', is_flag=True, help='Also remove the cached Qwen3-TTS model (~3.4GB)')
-@click.confirmation_option(prompt='Are you sure you want to uninstall the clone TTS service?')
-def uninstall(remove_model):
-    """Uninstall clone TTS service.
-
-    Stops the service, removes service configuration (launchd/systemd),
-    and removes the clone installation directory.
-    """
-    from voice_mode.tools.clone.uninstall import clone_uninstall
-    result = asyncio.run(clone_uninstall(remove_model=remove_model))
-
-    if result.get('success'):
-        click.echo("Clone TTS service uninstalled successfully!")
-        for item in result.get('removed_items', []):
-            click.echo(f"   {item}")
-    else:
-        click.echo(f"Uninstall failed: {result.get('message', 'Unknown error')}", err=True)
-        for err in result.get('errors', []):
-            click.echo(f"   {err}", err=True)
-        raise SystemExit(1)
+    pass
 
 
 @clone.command()
@@ -579,7 +470,18 @@ def remove(name, keep_audio):
 #   voicemode service status [service]
 # etc.
 
-VALID_SERVICES = ['whisper', 'kokoro', 'voicemode']
+# Public CLI service names. ``mlx-audio`` uses kebab-case for ergonomics
+# at the command line; the internal Python identifier is ``mlx_audio``.
+VALID_SERVICES = ['whisper', 'kokoro', 'voicemode', 'mlx-audio']
+
+
+def _normalize_service_name(name: str) -> str:
+    """Map CLI-form service names to Python-internal identifiers.
+
+    ``mlx-audio`` -> ``mlx_audio``; everything else passes through. Keeps
+    the CLI ergonomic without forcing snake_case onto users.
+    """
+    return name.replace("-", "_") if name else name
 
 
 @voice_mode_main_cli.group()
@@ -592,6 +494,7 @@ def service():
       whisper    Local speech-to-text (STT) on port 2022
       kokoro     Local text-to-speech (TTS) on port 8880
       voicemode  HTTP MCP server for remote access on port 8765
+      mlx-audio  Apple Silicon: unified Whisper + Kokoro + Qwen3-TTS on port 8890
 
     \b
     Quick Start:
@@ -601,7 +504,7 @@ def service():
 
     \b
     Service Lifecycle:
-      install  Install service software (whisper, kokoro)
+      install  Install service software (whisper, kokoro, mlx-audio)
       start    Start a service
       stop     Stop a service
       restart  Restart a service
@@ -625,9 +528,10 @@ def service_start(service_name):
       whisper    Local speech-to-text (STT)
       kokoro     Local text-to-speech (TTS)
       voicemode  HTTP MCP server for remote access
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
     """
     from voice_mode.tools.service import start_service
-    result = asyncio.run(start_service(service_name))
+    result = asyncio.run(start_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -642,9 +546,10 @@ def service_stop(service_name):
       whisper    Local speech-to-text (STT)
       kokoro     Local text-to-speech (TTS)
       voicemode  HTTP MCP server for remote access
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
     """
     from voice_mode.tools.service import stop_service
-    result = asyncio.run(stop_service(service_name))
+    result = asyncio.run(stop_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -659,9 +564,10 @@ def service_restart(service_name):
       whisper    Local speech-to-text (STT)
       kokoro     Local text-to-speech (TTS)
       voicemode  HTTP MCP server for remote access
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
     """
     from voice_mode.tools.service import restart_service
-    result = asyncio.run(restart_service(service_name))
+    result = asyncio.run(restart_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -691,14 +597,14 @@ def service_status(service_name):
 
     if service_name:
         # Show specific service
-        result = asyncio.run(status_service(service_name))
+        result = asyncio.run(status_service(_normalize_service_name(service_name)))
         click.echo(result)
     else:
         # Show all services
         click.echo("VoiceMode Service Status")
         click.echo("=" * 50)
         for svc in VALID_SERVICES:
-            result = asyncio.run(status_service(svc))
+            result = asyncio.run(status_service(_normalize_service_name(svc)))
             click.echo(f"\n{svc.upper()}:")
             click.echo(result)
 
@@ -720,7 +626,7 @@ def service_enable(service_name):
       voicemode  HTTP MCP server for remote access
     """
     from voice_mode.tools.service import enable_service
-    result = asyncio.run(enable_service(service_name))
+    result = asyncio.run(enable_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -741,7 +647,7 @@ def service_disable(service_name):
       voicemode  HTTP MCP server for remote access
     """
     from voice_mode.tools.service import disable_service
-    result = asyncio.run(disable_service(service_name))
+    result = asyncio.run(disable_service(_normalize_service_name(service_name)))
     click.echo(result)
 
 
@@ -762,7 +668,7 @@ def service_logs(service_name, lines):
       voicemode service logs voicemode -n 100  # Last 100 lines
     """
     from voice_mode.tools.service import view_logs
-    result = asyncio.run(view_logs(service_name, lines))
+    result = asyncio.run(view_logs(_normalize_service_name(service_name), lines))
     click.echo(result)
 
 
@@ -824,11 +730,13 @@ def service_install(service_name, force):
       whisper    whisper.cpp speech-to-text server
       kokoro     Kokoro text-to-speech server
       voicemode  Already installed (enables the HTTP server)
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
 
     \b
     Examples:
       voicemode service install whisper
       voicemode service install kokoro --force
+      voicemode service install mlx-audio
     """
     if service_name == 'whisper':
         from voice_mode.tools.whisper.install import whisper_install
@@ -864,6 +772,26 @@ def service_install(service_name, force):
                 click.echo(f"   Start script: {result['start_script']}")
         else:
             click.echo(f"❌ VoiceMode installation failed: {result.get('error', 'Unknown error')}")
+    elif service_name == 'mlx-audio':
+        from voice_mode.tools.mlx_audio.install import mlx_audio_install
+        result = asyncio.run(mlx_audio_install(force_reinstall=force))
+        if isinstance(result, dict):
+            if result.get("success"):
+                click.echo("✅ mlx-audio installed successfully")
+                if result.get('entry_point'):
+                    click.echo(f"   Entry point: {result['entry_point']}")
+                if result.get('service_url'):
+                    click.echo(f"   Service URL: {result['service_url']}")
+                patch = result.get('patch') or {}
+                if patch.get('already_patched'):
+                    click.echo("   server.py: already patched (sentinel present)")
+                elif patch.get('success'):
+                    click.echo("   server.py: patched (backup at "
+                               f"{patch.get('backup_path', '?')})")
+            else:
+                click.echo(f"❌ mlx-audio installation failed: {result.get('error', 'Unknown error')}")
+        else:
+            click.echo(result)
     else:
         click.echo(f"❌ Unknown service: {service_name}")
 

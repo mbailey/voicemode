@@ -1,15 +1,14 @@
-"""Clone voice TTS service tools."""
+"""Clone voice profile CRUD tools.
 
-from voice_mode.tools.clone.install import clone_install
+Voice profile management (add/list/remove) for the cloning feature. The
+underlying TTS *service* is mlx-audio -- see :mod:`voice_mode.tools.mlx_audio`
+for service install/uninstall/status.
+"""
+
 from voice_mode.tools.clone.profiles import clone_add, clone_list, clone_remove
-from voice_mode.tools.clone.status import clone_status
-from voice_mode.tools.clone.uninstall import clone_uninstall
 
 __all__ = [
-    'clone_add',
-    'clone_install',
-    'clone_list',
-    'clone_remove',
-    'clone_status',
-    'clone_uninstall',
+    "clone_add",
+    "clone_list",
+    "clone_remove",
 ]

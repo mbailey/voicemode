@@ -12,7 +12,7 @@ from typing import Literal, Optional, Dict, Any, Union
 import psutil
 
 from voice_mode.server import mcp
-from voice_mode.config import WHISPER_PORT, KOKORO_PORT, CLONE_PORT, SERVICE_AUTO_ENABLE
+from voice_mode.config import WHISPER_PORT, KOKORO_PORT, MLX_AUDIO_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
 
 # Default port for VoiceMode serve command (HTTP MCP server)
@@ -21,6 +21,21 @@ from voice_mode.utils.services.whisper_helpers import find_whisper_server, find_
 from voice_mode.utils.services.kokoro_helpers import find_kokoro_fastapi, has_gpu_support, is_kokoro_starting_up
 
 logger = logging.getLogger("voicemode")
+
+
+# Map Python-friendly service identifiers to the on-disk file-name stem
+# used in plist labels, systemd unit filenames, and log directories.
+# voicemode -> serve   (HTTP MCP server has the legacy "serve" naming)
+# mlx_audio -> mlx-audio (kebab-case matches the deployed plist label)
+_SERVICE_FILE_NAMES: Dict[str, str] = {
+    "voicemode": "serve",
+    "mlx_audio": "mlx-audio",
+}
+
+
+def _service_file_name(service_name: str) -> str:
+    """Translate a service identifier to its on-disk file-name stem."""
+    return _SERVICE_FILE_NAMES.get(service_name, service_name)
 
 
 def get_service_config_vars(service_name: str) -> Dict[str, Any]:
@@ -80,14 +95,13 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
             "KOKORO_DIR": kokoro_dir,
             "KOKORO_MAX_REQUESTS": str(KOKORO_MAX_REQUESTS),
         }
-    elif service_name == "clone":
-        clone_dir = os.path.join(voicemode_dir, "services", "clone")
-        start_script = os.path.join(clone_dir, "bin", "start-clone-server.sh")
-
+    elif service_name == "mlx_audio":
+        # mlx-audio is installed via ``uv tool install`` -- no service-local
+        # venv or start script. The plist exec's ``mlx_audio.server``
+        # directly from ~/.local/bin and reads VOICEMODE_MLX_AUDIO_HOST /
+        # VOICEMODE_MLX_AUDIO_PORT from voicemode.env at startup.
         return {
             "HOME": home,
-            "START_SCRIPT": start_script,
-            "CLONE_DIR": clone_dir,
         }
     elif service_name == "voicemode":
         # VoiceMode serve service - runs the HTTP MCP server
@@ -146,8 +160,9 @@ def load_service_template(service_name: str) -> str:
     system = platform.system()
     templates_dir = Path(__file__).parent.parent / "templates"
 
-    # Map service name to template name (voicemode uses "serve" in template names)
-    template_name = "serve" if service_name == "voicemode" else service_name
+    # Map service name to template-file stem (voicemode -> serve,
+    # mlx_audio -> mlx-audio, others passthrough).
+    template_name = _service_file_name(service_name)
 
     if system == "Darwin":
         template_path = templates_dir / "launchd" / f"com.voicemode.{template_name}.plist"
@@ -184,8 +199,8 @@ def create_service_file(service_name: str) -> tuple[Path, str]:
     # Format template with config vars
     content = template.format(**config_vars)
 
-    # Map service name to file name (voicemode uses "serve" in file names)
-    file_name = "serve" if service_name == "voicemode" else service_name
+    # Map service name to file name (voicemode -> serve, mlx_audio -> mlx-audio).
+    file_name = _service_file_name(service_name)
 
     # Determine destination path
     if system == "Darwin":
@@ -208,8 +223,8 @@ async def status_service(service_name: str) -> str:
     elif service_name == "kokoro":
         port = KOKORO_PORT
         process_name = None
-    elif service_name == "clone":
-        port = CLONE_PORT
+    elif service_name == "mlx_audio":
+        port = MLX_AUDIO_PORT
         process_name = None
     elif service_name == "voicemode":
         port = VOICEMODE_SERVE_PORT
@@ -358,8 +373,8 @@ async def start_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
-    elif service_name == "clone":
-        port = CLONE_PORT
+    elif service_name == "mlx_audio":
+        port = MLX_AUDIO_PORT
     elif service_name == "voicemode":
         port = VOICEMODE_SERVE_PORT
     else:
@@ -369,8 +384,8 @@ async def start_service(service_name: str) -> str:
 
     system = platform.system()
 
-    # Map service name to file name (voicemode uses "serve" in file names)
-    file_name = "serve" if service_name == "voicemode" else service_name
+    # Map service name to file name (voicemode -> serve, mlx_audio -> mlx-audio).
+    file_name = _service_file_name(service_name)
 
     # Helper to check if service is running
     def is_service_running():
@@ -476,14 +491,25 @@ async def start_service(service_name: str) -> str:
 
         cmd = [str(start_script)]
 
-    elif service_name == "clone":
-        # Find clone start script
-        voicemode_dir = os.path.expanduser(os.environ.get("VOICEMODE_BASE_DIR", "~/.voicemode"))
-        clone_dir = os.path.join(voicemode_dir, "services", "clone")
-        start_script = Path(clone_dir) / "bin" / "start-clone-server.sh"
-        if not start_script.exists():
-            return "❌ Clone start script not found. Please run clone_install first."
-        cmd = [str(start_script)]
+    elif service_name == "mlx_audio":
+        # mlx-audio installs via ``uv tool install`` -- the entry point
+        # lives at ~/.local/bin/mlx_audio.server. Pass --host/--port from
+        # config so the manual ``service start`` path matches the plist.
+        from voice_mode.config import MLX_AUDIO_HOST
+        entry_point = Path.home() / ".local" / "bin" / "mlx_audio.server"
+        if not entry_point.exists():
+            return (
+                "❌ mlx_audio.server not found at "
+                f"{entry_point}. Please run `voicemode service install mlx-audio` first."
+            )
+        log_dir = Path.home() / ".voicemode" / "logs" / "mlx-audio"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        cmd = [
+            str(entry_point),
+            "--host", MLX_AUDIO_HOST,
+            "--port", str(port),
+            "--log-dir", str(log_dir),
+        ]
 
     elif service_name == "voicemode":
         # Start voicemode serve command directly
@@ -499,8 +525,8 @@ async def start_service(service_name: str) -> str:
         cwd = None
         if service_name == "kokoro":
             cwd = Path(kokoro_dir)
-        elif service_name == "clone":
-            cwd = Path(clone_dir)
+        elif service_name == "mlx_audio":
+            cwd = log_dir
 
         process = subprocess.Popen(
             cmd,
@@ -534,16 +560,16 @@ async def stop_service(service_name: str) -> str:
         port = WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
-    elif service_name == "clone":
-        port = CLONE_PORT
+    elif service_name == "mlx_audio":
+        port = MLX_AUDIO_PORT
     elif service_name == "voicemode":
         port = VOICEMODE_SERVE_PORT
     else:
         port = 3000
     system = platform.system()
 
-    # Map service name to file name (voicemode uses "serve" in file names)
-    file_name = "serve" if service_name == "voicemode" else service_name
+    # Map service name to file name (voicemode -> serve, mlx_audio -> mlx-audio).
+    file_name = _service_file_name(service_name)
 
     # Check if managed by service manager
     if system == "Darwin":
@@ -640,10 +666,15 @@ async def enable_service(service_name: str) -> str:
             if not start_script or not Path(start_script).exists():
                 return "❌ Kokoro start script not found. Please run kokoro_install first."
 
-        elif service_name == "clone":
-            start_script = config_vars.get("START_SCRIPT", "")
-            if not start_script or not Path(start_script).exists():
-                return "❌ Clone start script not found. Please run clone_install first."
+        elif service_name == "mlx_audio":
+            # Validate the uv-tool entry point exists rather than a start
+            # script -- mlx-audio has no start script.
+            entry_point = Path.home() / ".local" / "bin" / "mlx_audio.server"
+            if not entry_point.exists():
+                return (
+                    "❌ mlx_audio.server not found at "
+                    f"{entry_point}. Run `voicemode service install mlx-audio` first."
+                )
 
         elif service_name == "voicemode":
             start_script = config_vars.get("START_SCRIPT", "")
@@ -841,7 +872,7 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 
 @mcp.tool()
 async def service(
-    service_name: Literal["whisper", "kokoro", "clone", "voicemode"],
+    service_name: Literal["whisper", "kokoro", "mlx_audio", "voicemode"],
     action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs"] = "status",
     lines: Optional[Union[int, str]] = None
 ) -> str:
