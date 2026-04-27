@@ -160,6 +160,13 @@ def load_service_template(service_name: str) -> str:
     system = platform.system()
     templates_dir = Path(__file__).parent.parent / "templates"
 
+    # mlx-audio is Apple-Silicon-only -- no Linux systemd unit ships.
+    if service_name == "mlx_audio" and system != "Darwin":
+        raise FileNotFoundError(
+            "mlx_audio is macOS-only (MLX requires Apple Silicon); "
+            "no systemd template is shipped."
+        )
+
     # Map service name to template-file stem (voicemode -> serve,
     # mlx_audio -> mlx-audio, others passthrough).
     template_name = _service_file_name(service_name)

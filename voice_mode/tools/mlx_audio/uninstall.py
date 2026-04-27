@@ -72,6 +72,9 @@ async def mlx_audio_uninstall(
         logger.debug("Port-lookup failed during uninstall: %s", exc)
 
     # 2. Remove service configuration.
+    # mlx-audio is Apple-Silicon-only -- launchd is the only path.
+    # Linux installs short-circuit at the install gate, so no systemd
+    # cleanup is needed here.
     if system == "Darwin":
         plist_path = (
             Path.home() / "Library" / "LaunchAgents" / "com.voicemode.mlx-audio.plist"
@@ -86,32 +89,6 @@ async def mlx_audio_uninstall(
                 removed_items.append(f"Removed launchd plist: {plist_path}")
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"Failed to remove {plist_path}: {exc}")
-    elif system == "Linux":
-        unit_path = (
-            Path.home()
-            / ".config"
-            / "systemd"
-            / "user"
-            / "voicemode-mlx-audio.service"
-        )
-        if unit_path.exists():
-            try:
-                subprocess.run(
-                    ["systemctl", "--user", "stop", "voicemode-mlx-audio.service"],
-                    capture_output=True,
-                )
-                subprocess.run(
-                    ["systemctl", "--user", "disable", "voicemode-mlx-audio.service"],
-                    capture_output=True,
-                )
-                unit_path.unlink()
-                subprocess.run(
-                    ["systemctl", "--user", "daemon-reload"],
-                    capture_output=True,
-                )
-                removed_items.append(f"Removed systemd unit: {unit_path}")
-            except Exception as exc:  # noqa: BLE001
-                errors.append(f"Failed to remove {unit_path}: {exc}")
 
     # 3. Uninstall the uv-tool-managed package (drops ~/.local/bin entry
     #    points and the tool's isolated environment).

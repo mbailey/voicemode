@@ -18,8 +18,8 @@ The install pipeline is:
    clone-voice, and Whisper STT under the OpenAI-compatible API.
 3. Apply the bundled ``mlx_audio_server.patch`` to the freshly-installed
    ``server.py`` (idempotent; sentinel-checked).
-4. Render the launchd plist (or systemd unit) calling
-   ``~/.local/bin/mlx_audio.server`` directly.
+4. Render the launchd plist calling ``~/.local/bin/mlx_audio.server``
+   directly. (Apple-Silicon-only -- no systemd unit ships.)
 """
 
 from __future__ import annotations
@@ -295,7 +295,7 @@ def _query_installed_version() -> Optional[str]:
 async def _update_mlx_audio_service_files(
     auto_enable: Optional[bool],
 ) -> Dict[str, Any]:
-    """Render and install the launchd plist (or systemd unit)."""
+    """Render and install the launchd plist (Apple Silicon only)."""
     from voice_mode.tools.service import create_service_file, enable_service
 
     result: Dict[str, Any] = {"success": False, "updated": False}
@@ -303,12 +303,12 @@ async def _update_mlx_audio_service_files(
     try:
         service_path, content = create_service_file("mlx_audio")
 
-        if platform.system() == "Darwin":
-            # Best-effort unload; a stale entry is harmless to overwrite.
-            subprocess.run(
-                ["launchctl", "unload", str(service_path)],
-                capture_output=True,
-            )
+        # Best-effort unload; a stale entry is harmless to overwrite.
+        # mlx-audio is Apple-Silicon-only so this is always launchctl.
+        subprocess.run(
+            ["launchctl", "unload", str(service_path)],
+            capture_output=True,
+        )
 
         service_path.parent.mkdir(parents=True, exist_ok=True)
         service_path.write_text(content)

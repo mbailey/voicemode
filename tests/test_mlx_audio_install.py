@@ -336,7 +336,7 @@ class TestMlxAudioConfigVars:
 
 
 class TestMlxAudioTemplates:
-    """Bundled launchd plist + systemd unit must exist and look right."""
+    """Bundled launchd plist must exist; no systemd unit ships (Apple-only)."""
 
     @property
     def templates_dir(self) -> Path:
@@ -346,9 +346,23 @@ class TestMlxAudioTemplates:
         template = self.templates_dir / "launchd" / "com.voicemode.mlx-audio.plist"
         assert template.exists(), f"Launchd template missing: {template}"
 
-    def test_systemd_unit_exists(self):
+    def test_no_systemd_unit_ships(self):
+        # mlx-audio is Apple-Silicon-only; the install gate rejects Linux
+        # before any service-rendering code runs, so no systemd unit ships.
         template = self.templates_dir / "systemd" / "voicemode-mlx-audio.service"
-        assert template.exists(), f"Systemd template missing: {template}"
+        assert not template.exists(), (
+            f"Linux systemd unit must not ship for mlx-audio: {template}"
+        )
+
+    def test_load_template_refuses_mlx_audio_on_linux(self):
+        # The template loader must refuse mlx_audio on non-Darwin so we
+        # fail loud rather than silently looking up a nonexistent file.
+        from voice_mode.tools.service import load_service_template
+
+        with patch("voice_mode.tools.service.platform") as mock_platform:
+            mock_platform.system.return_value = "Linux"
+            with pytest.raises(FileNotFoundError, match="macOS-only"):
+                load_service_template("mlx_audio")
 
     def test_launchd_plist_calls_local_bin_entry_point(self):
         template = self.templates_dir / "launchd" / "com.voicemode.mlx-audio.plist"
