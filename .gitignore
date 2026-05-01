@@ -124,3 +124,6 @@ models/
 # Coverage reports (duplicates removed - already in Python section)
 coverage.xml
 voicemode-install-feedback.md
+
+# Local convenience symlink to voice-lab voices dir (per-developer, not shipped)
+/voices
