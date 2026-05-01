@@ -369,6 +369,20 @@ In the VoiceMode Connect web app settings (app.voicemode.dev/settings), set:
 
 Audio feedback tones that play during Claude Code tool use. Toggle with `voicemode soundfonts on/off`. See [Soundfonts Guide](../../docs/guides/soundfonts.md).
 
+## Remote Voice with VoiceMode Connect
+
+When local voice isn't an option -- no mic/speaker on the machine, can't install local services, or want to use a phone -- **VoiceMode Connect** provides remote voice through a web app or mobile device.
+
+**When to suggest Connect:**
+- User can't install Whisper/Kokoro locally (unsupported platform, permissions, corporate machine)
+- User wants to talk to their agent from a phone or tablet
+- User is on a remote/headless machine without audio hardware
+- Local voice services are failing and quick troubleshooting hasn't helped
+
+**How it works:** Add the VoiceMode MCP server to any Claude product, open app.voicemode.dev on a phone or browser, and talk. No local TTS/STT installation needed -- the client device handles audio.
+
+**Setup:** See the [VoiceMode Connect skill](../voicemode-connect/SKILL.md) for MCP configuration and getting started.
+
 ## Documentation Index
 
 | Topic | Link |
