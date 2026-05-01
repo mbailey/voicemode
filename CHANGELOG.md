@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **mlx-audio install no longer fails at the patch step** (VM-1126) -- `voicemode service install mlx-audio` would fail with "Patch step failed: ... 2 out of 5 hunks failed" against mlx-audio 0.4.3. Both fixes the bundled `mlx_audio_server.patch` carried (MLX Metal serialisation lock for [ml-explore/mlx#2133](https://github.com/ml-explore/mlx/issues/2133), and OpenAI-style STT `response_format` on `/v1/audio/transcriptions`) are upstream from 0.4.3 on, so the patch now adds lines that already exist and rejects.
+
+### Removed
+
+- **Bundled `voice_mode/data/patches/mlx_audio_server.patch`** (VM-1126) -- Both fixes were upstreamed in mlx-audio 0.4.3. The patch-apply step in `voice_mode/tools/mlx_audio/install.py` (and its `_apply_server_patch` / `_find_installed_server_py` / `_query_installed_version` helpers) is gone, along with the `voice_mode/data/**/*.patch` packaging glob and the corresponding tests.
+
+### Changed
+
+- **mlx-audio pin floored at `>=0.4.3`** (VM-1126) -- `MLX_AUDIO_PIP_PACKAGE` now embeds the version specifier, so `uv tool install` refuses earlier releases that needed the deleted patch.
+
 ## [8.6.1] - 2026-04-21
 
 ### Fixed

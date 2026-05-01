@@ -119,7 +119,6 @@ include = [
   "voice_mode/data/**/*.ffmeta",
   "voice_mode/data/**/*.sha256",
   "voice_mode/data/**/*.bash",
-  "voice_mode/data/**/*.patch",
 ]
 # artifacts overrides .gitignore for VCS-ignored files that should be packaged
 artifacts = [
