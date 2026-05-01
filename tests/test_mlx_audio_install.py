@@ -3,9 +3,6 @@
 Covers:
 - Apple-Silicon hardware gate (short-circuits before any subprocess).
 - The ``MLX_AUDIO_EXTRAS`` list shape and the install-command generator.
-- Patch idempotency via the ``_inference_lock = asyncio.Lock()`` sentinel.
-- Backup creation and preservation across re-applies.
-- Patch failure surfaces an actionable error.
 - Service config + template wiring (plist/systemd) for ``mlx_audio``.
 """
 
@@ -18,11 +15,8 @@ from voice_mode.tools.mlx_audio.install import (
     MLX_AUDIO_DEFAULT_PORT,
     MLX_AUDIO_EXTRAS,
     MLX_AUDIO_PIP_PACKAGE,
-    PATCH_SENTINEL,
-    _apply_server_patch,
     _build_install_cmd,
     _is_apple_silicon,
-    _query_installed_version,
     mlx_audio_install,
 )
 from voice_mode.tools.service import (
@@ -106,7 +100,7 @@ class TestInstallShortCircuitsOnNonAppleSilicon:
 class TestExtrasList:
     """Pin the runtime extras list -- this is the entire point of the task."""
 
-    EXPECTED_EXTRAS = [
+    EXPECTED_EXTRA_NAMES = [
         "misaki[en]",
         "en-core-web-sm",
         "uvicorn",
@@ -121,13 +115,23 @@ class TestExtrasList:
         "mlx-lm",
     ]
 
+    @staticmethod
+    def _extra_name(spec: str) -> str:
+        """Return the bare package name from a uv ``--with`` spec.
+
+        ``uv`` accepts PEP 508 specifiers (e.g. ``en-core-web-sm @ https://...``);
+        we want to compare on package identity, not pinned URLs.
+        """
+        return spec.split(" @ ", 1)[0].strip()
+
     def test_extras_list_has_exactly_twelve_entries(self):
         assert len(MLX_AUDIO_EXTRAS) == 12
 
     def test_extras_list_matches_canonical(self):
         # Order isn't semantically meaningful but matching it keeps diffs
         # readable; if upstream pins move, update both lists in lockstep.
-        assert MLX_AUDIO_EXTRAS == self.EXPECTED_EXTRAS
+        actual_names = [self._extra_name(s) for s in MLX_AUDIO_EXTRAS]
+        assert actual_names == self.EXPECTED_EXTRA_NAMES
 
     def test_setuptools_is_pinned_below_81(self):
         # Bare ``setuptools`` would let pkg_resources removal break us;
@@ -136,10 +140,24 @@ class TestExtrasList:
         assert "setuptools" not in MLX_AUDIO_EXTRAS
 
     def test_misaki_carries_en_extra(self):
-        # misaki without [en] doesn't pull spaCy English -- the bundled
-        # patch + Kokoro path needs it.
+        # misaki without [en] doesn't pull spaCy English -- the Kokoro G2P
+        # path needs it; without it, /v1/audio/speech crashes with
+        # ``ModuleNotFoundError: No module named 'misaki'`` on the first
+        # synth request.
         assert "misaki[en]" in MLX_AUDIO_EXTRAS
         assert "misaki" not in MLX_AUDIO_EXTRAS
+
+
+class TestPipPackagePin:
+    """The pip-package spec must keep the ``>=0.4.3`` floor."""
+
+    def test_pip_package_specifier_pins_at_or_above_0_4_3(self):
+        # 0.4.3 is the first upstream release that absorbed the MLX Metal
+        # serialisation lock + OpenAI-style STT response_format fixes that
+        # voicemode used to ship as a bundled patch (see VM-1126). Older
+        # mlx-audio releases will misbehave on real workloads.
+        assert MLX_AUDIO_PIP_PACKAGE.startswith("mlx-audio")
+        assert ">=0.4.3" in MLX_AUDIO_PIP_PACKAGE
 
 
 class TestInstallCommandShape:
@@ -168,210 +186,9 @@ class TestInstallCommandShape:
         assert "--reinstall" not in cmd
 
 
-# ============================================================================
-# Patch application: idempotency + backup + failure
-# ============================================================================
-
-
-@pytest.fixture
-def fake_server_py(tmp_path: Path) -> Path:
-    """A throwaway ``server.py`` that looks pre-patch."""
-    server = tmp_path / "server.py"
-    server.write_text(
-        "# fake mlx_audio server.py\n"
-        "import asyncio\n"
-        "# (no _inference_lock yet)\n"
-    )
-    return server
-
-
-class TestPatchAlreadyApplied:
-    """If the sentinel is present, skip patching and report success."""
-
-    def test_skip_patch_when_sentinel_present(self, tmp_path: Path):
-        server = tmp_path / "server.py"
-        server.write_text(
-            f"import asyncio\n# voicemode-patched\n{PATCH_SENTINEL}\n"
-        )
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run"
-        ) as mock_run:
-            result = _apply_server_patch(server)
-        assert result["success"] is True
-        assert result.get("already_patched") is True
-        # Critical: no `patch` invocation -- already patched.
-        assert mock_run.call_count == 0
-        # Backup must NOT be created when nothing was patched.
-        assert not (server.parent / "server.py.pre-voicemode.bak").exists()
-
-
-class TestPatchBackupCreation:
-    """First-time apply writes a one-shot backup; subsequent applies don't overwrite it."""
-
-    def test_backup_created_on_first_apply(self, fake_server_py: Path):
-        from voice_mode.tools.mlx_audio import install as install_mod
-
-        # Stub `patch -p1` to "succeed" and inject the sentinel into server.py
-        # so the post-patch sanity check passes.
-        def fake_patch_run(cmd, **kwargs):
-            fake_server_py.write_text(
-                fake_server_py.read_text()
-                + f"\n{install_mod.PATCH_SENTINEL}\n"
-            )
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run",
-            side_effect=fake_patch_run,
-        ):
-            result = install_mod._apply_server_patch(fake_server_py)
-
-        assert result["success"] is True
-        assert result["already_patched"] is False
-        backup = fake_server_py.parent / "server.py.pre-voicemode.bak"
-        assert backup.exists()
-        # Backup snapshots the *pre-patch* content (no sentinel).
-        assert install_mod.PATCH_SENTINEL not in backup.read_text()
-
-    def test_existing_backup_preserved(self, fake_server_py: Path):
-        from voice_mode.tools.mlx_audio import install as install_mod
-
-        # Pre-seed an "older" backup.
-        backup = fake_server_py.parent / "server.py.pre-voicemode.bak"
-        backup.write_text("ORIGINAL UNTOUCHABLE PRE-PATCH SNAPSHOT")
-        original_backup_bytes = backup.read_bytes()
-
-        def fake_patch_run(cmd, **kwargs):
-            fake_server_py.write_text(
-                fake_server_py.read_text()
-                + f"\n{install_mod.PATCH_SENTINEL}\n"
-            )
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run",
-            side_effect=fake_patch_run,
-        ):
-            result = install_mod._apply_server_patch(fake_server_py)
-
-        assert result["success"] is True
-        # The pre-existing backup must NOT be clobbered.
-        assert backup.read_bytes() == original_backup_bytes
-
-
-class TestPatchFailureError:
-    """Sentinel absent + ``patch`` returns nonzero -> fail with actionable error."""
-
-    def test_patch_failure_surfaces_paths_and_version(self, fake_server_py: Path):
-        from voice_mode.tools.mlx_audio import install as install_mod
-
-        def fake_run(cmd, **kwargs):
-            # First subprocess.run call is `patch -p1 ...` and fails.
-            # Second is `uv tool run --from mlx-audio python -c ...` for
-            # the importlib.metadata version lookup.
-            if cmd and cmd[0] == "patch":
-                return type("R", (), {
-                    "returncode": 1,
-                    "stdout": "",
-                    "stderr": "Hunk #1 FAILED at 35.",
-                })()
-            if cmd[:4] == ["uv", "tool", "run", "--from"]:
-                return type("R", (), {
-                    "returncode": 0,
-                    "stdout": "0.4.2\n",
-                    "stderr": "",
-                })()
-            raise AssertionError(f"unexpected subprocess.run call: {cmd}")
-
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run",
-            side_effect=fake_run,
-        ):
-            result = install_mod._apply_server_patch(fake_server_py)
-
-        assert result["success"] is False
-        assert "Failed to apply" in result["error"]
-        # The error must point at the patch file + the installed version
-        # so the operator can investigate without source-diving.
-        assert "mlx_audio_server.patch" in result["error"]
-        assert "0.4.2" in result["error"] or "unknown" in result["error"]
-
-
-class TestQueryInstalledVersion:
-    """``_query_installed_version`` reads the version from the tool's venv."""
-
-    def test_returns_version_from_importlib_metadata(self):
-        from voice_mode.tools.mlx_audio import install as install_mod
-
-        def fake_run(cmd, **kwargs):
-            # Confirms we go through ``uv tool run --from mlx-audio python``.
-            assert cmd[:4] == ["uv", "tool", "run", "--from"]
-            assert cmd[4] == "mlx-audio"
-            assert cmd[5] == "python"
-            return type("R", (), {
-                "returncode": 0,
-                "stdout": "0.4.2\n",
-                "stderr": "",
-            })()
-
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run",
-            side_effect=fake_run,
-        ):
-            assert install_mod._query_installed_version() == "0.4.2"
-
-    def test_returns_none_when_uv_missing(self):
-        from voice_mode.tools.mlx_audio import install as install_mod
-
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run",
-            side_effect=FileNotFoundError("uv"),
-        ):
-            assert install_mod._query_installed_version() is None
-
-    def test_returns_none_on_nonzero_exit(self):
-        from voice_mode.tools.mlx_audio import install as install_mod
-
-        def fake_run(cmd, **kwargs):
-            return type("R", (), {
-                "returncode": 1,
-                "stdout": "",
-                "stderr": "tool not found",
-            })()
-
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run",
-            side_effect=fake_run,
-        ):
-            assert install_mod._query_installed_version() is None
-
-    def test_returns_none_when_stdout_is_garbage(self):
-        # Defends against future uv versions that might prepend banners or
-        # warnings -- if the last line isn't a PEP 440 version, return None.
-        from voice_mode.tools.mlx_audio import install as install_mod
-
-        def fake_run(cmd, **kwargs):
-            return type("R", (), {
-                "returncode": 0,
-                "stdout": "warning: something\nNot-a-version\n",
-                "stderr": "",
-            })()
-
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run",
-            side_effect=fake_run,
-        ):
-            assert install_mod._query_installed_version() is None
-
-    def test_returns_none_on_timeout(self):
-        from voice_mode.tools.mlx_audio import install as install_mod
-        import subprocess as _sp
-
-        with patch(
-            "voice_mode.tools.mlx_audio.install.subprocess.run",
-            side_effect=_sp.TimeoutExpired(cmd="uv", timeout=30),
-        ):
-            assert install_mod._query_installed_version() is None
+# (Removed VM-1126: server.py patch tests + _query_installed_version tests.
+# Both fixes were upstreamed in mlx-audio 0.4.3 so voicemode no longer
+# ships a patch nor needs to query the installed version.)
 
 
 # ============================================================================
@@ -478,34 +295,24 @@ class TestMlxAudioConfigEnvVars:
 
 
 # ============================================================================
-# Bundled patch resource
+# Bundled patch resource (removed VM-1126)
 # ============================================================================
+# voice_mode/data/patches/mlx_audio_server.patch was deleted because both
+# fixes it carried (MLX Metal serialisation lock + OpenAI-style STT
+# response_format) were upstreamed in mlx-audio 0.4.3. The patch file no
+# longer exists, so there is nothing to assert about it here.
 
 
-class TestBundledPatchResource:
-    """The patch file ships under voice_mode/data/patches/."""
+class TestNoBundledPatchShips:
+    """Belt-and-braces: the patches directory must NOT come back."""
 
-    def test_patch_file_exists_in_package(self):
-        patch_path = (
-            Path(__file__).parent.parent
-            / "voice_mode"
-            / "data"
-            / "patches"
-            / "mlx_audio_server.patch"
+    def test_patches_dir_absent(self):
+        patches_dir = (
+            Path(__file__).parent.parent / "voice_mode" / "data" / "patches"
         )
-        assert patch_path.exists(), (
-            f"Bundled patch missing at {patch_path} -- this is a packaging bug"
+        assert not patches_dir.exists(), (
+            f"voice_mode/data/patches/ has come back at {patches_dir}. "
+            "Bundling another mlx-audio patch invites the same staleness "
+            "that broke installs against mlx-audio 0.4.3 -- prefer pinning "
+            "a fixed upstream version instead. See VM-1126."
         )
-
-    def test_patch_file_contains_sentinel_introduction(self):
-        # The whole point of bundling: the patch introduces our sentinel.
-        patch_path = (
-            Path(__file__).parent.parent
-            / "voice_mode"
-            / "data"
-            / "patches"
-            / "mlx_audio_server.patch"
-        )
-        content = patch_path.read_text()
-        # The patch should add (not remove) the sentinel line.
-        assert f"+_inference_lock = asyncio.Lock()" in content

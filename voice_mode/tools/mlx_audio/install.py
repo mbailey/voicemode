@@ -12,13 +12,15 @@ Install layout::
 The install pipeline is:
 
 1. Apple Silicon gate -- mlx-audio is MLX-native, no Intel/Linux fallback.
-2. ``uv tool install mlx-audio --with <extras>`` -- the extras list is
-   hardcoded in :data:`MLX_AUDIO_EXTRAS` and is the minimum surface
+2. ``uv tool install mlx-audio>=0.4.3 --with <extras>`` -- the extras list
+   is hardcoded in :data:`MLX_AUDIO_EXTRAS` and is the minimum surface
    needed to make the upstream server.py serve Kokoro TTS, Qwen3-TTS
-   clone-voice, and Whisper STT under the OpenAI-compatible API.
-3. Apply the bundled ``mlx_audio_server.patch`` to the freshly-installed
-   ``server.py`` (idempotent; sentinel-checked).
-4. Render the launchd plist calling ``~/.local/bin/mlx_audio.server``
+   clone-voice, and Whisper STT under the OpenAI-compatible API. The
+   ``>=0.4.3`` floor exists because earlier releases of mlx-audio needed
+   a bundled patch for MLX Metal thread-safety + OpenAI-style STT
+   ``response_format``; both fixes are upstream from 0.4.3 on, and
+   voicemode no longer ships a patch.
+3. Render the launchd plist calling ``~/.local/bin/mlx_audio.server``
    directly. (Apple-Silicon-only -- no systemd unit ships.)
 """
 
@@ -39,7 +41,10 @@ logger = logging.getLogger("voicemode")
 
 
 MLX_AUDIO_DEFAULT_PORT = 8890
-MLX_AUDIO_PIP_PACKAGE = "mlx-audio"
+# Pinned ``>=0.4.3`` because that's the first upstream release that absorbed
+# the MLX Metal serialisation lock + OpenAI-compatible STT ``response_format``
+# fixes voicemode previously shipped as a bundled patch. See VM-1126.
+MLX_AUDIO_PIP_PACKAGE = "mlx-audio>=0.4.3"
 MLX_AUDIO_ENTRY_POINT = "mlx_audio.server"
 
 # Extras the bundled server.py + voicemode client need at runtime. These were
@@ -61,19 +66,6 @@ MLX_AUDIO_EXTRAS: List[str] = [
     "mlx",                 # core MLX runtime
     "mlx-lm",              # mlx_lm -- Qwen3-TTS path
 ]
-
-# Sentinel string that proves the bundled patch has already been applied to
-# the installed server.py. Picked because the asyncio.Lock line is unique to
-# the patch (it doesn't appear in any unpatched mlx-audio release as of
-# 0.4.2).
-PATCH_SENTINEL = "_inference_lock = asyncio.Lock()"
-
-# Path of the bundled patch relative to the installed package root.
-_PATCH_RESOURCE = Path(__file__).resolve().parent.parent.parent / "data" / "patches" / "mlx_audio_server.patch"
-
-# Backup filename written next to the patched server.py.
-_BACKUP_NAME = "server.py.pre-voicemode.bak"
-
 
 def _is_apple_silicon() -> bool:
     """True when running on macOS arm64 (Apple Silicon)."""
@@ -153,167 +145,6 @@ def _build_install_cmd(force_reinstall: bool) -> List[str]:
     return cmd
 
 
-def _find_installed_server_py() -> Optional[Path]:
-    """Locate the ``server.py`` shipped by the just-installed mlx-audio.
-
-    ``uv tool install mlx-audio`` puts the package under
-    ``~/.local/share/uv/tools/mlx-audio/lib/python<X.Y>/site-packages/mlx_audio/``.
-    The Python version isn't pinned by us (uv picks one), so we glob for it.
-    Returns ``None`` if no candidate exists.
-    """
-    base = Path.home() / ".local" / "share" / "uv" / "tools" / "mlx-audio" / "lib"
-    if not base.exists():
-        return None
-    candidates = sorted(base.glob("python*/site-packages/mlx_audio/server.py"))
-    return candidates[0] if candidates else None
-
-
-def _apply_server_patch(server_py: Path) -> Dict[str, Any]:
-    """Apply the bundled patch to ``server.py``, idempotently.
-
-    1. If ``server.py`` already contains :data:`PATCH_SENTINEL`, treat it as
-       already-patched and return success without touching anything.
-    2. Else, save a one-shot backup as ``server.py.pre-voicemode.bak`` (only
-       if no backup exists yet) and run ``patch -p1`` from the package root.
-    3. On failure, surface a clear error pointing at both the bundled patch
-       and the installed mlx-audio version (best-effort) so the operator can
-       refresh the patch against upstream.
-    """
-    result: Dict[str, Any] = {
-        "patch_path": str(_PATCH_RESOURCE),
-        "server_py": str(server_py),
-    }
-
-    if not _PATCH_RESOURCE.exists():
-        result["success"] = False
-        result["error"] = (
-            f"Bundled patch is missing at {_PATCH_RESOURCE}. "
-            "This is a packaging bug -- reinstall voicemode."
-        )
-        return result
-
-    try:
-        current = server_py.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        result["success"] = False
-        result["error"] = f"Could not read {server_py}: {exc}"
-        return result
-
-    if PATCH_SENTINEL in current:
-        result["success"] = True
-        result["already_patched"] = True
-        result["message"] = "mlx-audio server.py already patched (sentinel present)"
-        logger.info(result["message"])
-        return result
-
-    package_root = server_py.parent  # .../site-packages/mlx_audio/
-    backup_path = package_root / _BACKUP_NAME
-
-    if not backup_path.exists():
-        try:
-            shutil.copy2(server_py, backup_path)
-            logger.info("Saved backup: %s", backup_path)
-        except OSError as exc:
-            result["success"] = False
-            result["error"] = f"Could not write backup {backup_path}: {exc}"
-            return result
-    result["backup_path"] = str(backup_path)
-
-    # Apply with ``patch -p1`` from the package root. ``-p1`` strips the
-    # leading "/Users/admin/.local/share/.../mlx_audio/" path component from
-    # the diff so it matches the installed file regardless of its absolute
-    # location.
-    try:
-        completed = subprocess.run(
-            ["patch", "-p1", "--forward", "-i", str(_PATCH_RESOURCE)],
-            cwd=str(package_root),
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError as exc:
-        result["success"] = False
-        result["error"] = (
-            f"`patch` binary not found ({exc}). On macOS install Xcode "
-            "command-line tools: xcode-select --install"
-        )
-        return result
-
-    if completed.returncode != 0:
-        # Try to surface the installed mlx-audio version for the error message.
-        version = _query_installed_version()
-        result["success"] = False
-        result["error"] = (
-            f"Failed to apply {_PATCH_RESOURCE} to {server_py} "
-            f"(mlx-audio version: {version or 'unknown'}). "
-            "The upstream server.py may have drifted. Refresh the patch "
-            "against the installed file and retry. "
-            f"patch stdout: {completed.stdout.strip()!r} "
-            f"patch stderr: {completed.stderr.strip()!r}"
-        )
-        return result
-
-    # Sanity check: the sentinel should now be present.
-    try:
-        post = server_py.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        post = ""
-    if PATCH_SENTINEL not in post:
-        result["success"] = False
-        result["error"] = (
-            f"`patch` reported success but {PATCH_SENTINEL!r} is not in "
-            f"{server_py}. Refusing to silently ship a half-applied patch."
-        )
-        return result
-
-    result["success"] = True
-    result["already_patched"] = False
-    result["message"] = "mlx-audio server.py patched successfully"
-    logger.info(result["message"])
-    return result
-
-
-def _query_installed_version() -> Optional[str]:
-    """Best-effort: read mlx-audio's installed version from inside its venv.
-
-    Earlier versions parsed ``uv tool list`` stdout, which is fragile across
-    uv releases (column shape, prefix decoration, locale, etc.). uv 0.9.x
-    has no ``uv tool show`` subcommand and ``uv tool list --output-format
-    json`` is unrecognized -- so we ask the tool's own venv via
-    ``importlib.metadata`` instead. That bypasses uv's CLI surface entirely
-    and gets us the canonical PEP 440 string.
-
-    Returns ``None`` on any failure (subprocess error, parse error, missing
-    install) -- callers should treat it as "unknown version" rather than
-    aborting the install/patch flow.
-    """
-    try:
-        completed = subprocess.run(
-            [
-                "uv",
-                "tool",
-                "run",
-                "--from",
-                MLX_AUDIO_PIP_PACKAGE,
-                "python",
-                "-c",
-                "import importlib.metadata as m; "
-                f"print(m.version('{MLX_AUDIO_PIP_PACKAGE}'))",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
-        return None
-    if completed.returncode != 0:
-        return None
-    version = completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
-    # Sanity check: PEP 440 versions start with a digit.
-    if not version or not version[0].isdigit():
-        return None
-    return version
-
-
 async def _update_mlx_audio_service_files(
     auto_enable: Optional[bool],
 ) -> Dict[str, Any]:
@@ -366,9 +197,7 @@ async def mlx_audio_install(
     Installs the ``mlx-audio`` package via ``uv tool install`` along with
     the runtime extras list (Kokoro G2P, FastAPI, sounddevice, mlx-lm,
     etc.). Console entry points (``mlx_audio.server`` and friends) land
-    in ``~/.local/bin`` -- no service-local venv. The bundled patch is
-    then applied to the installed ``server.py`` (idempotent,
-    sentinel-checked), and the launchd plist (or systemd unit) is
+    in ``~/.local/bin`` -- no service-local venv. The launchd plist is
     rendered to call ``mlx_audio.server`` directly with config sourced
     from ``~/.voicemode/voicemode.env``.
 
@@ -384,9 +213,8 @@ async def mlx_audio_install(
             falls back to ``VOICEMODE_SERVICE_AUTO_ENABLE``.
 
     Returns:
-        Dict with ``success``, ``install_path``, ``service_url``,
-        ``service_path``, and ``patch`` (a sub-dict describing whether
-        the patch was applied or already present).
+        Dict with ``success``, ``install_path``, ``service_url``, and
+        ``service_path``.
     """
     if not _is_apple_silicon():
         return {
@@ -447,33 +275,12 @@ async def mlx_audio_install(
             ),
         }
 
-    server_py = _find_installed_server_py()
-    if server_py is None:
-        return {
-            "success": False,
-            "error": (
-                "Could not locate installed mlx_audio/server.py under "
-                "~/.local/share/uv/tools/mlx-audio/. uv tool layout may have "
-                "changed -- inspect `uv tool list` and refresh the locator."
-            ),
-        }
-
-    patch_result = _apply_server_patch(server_py)
-    if not patch_result.get("success"):
-        return {
-            "success": False,
-            "error": f"Patch step failed: {patch_result.get('error')}",
-            "install_path": str(install_path),
-            "patch": patch_result,
-        }
-
     service_result = await _update_mlx_audio_service_files(auto_enable_bool)
     if not service_result.get("success"):
         return {
             "success": False,
             "error": f"service file update failed: {service_result.get('error')}",
             "install_path": str(install_path),
-            "patch": patch_result,
         }
 
     bind_host = "0.0.0.0" if bind_lan_bool else "127.0.0.1"
@@ -486,7 +293,6 @@ async def mlx_audio_install(
         "host": bind_host,
         "port": port_int,
         "auto_enabled": service_result.get("enabled", False),
-        "patch": patch_result,
         "extras": list(MLX_AUDIO_EXTRAS),
         "message": (
             f"mlx-audio installed via uv tool install. "

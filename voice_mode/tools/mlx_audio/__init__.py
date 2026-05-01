@@ -1,9 +1,11 @@
 """mlx-audio service tools.
 
 Unified Whisper STT + Kokoro TTS + Qwen3-TTS clone-voice service for
-Apple Silicon. Uses ``uv tool install mlx-audio`` -- no service-local
-venv -- and applies the bundled ``mlx_audio_server.patch`` so the
-upstream server.py is voicemode-client-usable out of the box.
+Apple Silicon. Uses ``uv tool install mlx-audio`` (pinned ``>=0.4.3``)
+with no service-local venv. The upstream server.py is voicemode-client
+usable out of the box from 0.4.3 on -- voicemode used to ship a
+``mlx_audio_server.patch`` for MLX Metal serialisation + OpenAI-style
+STT ``response_format``; both fixes are upstream now (see VM-1126).
 """
 
 from voice_mode.tools.mlx_audio.install import mlx_audio_install
