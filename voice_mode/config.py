@@ -1261,6 +1261,11 @@ def get_provider_supported_formats(provider: str, operation: str = "tts") -> lis
             "tts": ["mp3", "opus", "flac", "wav", "pcm"],  # AAC is not currently supported
             "stt": []  # Kokoro is TTS only
         },
+        "cartesia": {
+            # Cartesia streaming emits raw PCM; buffered /tts/bytes returns WAV.
+            "tts": ["pcm", "wav"],
+            "stt": []
+        },
         # STT providers
         "whisper-local": {
             "tts": [],  # Whisper is STT only

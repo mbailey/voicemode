@@ -113,7 +113,8 @@ class ProviderRegistry:
                 elif provider_type == "cartesia":
                     import re
                     uuid_re = re.compile(
-                        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                        re.IGNORECASE,
                     )
                     models = [config.CARTESIA_MODEL, config.CARTESIA_FALLBACK_MODEL]
                     voices = [v for v in config.TTS_VOICES if uuid_re.match(v)]
@@ -175,7 +176,8 @@ class ProviderRegistry:
         if detect_provider_type(base_url) == "cartesia":
             import re
             uuid_re = re.compile(
-                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                re.IGNORECASE,
             )
             voices = [v for v in config.TTS_VOICES if uuid_re.match(v)]
             if config.CARTESIA_VOICE_ID and config.CARTESIA_VOICE_ID not in voices:

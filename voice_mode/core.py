@@ -283,12 +283,21 @@ async def text_to_speech(
         generation_start = time.perf_counter()
         
         # Check if streaming is enabled and format is supported.
-        # Cartesia streams via its own SSE endpoint; OpenAI/Kokoro stream
+        # Cartesia streams via its own SSE endpoint and currently emits raw
+        # PCM only, so we only stream when the validated format is pcm and
+        # fall back to the buffered WAV path otherwise. OpenAI/Kokoro stream
         # over the OpenAI-compatible HTTP response.
-        use_streaming = STREAMING_ENABLED and (
-            provider == "cartesia"
-            or validated_format in ["opus", "mp3", "pcm", "wav"]
-        )
+        if provider == "cartesia":
+            use_streaming = STREAMING_ENABLED and validated_format == "pcm"
+            if STREAMING_ENABLED and validated_format != "pcm":
+                logger.info(
+                    f"Cartesia streaming only supports pcm; "
+                    f"falling back to buffered playback for format {validated_format}"
+                )
+        else:
+            use_streaming = STREAMING_ENABLED and validated_format in [
+                "opus", "mp3", "pcm", "wav"
+            ]
 
         if use_streaming:
             logger.info(f"Using streaming playback ({provider}, {validated_format})")

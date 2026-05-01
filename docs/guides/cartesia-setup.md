@@ -75,4 +75,6 @@ stream. Streaming silently ends; check `~/.voicemode/logs/events/` for the
 
 **Slower than expected first-audio time** — Verify streaming is engaged by
 looking for `Starting Cartesia SSE streaming` in voicemode logs. If the log
-line is missing, the buffered path is being used; check `STREAMING_ENABLED`.
+line is missing, the buffered path is being used; check
+`VOICEMODE_STREAMING_ENABLED` (Cartesia streaming additionally requires the
+validated TTS format to resolve to `pcm`).
