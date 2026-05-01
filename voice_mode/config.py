@@ -563,6 +563,12 @@ AUTO_FOCUS_PANE = env_bool("VOICEMODE_AUTO_FOCUS_PANE", False)
 # OpenAI configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+# Cartesia configuration (https://cartesia.ai)
+CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
+CARTESIA_VOICE_ID = os.getenv("VOICEMODE_CARTESIA_VOICE_ID", "")
+CARTESIA_MODEL = os.getenv("VOICEMODE_CARTESIA_MODEL", "sonic-3")
+CARTESIA_FALLBACK_MODEL = os.getenv("VOICEMODE_CARTESIA_FALLBACK_MODEL", "sonic-2")
+
 # Helper function to parse comma-separated lists
 def parse_comma_list(env_var: str, fallback: str) -> list:
     """Parse comma-separated list from environment variable."""
