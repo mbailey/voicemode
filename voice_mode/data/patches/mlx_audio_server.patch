@@ -1,0 +1,82 @@
+--- a/server.py
++++ b/server.py
+@@ -38,7 +38,7 @@
+     WebSocketDisconnect,
+ )
+ from fastapi.middleware.cors import CORSMiddleware
+-from fastapi.responses import StreamingResponse
++from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+ from pydantic import BaseModel
+ 
+ from mlx_audio.audio_io import read as audio_read
+@@ -928,6 +928,7 @@
+     context: Optional[str] = Form(None),
+     prefill_step_size: int = Form(2048),
+     text: Optional[str] = Form(None),
++    response_format: str = Form("json"),
+ ):
+     """Transcribe audio using an STT model in OpenAI format."""
+     payload = TranscriptionRequest(
+@@ -959,7 +960,62 @@
+         normalized_kwargs=payload.model_dump(exclude={"model"}, exclude_none=True),
+         stream=payload.stream,
+     )
++
++    # voicemode-patch: honor OpenAI-style response_format. mlx-audio's native
++    # transport is application/x-ndjson with whisper's full segment/timing
++    # payload (incl. trailing silence-hallucination segments). For
++    # text/json/verbose_json we collect, parse, drop the silence segments,
++    # and return the OpenAI Audio API shape. Default ("ndjson") preserves
++    # the legacy behaviour for any client relying on it.
++    if response_format in ("text", "json", "verbose_json"):
++        full = None
++        accumulated = ""
++        try:
++            while True:
++                chunk = await _next_inference_chunk(handle)
++                if chunk.kind == "done":
++                    break
++                if chunk.kind == "error":
++                    raise chunk.error
++                line = chunk.payload
++                if isinstance(line, bytes):
++                    line = line.decode("utf-8", errors="replace")
++                for raw in str(line).splitlines():
++                    raw = raw.strip()
++                    if not raw:
++                        continue
++                    try:
++                        obj = json.loads(raw)
++                    except Exception:
++                        continue
++                    if isinstance(obj, dict) and ("segments" in obj or "language" in obj):
++                        full = obj
++                    elif isinstance(obj, dict) and "text" in obj:
++                        accumulated += obj.get("text") or ""
++        finally:
++            handle.cancel()
++
++        if full is None:
++            full = {"text": accumulated}
++
++        # Whisper hallucinates empty / "." / "..." segments on trailing
++        # silence. Strip them so callers don't drown in noise.
++        segs = full.get("segments") or []
++        filtered = [
++            s for s in segs
++            if (s.get("text") or "").strip() not in ("", ".", "...")
++        ]
++        if filtered:
++            full = {**full, "segments": filtered}
++            full["text"] = "".join(s.get("text", "") for s in filtered)
+ 
++        if response_format == "text":
++            return PlainTextResponse((full.get("text") or "").strip())
++        if response_format == "json":
++            return JSONResponse({"text": (full.get("text") or "").strip()})
++        # verbose_json: full payload with segments + language, silence-cleaned
++        return JSONResponse(full)
++
+     return StreamingResponse(
+         _stream_inference_results(handle, request),
+         media_type="application/x-ndjson",

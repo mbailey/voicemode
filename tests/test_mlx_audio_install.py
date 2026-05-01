@@ -295,24 +295,54 @@ class TestMlxAudioConfigEnvVars:
 
 
 # ============================================================================
-# Bundled patch resource (removed VM-1126)
+# Bundled patch resource (restored VM-1128)
 # ============================================================================
-# voice_mode/data/patches/mlx_audio_server.patch was deleted because both
-# fixes it carried (MLX Metal serialisation lock + OpenAI-style STT
-# response_format) were upstreamed in mlx-audio 0.4.3. The patch file no
-# longer exists, so there is nothing to assert about it here.
+# voice_mode/data/patches/mlx_audio_server.patch ships the OpenAI-style STT
+# response_format handling that mlx-audio 0.4.3 still does NOT provide.
+# (VM-1126 incorrectly removed it on the assumption that all fixes were
+# upstreamed; only the inference lock was. VM-1128 restores the
+# response_format half against the 0.4.3 endpoint shape.)
 
 
-class TestNoBundledPatchShips:
-    """Belt-and-braces: the patches directory must NOT come back."""
+class TestBundledPatchShips:
+    """The patch file and its sentinel must exist and be wired through."""
 
-    def test_patches_dir_absent(self):
-        patches_dir = (
-            Path(__file__).parent.parent / "voice_mode" / "data" / "patches"
+    def test_patch_file_exists(self):
+        from voice_mode.tools.mlx_audio.install import _PATCH_RESOURCE
+        assert _PATCH_RESOURCE.exists(), (
+            f"Bundled patch missing at {_PATCH_RESOURCE}. "
+            "Wheel/sdist will ship without STT response_format support."
         )
-        assert not patches_dir.exists(), (
-            f"voice_mode/data/patches/ has come back at {patches_dir}. "
-            "Bundling another mlx-audio patch invites the same staleness "
-            "that broke installs against mlx-audio 0.4.3 -- prefer pinning "
-            "a fixed upstream version instead. See VM-1126."
+
+    def test_patch_sentinel_present_in_patch(self):
+        """The sentinel must literally appear in the patch -- otherwise
+        applying the patch can never satisfy the post-patch sanity check."""
+        from voice_mode.tools.mlx_audio.install import (
+            _PATCH_RESOURCE,
+            PATCH_SENTINEL,
+        )
+        text = _PATCH_RESOURCE.read_text(encoding="utf-8")
+        assert PATCH_SENTINEL in text, (
+            f"Sentinel {PATCH_SENTINEL!r} not found in patch content. "
+            "Either the sentinel constant or the patch comment has drifted."
+        )
+
+    def test_patch_targets_response_format(self):
+        """Smoke test: patch should add response_format form param and the
+        text/json/verbose_json branching block."""
+        from voice_mode.tools.mlx_audio.install import _PATCH_RESOURCE
+        text = _PATCH_RESOURCE.read_text(encoding="utf-8")
+        assert "response_format: str = Form" in text
+        assert "PlainTextResponse" in text
+        assert "JSONResponse" in text
+
+    def test_pyproject_includes_patches_glob(self):
+        """The wheel target must include *.patch under data/ or the patch
+        file silently won't ship to PyPI."""
+        pyproject = (
+            Path(__file__).parent.parent / "pyproject.toml"
+        ).read_text(encoding="utf-8")
+        assert "voice_mode/data/**/*.patch" in pyproject, (
+            "pyproject.toml [tool.hatch.build.targets.wheel].include is "
+            "missing the *.patch glob -- the bundled patch will not ship."
         )
