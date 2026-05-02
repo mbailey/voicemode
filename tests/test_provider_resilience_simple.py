@@ -12,7 +12,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # Ensure ALWAYS_TRY_LOCAL is enabled for the test
 os.environ['VOICEMODE_ALWAYS_TRY_LOCAL'] = 'true'
 
+from voice_mode import config
+from voice_mode import provider_discovery
 from voice_mode.provider_discovery import ProviderRegistry, is_local_provider, detect_provider_type
+
+
+# Documented defaults — pin so tests are isolated from user voicemode.env. See VM-1138.
+DEFAULT_TTS_BASE_URLS = [
+    "http://127.0.0.1:8880/v1",
+    "https://api.openai.com/v1",
+]
+DEFAULT_STT_BASE_URLS = [
+    "http://127.0.0.1:2022/v1",
+    "https://api.openai.com/v1",
+]
+
+
+@pytest.fixture(autouse=True)
+def pin_provider_urls(monkeypatch):
+    """Isolate from user ~/.voicemode/voicemode.env. See VM-1138."""
+    monkeypatch.setattr(config, "TTS_BASE_URLS", list(DEFAULT_TTS_BASE_URLS))
+    monkeypatch.setattr(config, "STT_BASE_URLS", list(DEFAULT_STT_BASE_URLS))
+    monkeypatch.setattr(provider_discovery, "TTS_BASE_URLS", list(DEFAULT_TTS_BASE_URLS))
+    monkeypatch.setattr(provider_discovery, "STT_BASE_URLS", list(DEFAULT_STT_BASE_URLS))
 
 
 @pytest.mark.asyncio
