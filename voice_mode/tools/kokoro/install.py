@@ -142,6 +142,33 @@ async def kokoro_install(
         # Check for and migrate old installations
         migration_msg = auto_migrate_if_needed("kokoro")
 
+        # NixOS needs two fixes for Kokoro's GPU path:
+        # 1. SSL: uv's standalone Python can't find NixOS CA certificates.
+        # 2. CUDA driver: PyTorch's pip wheels can't find libcuda.so.1
+        #    (lives at /run/opengl-driver/lib on NixOS).
+        # 3. Pascal GPUs (GTX 10xx, sm_61): torch 2.8+ dropped support.
+        #    Use torch 2.7.x+cu118 from the cu118 wheel index instead.
+        if os.path.isfile("/etc/NIXOS"):
+            return {
+                "success": False,
+                "error": "NixOS detected — Kokoro requires manual setup on NixOS.",
+                "nixos_guidance": {
+                    "install": "The standard install (clone + venv + start script) "
+                               "works, but the start script must run with: "
+                               "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt "
+                               "LD_LIBRARY_PATH=/run/opengl-driver/lib",
+                    "pascal_gpu": "For Pascal GPUs (GTX 10xx, sm_61): torch 2.8+ "
+                                  "dropped support. After install, swap PyTorch: "
+                                  "uv pip install torch==2.7.1+cu118 "
+                                  "--index-url https://download.pytorch.org/whl/cu118",
+                    "volta_plus": "For Volta+ GPUs (RTX 20xx and newer): the default "
+                                  "torch GPU wheels work, just set the environment "
+                                  "variables above when starting the service.",
+                    "cpu": "Kokoro's 82M model also runs well on CPU — use "
+                           "start-cpu.sh if GPU setup is not needed."
+                }
+            }
+
         # Check kokoro dependencies (unless skipped)
         if not skip_deps:
             from voice_mode.utils.dependencies.checker import (
