@@ -12,6 +12,18 @@ from voice_mode.simple_failover import simple_stt_failover
 TEST_STT_BASE_URLS = ["http://127.0.0.1:2022/v1", "https://api.openai.com/v1"]
 
 
+@pytest.fixture(autouse=True)
+def pin_stt_base_urls(monkeypatch):
+    """Pin simple_failover.STT_BASE_URLS to TEST_STT_BASE_URLS so tests are
+    isolated from the user's ~/.voicemode/voicemode.env (which may put
+    mlx-audio first or omit OpenAI entirely). See VM-1138.
+
+    `simple_failover` does `from .config import STT_BASE_URLS` at module load,
+    so it carries its own bound name — patch the failover module, not config.
+    """
+    monkeypatch.setattr("voice_mode.simple_failover.STT_BASE_URLS", list(TEST_STT_BASE_URLS))
+
+
 class TestSTTErrorHandling:
     """Test STT error handling and structured response generation"""
 

@@ -5,7 +5,38 @@ import asyncio
 from unittest.mock import patch
 
 from voice_mode import config
+from voice_mode import provider_discovery
 from voice_mode.provider_discovery import ProviderRegistry, is_local_provider, detect_provider_type
+
+
+# Documented defaults — tests assert against these literal URLs / providers, so
+# pin them here regardless of what the developer has in ~/.voicemode/voicemode.env.
+# See VM-1138.
+DEFAULT_TTS_BASE_URLS = [
+    "http://127.0.0.1:8880/v1",      # Kokoro (local TTS)
+    "https://api.openai.com/v1",     # OpenAI (remote)
+]
+DEFAULT_STT_BASE_URLS = [
+    "http://127.0.0.1:2022/v1",      # Whisper (local STT)
+    "https://api.openai.com/v1",     # OpenAI (remote)
+]
+
+
+@pytest.fixture(autouse=True)
+def pin_provider_urls(monkeypatch):
+    """Pin TTS/STT base URLs to documented defaults so tests are isolated from
+    the user's ~/.voicemode/voicemode.env. Without this, tests asserting on
+    'http://127.0.0.1:8880/v1' or provider 'whisper' fail when the user has
+    overridden the URL list (e.g. mlx-audio at 8890 first).
+
+    Both `config` and `provider_discovery` carry their own bound names because
+    `provider_discovery` does `from .config import TTS_BASE_URLS, STT_BASE_URLS`
+    at module load — patch both.
+    """
+    monkeypatch.setattr(config, "TTS_BASE_URLS", list(DEFAULT_TTS_BASE_URLS))
+    monkeypatch.setattr(config, "STT_BASE_URLS", list(DEFAULT_STT_BASE_URLS))
+    monkeypatch.setattr(provider_discovery, "TTS_BASE_URLS", list(DEFAULT_TTS_BASE_URLS))
+    monkeypatch.setattr(provider_discovery, "STT_BASE_URLS", list(DEFAULT_STT_BASE_URLS))
 
 
 class TestProviderResilience:
