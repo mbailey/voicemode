@@ -71,6 +71,58 @@ For all parameters, see [Converse Parameters](../../docs/reference/converse-para
 4. **Let VoiceMode auto-select** - Don't hardcode providers unless user has preference
 5. **First run is slow** - Model downloads happen on first start (2-5 min), then instant
 
+## Transcript visibility
+
+Newer Claude Code releases collapse MCP tool calls in the visible transcript, so the spoken side of a `voicemode:converse` exchange disappears from the conversation record. To keep voice turns readable, echo the spoken content as visible Markdown on **both** sides of the call:
+
+- **Before** every `voicemode:converse` call where `wait_for_response=true`, write the assistant message you are about to speak as a blockquote in the same response that issues the tool call.
+- **After** the call returns with a captured user message, write that user message as a blockquote in your next response.
+
+Use this format:
+
+```
+> **voicemode (assistant):** <message arg passed to converse>
+[voicemode:converse tool call]
+> **voicemode (user):** <captured user message>
+```
+
+The bold `voicemode` label and the `(assistant)` / `(user)` qualifier keep voice turns unambiguous in a transcript that mixes typed and spoken conversation.
+
+### When to echo
+
+- **Echo only when `wait_for_response=true`** *and* the tool response contains a user message.
+- **Do not echo when `wait_for_response=false`** — speak-only narration calls have no user message to surface, so they produce no echo (in either direction).
+- **Do not echo on empty or failed transcription** — if the tool returns no user utterance (timeout, transcription failure, empty result), skip the echo line and proceed.
+
+### Worked example
+
+In the response that issues the converse call, the assistant echo precedes the tool use:
+
+```
+> **voicemode (assistant):** What would you like to work on next?
+[voicemode:converse("What would you like to work on next?") tool call]
+```
+
+In the next assistant response, after receiving the tool result, the user echo comes first:
+
+```
+> **voicemode (user):** Let's pick up the auth refactor where we left off.
+
+Sure — pulling up that branch now.
+```
+
+A future reader can reconstruct the full voice exchange from the visible blockquotes alone, without expanding any collapsed tool calls.
+
+### No double-echo
+
+If the assistant message you pass to `converse` is identical to a sentence already written as visible prose in the same response, don't also produce a separate `> **voicemode (assistant):**` line — the prose already serves the same purpose. The common case is that the visible reasoning text and the spoken `message` argument differ, and in that case both should appear.
+
+The same rule applies to the user side: if you naturally quote the user's words back in your reasoning ("You said 'X', so..."), don't also add a separate `> **voicemode (user):**` line for the same content. One visible record of each utterance is enough.
+
+### Opt-out
+
+This is a default, not a hard rule. If the user asks you to stop echoing voice turns ("stop echoing", "drop the voicemode lines", "you don't need to repeat me"), honour that for the rest of the session and resume only if they ask.
+
 ## Parallel Tool Calls (Zero Dead Air)
 
 Eliminate dead air by sending voice and action calls in the **same response**:
