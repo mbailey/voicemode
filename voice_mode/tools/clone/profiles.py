@@ -25,7 +25,7 @@ VOICES_DIR = BASE_DIR / "voices"
 VOICES_JSON = BASE_DIR / "voices.json"
 
 MIN_CLIP_SECONDS = 3.0
-MAX_CLIP_SECONDS = 15.0
+MAX_CLIP_SECONDS = 9.0
 TRIM_HINT = "ffmpeg -i in.wav -ss 0 -t 8 out.wav"
 
 # Default clone TTS settings
@@ -177,11 +177,11 @@ def _probe_duration_seconds(path: Path) -> float:
 
 
 def _validate_clip_length(path: Path) -> float:
-    """Reject clips outside the 3-15s window. Returns measured duration."""
+    """Reject clips outside the 3-9s window. Returns measured duration."""
     duration = _probe_duration_seconds(path)
     if duration < MIN_CLIP_SECONDS or duration > MAX_CLIP_SECONDS:
         raise ValueError(
-            f"Reference clip is {duration:.1f}s; accepted window is 3-15s. "
+            f"Reference clip is {duration:.1f}s; accepted window is 3-9s. "
             f"Voice cloning works best with short clean speech. "
             f"Trim with: {TRIM_HINT}"
         )
@@ -233,7 +233,7 @@ async def clone_add(
             "error": f"Voice profile '{name}' already exists. Remove it first or choose a different name.",
         }
 
-    # Gate: reject clips outside 3-15s before any expensive work.
+    # Gate: reject clips outside 3-9s before any expensive work.
     try:
         _validate_clip_length(source_path)
     except ValueError as e:

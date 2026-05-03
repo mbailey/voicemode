@@ -1,4 +1,4 @@
-"""Tests for the 3-15s reference-clip length gate in clone_add."""
+"""Tests for the 3-9s reference-clip length gate in clone_add."""
 
 import wave
 from pathlib import Path
@@ -39,7 +39,7 @@ def test_validate_rejects_short_clip(tmp_path):
         _validate_clip_length(short)
     msg = str(exc.value)
     assert "1.0s" in msg
-    assert "3-15s" in msg
+    assert "3-9s" in msg
     assert "ffmpeg -i" in msg
 
 
@@ -49,7 +49,7 @@ def test_validate_rejects_long_clip(tmp_path):
         _validate_clip_length(long)
     msg = str(exc.value)
     assert "60.0s" in msg
-    assert "3-15s" in msg
+    assert "3-9s" in msg
 
 
 def test_validate_accepts_in_window(tmp_path):
@@ -63,9 +63,25 @@ def test_validate_accepts_boundary_3s(tmp_path):
     assert _validate_clip_length(boundary) == pytest.approx(3.0, abs=0.05)
 
 
-def test_validate_accepts_boundary_15s(tmp_path):
-    boundary = _write_wav(tmp_path / "fifteen.wav", 15.0)
-    assert _validate_clip_length(boundary) == pytest.approx(15.0, abs=0.05)
+def test_validate_rejects_just_below_lower_boundary(tmp_path):
+    just_short = _write_wav(tmp_path / "two-nine.wav", 2.9)
+    with pytest.raises(ValueError) as exc:
+        _validate_clip_length(just_short)
+    assert "2.9s" in str(exc.value)
+    assert "3-9s" in str(exc.value)
+
+
+def test_validate_accepts_boundary_9s(tmp_path):
+    boundary = _write_wav(tmp_path / "nine.wav", 9.0)
+    assert _validate_clip_length(boundary) == pytest.approx(9.0, abs=0.05)
+
+
+def test_validate_rejects_just_over_upper_boundary(tmp_path):
+    just_long = _write_wav(tmp_path / "nine-one.wav", 9.1)
+    with pytest.raises(ValueError) as exc:
+        _validate_clip_length(just_long)
+    assert "9.1s" in str(exc.value)
+    assert "3-9s" in str(exc.value)
 
 
 def test_probe_falls_back_to_wave_when_ffprobe_missing(tmp_path):
@@ -96,7 +112,7 @@ async def test_clone_add_rejects_short_clip(tmp_voicemode, tmp_path):
     result = await clone_add("testfoo", str(short))
     assert result["success"] is False
     assert "1.0s" in result["error"]
-    assert "3-15s" in result["error"]
+    assert "3-9s" in result["error"]
     assert TRIM_HINT in result["error"]
 
 
@@ -106,7 +122,7 @@ async def test_clone_add_rejects_long_clip(tmp_voicemode, tmp_path):
     result = await clone_add("testfoo", str(long))
     assert result["success"] is False
     assert "60.0s" in result["error"]
-    assert "3-15s" in result["error"]
+    assert "3-9s" in result["error"]
 
 
 @pytest.mark.asyncio
