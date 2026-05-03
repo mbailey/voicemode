@@ -141,9 +141,10 @@ class TestCloneAdd:
         assert result["ref_text"] == "This is the transcript."
         assert result["description"] == "A test voice"
 
-        # Verify audio was copied
-        dest = tmp_voicemode["voices_dir"] / "testvoice.wav"
+        # Verify audio landed in per-voice directory layout
+        dest = tmp_voicemode["voices_dir"] / "testvoice" / "default.wav"
         assert dest.exists()
+        assert (tmp_voicemode["voices_dir"] / "testvoice" / "voice.md").exists()
 
         # Verify voices.json was updated
         data = json.loads(tmp_voicemode["voices_json"].read_text())
@@ -219,7 +220,7 @@ class TestCloneAdd:
         assert "Whisper" in result["error"]
 
         # Audio file should have been cleaned up
-        dest = tmp_voicemode["voices_dir"] / "failvoice.wav"
+        dest = tmp_voicemode["voices_dir"] / "failvoice" / "default.wav"
         assert not dest.exists()
 
     @pytest.mark.asyncio
