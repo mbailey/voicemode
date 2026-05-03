@@ -10,13 +10,25 @@ The fix is a soft instruction (this skill), not a hook or output style. Hooks ca
 
 ## When to echo
 
-| Tool call shape | User message in result | Echo? |
-|---|---|---|
-| `wait_for_response=true` | yes | echo BOTH sides |
-| `wait_for_response=true` | empty / transcription failure / timeout | NO echo (don't fabricate) |
-| `wait_for_response=false` | (n/a — no listen window) | NO echo (no user message to surface) |
+The two echoes are **asymmetric** — assistant echo and user echo follow different rules:
+
+| Tool call shape | User message in result | ASSISTANT echo | USER echo |
+|---|---|---|---|
+| `wait_for_response=true` | captured | yes | yes |
+| `wait_for_response=true` | empty / transcription failure / timeout | yes | **no** (nothing to echo) |
+| `wait_for_response=false` (speak-only narration) | (n/a — no listen window) | **yes** | no |
+
+The asymmetry: the assistant always speaks something on a converse call, and the visible transcript is exactly where that content gets lost — so the assistant echo always applies. The user echo only applies when there is a captured user message; otherwise there's nothing to print and fabricating a placeholder would be misleading.
 
 The assistant echo appears in the response that issues the converse call (immediately before the tool use). The user echo appears in the next assistant response (immediately after receiving the tool result).
+
+## Truncation
+
+**Default: no truncation.** Echo the full user message, full assistant message. If the user said three sentences, all three appear in the blockquote.
+
+**Opt-in truncation.** A user can say *"truncate long echoes"* or *"keep echoes under one line"* to enable a soft cap (suggest: ~140 chars, with `…` on a single subsequent line). The cap applies for the rest of the session unless the user resets it.
+
+**Never truncate the user echo by default.** Mike's note 2026-05-03: truncating user speech in the echo is a real risk for misreading what was said. The user typed (or spoke) what they spoke; show the whole thing back unless they explicitly ask for shorter.
 
 ## Worked example
 

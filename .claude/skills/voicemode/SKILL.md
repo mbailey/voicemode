@@ -82,9 +82,10 @@ Newer Claude Code collapses MCP tool calls — voice turns vanish from the visib
 ```
 
 - Speaker first in caps; `(voicemode)` is the channel tag.
-- Skip the echo when `wait_for_response=false` or transcription is empty.
+- **ASSISTANT echo: always**, including `wait_for_response=false` (speak-only narration still produces visible content that would otherwise vanish).
+- **USER echo: only when a user message was captured** (skip on `wait_for_response=false`, empty result, or transcription failure — there is nothing to echo).
 - **Assistant echo defaults to companion** — Markdown-formatted (lists, code, etc) of the *same content* you spoke.
-- **User echo defaults to verbatim** — exact words, no reformatting (rewriting risks distorting intent).
+- **User echo defaults to verbatim and full** — exact words, no truncation; rewriting or shortening risks distorting intent.
 - Don't double-echo: if a sentence already appears as visible prose in the same response, don't also blockquote it.
 - Opt-out if asked ("stop echoing", "drop the voicemode lines").
 
