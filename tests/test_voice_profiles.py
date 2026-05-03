@@ -345,6 +345,91 @@ def test_collision_three_way_drops_all(tmp_path, monkeypatch, caplog):
     assert "show-c/bob" in msg
 
 
+# ---------- description suffix: (from <group>) (VL-26 impl-002) ----------
+
+
+def test_top_level_voice_description_has_no_suffix(tmp_path, monkeypatch):
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    alan = _make_voice(voices, "alan")
+    (alan / "description.txt").write_text("Australian rock voice.")
+
+    monkeypatch.setenv("VOICEMODE_VOICES_DIR", str(voices))
+    monkeypatch.delenv("VOICEMODE_REMOTE_VOICES_DIR", raising=False)
+
+    import importlib
+
+    from voice_mode import voice_profiles
+
+    importlib.reload(voice_profiles)
+
+    p = voice_profiles.get_profile("alan")
+    assert p.description == "Australian rock voice."
+    assert "(from" not in p.description
+
+
+def test_grouped_voice_description_gets_suffix(tmp_path, monkeypatch):
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    bob = _make_voice(voices, "bobs-burgers/bob")
+    (bob / "description.txt").write_text("Bob Belcher, burger flipper.")
+
+    monkeypatch.setenv("VOICEMODE_VOICES_DIR", str(voices))
+    monkeypatch.delenv("VOICEMODE_REMOTE_VOICES_DIR", raising=False)
+
+    import importlib
+
+    from voice_mode import voice_profiles
+
+    importlib.reload(voice_profiles)
+
+    p = voice_profiles.get_profile("bob")
+    assert p.description == "Bob Belcher, burger flipper.\n(from bobs-burgers)"
+
+
+def test_multi_level_grouped_voice_uses_joined_relative_path(
+    tmp_path, monkeypatch
+):
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    picard = _make_voice(voices, "star-trek/tng/picard")
+    (picard / "description.txt").write_text("Make it so.")
+
+    monkeypatch.setenv("VOICEMODE_VOICES_DIR", str(voices))
+    monkeypatch.delenv("VOICEMODE_REMOTE_VOICES_DIR", raising=False)
+
+    import importlib
+
+    from voice_mode import voice_profiles
+
+    importlib.reload(voice_profiles)
+
+    p = voice_profiles.get_profile("picard")
+    assert p.description == "Make it so.\n(from star-trek/tng)"
+
+
+def test_grouped_voice_with_no_description_txt_still_gets_suffix(
+    tmp_path, monkeypatch
+):
+    """A grouped voice without description.txt should get just the suffix
+    (no leading newline, no empty body)."""
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    _make_voice(voices, "bobs-burgers/linda")  # no description.txt
+
+    monkeypatch.setenv("VOICEMODE_VOICES_DIR", str(voices))
+    monkeypatch.delenv("VOICEMODE_REMOTE_VOICES_DIR", raising=False)
+
+    import importlib
+
+    from voice_mode import voice_profiles
+
+    importlib.reload(voice_profiles)
+
+    p = voice_profiles.get_profile("linda")
+    assert p.description == "(from bobs-burgers)"
+
+
 # ---------- voice-with-subdir-ignored ----------
 
 def test_subdirs_of_voice_dir_are_not_walked(tmp_path, monkeypatch):

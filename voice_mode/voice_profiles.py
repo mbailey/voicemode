@@ -131,6 +131,32 @@ def _read_description(voice_dir: Path) -> str:
     return ""
 
 
+def _derive_group(voice_dir: Path) -> str:
+    """Joined relative path from ``VOICES_DIR`` to ``voice_dir.parent``.
+
+    Returns the empty string for a top-level voice dir. For a multi-level
+    nested voice (``star-trek/tng/picard``) the full lineage is preserved
+    (``star-trek/tng``), not just the immediate parent.
+    """
+    rel_parent = voice_dir.parent.relative_to(VOICES_DIR)
+    s = rel_parent.as_posix()
+    return "" if s == "." else s
+
+
+def _format_description(base_desc: str, group: str) -> str:
+    """Append ``(from <group>)`` as a footer on its own line.
+
+    Top-level voices (empty ``group``) keep their description unchanged.
+    Voices with no ``description.txt`` get just the suffix.
+    """
+    if not group:
+        return base_desc
+    suffix = f"(from {group})"
+    if not base_desc:
+        return suffix
+    return f"{base_desc}\n{suffix}"
+
+
 def _build_profile(voice_dir: Path, wav: Path) -> VoiceProfile:
     """Construct a VoiceProfile for a directory that qualifies as a voice."""
     transcript = _resolve_transcript(wav)
@@ -141,13 +167,15 @@ def _build_profile(voice_dir: Path, wav: Path) -> VoiceProfile:
             f"ref_text will be empty."
         )
 
+    base_desc = _read_description(voice_dir)
+    group = _derive_group(voice_dir)
     return VoiceProfile(
         name=voice_dir.name,
         ref_audio=_translate_path(wav),
         ref_text=transcript,
         model=DEFAULT_CLONE_MODEL,
         base_url=DEFAULT_CLONE_BASE_URL,
-        description=_read_description(voice_dir),
+        description=_format_description(base_desc, group),
         voice_dir=str(voice_dir),
     )
 
