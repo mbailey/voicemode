@@ -70,7 +70,7 @@ class TestCloneAdd:
         assert "--description" in result.output
         assert "--ref-text" in result.output
 
-    @patch("voice_mode.tools.clone.profiles.clone_add", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_add", new_callable=AsyncMock)
     def test_add_success(self, mock_add, runner, tmp_path):
         # Create a temp audio file so click.Path(exists=True) passes
         audio_file = tmp_path / "test.wav"
@@ -90,7 +90,7 @@ class TestCloneAdd:
         assert result.exit_code == 0
         assert "added successfully" in result.output
 
-    @patch("voice_mode.tools.clone.profiles.clone_add", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_add", new_callable=AsyncMock)
     def test_add_duplicate(self, mock_add, runner, tmp_path):
         audio_file = tmp_path / "test.wav"
         audio_file.write_bytes(b"RIFF" + b"\x00" * 100)
@@ -112,7 +112,7 @@ class TestCloneAdd:
         ])
         assert result.exit_code != 0
 
-    @patch("voice_mode.tools.clone.profiles.clone_add", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_add", new_callable=AsyncMock)
     def test_add_whisper_failure_shows_hint(self, mock_add, runner, tmp_path):
         audio_file = tmp_path / "test.wav"
         audio_file.write_bytes(b"RIFF" + b"\x00" * 100)
@@ -142,7 +142,7 @@ class TestCloneList:
         assert result.exit_code == 0
         assert "List available clone voice profiles" in result.output
 
-    @patch("voice_mode.tools.clone.profiles.clone_list", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_list", new_callable=AsyncMock)
     def test_list_voices(self, mock_list, runner):
         mock_list.return_value = {
             "success": True,
@@ -158,7 +158,7 @@ class TestCloneList:
         assert "bob" in result.output
         assert "Alice voice" in result.output
 
-    @patch("voice_mode.tools.clone.profiles.clone_list", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_list", new_callable=AsyncMock)
     def test_list_empty(self, mock_list, runner):
         mock_list.return_value = {
             "success": True,
@@ -169,7 +169,7 @@ class TestCloneList:
         assert result.exit_code == 0
         assert "No voice profiles found" in result.output
 
-    @patch("voice_mode.tools.clone.profiles.clone_list", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_list", new_callable=AsyncMock)
     def test_list_no_description(self, mock_list, runner):
         """Voices without descriptions should still display."""
         mock_list.return_value = {
@@ -199,7 +199,7 @@ class TestCloneRemove:
         assert "NAME" in result.output
         assert "--keep-audio" in result.output
 
-    @patch("voice_mode.tools.clone.profiles.clone_remove", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_remove", new_callable=AsyncMock)
     def test_remove_success(self, mock_remove, runner):
         mock_remove.return_value = {
             "success": True,
@@ -211,7 +211,7 @@ class TestCloneRemove:
         assert result.exit_code == 0
         assert "removed" in result.output
 
-    @patch("voice_mode.tools.clone.profiles.clone_remove", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_remove", new_callable=AsyncMock)
     def test_remove_not_found(self, mock_remove, runner):
         mock_remove.return_value = {
             "success": False,
@@ -221,7 +221,7 @@ class TestCloneRemove:
         assert result.exit_code == 1
         assert "not found" in result.output
 
-    @patch("voice_mode.tools.clone.profiles.clone_remove", new_callable=AsyncMock)
+    @patch("voice_mode.tools.impressions.profiles.clone_remove", new_callable=AsyncMock)
     def test_remove_keep_audio(self, mock_remove, runner):
         mock_remove.return_value = {
             "success": True,

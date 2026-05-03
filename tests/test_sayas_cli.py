@@ -11,9 +11,9 @@ from click.testing import CliRunner
 from voice_mode.cli import sayas_command
 
 
-# The sayas_command imports _load_voices_json from voice_mode.tools.clone.profiles
-# at call time. Patch at the source module.
-PROFILES_MODULE = "voice_mode.tools.clone.profiles"
+# The sayas_command imports _load_voices_json from
+# voice_mode.tools.impressions.profiles at call time. Patch at the source module.
+PROFILES_MODULE = "voice_mode.tools.impressions.profiles"
 
 
 @pytest.fixture

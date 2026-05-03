@@ -43,18 +43,27 @@ VOICES_DIR = Path(os.path.expanduser(
 # the server can find the file on its own filesystem.
 REMOTE_VOICES_DIR = os.environ.get("VOICEMODE_REMOTE_VOICES_DIR", "")
 
-# Default mlx-audio endpoint for clone voices (Qwen3-TTS).
+# Default mlx-audio endpoint for impressions (Qwen3-TTS).
 # Defaults to a local mlx-audio server. Override via env vars when you
 # want to point at a different host (e.g. a remote ms2 box on the LAN).
-DEFAULT_CLONE_BASE_URL = os.environ.get(
-    "VOICEMODE_CLONE_BASE_URL", "http://127.0.0.1:8890/v1"
+#
+# VOICEMODE_CLONE_BASE_URL / VOICEMODE_CLONE_MODEL are honoured for one
+# release with a deprecation warning (VM-1174). Removal in 8.8.0.
+from voice_mode._env_deprecation import get_env_with_deprecation
+
+DEFAULT_CLONE_BASE_URL = get_env_with_deprecation(
+    "VOICEMODE_MLX_AUDIO_BASE_URL",
+    "VOICEMODE_CLONE_BASE_URL",
+    "http://127.0.0.1:8890/v1",
 )
 # 1.7B-Base-4bit: ~2× realtime on M-series, clean audio, ~2.2GB on disk.
 # Picked as the default from the Apr 2026 quant matrix bench. The
 # auto-generated voicemode.env lists alternatives (5-bit, 6-bit, bf16,
 # 0.6B-5bit).
-DEFAULT_CLONE_MODEL = os.environ.get(
-    "VOICEMODE_CLONE_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
+DEFAULT_CLONE_MODEL = get_env_with_deprecation(
+    "VOICEMODE_IMPRESSIONS_MODEL",
+    "VOICEMODE_CLONE_MODEL",
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
 )
 
 # Matches ``name[0]``, ``name[12]``. Captures (name, index).

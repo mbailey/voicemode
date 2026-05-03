@@ -101,7 +101,12 @@ def voice_mode() -> None:
 @click.option("-s", "--stream", is_flag=True, help="Stream audio to mpv for reduced latency")
 @click.option("--completion", is_flag=True, help="Print bash completion script to stdout")
 def sayas_command(voice, text, list_voices, preview, output, stream, completion):
-    """Speak as someone using voice cloning.
+    """Speak as someone using voice cloning (DEPRECATED).
+
+    \b
+    DEPRECATED: prefer ``voicemode converse --voice <name>`` -- it does
+    the same thing through the unified converse surface. ``sayas`` will
+    be removed in 8.8.0 (tracked as VM-1180).
 
     \b
     Usage:
@@ -116,12 +121,20 @@ def sayas_command(voice, text, list_voices, preview, output, stream, completion)
       sayas mike "Good evening everyone"
       sayas odawg "Welcome to the show" -o output.mp3
     """
+    # One-shot deprecation warning per process (D5 / VM-1180).
+    from voice_mode._env_deprecation import warn_once
+    warn_once(
+        "sayas-cli",
+        "The `sayas` CLI is deprecated; use `voicemode converse --voice "
+        "<name>` instead. `sayas` will be removed in 8.8.0.",
+    )
+
     import json
     import tempfile
     import urllib.request
     import urllib.error
 
-    from voice_mode.tools.clone.profiles import (
+    from voice_mode.tools.impressions.profiles import (
         _load_voices_json,
         DEFAULT_CLONE_BASE_URL,
         DEFAULT_CLONE_MODEL,
@@ -388,7 +401,7 @@ def add(name, audio_file, description, ref_text, model, base_url):
       voicemode clone add fleabag ~/clip.wav -d "Phoebe as Fleabag"
       voicemode clone add mike ~/mike.wav --ref-text "Hello everyone"
     """
-    from voice_mode.tools.clone.profiles import clone_add
+    from voice_mode.tools.impressions.profiles import clone_add
     result = asyncio.run(clone_add(
         name=name,
         audio_file=audio_file,
@@ -418,7 +431,7 @@ def list_voices():
 
     Shows all voice profiles from ~/.voicemode/voices.json.
     """
-    from voice_mode.tools.clone.profiles import clone_list
+    from voice_mode.tools.impressions.profiles import clone_list
     result = asyncio.run(clone_list())
 
     voices = result.get('voices', [])
@@ -446,7 +459,7 @@ def remove(name, keep_audio):
     Removes the profile from voices.json and optionally the reference audio file.
     By default, the audio file is also deleted.
     """
-    from voice_mode.tools.clone.profiles import clone_remove
+    from voice_mode.tools.impressions.profiles import clone_remove
     result = asyncio.run(clone_remove(
         name=name,
         remove_audio=not keep_audio,
