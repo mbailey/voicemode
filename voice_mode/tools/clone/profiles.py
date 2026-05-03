@@ -26,7 +26,8 @@ VOICES_JSON = BASE_DIR / "voices.json"
 DEFAULT_CLONE_BASE_URL = "http://ms2:8890/v1"
 DEFAULT_CLONE_MODEL = CLONE_MODEL
 
-# Whisper STT endpoint for auto-transcription
+# Legacy single-URL STT endpoint. Kept for backwards reference only --
+# _transcribe_audio() now walks voice_mode.config.STT_BASE_URLS instead.
 WHISPER_STT_URL = "http://localhost:2022/v1/audio/transcriptions"
 
 
@@ -60,11 +61,27 @@ def _save_voices_json(data: Dict[str, Any]) -> None:
         raise
 
 
-def _transcribe_audio(audio_path: Path) -> str:
-    """Transcribe audio via the local Whisper STT endpoint.
+def _normalise_transcription_url(base_url: str) -> str:
+    """Convert an STT base URL into the /audio/transcriptions endpoint.
 
-    Posts the audio file as multipart/form-data to the Whisper service
-    at http://localhost:2022/v1/audio/transcriptions.
+    If the base ends with /v1 (or /v1/), append /audio/transcriptions.
+    Otherwise append /v1/audio/transcriptions. Trailing slashes are
+    stripped so we never produce a double slash.
+    """
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        return f"{base}/audio/transcriptions"
+    return f"{base}/v1/audio/transcriptions"
+
+
+def _transcribe_audio(audio_path: Path) -> str:
+    """Transcribe audio by walking the configured STT_BASE_URLS chain.
+
+    For each URL in voice_mode.config.STT_BASE_URLS (read at call time,
+    in order), normalises to the /audio/transcriptions endpoint and POSTs
+    the audio as multipart/form-data. Returns the first successful
+    transcription. If every URL fails, raises ConnectionError listing
+    each URL with its individual error.
 
     Args:
         audio_path: Path to the audio file to transcribe.
@@ -73,16 +90,27 @@ def _transcribe_audio(audio_path: Path) -> str:
         Transcribed text.
 
     Raises:
-        ConnectionError: If the Whisper service is not reachable.
-        RuntimeError: If transcription fails.
+        ConnectionError: If no STT endpoint can be reached or all return
+            unusable responses.
     """
     import mimetypes
     import uuid
 
+    # Read at call time so reload_environment() takes effect and so tests
+    # can monkeypatch the value.
+    from voice_mode import config as _vm_config
+
+    base_urls = list(_vm_config.STT_BASE_URLS)
+    if not base_urls:
+        raise ConnectionError(
+            "No STT base URLs configured. "
+            "Set VOICEMODE_STT_BASE_URLS to a comma-separated list of endpoints."
+        )
+
     boundary = uuid.uuid4().hex
     content_type = mimetypes.guess_type(str(audio_path))[0] or "audio/wav"
 
-    # Build multipart/form-data body
+    # Build multipart/form-data body once; reuse across attempts.
     body_parts = []
 
     # File field
@@ -105,30 +133,36 @@ def _transcribe_audio(audio_path: Path) -> str:
     body_parts.append(b"")
 
     body = b"\r\n".join(body_parts)
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
 
-    req = urllib.request.Request(
-        WHISPER_STT_URL,
-        data=body,
-        headers={
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-        method="POST",
+    failures: List[tuple] = []
+
+    for base in base_urls:
+        url = _normalise_transcription_url(base)
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode()
+                result = json.loads(raw)
+                text = result.get("text", "").strip()
+                if not text:
+                    failures.append((url, "empty 'text' in response"))
+                    continue
+                logger.info(f"Transcribed via {url}")
+                return text
+        except urllib.error.URLError as e:
+            failures.append((url, str(e)))
+        except (json.JSONDecodeError, KeyError) as e:
+            failures.append((url, f"invalid response: {e}"))
+
+    # Every candidate failed; build an error message that names each one.
+    lines = ["Cannot reach any STT endpoint. Tried:"]
+    for url, err in failures:
+        lines.append(f"  - {url}: {err}")
+    lines.append(
+        "Is an STT service running? Configure endpoints with VOICEMODE_STT_BASE_URLS."
     )
-
-    try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            result = json.loads(resp.read().decode())
-            text = result.get("text", "").strip()
-            if not text:
-                raise RuntimeError("Whisper returned empty transcription")
-            return text
-    except urllib.error.URLError as e:
-        raise ConnectionError(
-            f"Cannot reach Whisper STT at {WHISPER_STT_URL}. "
-            f"Is the Whisper service running? Error: {e}"
-        ) from e
-    except (json.JSONDecodeError, KeyError) as e:
-        raise RuntimeError(f"Invalid response from Whisper STT: {e}") from e
+    raise ConnectionError("\n".join(lines))
 
 
 async def clone_add(
@@ -196,7 +230,11 @@ async def clone_add(
             return {
                 "success": False,
                 "error": str(e),
-                "hint": "Start Whisper with: voicemode whisper service install",
+                "hint": (
+                    "Install an STT service (e.g. 'voicemode whisper service install' "
+                    "or 'voicemode mlx-audio service install'), or configure "
+                    "VOICEMODE_STT_BASE_URLS to point at an existing endpoint."
+                ),
             }
         except RuntimeError as e:
             dest_path.unlink(missing_ok=True)
