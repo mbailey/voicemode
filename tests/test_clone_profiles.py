@@ -371,19 +371,19 @@ class TestCloneRemove:
 
 
 class TestTranscribeAudio:
-    """Test _transcribe_audio -- Whisper STT integration."""
+    """Test _transcribe_audio -- STT_BASE_URLS failover walk."""
 
     def test_transcribe_connection_error(self, sample_audio):
-        """Verify ConnectionError when Whisper is unreachable."""
+        """Every URL unreachable --> ConnectionError listing endpoints tried."""
         with patch(
             "voice_mode.tools.clone.profiles.urllib.request.urlopen",
             side_effect=urllib.error.URLError("Connection refused"),
         ):
-            with pytest.raises(ConnectionError, match="Whisper"):
+            with pytest.raises(ConnectionError, match="Cannot reach any STT endpoint"):
                 _transcribe_audio(sample_audio)
 
     def test_transcribe_successful(self, sample_audio):
-        """Test successful transcription via mocked urllib."""
+        """First URL succeeds --> return its transcription text."""
         response_body = json.dumps({"text": "Hello world"}).encode()
         mock_response = MagicMock()
         mock_response.read.return_value = response_body
@@ -394,8 +394,12 @@ class TestTranscribeAudio:
             result = _transcribe_audio(sample_audio)
         assert result == "Hello world"
 
-    def test_transcribe_empty_result_raises(self, sample_audio):
-        """Test that empty transcription raises RuntimeError."""
+    def test_transcribe_all_empty_raises(self, sample_audio, monkeypatch):
+        """Every URL returns empty 'text' --> ConnectionError naming each."""
+        monkeypatch.setattr(
+            "voice_mode.config.STT_BASE_URLS",
+            ["http://a.example/v1", "http://b.example/v1"],
+        )
         response_body = json.dumps({"text": ""}).encode()
         mock_response = MagicMock()
         mock_response.read.return_value = response_body
@@ -403,5 +407,5 @@ class TestTranscribeAudio:
         mock_response.__exit__ = MagicMock(return_value=False)
 
         with patch("voice_mode.tools.clone.profiles.urllib.request.urlopen", return_value=mock_response):
-            with pytest.raises(RuntimeError, match="empty"):
+            with pytest.raises(ConnectionError, match="empty 'text'"):
                 _transcribe_audio(sample_audio)
