@@ -10,8 +10,10 @@ on the cora/clone-voices branch handles loading and lookup.
 import json
 import logging
 import shutil
+import subprocess
 import urllib.error
 import urllib.request
+import wave
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -21,6 +23,10 @@ logger = logging.getLogger("voicemode")
 
 VOICES_DIR = BASE_DIR / "voices"
 VOICES_JSON = BASE_DIR / "voices.json"
+
+MIN_CLIP_SECONDS = 3.0
+MAX_CLIP_SECONDS = 15.0
+TRIM_HINT = "ffmpeg -i in.wav -ss 0 -t 8 out.wav"
 
 # Default clone TTS settings
 DEFAULT_CLONE_BASE_URL = "http://ms2:8890/v1"
@@ -131,6 +137,57 @@ def _transcribe_audio(audio_path: Path) -> str:
         raise RuntimeError(f"Invalid response from Whisper STT: {e}") from e
 
 
+def _probe_duration_seconds(path: Path) -> float:
+    """Return the duration of an audio file in seconds.
+
+    Uses ffprobe when available. Falls back to ``wave`` for WAV inputs when
+    ffprobe is missing. For non-WAV inputs without ffprobe, raises RuntimeError.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return float(result.stdout.strip())
+    except FileNotFoundError:
+        if path.suffix.lower() != ".wav":
+            raise RuntimeError(
+                "ffmpeg/ffprobe required for non-WAV inputs "
+                "(install via: brew install ffmpeg)"
+            )
+        with wave.open(str(path), "rb") as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            if rate <= 0:
+                raise RuntimeError(f"Invalid sample rate in WAV: {path}")
+            return frames / float(rate)
+    except (subprocess.CalledProcessError, ValueError) as e:
+        raise RuntimeError(f"Failed to probe duration of {path}: {e}") from e
+
+
+def _validate_clip_length(path: Path) -> float:
+    """Reject clips outside the 3-15s window. Returns measured duration."""
+    duration = _probe_duration_seconds(path)
+    if duration < MIN_CLIP_SECONDS or duration > MAX_CLIP_SECONDS:
+        raise ValueError(
+            f"Reference clip is {duration:.1f}s; accepted window is 3-15s. "
+            f"Voice cloning works best with short clean speech. "
+            f"Trim with: {TRIM_HINT}"
+        )
+    return duration
+
+
 async def clone_add(
     name: str,
     audio_file: str,
@@ -175,6 +232,14 @@ async def clone_add(
             "success": False,
             "error": f"Voice profile '{name}' already exists. Remove it first or choose a different name.",
         }
+
+    # Gate: reject clips outside 3-15s before any expensive work.
+    try:
+        _validate_clip_length(source_path)
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    except RuntimeError as e:
+        return {"success": False, "error": str(e)}
 
     # Copy audio to ~/.voicemode/voices/<name>.wav
     VOICES_DIR.mkdir(parents=True, exist_ok=True)

@@ -43,13 +43,13 @@ def tmp_voicemode(tmp_path, monkeypatch):
 
 @pytest.fixture
 def sample_audio(tmp_path):
-    """Create a minimal valid WAV file for testing."""
+    """Create a minimal valid WAV file for testing (within the 3-15s gate)."""
     audio_path = tmp_path / "test-clip.wav"
     with wave.open(str(audio_path), "w") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(16000)
-        wf.writeframes(b"\x00\x00" * 16000)  # 1 second of silence
+        wf.writeframes(b"\x00\x00" * 16000 * 5)  # 5 seconds of silence
     return audio_path
 
 
