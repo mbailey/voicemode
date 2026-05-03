@@ -9,7 +9,6 @@ on the cora/clone-voices branch handles loading and lookup.
 
 import json
 import logging
-import shutil
 import subprocess
 import urllib.error
 import urllib.request
@@ -176,6 +175,42 @@ def _probe_duration_seconds(path: Path) -> float:
         raise RuntimeError(f"Failed to probe duration of {path}: {e}") from e
 
 
+def _normalise_audio(src: Path, dest: Path) -> None:
+    """Normalise ``src`` to mono 24 kHz 16-bit PCM with loudnorm at ``dest``.
+
+    Shells out to ffmpeg with the voice-lab clip-prep spec:
+    ``-ac 1 -ar 24000 -sample_fmt s16 -af loudnorm=I=-16:TP=-1.5:LRA=11``.
+    Single-pass loudnorm; matches the upstream voice-lab pipeline.
+    """
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(src),
+        "-ac",
+        "1",
+        "-ar",
+        "24000",
+        "-sample_fmt",
+        "s16",
+        "-af",
+        "loudnorm=I=-16:TP=-1.5:LRA=11",
+        str(dest),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            "ffmpeg required for clone add (install via: brew install ffmpeg)"
+        ) from e
+
+    if result.returncode != 0:
+        tail = "\n".join(result.stderr.splitlines()[-20:])
+        raise RuntimeError(
+            f"ffmpeg failed (exit {result.returncode}) while normalising {src}:\n{tail}"
+        )
+
+
 def _validate_clip_length(path: Path) -> float:
     """Reject clips outside the 3-9s window. Returns measured duration."""
     duration = _probe_duration_seconds(path)
@@ -241,14 +276,23 @@ async def clone_add(
     except RuntimeError as e:
         return {"success": False, "error": str(e)}
 
-    # Copy audio to ~/.voicemode/voices/<name>.wav
+    # Normalise audio to ~/.voicemode/voices/<name>.wav (mono 24kHz s16, loudnorm)
     VOICES_DIR.mkdir(parents=True, exist_ok=True)
     dest_path = VOICES_DIR / f"{name}.wav"
     try:
-        shutil.copy2(str(source_path), str(dest_path))
-        logger.info(f"Copied reference audio to {dest_path}")
-    except OSError as e:
-        return {"success": False, "error": f"Failed to copy audio file: {e}"}
+        _normalise_audio(source_path, dest_path)
+    except FileNotFoundError as e:
+        return {"success": False, "error": str(e)}
+    except RuntimeError as e:
+        return {"success": False, "error": str(e)}
+
+    try:
+        normalised_duration = _probe_duration_seconds(dest_path)
+        logger.info(
+            f"Normalised: {normalised_duration:.1f}s mono 24kHz 16-bit PCM"
+        )
+    except RuntimeError as e:
+        logger.warning(f"Could not probe normalised file {dest_path}: {e}")
 
     # Auto-transcribe if ref_text not provided
     if ref_text is None:
