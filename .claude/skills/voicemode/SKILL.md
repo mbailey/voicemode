@@ -81,12 +81,12 @@ Newer Claude Code releases collapse MCP tool calls in the visible transcript, so
 Use this format:
 
 ```
-> **voicemode (assistant):** <message arg passed to converse>
+> **ASSISTANT (voicemode):** <message arg passed to converse>
 [voicemode:converse tool call]
-> **voicemode (user):** <captured user message>
+> **USER (voicemode):** <captured user message>
 ```
 
-The bold `voicemode` label and the `(assistant)` / `(user)` qualifier keep voice turns unambiguous in a transcript that mixes typed and spoken conversation.
+The capitalised speaker label (`ASSISTANT` / `USER`) is the visual anchor — your eye reads *who* first. The lowercase `(voicemode)` qualifier is metadata: it marks the turn as a voice turn, distinguishing it from typed conversation in the same transcript.
 
 ### When to echo
 
@@ -99,14 +99,14 @@ The bold `voicemode` label and the `(assistant)` / `(user)` qualifier keep voice
 In the response that issues the converse call, the assistant echo precedes the tool use:
 
 ```
-> **voicemode (assistant):** What would you like to work on next?
+> **ASSISTANT (voicemode):** What would you like to work on next?
 [voicemode:converse("What would you like to work on next?") tool call]
 ```
 
 In the next assistant response, after receiving the tool result, the user echo comes first:
 
 ```
-> **voicemode (user):** Let's pick up the auth refactor where we left off.
+> **USER (voicemode):** Let's pick up the auth refactor where we left off.
 
 Sure — pulling up that branch now.
 ```
@@ -115,9 +115,9 @@ A future reader can reconstruct the full voice exchange from the visible blockqu
 
 ### No double-echo
 
-If the assistant message you pass to `converse` is identical to a sentence already written as visible prose in the same response, don't also produce a separate `> **voicemode (assistant):**` line — the prose already serves the same purpose. The common case is that the visible reasoning text and the spoken `message` argument differ, and in that case both should appear.
+If the assistant message you pass to `converse` is identical to a sentence already written as visible prose in the same response, don't also produce a separate `> **ASSISTANT (voicemode):**` line — the prose already serves the same purpose. The common case is that the visible reasoning text and the spoken `message` argument differ, and in that case both should appear.
 
-The same rule applies to the user side: if you naturally quote the user's words back in your reasoning ("You said 'X', so..."), don't also add a separate `> **voicemode (user):**` line for the same content. One visible record of each utterance is enough.
+The same rule applies to the user side: if you naturally quote the user's words back in your reasoning ("You said 'X', so..."), don't also add a separate `> **USER (voicemode):**` line for the same content. One visible record of each utterance is enough.
 
 ### Verbatim vs companion formatting
 
@@ -147,7 +147,7 @@ If in doubt, fall back to verbatim. The constraint exists because companion mode
 …in companion mode echoes as:
 
 ```
-> **voicemode (assistant):**
+> **ASSISTANT (voicemode):**
 > - **(1) Triage TM-698 children** — flip the nine inbox tasks to todo
 > - **(2) Flesh out TM-720** — design the rename properly: scope, order, what breaks
 > - **(3) Switch tracks to CC-164** — the settle skill still needs triage
