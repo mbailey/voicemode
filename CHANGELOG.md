@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Impressions (preview / experimental) (VM-1174)
+
+VoiceMode can now do **impressions** -- speak in any voice from a short reference clip via local Qwen3-TTS on top of mlx-audio. Drop a 5-9 second WAV at `~/.voicemode/voices/<name>/default.wav`, then call `voicemode:converse(..., voice="<name>")` or `voicemode converse --voice <name>`. The model imitates the timbre and cadence of the clip; same technical path the unreleased "voice cloning" framing pointed at, with active "do an impression" framing instead.
+
+**Apple Silicon only, opt-in, not enabled by default.** Nothing happens until you run `voicemode service install mlx-audio` and add at least one voice directory. Intel Macs / Linux / Windows are unaffected -- Kokoro and OpenAI TTS continue to work as normal.
+
+- New env vars (replacing the unreleased `VOICEMODE_CLONE_*` candidates -- see Migration below):
+  - `VOICEMODE_VOICES_DIR` (default `~/.voicemode/voices`) -- directory of voice profiles, one subdirectory per voice.
+  - `VOICEMODE_REMOTE_VOICES_DIR` -- path translation for remote mlx-audio servers (e.g. ms2).
+  - `VOICEMODE_MLX_AUDIO_BASE_URL` (default `http://127.0.0.1:8890/v1`) -- OpenAI-compatible mlx-audio endpoint.
+  - `VOICEMODE_IMPRESSIONS_MODEL` (default `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16`) -- Hugging Face model ID; pick `-4bit` / `-5bit` / `-6bit` quants to trade quality for speed/RAM.
+- Code dir: `voice_mode/tools/clone/` renamed to `voice_mode/tools/impressions/` (mechanical `git mv`; function names `clone_add` / `clone_list` / `clone_remove` preserved as internal symbols).
+- Template generator (`voice_mode/resources/configuration.py`) gains three sections: STT Models, MLX Audio Service, Impressions, per the env-grouping proposal in VM-1172.
+- Docs: new [Impressions guide](docs/guides/impressions.md) (replaces `docs/guides/voice-cloning.md`), with footguns covering Kokoro voice-name collisions, Apple Silicon constraint, and first-synthesis model download.
+- Skill: new `.claude/skills/impressions/` skill with progressive-disclosure deep-dives for setup (model quants, remote mlx-audio, troubleshooting) and finding samples (clip ranking heuristic, ffmpeg loudnorm recipes, voice-lab integration).
+
+### Migration
+
+- **`VOICEMODE_CLONE_BASE_URL` and `VOICEMODE_CLONE_MODEL` are renamed.** Replace them in your `~/.voicemode/voicemode.env`:
+  - `VOICEMODE_CLONE_BASE_URL` -> `VOICEMODE_MLX_AUDIO_BASE_URL`
+  - `VOICEMODE_CLONE_MODEL` -> `VOICEMODE_IMPRESSIONS_MODEL`
+  - `VOICEMODE_CLONE_PORT` -> use `VOICEMODE_MLX_AUDIO_PORT` (the old name was a duplicate; same default `8890`).
+
+  The old names are honoured for one release with a one-shot per-process deprecation warning routed through `voice_mode/_env_deprecation.py`. **Removal scheduled for 8.8.0.**
+- **The `sayas` CLI is deprecated** in favour of `voicemode converse --voice <name>`. `sayas` keeps working through 8.7.x with a one-shot deprecation warning at the entry point. Full removal of the command, its bash completion, and `tests/test_sayas_cli.py` is scheduled for 8.8.0 and tracked as VM-1180.
+
 ### Fixed
 
 - **mlx-audio install no longer fails at the patch step** (VM-1126) -- `voicemode service install mlx-audio` would fail with "Patch step failed: ... 2 out of 5 hunks failed" against mlx-audio 0.4.3. Both fixes the bundled `mlx_audio_server.patch` carried (MLX Metal serialisation lock for [ml-explore/mlx#2133](https://github.com/ml-explore/mlx/issues/2133), and OpenAI-style STT `response_format` on `/v1/audio/transcriptions`) are upstream from 0.4.3 on, so the patch now adds lines that already exist and rejects.
