@@ -70,6 +70,7 @@ class VoiceProfile:
     model: str           # TTS model to use
     base_url: str        # TTS endpoint URL
     description: str = ""
+    voice_dir: str = ""  # Absolute path to the voice's own directory
 
 
 _profiles: Dict[str, VoiceProfile] = {}
@@ -130,36 +131,72 @@ def _read_description(voice_dir: Path) -> str:
     return ""
 
 
+def _build_profile(voice_dir: Path, wav: Path) -> VoiceProfile:
+    """Construct a VoiceProfile for a directory that qualifies as a voice."""
+    transcript = _resolve_transcript(wav)
+    if not transcript:
+        logger.warning(
+            f"Voice {voice_dir.name!r}: no transcript found "
+            f"(expected {wav.with_suffix('.txt').name} or default.txt). "
+            f"ref_text will be empty."
+        )
+
+    return VoiceProfile(
+        name=voice_dir.name,
+        ref_audio=_translate_path(wav),
+        ref_text=transcript,
+        model=DEFAULT_CLONE_MODEL,
+        base_url=DEFAULT_CLONE_BASE_URL,
+        description=_read_description(voice_dir),
+        voice_dir=str(voice_dir),
+    )
+
+
 def _load_dir_profiles() -> Dict[str, VoiceProfile]:
-    """Walk VOICES_DIR and build profiles from per-voice subdirectories."""
+    """Walk VOICES_DIR recursively and build profiles for each voice dir.
+
+    A directory containing a resolvable WAV (see :func:`_resolve_default_wav`)
+    is a voice; otherwise it's a group and we descend into it. Subdirectories
+    of a voice dir are NOT walked further — voices and groups are disjoint.
+
+    Voices are keyed by leaf directory name. If two directories anywhere in
+    the tree share the same leaf name we treat it as a load-time
+    configuration error: log a single ERROR listing every conflicting path
+    and drop ALL conflicting candidates from the registry so neither
+    resolves silently.
+    """
     profiles: Dict[str, VoiceProfile] = {}
+    seen: Dict[str, Path] = {}
+    conflicts: Dict[str, List[Path]] = {}
 
     if not VOICES_DIR.exists() or not VOICES_DIR.is_dir():
         logger.debug(f"Voices directory not found at {VOICES_DIR}")
         return profiles
 
-    for voice_dir in sorted(p for p in VOICES_DIR.iterdir() if p.is_dir()):
-        wav = _resolve_default_wav(voice_dir)
-        if wav is None:
-            logger.debug(f"Skipping {voice_dir.name!r}: no .wav files")
-            continue
+    def walk(dir_path: Path) -> None:
+        wav = _resolve_default_wav(dir_path)
+        if wav is not None:
+            leaf = dir_path.name
+            if leaf in seen:
+                conflicts.setdefault(leaf, [seen[leaf]]).append(dir_path)
+                return
+            seen[leaf] = dir_path
+            profiles[leaf] = _build_profile(dir_path, wav)
+            return  # do NOT descend into a voice dir
 
-        transcript = _resolve_transcript(wav)
-        if not transcript:
-            logger.warning(
-                f"Voice {voice_dir.name!r}: no transcript found "
-                f"(expected {wav.with_suffix('.txt').name} or default.txt). "
-                f"ref_text will be empty."
-            )
+        for child in sorted(p for p in dir_path.iterdir() if p.is_dir()):
+            walk(child)
 
-        profiles[voice_dir.name] = VoiceProfile(
-            name=voice_dir.name,
-            ref_audio=_translate_path(wav),
-            ref_text=transcript,
-            model=DEFAULT_CLONE_MODEL,
-            base_url=DEFAULT_CLONE_BASE_URL,
-            description=_read_description(voice_dir),
+    for top in sorted(p for p in VOICES_DIR.iterdir() if p.is_dir()):
+        walk(top)
+
+    for leaf, paths in conflicts.items():
+        rel_paths = [str(p.relative_to(VOICES_DIR)) for p in paths]
+        logger.error(
+            f"Voice name collision: leaf {leaf!r} appears at {rel_paths}. "
+            f"Dropping ALL candidates — rename to disambiguate."
         )
+        profiles.pop(leaf, None)
 
     if profiles:
         logger.info(
@@ -271,7 +308,7 @@ def resolve_voice_expr(expr: str) -> Optional[VoiceProfile]:
     if selector is None:
         return profile
 
-    voice_dir = VOICES_DIR / name
+    voice_dir = Path(profile.voice_dir) if profile.voice_dir else VOICES_DIR / name
 
     # Indexed sample: samantha[0]
     if selector.startswith("[") and selector.endswith("]"):
