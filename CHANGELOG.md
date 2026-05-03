@@ -47,7 +47,7 @@ Newer Claude Code releases collapse MCP tool calls in the visible transcript, wh
   - `VOICEMODE_CLONE_PORT` -> use `VOICEMODE_MLX_AUDIO_PORT` (the old name was a duplicate; same default `8890`).
 
   The old names are honoured for one release with a one-shot per-process deprecation warning routed through `voice_mode/_env_deprecation.py`. **Removal scheduled for 8.8.0.**
-- **The `sayas` CLI is deprecated** in favour of `voicemode converse --voice <name>`. `sayas` keeps working through 8.7.x with a one-shot deprecation warning at the entry point. Full removal of the command, its bash completion, and `tests/test_sayas_cli.py` is scheduled for 8.8.0 and tracked as VM-1180.
+- **The `sayas` CLI is removed.** Use `voicemode converse --voice <name>` instead -- it routes cloned voices through the same mlx-audio backend `sayas` did, with the rest of the converse pipeline (silence detection, audio formats, providers) for free. `sayas` was an alternate door to the same room; the unified converse surface is the canonical path now.
 
 ### Fixed
 
@@ -66,6 +66,7 @@ Newer Claude Code releases collapse MCP tool calls in the visible transcript, wh
 ### Removed
 
 - **Bundled `voice_mode/data/patches/mlx_audio_server.patch`** (VM-1126) -- The Metal-lock half of the patch was upstreamed in mlx-audio 0.4.3. The patch-apply step in `voice_mode/tools/mlx_audio/install.py` (and its `_apply_server_patch` / `_find_installed_server_py` / `_query_installed_version` helpers) is gone, along with the `voice_mode/data/**/*.patch` packaging glob and the corresponding tests. (The STT `response_format` patch is restored separately under VM-1128.)
+- **`sayas` CLI** (VM-1174) -- the standalone `sayas <voice> "text"` command is gone, along with its bash completion (`voice_mode/data/completions/sayas.bash`), test module (`tests/test_sayas_cli.py`), and `[project.scripts]` entry. Migration: `voicemode converse --voice <name> -m "text" --no-wait` (or pass `voice="<name>"` to the `voicemode:converse` MCP tool).
 
 ## [8.6.1] - 2026-04-21
 

@@ -75,7 +75,6 @@ If you see those in a user's `voicemode.env`, suggest updating them.
 - **Kokoro name collisions** -- naming a voice `af_sky` (or any other Kokoro voice name) shadows the Kokoro voice. Pick distinctive names like `fleabag`, `mike-2026`, `bryan_morning`.
 - **Apple Silicon only** -- no fallback for Intel Macs / Linux / Windows. Don't suggest installing mlx-audio on those platforms.
 - **First synthesis is slow** -- ~3.4 GB model download on first call. Warn the user.
-- **`sayas` is deprecated** -- recommend `voicemode converse --voice <name>` for new automation. The `sayas` CLI works through 8.7.x with a warning; full removal in 8.8.0 (VM-1180).
 
 ## Deep dives
 

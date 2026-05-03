@@ -103,7 +103,6 @@ Issues = "https://github.com/mbailey/voicemode/issues"
 [project.scripts]
 voice-mode = "voice_mode.cli:voice_mode"
 voicemode = "voice_mode.cli:voice_mode"
-sayas = "voice_mode.cli:sayas_cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["voice_mode"]

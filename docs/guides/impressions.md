@@ -101,9 +101,9 @@ Kokoro voices live in a flat namespace (`af_sky`, `am_michael`, `bf_emma`, …).
 
 The Qwen3-TTS model (~3.4 GB) downloads on the first synthesis call. Plan for a 1-3 minute pause on the first impression after install. Subsequent calls are local and fast.
 
-### `sayas` is deprecated
+### `sayas` is removed
 
-The standalone `sayas <voice> <text>` CLI from the 8.6.x line is **deprecated** in favour of `voicemode converse --voice <name>`. It still works in 8.7.x and emits a one-shot deprecation warning; full removal is scheduled for 8.8.0 (tracked as VM-1180). Don't write new automation against `sayas`.
+The standalone `sayas <voice> <text>` CLI from the 8.6.x line is **gone in 8.7.0**. Use `voicemode converse --voice <name> -m "text" --no-wait` instead -- it routes through the same mlx-audio backend and gets the rest of the converse pipeline (silence detection, audio formats, providers) for free. From the MCP tool, pass `voice="<name>"` to `voicemode:converse`.
 
 ## Configuration
 

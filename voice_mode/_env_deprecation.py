@@ -48,7 +48,7 @@ def warn_once(key: str, message: str) -> None:
     """Emit ``logger.warning(message)`` exactly once per process for ``key``.
 
     The ``key`` is the dedupe slot -- typically the deprecated env-var name
-    or a stable identifier for the deprecation site (e.g. ``"sayas-cli"``).
+    or a stable identifier for the deprecation site.
     """
     if key in _warned_keys:
         return
