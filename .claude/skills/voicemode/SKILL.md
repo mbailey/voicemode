@@ -71,6 +71,26 @@ For all parameters, see [Converse Parameters](../../docs/reference/converse-para
 4. **Let VoiceMode auto-select** - Don't hardcode providers unless user has preference
 5. **First run is slow** - Model downloads happen on first start (2-5 min), then instant
 
+## Transcript visibility
+
+Newer Claude Code collapses MCP tool calls — voice turns vanish from the visible transcript. Echo them as Markdown blockquotes on both sides of every `voicemode:converse` call where `wait_for_response=true`:
+
+```
+> **ASSISTANT (voicemode):** <message arg passed to converse>
+[voicemode:converse tool call]
+> **USER (voicemode):** <captured user message>
+```
+
+- Speaker first in caps; `(voicemode)` is the channel tag.
+- **ASSISTANT echo: always**, including `wait_for_response=false` (speak-only narration still produces visible content that would otherwise vanish).
+- **USER echo: only when a user message was captured** (skip on `wait_for_response=false`, empty result, or transcription failure — there is nothing to echo).
+- **Assistant echo defaults to companion** — Markdown-formatted (lists, code, etc) of the *same content* you spoke.
+- **User echo defaults to verbatim and full** — exact words, no truncation; rewriting or shortening risks distorting intent.
+- Don't double-echo: if a sentence already appears as visible prose in the same response, don't also blockquote it.
+- Opt-out if asked ("stop echoing", "drop the voicemode lines").
+
+Deep dive (overrides, edge cases, worked examples, companion-mode constraints): [docs/transcript-visibility.md](docs/transcript-visibility.md).
+
 ## Parallel Tool Calls (Zero Dead Air)
 
 Eliminate dead air by sending voice and action calls in the **same response**:
