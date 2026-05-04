@@ -19,13 +19,21 @@ def test_get_git_commit_hash():
     """Test getting git commit hash."""
     # Should return a hash in a real git repo
     commit = get_git_commit_hash(short=True)
-    if commit:
-        assert len(commit) == 7  # Short hash is 7 characters
-        
-    # Test full hash
     commit_full = get_git_commit_hash(short=False)
+
+    if commit:
+        # Git auto-grows the short hash as the repo grows so the abbreviation
+        # stays unambiguous. Assert a sane range and that the short form is a
+        # prefix of the full hash, rather than a fixed length.
+        assert 7 <= len(commit) <= 40
+        assert all(c in "0123456789abcdef" for c in commit)
+        if commit_full:
+            assert commit_full.startswith(commit)
+
+    # Test full hash
     if commit_full:
-        assert len(commit_full) == 40  # Full hash is 40 characters
+        assert len(commit_full) == 40  # Full hash is always 40 characters
+        assert all(c in "0123456789abcdef" for c in commit_full)
 
 
 def test_is_git_repository():
