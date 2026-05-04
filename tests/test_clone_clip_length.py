@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from voice_mode.tools.clone.profiles import (
+from voice_mode.tools.impressions.profiles import (
     TRIM_HINT,
     _probe_duration_seconds,
     _validate_clip_length,
@@ -28,8 +28,8 @@ def tmp_voicemode(tmp_path, monkeypatch):
     voices_json = tmp_path / "voices.json"
     voices_dir = tmp_path / "voices"
     voices_dir.mkdir()
-    monkeypatch.setattr("voice_mode.tools.clone.profiles.VOICES_JSON", voices_json)
-    monkeypatch.setattr("voice_mode.tools.clone.profiles.VOICES_DIR", voices_dir)
+    monkeypatch.setattr("voice_mode.tools.impressions.profiles.VOICES_JSON", voices_json)
+    monkeypatch.setattr("voice_mode.tools.impressions.profiles.VOICES_DIR", voices_dir)
     return {"voices_json": voices_json, "voices_dir": voices_dir}
 
 
@@ -87,7 +87,7 @@ def test_validate_rejects_just_over_upper_boundary(tmp_path):
 def test_probe_falls_back_to_wave_when_ffprobe_missing(tmp_path):
     wav = _write_wav(tmp_path / "wave.wav", 5.0)
     with patch(
-        "voice_mode.tools.clone.profiles.subprocess.run",
+        "voice_mode.tools.impressions.profiles.subprocess.run",
         side_effect=FileNotFoundError("ffprobe not found"),
     ):
         duration = _probe_duration_seconds(wav)
@@ -98,7 +98,7 @@ def test_probe_non_wav_without_ffprobe_raises(tmp_path):
     mp3 = tmp_path / "x.mp3"
     mp3.write_bytes(b"\x00" * 100)
     with patch(
-        "voice_mode.tools.clone.profiles.subprocess.run",
+        "voice_mode.tools.impressions.profiles.subprocess.run",
         side_effect=FileNotFoundError("ffprobe not found"),
     ):
         with pytest.raises(RuntimeError) as exc:
@@ -129,7 +129,7 @@ async def test_clone_add_rejects_long_clip(tmp_voicemode, tmp_path):
 async def test_clone_add_passes_gate_for_7s_clip(tmp_voicemode, tmp_path):
     ok = _write_wav(tmp_path / "ok.wav", 7.0)
     with patch(
-        "voice_mode.tools.clone.profiles._transcribe_audio",
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
         return_value="hello world",
     ):
         result = await clone_add("testfoo", str(ok))
