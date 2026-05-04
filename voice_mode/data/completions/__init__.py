@@ -7,7 +7,7 @@ def get_completion_path(name: str) -> str:
     """Return the filesystem path to a bundled completion script.
 
     Args:
-        name: Filename of the completion script (e.g. ``"sayas.bash"``).
+        name: Filename of the completion script (e.g. ``"voicemode.bash"``).
 
     Returns:
         Absolute path to the completion file.

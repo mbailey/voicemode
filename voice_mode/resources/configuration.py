@@ -12,12 +12,18 @@ from ..config import (
     AUDIO_FEEDBACK_ENABLED, PREFER_LOCAL, ALWAYS_TRY_LOCAL, AUTO_START_KOKORO,
     # Service settings
     OPENAI_API_KEY, TTS_BASE_URLS, STT_BASE_URLS, TTS_VOICES, TTS_MODELS,
+    STT_MODEL, STT_MODELS,
     # Whisper settings
     WHISPER_MODEL, WHISPER_PORT, WHISPER_LANGUAGE, WHISPER_MODEL_PATH,
     # Kokoro settings
     KOKORO_PORT, KOKORO_MODELS_DIR, KOKORO_CACHE_DIR, KOKORO_DEFAULT_VOICE,
+    # MLX Audio Service settings
+    MLX_AUDIO_HOST, MLX_AUDIO_PORT,
+    # Impressions settings
+    CLONE_MODEL,
     # Audio settings
     AUDIO_FORMAT, TTS_AUDIO_FORMAT, STT_AUDIO_FORMAT,
+    TTS_TRAILING_SILENCE,
     SAMPLE_RATE, CHANNELS,
     # Silence detection
     DISABLE_SILENCE_DETECTION, VAD_AGGRESSIVENESS, SILENCE_THRESHOLD_MS,
@@ -273,8 +279,12 @@ async def environment_variables() -> str:
         ("VOICEMODE_AUDIO_FORMAT", "Audio format for recording (pcm/mp3/wav/flac/aac/opus)"),
         ("VOICEMODE_TTS_AUDIO_FORMAT", "Audio format for TTS output"),
         ("VOICEMODE_STT_AUDIO_FORMAT", "Audio format for STT input"),
+        ("VOICEMODE_TTS_TRAILING_SILENCE", "Trailing silence (s) appended to opus TTS output to prevent tail clipping"),
         # STT Prompt for vocabulary biasing
         ("VOICEMODE_STT_PROMPT", "Vocabulary hints for Whisper (names, technical terms)"),
+        # STT Models
+        ("VOICEMODE_STT_MODEL", "Default STT model (e.g. whisper-1)"),
+        ("VOICEMODE_STT_MODELS", "Comma-separated list of STT models for failover"),
         # Whisper Configuration
         ("VOICEMODE_WHISPER_MODEL", "Whisper model to use (e.g., large-v2)"),
         ("VOICEMODE_WHISPER_PORT", "Whisper server port"),
@@ -285,6 +295,14 @@ async def environment_variables() -> str:
         ("VOICEMODE_KOKORO_MODELS_DIR", "Directory for Kokoro models"),
         ("VOICEMODE_KOKORO_CACHE_DIR", "Directory for Kokoro cache"),
         ("VOICEMODE_KOKORO_DEFAULT_VOICE", "Default Kokoro voice"),
+        # MLX Audio Service (powers Impressions)
+        ("VOICEMODE_MLX_AUDIO_HOST", "mlx-audio server bind host (default 127.0.0.1)"),
+        ("VOICEMODE_MLX_AUDIO_PORT", "mlx-audio server port (default 8890)"),
+        ("VOICEMODE_MLX_AUDIO_BASE_URL", "mlx-audio OpenAI-compatible endpoint URL"),
+        # Impressions (voice cloning -- preview)
+        ("VOICEMODE_VOICES_DIR", "Local voice profile directory (default ~/.voicemode/voices)"),
+        ("VOICEMODE_REMOTE_VOICES_DIR", "Mirror of VOICES_DIR on a remote mlx-audio host"),
+        ("VOICEMODE_IMPRESSIONS_MODEL", "Qwen3-TTS quant for impressions (e.g. mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit)"),
         # Silence Detection
         ("VOICEMODE_DISABLE_SILENCE_DETECTION", "Disable silence detection (true/false)"),
         ("VOICEMODE_VAD_AGGRESSIVENESS", "Voice activity detection aggressiveness (0-3)"),
@@ -367,6 +385,13 @@ async def environment_template() -> str:
         f"export VOICEMODE_AUDIO_FORMAT=\"{AUDIO_FORMAT}\"",
         f"export VOICEMODE_TTS_AUDIO_FORMAT=\"{TTS_AUDIO_FORMAT}\"",
         f"export VOICEMODE_STT_AUDIO_FORMAT=\"{STT_AUDIO_FORMAT}\"",
+        f"export VOICEMODE_TTS_TRAILING_SILENCE=\"{TTS_TRAILING_SILENCE}\"  # Pad opus output to prevent tail clipping",
+        "",
+        "# STT Models (provider-side model selection)",
+        "# Used when sending audio to STT providers via OpenAI-compatible /v1/audio/transcriptions.",
+        "# VOICEMODE_STT_MODEL is the default; VOICEMODE_STT_MODELS lists alternatives for failover.",
+        f"export VOICEMODE_STT_MODEL=\"{STT_MODEL}\"",
+        f"export VOICEMODE_STT_MODELS=\"{','.join(STT_MODELS)}\"",
         "",
         "# Whisper Configuration",
         f"export VOICEMODE_WHISPER_MODEL=\"{WHISPER_MODEL}\"",
@@ -379,6 +404,22 @@ async def environment_template() -> str:
         f"export VOICEMODE_KOKORO_MODELS_DIR=\"{KOKORO_MODELS_DIR}\"",
         f"export VOICEMODE_KOKORO_CACHE_DIR=\"{KOKORO_CACHE_DIR}\"",
         f"export VOICEMODE_KOKORO_DEFAULT_VOICE=\"{KOKORO_DEFAULT_VOICE}\"",
+        "",
+        "# MLX Audio Service (Apple Silicon TTS backend powering Impressions)",
+        "# Local mlx-audio server. Install with: voicemode service install mlx-audio",
+        f"export VOICEMODE_MLX_AUDIO_HOST=\"{MLX_AUDIO_HOST}\"",
+        f"export VOICEMODE_MLX_AUDIO_PORT=\"{MLX_AUDIO_PORT}\"",
+        f"export VOICEMODE_MLX_AUDIO_BASE_URL=\"{os.environ.get('VOICEMODE_MLX_AUDIO_BASE_URL', f'http://{MLX_AUDIO_HOST}:{MLX_AUDIO_PORT}/v1')}\"",
+        "",
+        "# Impressions (voice cloning -- preview)",
+        "# Custom voice profiles. Each voice lives at $VOICEMODE_VOICES_DIR/<name>/default.wav.",
+        "# Use voice=\"<name>\" in converse to speak with that voice.",
+        "# REMOTE_VOICES_DIR is the path on a remote mlx-audio server (e.g. ms2)",
+        "# where VOICES_DIR is mirrored -- for talking to a remote impressions backend.",
+        f"export VOICEMODE_VOICES_DIR=\"{os.environ.get('VOICEMODE_VOICES_DIR', '$HOME/.voicemode/voices')}\"",
+        f"export VOICEMODE_REMOTE_VOICES_DIR=\"{os.environ.get('VOICEMODE_REMOTE_VOICES_DIR', '')}\"",
+        "# Quants: 4bit (default) / 5bit / 6bit / bf16 (full quality, ~1x realtime)",
+        f"export VOICEMODE_IMPRESSIONS_MODEL=\"{CLONE_MODEL}\"",
         "",
         "# Silence Detection",
         f"export VOICEMODE_DISABLE_SILENCE_DETECTION=\"{str(DISABLE_SILENCE_DETECTION).lower()}\"",

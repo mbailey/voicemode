@@ -207,31 +207,31 @@ def load_voicemode_env():
 # VOICEMODE_KOKORO_MAX_REQUESTS=25
 
 #############
-# Clone Voice (Qwen3-TTS via mlx-audio)
+# Impressions (Qwen3-TTS via mlx-audio)
 #############
 
 # Where voice profile dirs live locally (each subdir is a voice).
 # VOICEMODE_VOICES_DIR=~/.voicemode/voices
 
 # Path on the remote TTS server where VOICES_DIR is mirrored.
-# Required when the mlx-audio (clone) server runs on a different machine.
-# Leave unset (or empty) when the clone server is local.
+# Required when the mlx-audio server runs on a different machine.
+# Leave unset (or empty) when the mlx-audio server is local.
 # VOICEMODE_REMOTE_VOICES_DIR=
 
-# Clone-voice TTS endpoint (Qwen3-TTS via mlx-audio).
+# mlx-audio TTS endpoint (Qwen3-TTS for impressions).
 # Defaults to the local mlx-audio server. Override to point at a remote
 # host (e.g. ms2 on the LAN).
-# VOICEMODE_CLONE_BASE_URL=http://127.0.0.1:8890/v1
+# VOICEMODE_MLX_AUDIO_BASE_URL=http://127.0.0.1:8890/v1
 
 # Qwen3-TTS model (which weights mlx-audio loads on first request).
 # 1.7B-Base-4bit is the chosen default: ~2× realtime, clean audio, ~2.2GB.
-# VOICEMODE_CLONE_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit
+# VOICEMODE_IMPRESSIONS_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit
 #
 # Alternatives (uncomment one to switch):
-# VOICEMODE_CLONE_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-5bit  # ok, slightly larger
-# VOICEMODE_CLONE_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-6bit  # ok, slightly larger
-# VOICEMODE_CLONE_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16  # full quality, slow (~1× realtime)
-# VOICEMODE_CLONE_MODEL=mlx-community/Qwen3-TTS-12Hz-0.6B-Base-5bit  # smaller (1.7GB), ok quality
+# VOICEMODE_IMPRESSIONS_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-5bit  # ok, slightly larger
+# VOICEMODE_IMPRESSIONS_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-6bit  # ok, slightly larger
+# VOICEMODE_IMPRESSIONS_MODEL=mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16  # full quality, slow (~1× realtime)
+# VOICEMODE_IMPRESSIONS_MODEL=mlx-community/Qwen3-TTS-12Hz-0.6B-Base-5bit  # smaller (1.7GB), ok quality
 
 #############
 # Recording & Voice Activity Detection
@@ -673,14 +673,23 @@ KOKORO_MAX_REQUESTS = int(os.getenv("VOICEMODE_KOKORO_MAX_REQUESTS", "25"))
 MLX_AUDIO_HOST = os.getenv("VOICEMODE_MLX_AUDIO_HOST", "127.0.0.1")
 MLX_AUDIO_PORT = int(os.getenv("VOICEMODE_MLX_AUDIO_PORT", "8890"))
 
-# ==================== CLONE VOICE CONFIGURATION ====================
+# ==================== IMPRESSIONS CONFIGURATION ====================
 
-# Default Qwen3-TTS model for the clone-voice feature. This is a
-# *cloning* setting (which weights to ask the mlx-audio service to use),
-# not a service setting -- the mlx-audio service itself doesn't pin a
-# model. 1.7B-Base-4bit is the chosen default from the Apr 2026 quant
-# matrix bench: ~2× realtime on M-series, clean audio, ~2.2GB on disk.
-CLONE_MODEL = os.getenv("VOICEMODE_CLONE_MODEL", "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit")
+# Default Qwen3-TTS model for the impressions feature (voice cloning).
+# This is an *impressions* setting (which weights to ask the mlx-audio
+# service to use), not a service setting -- the mlx-audio service itself
+# doesn't pin a model. 1.7B-Base-4bit is the chosen default from the
+# Apr 2026 quant matrix bench: ~2× realtime on M-series, clean audio,
+# ~2.2GB on disk.
+#
+# VOICEMODE_CLONE_MODEL is honoured for one release with a deprecation
+# warning (VM-1174). Removal in 8.8.0.
+from voice_mode._env_deprecation import get_env_with_deprecation as _get_env_with_deprecation
+CLONE_MODEL = _get_env_with_deprecation(
+    "VOICEMODE_IMPRESSIONS_MODEL",
+    "VOICEMODE_CLONE_MODEL",
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
+)
 
 # ==================== SERVICE MANAGEMENT CONFIGURATION ====================
 
