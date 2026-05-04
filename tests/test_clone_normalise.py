@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from voice_mode.tools.clone.profiles import _normalise_audio
+from voice_mode.tools.impressions.profiles import _normalise_audio
 
 
 EXPECTED_FFMPEG_ARGS = [
@@ -31,7 +31,7 @@ def test_normalise_invokes_ffmpeg_with_expected_arg_vector():
     dest = Path("/tmp/out.wav")
     fake_result = SimpleNamespace(returncode=0, stderr="", stdout="")
     with patch(
-        "voice_mode.tools.clone.profiles.subprocess.run",
+        "voice_mode.tools.impressions.profiles.subprocess.run",
         return_value=fake_result,
     ) as mock_run:
         _normalise_audio(src, dest)
@@ -49,7 +49,7 @@ def test_normalise_raises_runtimeerror_on_nonzero_exit_with_stderr():
     stderr_payload = "\n".join(f"line {i}" for i in range(30))
     fake_result = SimpleNamespace(returncode=1, stderr=stderr_payload, stdout="")
     with patch(
-        "voice_mode.tools.clone.profiles.subprocess.run",
+        "voice_mode.tools.impressions.profiles.subprocess.run",
         return_value=fake_result,
     ):
         with pytest.raises(RuntimeError) as exc:
@@ -67,7 +67,7 @@ def test_normalise_raises_filenotfound_when_ffmpeg_missing():
     src = Path("/tmp/in.wav")
     dest = Path("/tmp/out.wav")
     with patch(
-        "voice_mode.tools.clone.profiles.subprocess.run",
+        "voice_mode.tools.impressions.profiles.subprocess.run",
         side_effect=FileNotFoundError("No such file: ffmpeg"),
     ):
         with pytest.raises(FileNotFoundError) as exc:

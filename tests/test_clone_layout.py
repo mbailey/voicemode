@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from voice_mode.tools.clone.profiles import (
+from voice_mode.tools.impressions.profiles import (
     NORMALISED_FORMAT_DESC,
     clone_add,
 )
@@ -29,10 +29,10 @@ def tmp_voicemode(tmp_path, monkeypatch):
     voices_dir = tmp_path / "voices"
     voices_dir.mkdir()
     monkeypatch.setattr(
-        "voice_mode.tools.clone.profiles.VOICES_JSON", voices_json
+        "voice_mode.tools.impressions.profiles.VOICES_JSON", voices_json
     )
     monkeypatch.setattr(
-        "voice_mode.tools.clone.profiles.VOICES_DIR", voices_dir
+        "voice_mode.tools.impressions.profiles.VOICES_DIR", voices_dir
     )
     return {"voices_json": voices_json, "voices_dir": voices_dir}
 
@@ -59,10 +59,10 @@ def _patch_normalise(voices_dir: Path):
 async def test_clone_add_creates_per_voice_directory(tmp_voicemode, stub_wav):
     voices_dir = tmp_voicemode["voices_dir"]
     with patch(
-        "voice_mode.tools.clone.profiles._normalise_audio",
+        "voice_mode.tools.impressions.profiles._normalise_audio",
         side_effect=_patch_normalise(voices_dir),
     ), patch(
-        "voice_mode.tools.clone.profiles._transcribe_audio",
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
         return_value="hello world",
     ):
         result = await clone_add("testfoo", str(stub_wav))
@@ -78,10 +78,10 @@ async def test_clone_add_creates_per_voice_directory(tmp_voicemode, stub_wav):
 async def test_voice_md_has_required_keys(tmp_voicemode, stub_wav):
     voices_dir = tmp_voicemode["voices_dir"]
     with patch(
-        "voice_mode.tools.clone.profiles._normalise_audio",
+        "voice_mode.tools.impressions.profiles._normalise_audio",
         side_effect=_patch_normalise(voices_dir),
     ), patch(
-        "voice_mode.tools.clone.profiles._transcribe_audio",
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
         return_value="this is the transcript",
     ):
         await clone_add("testfoo", str(stub_wav))
@@ -106,10 +106,10 @@ async def test_voice_md_has_required_keys(tmp_voicemode, stub_wav):
 async def test_voices_json_points_at_per_voice_default_wav(tmp_voicemode, stub_wav):
     voices_dir = tmp_voicemode["voices_dir"]
     with patch(
-        "voice_mode.tools.clone.profiles._normalise_audio",
+        "voice_mode.tools.impressions.profiles._normalise_audio",
         side_effect=_patch_normalise(voices_dir),
     ), patch(
-        "voice_mode.tools.clone.profiles._transcribe_audio",
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
         return_value="hello world",
     ):
         await clone_add("testfoo", str(stub_wav))
@@ -129,10 +129,10 @@ async def test_clone_add_refuses_when_voice_dir_already_populated(
     (existing / "default.wav").write_bytes(b"existing")
 
     with patch(
-        "voice_mode.tools.clone.profiles._normalise_audio",
+        "voice_mode.tools.impressions.profiles._normalise_audio",
         side_effect=_patch_normalise(voices_dir),
     ), patch(
-        "voice_mode.tools.clone.profiles._transcribe_audio",
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
         return_value="hello world",
     ):
         result = await clone_add("testfoo", str(stub_wav))
@@ -149,10 +149,10 @@ async def test_clone_add_does_not_remove_legacy_flat_wav(tmp_voicemode, stub_wav
     legacy.write_bytes(b"legacy")
 
     with patch(
-        "voice_mode.tools.clone.profiles._normalise_audio",
+        "voice_mode.tools.impressions.profiles._normalise_audio",
         side_effect=_patch_normalise(voices_dir),
     ), patch(
-        "voice_mode.tools.clone.profiles._transcribe_audio",
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
         return_value="hello world",
     ):
         result = await clone_add("testfoo", str(stub_wav))
@@ -179,10 +179,10 @@ async def test_clone_add_preserves_other_voices_json_entries(
     tmp_voicemode["voices_json"].write_text(json.dumps(pre_existing))
 
     with patch(
-        "voice_mode.tools.clone.profiles._normalise_audio",
+        "voice_mode.tools.impressions.profiles._normalise_audio",
         side_effect=_patch_normalise(voices_dir),
     ), patch(
-        "voice_mode.tools.clone.profiles._transcribe_audio",
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
         return_value="hello world",
     ):
         await clone_add("testfoo", str(stub_wav))
@@ -197,10 +197,10 @@ async def test_clone_add_preserves_other_voices_json_entries(
 async def test_success_message_includes_layout_paths(tmp_voicemode, stub_wav):
     voices_dir = tmp_voicemode["voices_dir"]
     with patch(
-        "voice_mode.tools.clone.profiles._normalise_audio",
+        "voice_mode.tools.impressions.profiles._normalise_audio",
         side_effect=_patch_normalise(voices_dir),
     ), patch(
-        "voice_mode.tools.clone.profiles._transcribe_audio",
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
         return_value="hello world transcript here",
     ):
         result = await clone_add("testfoo", str(stub_wav))

@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from voice_mode.tools.clone.profiles import (
+from voice_mode.tools.impressions.profiles import (
     _normalise_transcription_url,
     _transcribe_audio,
 )
@@ -58,7 +58,7 @@ def test_failover_success_uses_second_url(sample_audio, monkeypatch):
         return _ok_response("Hello world")
 
     with patch(
-        "voice_mode.tools.clone.profiles.urllib.request.urlopen",
+        "voice_mode.tools.impressions.profiles.urllib.request.urlopen",
         side_effect=fake_urlopen,
     ):
         result = _transcribe_audio(sample_audio)
@@ -79,7 +79,7 @@ def test_all_urls_fail_lists_each_in_error(sample_audio, monkeypatch):
     )
 
     with patch(
-        "voice_mode.tools.clone.profiles.urllib.request.urlopen",
+        "voice_mode.tools.impressions.profiles.urllib.request.urlopen",
         side_effect=urllib.error.URLError("nope"),
     ):
         with pytest.raises(ConnectionError) as exc_info:
