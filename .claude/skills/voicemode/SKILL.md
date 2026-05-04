@@ -429,3 +429,4 @@ When local voice isn't an option -- no mic/speaker on the machine, can't install
 ## Related Skills
 
 - **[VoiceMode Connect](../voicemode-connect/SKILL.md)** - Remote voice via mobile/web clients (no local STT/TTS needed)
+- **[Impressions](../impressions/SKILL.md)** - Add custom voices via local mlx-audio (Apple Silicon only, preview). Use when the user wants `voice="<name>"` with a clip-based custom voice rather than a Kokoro voice.

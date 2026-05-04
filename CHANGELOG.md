@@ -7,17 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Impressions (preview / experimental) (VM-1174)
+
+VoiceMode can now do **impressions** -- speak in any voice from a short reference clip via local Qwen3-TTS on top of mlx-audio. Drop a 5-9 second WAV at `~/.voicemode/voices/<name>/default.wav`, then call `voicemode:converse(..., voice="<name>")` or `voicemode converse --voice <name>`. The model imitates the timbre and cadence of the clip; same technical path the unreleased "voice cloning" framing pointed at, with active "do an impression" framing instead.
+
+**Apple Silicon only, opt-in, not enabled by default.** Nothing happens until you run `voicemode service install mlx-audio` and add at least one voice directory. Intel Macs / Linux / Windows are unaffected -- Kokoro and OpenAI TTS continue to work as normal.
+
+- New env vars (replacing the unreleased `VOICEMODE_CLONE_*` candidates -- see Migration below):
+  - `VOICEMODE_VOICES_DIR` (default `~/.voicemode/voices`) -- directory of voice profiles, one subdirectory per voice.
+  - `VOICEMODE_REMOTE_VOICES_DIR` -- path translation for remote mlx-audio servers (e.g. ms2).
+  - `VOICEMODE_MLX_AUDIO_BASE_URL` (default `http://127.0.0.1:8890/v1`) -- OpenAI-compatible mlx-audio endpoint.
+  - `VOICEMODE_IMPRESSIONS_MODEL` (default `mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16`) -- Hugging Face model ID; pick `-4bit` / `-5bit` / `-6bit` quants to trade quality for speed/RAM.
+- Code dir: `voice_mode/tools/clone/` renamed to `voice_mode/tools/impressions/` (mechanical `git mv`; function names `clone_add` / `clone_list` / `clone_remove` preserved as internal symbols).
+- Template generator (`voice_mode/resources/configuration.py`) gains three sections: STT Models, MLX Audio Service, Impressions, per the env-grouping proposal in VM-1172.
+- Docs: new [Impressions guide](docs/guides/impressions.md) (replaces `docs/guides/voice-cloning.md`), with footguns covering Kokoro voice-name collisions, Apple Silicon constraint, and first-synthesis model download.
+- Skill: new `.claude/skills/impressions/` skill with progressive-disclosure deep-dives for setup (model quants, remote mlx-audio, troubleshooting) and finding samples (clip ranking heuristic, ffmpeg loudnorm recipes, voice-lab integration).
+
+#### Transcript Visibility (echo user/assistant around converse) (VM-1166, [#371](https://github.com/mbailey/voicemode/pull/371))
+
+Newer Claude Code releases collapse MCP tool calls in the visible transcript, which hid the spoken side of `voicemode:converse` exchanges. VoiceMode now keeps the conversation reconstructible from the transcript alone.
+
+- **Echo both sides as Markdown blockquotes** -- `> **ASSISTANT (voicemode):** ...` before each converse call, `> **USER (voicemode):** ...` after.
+- **Companion-mode assistant echo, verbatim user echo** -- Assistant echo reformats prose into Markdown (lists, code, etc.) without paraphrasing; user echo is verbatim, no truncation by default.
+- **Asymmetric gating** -- Assistant echo always plays (including speak-only narration); user echo only when a captured utterance exists.
+- **Mid-session opt-out** -- Strict-stop semantics: when the user asks to stop echoing, the opt-out turn itself is not echoed back.
+- **Progressive disclosure** -- Heavy detail lives in `docs/transcript-visibility.md` so the always-loaded skill stays thin (~1,070 tokens saved per fresh load).
+
+#### Other
+
+- **Whisper start uses wrapper script** ([#283](https://github.com/mbailey/voicemode/pull/283) by @codesmax) -- Whisper service start now goes through a wrapper script that handles fallback paths cleanly.
+
+### Migration
+
+- **`VOICEMODE_CLONE_BASE_URL` and `VOICEMODE_CLONE_MODEL` are renamed.** Replace them in your `~/.voicemode/voicemode.env`:
+  - `VOICEMODE_CLONE_BASE_URL` -> `VOICEMODE_MLX_AUDIO_BASE_URL`
+  - `VOICEMODE_CLONE_MODEL` -> `VOICEMODE_IMPRESSIONS_MODEL`
+  - `VOICEMODE_CLONE_PORT` -> use `VOICEMODE_MLX_AUDIO_PORT` (the old name was a duplicate; same default `8890`).
+
+  The old names are honoured for one release with a one-shot per-process deprecation warning routed through `voice_mode/_env_deprecation.py`. **Removal scheduled for 8.8.0.**
+- **The `sayas` CLI is removed.** Use `voicemode converse --voice <name>` instead -- it routes cloned voices through the same mlx-audio backend `sayas` did, with the rest of the converse pipeline (silence detection, audio formats, providers) for free. `sayas` was an alternate door to the same room; the unified converse surface is the canonical path now.
+
 ### Fixed
 
-- **mlx-audio install no longer fails at the patch step** (VM-1126) -- `voicemode service install mlx-audio` would fail with "Patch step failed: ... 2 out of 5 hunks failed" against mlx-audio 0.4.3. Both fixes the bundled `mlx_audio_server.patch` carried (MLX Metal serialisation lock for [ml-explore/mlx#2133](https://github.com/ml-explore/mlx/issues/2133), and OpenAI-style STT `response_format` on `/v1/audio/transcriptions`) are upstream from 0.4.3 on, so the patch now adds lines that already exist and rejects.
-
-### Removed
-
-- **Bundled `voice_mode/data/patches/mlx_audio_server.patch`** (VM-1126) -- Both fixes were upstreamed in mlx-audio 0.4.3. The patch-apply step in `voice_mode/tools/mlx_audio/install.py` (and its `_apply_server_patch` / `_find_installed_server_py` / `_query_installed_version` helpers) is gone, along with the `voice_mode/data/**/*.patch` packaging glob and the corresponding tests.
+- **Provider tests no longer fail when user voicemode.env overrides TTS/STT base URLs** (VM-1138, [#370](https://github.com/mbailey/voicemode/pull/370)) -- `tests/test_providers.py` (and friends) now isolate themselves from the user's `~/.voicemode/voicemode.env`, so `VOICEMODE_TTS_BASE_URLS` / `VOICEMODE_STT_BASE_URLS` overrides on the dev machine no longer break the suite.
+- **mlx-audio install no longer fails at the patch step** (VM-1126) -- `voicemode service install mlx-audio` would fail with "Patch step failed: ... 2 out of 5 hunks failed" against mlx-audio 0.4.3. The MLX Metal serialisation lock the bundled patch carried ([ml-explore/mlx#2133](https://github.com/ml-explore/mlx/issues/2133)) is upstream from 0.4.3 on, so the patch now adds lines that already exist and rejects.
+- **mlx-audio STT `response_format` patch restored** (VM-1128) -- VM-1126 over-removed: while the Metal lock was upstreamed, the OpenAI-style STT `response_format` handling on `/v1/audio/transcriptions` is *not* yet in mlx-audio 0.4.3. Restored as a separate patch.
+- **Opus playback no longer truncates the tail** -- Pad trailing silence on opus output to prevent the last frame being clipped.
+- **Kokoro install pinned to fork with opus tail fix** -- `voicemode service install kokoro` now installs from `ai-cora/Kokoro-FastAPI` until the fix lands upstream.
 
 ### Changed
 
+- **Voice names must be lowercase in the skill** -- Skill guidance updated to require lowercase voice names (e.g. `af_sky`, not `AF_Sky`) to match the provider voice catalog.
+- **Parallel tool calls section simplified** -- Trimmed the "speak + act in parallel" section in the voicemode skill while preserving the key teaching content.
 - **mlx-audio pin floored at `>=0.4.3`** (VM-1126) -- `MLX_AUDIO_PIP_PACKAGE` now embeds the version specifier, so `uv tool install` refuses earlier releases that needed the deleted patch.
+
+### Removed
+
+- **Bundled `voice_mode/data/patches/mlx_audio_server.patch`** (VM-1126) -- The Metal-lock half of the patch was upstreamed in mlx-audio 0.4.3. The patch-apply step in `voice_mode/tools/mlx_audio/install.py` (and its `_apply_server_patch` / `_find_installed_server_py` / `_query_installed_version` helpers) is gone, along with the `voice_mode/data/**/*.patch` packaging glob and the corresponding tests. (The STT `response_format` patch is restored separately under VM-1128.)
+- **`sayas` CLI** (VM-1174) -- the standalone `sayas <voice> "text"` command is gone, along with its bash completion (`voice_mode/data/completions/sayas.bash`), test module (`tests/test_sayas_cli.py`), and `[project.scripts]` entry. Migration: `voicemode converse --voice <name> -m "text" --no-wait` (or pass `voice="<name>"` to the `voicemode:converse` MCP tool).
 
 ## [8.6.1] - 2026-04-21
 

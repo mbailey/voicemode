@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from voice_mode.tools.clone.profiles import (
+from voice_mode.tools.impressions.profiles import (
     VOICES_DIR,
     VOICES_JSON,
     _load_voices_json,
@@ -28,10 +28,10 @@ def tmp_voicemode(tmp_path, monkeypatch):
     voices_dir.mkdir()
 
     monkeypatch.setattr(
-        "voice_mode.tools.clone.profiles.VOICES_JSON", voices_json
+        "voice_mode.tools.impressions.profiles.VOICES_JSON", voices_json
     )
     monkeypatch.setattr(
-        "voice_mode.tools.clone.profiles.VOICES_DIR", voices_dir
+        "voice_mode.tools.impressions.profiles.VOICES_DIR", voices_dir
     )
 
     return {
@@ -115,7 +115,7 @@ class TestSaveVoicesJson:
 
     def test_creates_parent_directory(self, tmp_path, monkeypatch):
         nested = tmp_path / "deep" / "nested" / "voices.json"
-        monkeypatch.setattr("voice_mode.tools.clone.profiles.VOICES_JSON", nested)
+        monkeypatch.setattr("voice_mode.tools.impressions.profiles.VOICES_JSON", nested)
         _save_voices_json({"voices": {}})
         assert nested.exists()
 
@@ -155,7 +155,7 @@ class TestCloneAdd:
     async def test_add_with_auto_transcribe(self, tmp_voicemode, sample_audio):
         mock_text = "Auto transcribed text from Whisper."
         with patch(
-            "voice_mode.tools.clone.profiles._transcribe_audio",
+            "voice_mode.tools.impressions.profiles._transcribe_audio",
             return_value=mock_text,
         ):
             result = await clone_add(
@@ -209,7 +209,7 @@ class TestCloneAdd:
     @pytest.mark.asyncio
     async def test_add_whisper_connection_error_cleans_up(self, tmp_voicemode, sample_audio):
         with patch(
-            "voice_mode.tools.clone.profiles._transcribe_audio",
+            "voice_mode.tools.impressions.profiles._transcribe_audio",
             side_effect=ConnectionError("Cannot reach Whisper"),
         ):
             result = await clone_add(
@@ -376,7 +376,7 @@ class TestTranscribeAudio:
     def test_transcribe_connection_error(self, sample_audio):
         """Every URL unreachable --> ConnectionError listing endpoints tried."""
         with patch(
-            "voice_mode.tools.clone.profiles.urllib.request.urlopen",
+            "voice_mode.tools.impressions.profiles.urllib.request.urlopen",
             side_effect=urllib.error.URLError("Connection refused"),
         ):
             with pytest.raises(ConnectionError, match="Cannot reach any STT endpoint"):
@@ -390,7 +390,7 @@ class TestTranscribeAudio:
         mock_response.__enter__ = lambda s: s
         mock_response.__exit__ = MagicMock(return_value=False)
 
-        with patch("voice_mode.tools.clone.profiles.urllib.request.urlopen", return_value=mock_response):
+        with patch("voice_mode.tools.impressions.profiles.urllib.request.urlopen", return_value=mock_response):
             result = _transcribe_audio(sample_audio)
         assert result == "Hello world"
 
@@ -406,6 +406,6 @@ class TestTranscribeAudio:
         mock_response.__enter__ = lambda s: s
         mock_response.__exit__ = MagicMock(return_value=False)
 
-        with patch("voice_mode.tools.clone.profiles.urllib.request.urlopen", return_value=mock_response):
+        with patch("voice_mode.tools.impressions.profiles.urllib.request.urlopen", return_value=mock_response):
             with pytest.raises(ConnectionError, match="empty 'text'"):
                 _transcribe_audio(sample_audio)
