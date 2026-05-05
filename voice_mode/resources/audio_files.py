@@ -42,7 +42,19 @@ async def get_audio_file(filename: str) -> Optional[str]:
     """
     if not SAVE_AUDIO:
         return "Audio saving is not enabled. Set VOICE_MODE_SAVE_AUDIO=1 to enable."
+    
+    # Sanitize filename to prevent path traversal attacks
+    filename = os.path.basename(filename)
+    if not filename:
+        return "Invalid filename."
+    
     file_path = os.path.join(AUDIO_DIR, filename)
+    
+    # Verify the resolved path is within AUDIO_DIR
+    resolved_path = os.path.abspath(file_path)
+    audio_dir_resolved = os.path.abspath(AUDIO_DIR)
+    if not resolved_path.startswith(audio_dir_resolved + os.sep):
+        return "Invalid filename."
     
     if not os.path.exists(file_path):
         return f"Audio file not found: {filename}"
