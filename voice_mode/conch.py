@@ -147,44 +147,84 @@ class Conch:
             return False
 
     def _check_and_clear_stale_lock(self) -> None:
-        """Check for and clear stale locks based on timestamp.
+        """Check for and clear stale locks.
 
-        If a lock file exists and its timestamp exceeds CONCH_LOCK_EXPIRY,
-        forcibly remove it to allow new acquisitions. This handles the case
-        where a process is alive but stuck and won't release the lock.
+        Two paths:
+        1. Dead-holder fast-fail: if the recorded PID no longer exists,
+           unlink the lock immediately. This runs even when timestamp-based
+           expiry is disabled (CONCH_LOCK_EXPIRY <= 0) -- a dead holder is
+           unambiguously stale.
+        2. Timestamp-based expiry: if the lock is older than
+           CONCH_LOCK_EXPIRY seconds, forcibly remove it. This handles the
+           case where the holder is alive but stuck.
 
-        Note: This deletes the file, creating a new inode. The stuck process
+        Note: This deletes the file, creating a new inode. A stuck process
         still holds its flock on the old inode, but we can now create a fresh
         lock file.
         """
-        lock_expiry = _get_lock_expiry()
-        if lock_expiry <= 0:
-            return  # Stale lock detection disabled
-
         if not self.LOCK_FILE.exists():
             return
 
         try:
             data = json.loads(self.LOCK_FILE.read_text())
-            acquired_str = data.get("acquired")
-            if not acquired_str:
-                return
+        except (json.JSONDecodeError, OSError):
+            return
 
-            acquired_time = datetime.fromisoformat(acquired_str)
-            age_seconds = (datetime.now() - acquired_time).total_seconds()
-
-            if age_seconds > lock_expiry:
-                # Lock is stale - forcibly remove it
+        # Fast-fail on dead holder -- no need to wait for timestamp expiry.
+        pid = data.get("pid")
+        if pid is not None:
+            try:
+                os.kill(pid, 0)
+                # Process is alive -- fall through to timestamp check.
+            except ProcessLookupError:
+                # Holder is dead -- clear the lock immediately.
                 stale_agent = data.get("agent", "unknown")
-                stale_pid = data.get("pid", "unknown")
                 try:
                     self.LOCK_FILE.unlink()
-                    # Log would be nice here, but avoid import complexity
                 except OSError:
                     pass
-        except (json.JSONDecodeError, ValueError, OSError):
-            # Can't read or parse - ignore
-            pass
+                # Best-effort observability event. Safe no-op if logger unset
+                # or import fails (avoids circular-import / startup-order issues).
+                try:
+                    from voice_mode.utils.event_logger import get_event_logger
+                    event_logger = get_event_logger()
+                    if event_logger:
+                        event_logger.log_event("CONCH_DEAD_HOLDER_CLEARED", {
+                            "stale_pid": pid,
+                            "stale_agent": stale_agent,
+                        })
+                except Exception:
+                    pass
+                return
+            except PermissionError:
+                # Process exists but we can't signal it -- treat as alive.
+                pass
+            except (TypeError, OSError):
+                # PID isn't a valid int or other OS error -- skip dead-PID path,
+                # fall through to timestamp check.
+                pass
+
+        # Timestamp-based stale clearance.
+        lock_expiry = _get_lock_expiry()
+        if lock_expiry <= 0:
+            return  # Stale lock detection disabled
+
+        acquired_str = data.get("acquired")
+        if not acquired_str:
+            return
+
+        try:
+            acquired_time = datetime.fromisoformat(acquired_str)
+        except ValueError:
+            return
+
+        age_seconds = (datetime.now() - acquired_time).total_seconds()
+        if age_seconds > lock_expiry:
+            # Lock is stale - forcibly remove it
+            try:
+                self.LOCK_FILE.unlink()
+            except OSError:
+                pass
 
     def release(self) -> float:
         """Release the lock and return seconds held.
