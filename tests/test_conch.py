@@ -371,6 +371,147 @@ class TestConchAtomicLocking:
 
         conch.release()
 
+    def test_try_acquire_clears_dead_holder_lock(self):
+        """try_acquire() unlinks a lock owned by a dead PID and acquires.
+
+        Uses the fork-and-reap pattern: spawn a child, wait for it to exit,
+        then write a lock file with the reaped (now dead) PID. Avoids the
+        flaky "PID 999999" pattern -- high-PID systems may have it in use.
+        """
+        # Fork a child that exits immediately, then reap it so the PID is
+        # genuinely dead.
+        pid = os.fork()
+        if pid == 0:
+            # Child -- exit immediately
+            os._exit(0)
+        # Parent -- reap the child
+        os.waitpid(pid, 0)
+
+        # Sanity check: signal 0 against the reaped PID should now raise.
+        with pytest.raises(ProcessLookupError):
+            os.kill(pid, 0)
+
+        # Write a lock file with the dead PID and a fresh timestamp
+        # (so timestamp-based expiry would NOT fire).
+        Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime
+        data = {
+            "pid": pid,
+            "agent": "dead_agent",
+            "acquired": datetime.now().isoformat(),
+            "expires": None,
+        }
+        Conch.LOCK_FILE.write_text(json.dumps(data))
+
+        # A fresh Conch should clear the dead-holder lock and acquire.
+        new_conch = Conch(agent_name="new_agent")
+        assert new_conch.try_acquire() is True
+
+        # The lock should now be ours.
+        new_data = json.loads(Conch.LOCK_FILE.read_text())
+        assert new_data["pid"] == os.getpid()
+        assert new_data["agent"] == "new_agent"
+
+        new_conch.release()
+
+    def test_try_acquire_clears_dead_holder_lock_with_expiry_disabled(self):
+        """Dead-PID clearance works even when CONCH_LOCK_EXPIRY <= 0.
+
+        Operators may opt out of timestamp-based expiry, but a dead holder
+        is unambiguously stale and must still be cleared.
+        """
+        pid = os.fork()
+        if pid == 0:
+            os._exit(0)
+        os.waitpid(pid, 0)
+
+        Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime
+        data = {
+            "pid": pid,
+            "agent": "dead_agent",
+            "acquired": datetime.now().isoformat(),
+            "expires": None,
+        }
+        Conch.LOCK_FILE.write_text(json.dumps(data))
+
+        # Patch the deferred lock-expiry getter to simulate disabled expiry.
+        with patch("voice_mode.conch._get_lock_expiry", return_value=0):
+            new_conch = Conch(agent_name="new_agent")
+            assert new_conch.try_acquire() is True
+
+        new_conch.release()
+
+    def test_try_acquire_respects_live_holder_lock(self):
+        """try_acquire() returns False when a live PID holds a fresh lock."""
+        # Write a lock file with our own (live) PID and fresh timestamp.
+        # We DON'T use Conch.acquire() because that doesn't take an flock --
+        # we need a flock-protected lock to genuinely block try_acquire.
+        holder = Conch(agent_name="holder")
+        assert holder.try_acquire() is True
+
+        # Sanity: lock file has our live PID.
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["pid"] == os.getpid()
+
+        # A fresh Conch should NOT acquire.
+        contender = Conch(agent_name="contender")
+        assert contender.try_acquire() is False
+
+        # Lock file is unchanged (still belongs to holder).
+        assert Conch.LOCK_FILE.exists()
+
+        holder.release()
+
+    def test_try_acquire_clears_stale_timestamp_with_live_pid(self):
+        """Existing behavior: live PID + expired timestamp still clears."""
+        # Write a lock file with our live PID but an ancient timestamp.
+        Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "pid": os.getpid(),
+            "agent": "stuck_agent",
+            "acquired": "2000-01-01T00:00:00",  # Way past any expiry
+            "expires": None,
+        }
+        Conch.LOCK_FILE.write_text(json.dumps(data))
+
+        # A fresh Conch should clear the stale-timestamp lock and acquire.
+        new_conch = Conch(agent_name="new_agent")
+        assert new_conch.try_acquire() is True
+
+        new_data = json.loads(Conch.LOCK_FILE.read_text())
+        assert new_data["agent"] == "new_agent"
+
+        new_conch.release()
+
+    def test_check_and_clear_handles_permission_error(self):
+        """PermissionError from os.kill is treated as 'alive' -- lock preserved.
+
+        If os.kill raises PermissionError, the process exists but is owned
+        by another user. We must NOT clear the lock in that case.
+        """
+        # Write a lock file with a fresh timestamp and some PID.
+        Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        from datetime import datetime
+        data = {
+            "pid": 12345,
+            "agent": "other_user_agent",
+            "acquired": datetime.now().isoformat(),
+            "expires": None,
+        }
+        Conch.LOCK_FILE.write_text(json.dumps(data))
+
+        # Mock os.kill to raise PermissionError.
+        with patch("voice_mode.conch.os.kill", side_effect=PermissionError):
+            conch = Conch(agent_name="probe")
+            conch._check_and_clear_stale_lock()
+
+        # Lock file must still exist -- treated as alive.
+        assert Conch.LOCK_FILE.exists()
+        preserved = json.loads(Conch.LOCK_FILE.read_text())
+        assert preserved["pid"] == 12345
+        assert preserved["agent"] == "other_user_agent"
+
     def test_release_without_acquire_does_not_delete_lock_file(self):
         """release() on non-holder must NOT delete the lock file.
 
