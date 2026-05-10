@@ -75,6 +75,20 @@ Multi-layered configuration system (`config.py`):
 3. **User Config**: `~/.voicemode/voicemode.env`
 4. **Defaults**: Built-in sensible defaults
 
+### Resources
+
+MCP resources expose structured server state to clients (apps, agents,
+the LLM-facing tool layer). Auto-imported from `voice_mode/resources/`.
+
+- **`voice://voices`** and **`voice://voices/{provider}`** — JSON voice
+  discovery for streamable HTTP clients. Shares an enumerator with the
+  `voice_registry` tool so the JSON resource and the LLM-facing prose
+  can never disagree on the voice list. See the
+  [`voice://voices` reference](../reference/voices-resource.md).
+- **`voice://config/*`** — Effective configuration values.
+- **`audio://files/*`**, **`whisper://models`**, etc. — Other resource
+  families exposed for client access.
+
 ## Voice Services
 
 ### Whisper (Speech-to-Text)

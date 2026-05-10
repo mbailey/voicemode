@@ -451,8 +451,26 @@ export VOICEMODE_SERVE_HOST=127.0.0.1
 
 CLI options take precedence over environment variables.
 
+## Voice Discovery for HTTP Clients
+
+Streamable HTTP MCP clients (iOS app, web client, other agents) can
+enumerate the TTS voices a connected server can produce by reading the
+`voice://voices` MCP resource (with `voice://voices/{provider}` for
+per-backend filtering). The response is structured JSON, so apps don't
+have to scrape prose from `voice_registry`.
+
+Impressions/clones are filtered out for remote callers by default —
+see the resource's
+[Privacy section](../reference/voices-resource.md#privacy) for the
+`VOICEMODE_EXPOSE_LOCAL_VOICES_REMOTE` env var and notes on running
+behind a co-located reverse proxy.
+
+Full schema, freshness model, and example responses:
+[`voice://voices` reference](../reference/voices-resource.md).
+
 ## See Also
 
+- [`voice://voices` Resource](../reference/voices-resource.md) - Structured voice discovery for HTTP clients
 - [CLI Reference](../reference/cli.md) - Complete serve command documentation
 - [Configuration Guide](configuration.md) - VoiceMode configuration options
 - [Claude Code Plugin](claude-code-plugin.md) - Plugin installation for Claude Code

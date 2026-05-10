@@ -78,46 +78,65 @@ class TestDiagnosticTools:
 
     @pytest.mark.asyncio
     async def test_voice_registry(self):
-        """Test voice_registry returns provider information."""
-        mock_registry = {
-            "tts": {
-                "http://127.0.0.1:8880/v1": {
-                    "healthy": True,
-                    "models": ["tts-1"],
-                    "voices": ["af_sky", "am_adam"],
-                    "response_time_ms": 150.0,
-                    "last_check": "2024-01-01T12:00:00"
-                }
-            },
-            "stt": {
-                "http://127.0.0.1:2022/v1": {
-                    "healthy": True,
-                    "models": ["whisper-1"],
-                    "response_time_ms": 200.0,
-                    "last_check": "2024-01-01T12:00:00"
-                }
-            }
-        }
-        
-        with patch("voice_mode.tools.voice_registry.provider_registry") as mock_registry_instance:
-            mock_registry_instance.initialize = AsyncMock()
-            mock_registry_instance.get_registry_for_llm.return_value = mock_registry
-            
+        """Test voice_registry returns provider information.
+
+        After VM-1208 impl-003 the tool sources its voice list from the
+        shared ``enumerate_voices`` enumerator, not ``provider_registry``.
+        We patch the enumerator to return a controlled fake list; the
+        endpoint URLs come from ``TTS_BASE_URLS`` / ``STT_BASE_URLS`` via
+        config, which we also patch for hermeticity.
+        """
+        async def fake_enumerate(*, include_local_only):
+            return [
+                {
+                    "id": "kokoro:af_sky",
+                    "voice": "af_sky",
+                    "name": "af_sky",
+                    "provider": "kokoro",
+                    "language": None,
+                    "gender": None,
+                    "preview_url": None,
+                },
+                {
+                    "id": "kokoro:am_adam",
+                    "voice": "am_adam",
+                    "name": "am_adam",
+                    "provider": "kokoro",
+                    "language": None,
+                    "gender": None,
+                    "preview_url": None,
+                },
+            ]
+
+        with patch(
+            "voice_mode.tools.voice_registry.enumerate_voices",
+            side_effect=fake_enumerate,
+        ), patch(
+            "voice_mode.tools.voice_registry.TTS_BASE_URLS",
+            ["http://127.0.0.1:8880/v1"],
+        ), patch(
+            "voice_mode.tools.voice_registry.STT_BASE_URLS",
+            ["http://127.0.0.1:2022/v1"],
+        ):
             result = await voice_registry.fn()
-            
+
             # Should return formatted string
             assert isinstance(result, str)
-            
+
             # Should include TTS providers
             assert "TTS" in result or "Text-to-Speech" in result
             assert "8880" in result  # Port number
-            
+
             # Should include STT providers
             assert "STT" in result or "Speech-to-Text" in result
             assert "2022" in result  # Port number
-            
+
             # Should show health status
-            assert "healthy" in result.lower() or "✅" in result or "available" in result.lower()
+            assert "✅" in result or "healthy" in result.lower() or "available" in result.lower()
+
+            # Voices from the shared enumerator should appear in the prose
+            assert "af_sky" in result
+            assert "am_adam" in result
 
     @pytest.mark.asyncio
     async def test_check_audio_dependencies_linux(self):
