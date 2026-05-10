@@ -89,6 +89,7 @@ Some hosts (e.g. newer Claude Code) collapse MCP tool calls — voice turns vani
 ```
 
 - Speaker first in caps; `(voicemode)` is the channel tag.
+- **Order matters.** Write the **ASSISTANT** blockquote *before* the `voicemode:converse` tool call, in the same response that issues it — so the user can read along while the audio plays (and recover the message if they miss part of it). Write the **USER** blockquote in your *next* response, after the tool result returns. Don't batch both echoes after the call.
 - **ASSISTANT echo: always**, including `wait_for_response=false` (speak-only narration still produces visible content that would otherwise vanish).
 - **USER echo: only when a user message was captured** (skip on `wait_for_response=false`, empty result, or transcription failure — there is nothing to echo).
 - **Assistant echo: verbatim by default** — the exact string passed to `message`, not paraphrased or reformatted. Reasons: least-surprising for the reader + diagnostic value when comparing printed text to spoken audio.
