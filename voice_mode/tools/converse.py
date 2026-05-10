@@ -1264,6 +1264,21 @@ PRIVACY: Microphone access required when wait_for_response=true.
 RECOGNITION TIP: If specific words are consistently misrecognized, configure
    VOICEMODE_STT_PROMPT for vocabulary biasing - see voicemode://docs/parameters
 
+VOICEMODE ECHO (default ON): Some hosts (e.g. newer Claude Code) collapse MCP
+   tool calls, hiding voice turns from the visible transcript. To keep voice
+   exchanges readable on screen, echo each converse turn as Markdown blockquotes:
+       > **ASSISTANT (voicemode):** <message arg, verbatim>
+       [voicemode:converse tool call]
+       > **USER (voicemode):** <captured user message, verbatim>
+   - ASSISTANT echo: always (incl. wait_for_response=false). Verbatim — the
+     exact string passed to `message`, not a paraphrase or reformat.
+   - USER echo: only when a user message was captured (skip on empty result
+     or transcription failure). Verbatim, no truncation.
+   - Visual aids (lists, tables, code) may follow AFTER the blockquote, not
+     inside it — the blockquote stays a clean verbatim copy of what was spoken.
+   - Don't double-echo content already visible as prose.
+   - Disable on request — canonical phrase: "disable voicemode echo".
+
 For complete parameter list, advanced options, and detailed examples,
 consult the MCP resources listed above.
     """
