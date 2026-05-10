@@ -95,7 +95,7 @@ Some hosts (e.g. newer Claude Code) collapse MCP tool calls — voice turns vani
 - **User echo: verbatim and full** — exact words, no truncation; rewriting or shortening risks distorting intent.
 - **Visual aids (lists, tables, code) belong AFTER the blockquote, not inside it.** The blockquote stays a clean verbatim copy of what was spoken; richer formatting can follow as separate prose.
 - Don't double-echo: if a sentence already appears as visible prose in the same response, don't also blockquote it.
-- **Disable by name**: if the user says "disable voicemode echo" (or has it in their startup context), stop echoing for the rest of the session. Useful on hosts that already render voice tool calls inline (avoids doubling).
+- **Disable on request** — canonical phrase: **"disable voicemode echo"**. Stop echoing for the rest of the session and honour the same phrase if it appears in the user's startup context (some hosts already render voice tool calls inline, where echoes would double up).
 
 ## Parallel Tool Calls (Zero Dead Air)
 

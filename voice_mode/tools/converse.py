@@ -1277,9 +1277,7 @@ VOICEMODE ECHO (default ON): Some hosts (e.g. newer Claude Code) collapse MCP
    - Visual aids (lists, tables, code) may follow AFTER the blockquote, not
      inside it — the blockquote stays a clean verbatim copy of what was spoken.
    - Don't double-echo content already visible as prose.
-   - Disable by name: if the user says "disable voicemode echo" (or has it in
-     their startup context), stop echoing for the rest of the session. Useful
-     on hosts that already render voice tool calls inline (avoids doubling).
+   - Disable on request — canonical phrase: "disable voicemode echo".
 
 For complete parameter list, advanced options, and detailed examples,
 consult the MCP resources listed above.
