@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`voice://voices` and `voice://voices/{provider}` MCP resources for structured TTS voice discovery (VM-1208)** — Streamable HTTP MCP clients (iOS app, web client, other agents) can now enumerate available TTS voices as JSON instead of scraping prose from the `voice_registry` tool. Both resources advertise `mime_type=application/json`, share an enumerator with the `voice_registry` tool (so the JSON resource and the LLM-facing prose can never disagree), and include impressions only for local callers (toggleable via `VOICEMODE_EXPOSE_LOCAL_VOICES_REMOTE`). 60-second in-process TTL on `/audio/voices` probes; OpenAI voices come from a hand-maintained constant. As a side-effect the `voice_registry` tool now reports `Voices: none detected` for offline endpoints instead of the legacy 67-voice phantom fallback. See [`voice://voices` reference](docs/reference/voices-resource.md).
+
 #### Impressions (preview / experimental) (VM-1174)
 
 VoiceMode can now do **impressions** -- speak in any voice from a short reference clip via local Qwen3-TTS on top of mlx-audio. Drop a 5-9 second WAV at `~/.voicemode/voices/<name>/default.wav`, then call `voicemode:converse(..., voice="<name>")` or `voicemode converse --voice <name>`. The model imitates the timbre and cadence of the clip; same technical path the unreleased "voice cloning" framing pointed at, with active "do an impression" framing instead.

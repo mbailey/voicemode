@@ -61,6 +61,13 @@ American male, `bf_` = British female, `bm_` = British male.
 When in doubt, omit `voice` entirely -- auto-select picks a working
 default.
 
+**Voice discovery for apps and agents:** read the `voice://voices` MCP
+resource for a structured JSON list of available voices (with
+`voice://voices/{provider}` for per-backend filtering). The
+`voice_registry` tool returns the same data as prose for the LLM
+mid-conversation. Both share the underlying enumerator so they never
+drift. See [voices resource reference](../../docs/reference/voices-resource.md).
+
 For all parameters, see [Converse Parameters](../../docs/reference/converse-parameters.md).
 
 ## Best Practices
