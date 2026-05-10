@@ -28,9 +28,11 @@ logger = logging.getLogger("voicemode")
 # OpenAI TTS voices. Source: https://platform.openai.com/docs/guides/text-to-speech
 # OpenAI does NOT expose /audio/voices, so this list is hand-maintained.
 # Last verified: 2026-05-10. Update when OpenAI ships a new voice.
+# `ballad` and `verse` were added with gpt-4o-mini-tts (Sep 2024); the original
+# six (alloy/echo/fable/nova/onyx/shimmer) work with tts-1 and tts-1-hd too.
 OPENAI_TTS_VOICES = (
-    "alloy", "ash", "coral", "echo", "fable",
-    "nova", "onyx", "sage", "shimmer",
+    "alloy", "ash", "ballad", "coral", "echo", "fable",
+    "nova", "onyx", "sage", "shimmer", "verse",
 )
 
 _PROBE_TIMEOUT = 5.0
