@@ -57,9 +57,16 @@ def _is_local_request() -> bool:
     if client is None or not client.host:
         return False
     try:
-        return ipaddress.ip_address(client.host).is_loopback
+        ip = ipaddress.ip_address(client.host)
     except ValueError:
         return False
+    if ip.is_loopback:
+        return True
+    # Python < 3.12's IPv6Address.is_loopback does not unwrap IPv4-mapped
+    # addresses, so ::ffff:127.0.0.1 reads as non-loopback. Check the mapped
+    # IPv4 explicitly for cross-version parity.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_loopback
 
 
 def _now_iso() -> str:
