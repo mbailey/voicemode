@@ -1228,11 +1228,14 @@ Example: If user says "search for tasks created yesterday", check for and invoke
    - voicemode://docs/languages - Non-English language support guide
    - voicemode://docs/patterns - Best practices and conversation patterns
    - voicemode://docs/troubleshooting - Audio, VAD, and connectivity issues
+   - voice://voices - JSON list of available TTS voices
+     (filter by provider with voice://voices/{provider}, e.g. voice://voices/kokoro)
 
 KEY PARAMETERS:
 • message (required): The message to speak
 • wait_for_response (bool, default: true): Listen for response after speaking
 • voice (string): TTS voice name (auto-selected unless specified)
+  - To list available voices, read MCP resource voice://voices
 • tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)
 • disable_silence_detection (bool, default: false): Disable auto-stop on silence
 • vad_aggressiveness (0-3, default: 3): Voice detection strictness (0=permissive, 3=strict)
