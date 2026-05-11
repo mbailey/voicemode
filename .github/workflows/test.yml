@@ -50,7 +50,7 @@ jobs:
         pytest -v -m "not slow" --cov=voice_mode --cov-report=xml
     
     - name: Upload coverage reports
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v6
       if: matrix.python-version == '3.11' && matrix.os == 'ubuntu-latest'
       with:
         file: ./coverage.xml
