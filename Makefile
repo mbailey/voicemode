@@ -12,7 +12,8 @@
 	test-installer-ubuntu test-installer-fedora test-installer-all test-installer-ci \
 	test-installer-pypi test-installer-pypi-ubuntu test-installer-pypi-fedora \
 	test-installer-pypi-all \
-	vm-ubuntu vm-fedora vm-macos vm-ubuntu-quick vm-fedora-quick vm-macos-quick vm-clean vm-list
+	vm-ubuntu vm-fedora vm-macos vm-ubuntu-quick vm-fedora-quick vm-macos-quick vm-clean vm-list \
+	audit-deps audit-deps-critical audit-deps-json
 
 # Default target
 help:
@@ -75,6 +76,11 @@ help:
 	@echo "  docs-build    - Build documentation site"
 	@echo "  docs-check    - Check documentation for errors (strict mode)"
 	@echo "  docs-deploy   - Deploy to ReadTheDocs (requires auth)"
+	@echo ""
+	@echo "Security:"
+	@echo "  audit-deps          - Scan dependencies for known vulnerabilities (osv-scanner)"
+	@echo "  audit-deps-critical - Show only Critical and High severity findings"
+	@echo "  audit-deps-json     - Output full scan as JSON (for tooling)"
 	@echo ""
 	@echo "Manual VM Testing:"
 	@echo "  vm-ubuntu     - Start fresh Ubuntu VM and show SSH command"
@@ -714,3 +720,49 @@ test-installer-pypi-all:
 	echo ""; \
 	echo "=== Testing Fedora (fresh clone) ==="; \
 	uv run python scripts/test_installer.py fedora --pypi --backend tart --clone-fresh || true
+# ============================================================================
+# Security: dependency vulnerability scanning
+# ============================================================================
+# Uses osv-scanner (Google's OSV.dev client) to scan uv.lock + workflows
+# against known CVE/GHSA databases. Mirrors the Dependabot config in
+# .github/dependabot.yml but runs locally on demand.
+#
+# Install: brew install osv-scanner
+
+# Scan all dependencies for known vulnerabilities (full report)
+audit-deps:
+	@if ! command -v osv-scanner >/dev/null 2>&1; then \
+		echo "❌ osv-scanner is not installed!"; \
+		echo "Install with: brew install osv-scanner"; \
+		echo "Docs: https://google.github.io/osv-scanner/"; \
+		exit 1; \
+	fi
+	@echo "Scanning dependencies with osv-scanner..."
+	@osv-scanner scan source --recursive .
+
+# Show only Critical and High severity findings (CVSS >= 7.0)
+audit-deps-critical:
+	@if ! command -v osv-scanner >/dev/null 2>&1; then \
+		echo "❌ osv-scanner is not installed!"; \
+		echo "Install with: brew install osv-scanner"; \
+		exit 1; \
+	fi
+	@echo "Scanning for Critical and High severity vulnerabilities (CVSS >= 7.0)..."
+	@osv-scanner scan source --recursive . --format=table 2>&1 | awk ' \
+		/^Total/ { print; next } \
+		/^\| OSV URL/ { print; next } \
+		/^\+--/ { print; next } \
+		/^\| https/ { \
+			n = split($$0, parts, "|"); \
+			cvss = parts[3] + 0; \
+			if (cvss >= 7.0) print; \
+			next \
+		}'
+
+# Output full scan as JSON (for piping into other tools)
+audit-deps-json:
+	@if ! command -v osv-scanner >/dev/null 2>&1; then \
+		echo "❌ osv-scanner is not installed!" >&2; \
+		exit 1; \
+	fi
+	@osv-scanner scan source --recursive . --format=json
