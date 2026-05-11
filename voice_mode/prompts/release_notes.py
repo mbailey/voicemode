@@ -23,12 +23,10 @@ def release_notes_prompt(versions: str = "5") -> str:
     if not versions or versions == "":
         versions = "5"
 
-    # Get the changelog content from the resource
-    # Resources decorated with @mcp.resource need to access the fn attribute
-    if hasattr(changelog_resource, 'fn'):
-        changelog_content = changelog_resource.fn()
-    else:
-        changelog_content = changelog_resource()
+    # Get the changelog content from the resource.
+    # FastMCP 2.x: @mcp.resource wraps the function; access via .fn
+    # FastMCP 3.x: @mcp.resource returns the raw function
+    changelog_content = getattr(changelog_resource, 'fn', changelog_resource)()
     
     # If we got an error message, return it
     if changelog_content.startswith("Error") or changelog_content.startswith("CHANGELOG.md not found"):

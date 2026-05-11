@@ -28,7 +28,7 @@ class TestConverseCancellation:
 
             with patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]):
                 with patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
-                    result = await converse.fn(
+                    result = await getattr(converse, 'fn', converse)(
                         message="Test message",
                         wait_for_response=False,
                     )
@@ -51,7 +51,7 @@ class TestConverseCancellation:
 
             with patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]):
                 with patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
-                    await converse.fn(
+                    await getattr(converse, 'fn', converse)(
                         message="Test message",
                         wait_for_response=False,
                     )
@@ -78,7 +78,7 @@ class TestConverseCancellation:
             with patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]):
                 with patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
                     task = asyncio.create_task(
-                        converse.fn(message="Hello", wait_for_response=False)
+                        getattr(converse, 'fn', converse)(message="Hello", wait_for_response=False)
                     )
                     # Give it a moment to get into TTS
                     await asyncio.sleep(0.1)

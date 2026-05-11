@@ -30,7 +30,7 @@ def test_release_notes_prompt_parses_changelog():
     with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = mock_changelog
         
-        result = release_notes_prompt.fn(versions="2")
+        result = getattr(release_notes_prompt, 'fn', release_notes_prompt)(versions="2")
         
         # Should show oldest first
         assert "[1.1.0]" in result
@@ -54,7 +54,7 @@ def test_release_notes_prompt_handles_missing_changelog():
     with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = "CHANGELOG.md not found in package."
         
-        result = release_notes_prompt.fn()
+        result = getattr(release_notes_prompt, 'fn', release_notes_prompt)()
         
         assert "CHANGELOG.md not found" in result
 
@@ -64,7 +64,7 @@ def test_release_notes_prompt_handles_error():
     with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = "Error reading CHANGELOG.md: Permission denied"
         
-        result = release_notes_prompt.fn()
+        result = getattr(release_notes_prompt, 'fn', release_notes_prompt)()
         
         assert "Error reading CHANGELOG.md" in result
 
@@ -101,7 +101,7 @@ def test_release_notes_prompt_default_versions():
     with patch("voice_mode.resources.changelog.changelog_resource") as mock_resource:
         mock_resource.fn.return_value = mock_changelog
         
-        result = release_notes_prompt.fn()  # No versions specified
+        result = getattr(release_notes_prompt, 'fn', release_notes_prompt)()  # No versions specified
         
         # Should show 5 versions (default)
         assert "[2.0.0]" in result
@@ -145,7 +145,7 @@ def test_release_notes_prompt_handles_empty_string():
         mock_resource.fn.return_value = mock_changelog
         
         # Test with empty string (what Claude Code sends)
-        result = release_notes_prompt.fn(versions="")
+        result = getattr(release_notes_prompt, 'fn', release_notes_prompt)(versions="")
         
         # Should use default of 5 versions
         assert "[2.0.0]" in result
@@ -177,13 +177,13 @@ def test_release_notes_prompt_respects_version_limit():
         mock_resource.fn.return_value = mock_changelog
         
         # Test with 1 version
-        result = release_notes_prompt.fn(versions="1")
+        result = getattr(release_notes_prompt, 'fn', release_notes_prompt)(versions="1")
         assert "[3.0.0]" in result
         assert "[2.0.0]" not in result
         assert "[1.0.0]" not in result
         
         # Test with all versions
-        result = release_notes_prompt.fn(versions="10")
+        result = getattr(release_notes_prompt, 'fn', release_notes_prompt)(versions="10")
         assert "[3.0.0]" in result
         assert "[2.0.0]" in result
         assert "[1.0.0]" in result

@@ -29,7 +29,7 @@ classifiers = [
 
 dependencies = [
     "uv>=0.4.0",
-    "fastmcp>=2.3.2,<3",  # Pin to 2.x until FastMCP 3.0 migration (VM-742)
+    "fastmcp>=3.2.0,<4",  # Migrated to 3.x in VM-1242. Fixes CVSS 10.0 (GHSA-vv7q-7jx5-f767).
     "numpy",
     "sounddevice",
     "scipy",

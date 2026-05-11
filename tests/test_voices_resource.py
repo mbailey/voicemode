@@ -196,7 +196,7 @@ def patched_enum(monkeypatch):
 async def test_list_voices_returns_locked_envelope(patched_enum, clean_env):
     _patch_no_request(clean_env)   # stdio context → local
 
-    body = await list_voices.fn()
+    body = await getattr(list_voices, 'fn', list_voices)()
 
     assert body["schema_version"] == 1
     assert isinstance(body["generated_at"], str)
@@ -210,7 +210,7 @@ async def test_list_voices_returns_locked_envelope(patched_enum, clean_env):
 async def test_list_voices_stdio_includes_impressions(patched_enum, clean_env):
     _patch_no_request(clean_env)
 
-    body = await list_voices.fn()
+    body = await getattr(list_voices, 'fn', list_voices)()
 
     assert patched_enum == [True]   # stdio → include_local_only=True
     assert any(v["provider"] == "mlx-audio" for v in body["voices"])
@@ -222,7 +222,7 @@ async def test_list_voices_remote_omits_impressions(patched_enum, clean_env):
     req.client.host = "203.0.113.7"
     _patch_request(clean_env, req)
 
-    body = await list_voices.fn()
+    body = await getattr(list_voices, 'fn', list_voices)()
 
     assert patched_enum == [False]
     assert all(v["provider"] != "mlx-audio" for v in body["voices"])
@@ -233,7 +233,7 @@ async def test_list_voices_loopback_includes_impressions(patched_enum, clean_env
     req.client.host = "127.0.0.1"
     _patch_request(clean_env, req)
 
-    body = await list_voices.fn()
+    body = await getattr(list_voices, 'fn', list_voices)()
 
     assert patched_enum == [True]
     assert any(v["provider"] == "mlx-audio" for v in body["voices"])
@@ -247,7 +247,7 @@ async def test_list_voices_env_override_forces_impressions_over_remote(
     _patch_request(monkeypatch, req)
     monkeypatch.setenv("VOICEMODE_EXPOSE_LOCAL_VOICES_REMOTE", "true")
 
-    body = await list_voices.fn()
+    body = await getattr(list_voices, 'fn', list_voices)()
 
     assert patched_enum == [True]
     assert any(v["provider"] == "mlx-audio" for v in body["voices"])
@@ -257,7 +257,7 @@ async def test_list_voices_response_carries_no_raw_urls(patched_enum, clean_env)
     """AC4: no ``http://`` / ``https://`` substrings anywhere in the body."""
     _patch_no_request(clean_env)
 
-    body = await list_voices.fn()
+    body = await getattr(list_voices, 'fn', list_voices)()
 
     import json
     serialized = json.dumps(body)
@@ -271,7 +271,7 @@ async def test_list_voices_response_carries_no_raw_urls(patched_enum, clean_env)
 async def test_per_provider_filter_returns_only_matching(patched_enum, clean_env):
     _patch_no_request(clean_env)
 
-    body = await list_voices_for_provider.fn(provider="openai")
+    body = await getattr(list_voices_for_provider, 'fn', list_voices_for_provider)(provider="openai")
 
     assert body["schema_version"] == 1
     assert all(v["provider"] == "openai" for v in body["voices"])
@@ -281,7 +281,7 @@ async def test_per_provider_filter_returns_only_matching(patched_enum, clean_env
 async def test_per_provider_filter_empty_for_unknown_provider(patched_enum, clean_env):
     _patch_no_request(clean_env)
 
-    body = await list_voices_for_provider.fn(provider="never-heard-of-it")
+    body = await getattr(list_voices_for_provider, 'fn', list_voices_for_provider)(provider="never-heard-of-it")
 
     assert body["voices"] == []
     assert body["schema_version"] == 1
@@ -293,7 +293,7 @@ async def test_per_provider_filter_respects_privacy(patched_enum, clean_env):
     req.client.host = "203.0.113.7"
     _patch_request(clean_env, req)
 
-    body = await list_voices_for_provider.fn(provider="mlx-audio")
+    body = await getattr(list_voices_for_provider, 'fn', list_voices_for_provider)(provider="mlx-audio")
 
     # patched_enum returns no mlx-audio voices when include_local_only=False,
     # so the per-provider filter yields nothing.
@@ -305,8 +305,8 @@ async def test_per_provider_envelope_matches_unfiltered(patched_enum, clean_env)
     """Per-provider response carries the same envelope keys as the unfiltered one."""
     _patch_no_request(clean_env)
 
-    full = await list_voices.fn()
-    one = await list_voices_for_provider.fn(provider="kokoro")
+    full = await getattr(list_voices, 'fn', list_voices)()
+    one = await getattr(list_voices_for_provider, 'fn', list_voices_for_provider)(provider="kokoro")
 
     assert set(full.keys()) == set(one.keys())
     assert full["schema_version"] == one["schema_version"]
@@ -315,10 +315,19 @@ async def test_per_provider_envelope_matches_unfiltered(patched_enum, clean_env)
 # ---------- registration sanity check -------------------------------------
 
 
-def test_resources_register_with_expected_uris():
+async def test_resources_register_with_expected_uris():
     """Both resources are loaded into the FastMCP instance with mime_type=json."""
-    # The resource objects expose .uri / .mime_type attributes once registered.
-    assert str(list_voices.uri) == "voice://voices"
-    assert list_voices.mime_type == "application/json"
-    assert "voice://voices/{provider}" in str(list_voices_for_provider.uri_template)
-    assert list_voices_for_provider.mime_type == "application/json"
+    # FastMCP 3.x: @mcp.resource decorator returns the raw function, so we
+    # query the server for registered resources rather than introspecting
+    # the decorated objects directly. (In 2.x the decorator returned a
+    # wrapper exposing .uri / .mime_type / .uri_template.)
+    from voice_mode.server import mcp
+
+    static = {str(r.uri): r for r in await mcp.list_resources()}
+    assert "voice://voices" in static
+    assert static["voice://voices"].mime_type == "application/json"
+
+    templates = {str(t.uri_template): t for t in await mcp.list_resource_templates()}
+    assert any("voice://voices/{provider}" in u for u in templates)
+    template = next(t for u, t in templates.items() if "voice://voices/{provider}" in u)
+    assert template.mime_type == "application/json"

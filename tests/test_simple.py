@@ -149,8 +149,14 @@ async def test_mcp_server_import():
         async def test_tool(message: str) -> str:
             return f"Test response: {message}"
         
-        # Verify the tool was added
-        assert len(test_mcp._tool_manager._tools) > 0
+        # Verify the tool was added.
+        # FastMCP 3.x: list_tools() is the public API (async, returns list).
+        # FastMCP 2.x: _tool_manager._tools is the internal dict.
+        if hasattr(test_mcp, 'list_tools'):
+            tools = await test_mcp.list_tools()
+        else:
+            tools = test_mcp._tool_manager._tools
+        assert len(tools) > 0
         
     except ImportError:
         pytest.skip("FastMCP not available")

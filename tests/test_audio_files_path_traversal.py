@@ -26,8 +26,9 @@ from voice_mode.resources import audio_files as audio_files_module
 from voice_mode.resources.audio_files import get_audio_file
 
 
-# Resolve the underlying async function (FastMCP wraps the decorated fn).
-_handler = get_audio_file.fn
+# Resolve the underlying async function.
+# FastMCP 2.x: decorator wraps with .fn; 3.x: decorator returns the function directly.
+_handler = getattr(get_audio_file, 'fn', get_audio_file)
 
 
 def _run(coro):

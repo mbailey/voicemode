@@ -26,7 +26,7 @@ def test_changelog_resource_finds_file_from_source():
             mock_exists.side_effect = [True, False, False]
             mock_read.return_value = mock_content
             
-            result = changelog_resource.fn()
+            result = getattr(changelog_resource, 'fn', changelog_resource)()
             
             assert result == mock_content
             assert mock_exists.call_count == 1
@@ -42,7 +42,7 @@ def test_changelog_resource_fallback_paths():
             mock_exists.side_effect = [False, False, True]
             mock_read.return_value = mock_content
             
-            result = changelog_resource.fn()
+            result = getattr(changelog_resource, 'fn', changelog_resource)()
             
             assert result == mock_content
             assert mock_exists.call_count == 3
@@ -54,7 +54,7 @@ def test_changelog_resource_file_not_found():
         # No paths exist
         mock_exists.return_value = False
         
-        result = changelog_resource.fn()
+        result = getattr(changelog_resource, 'fn', changelog_resource)()
         
         assert "CHANGELOG.md not found in package" in result
         assert "https://github.com/mbailey/voicemode" in result
@@ -68,7 +68,7 @@ def test_changelog_resource_read_error():
             mock_exists.side_effect = [True, False, False]
             mock_read.side_effect = PermissionError("Access denied")
             
-            result = changelog_resource.fn()
+            result = getattr(changelog_resource, 'fn', changelog_resource)()
             
             assert "Error reading CHANGELOG.md" in result
             assert "Access denied" in result
