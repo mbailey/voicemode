@@ -104,6 +104,18 @@ Issues = "https://github.com/mbailey/voicemode/issues"
 voice-mode = "voice_mode.cli:voice_mode"
 voicemode = "voice_mode.cli:voice_mode"
 
+[tool.uv]
+# Constrain transitive deps that have known vulnerabilities but aren't bumped
+# automatically because nothing in the tree requires a newer version.
+# Format: each entry is a PEP 508 specifier that uv applies during resolution.
+constraint-dependencies = [
+    # Cryptography is pulled in via authlib/joserfc/pyjwt. 45.0.7 has 3 known
+    # vulns (GHSA-r6ph-v2qm-q3c2 CVSS 8.2, plus 6.9 and 5.3 mediums). None of
+    # the transitive deps require >=46, so without this constraint uv resolves
+    # to the lowest acceptable (vulnerable) version. See VM-1244.
+    "cryptography>=46.0.7",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["voice_mode"]
 include = [
