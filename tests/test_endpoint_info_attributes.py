@@ -91,7 +91,7 @@ class TestProviderToolsUsage:
 
         with patch('voice_mode.tools.providers.provider_registry', mock_registry):
             # This should work if the fields exist
-            result = await refresh_provider_registry.fn(optimistic=False)
+            result = await getattr(refresh_provider_registry, 'fn', refresh_provider_registry)(optimistic=False)
             # The tool should be able to access endpoint.healthy without error
             assert "healthy" in str(result) or "✅" in result or "❌" in result
 
@@ -120,7 +120,7 @@ class TestProviderToolsUsage:
             from voice_mode.tools.devices import voice_status
 
             # This should work without AttributeError
-            result = await voice_status.fn()
+            result = await getattr(voice_status, 'fn', voice_status)()
             assert "TTS Endpoints" in result
 
 
@@ -147,7 +147,7 @@ class TestConverseIntegrationWithEndpointInfo:
             })
 
             # This should handle the error gracefully
-            result = await converse.fn(
+            result = await getattr(converse, 'fn', converse)(
                 message="Test message",
                 wait_for_response=False
             )
@@ -173,7 +173,7 @@ class TestConverseIntegrationWithEndpointInfo:
                 ]
             })
 
-            result = await converse.fn(
+            result = await getattr(converse, 'fn', converse)(
                 message="Test message",
                 wait_for_response=False
             )

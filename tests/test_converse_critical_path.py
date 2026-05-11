@@ -27,7 +27,7 @@ class TestConverseOpenAIErrors:
 
             with patch('voice_mode.config.TTS_BASE_URLS', ['https://api.openai.com/v1']):
                 with patch('voice_mode.config.OPENAI_API_KEY', 'test-api-key'):
-                    result = await converse.fn(
+                    result = await getattr(converse, 'fn', converse)(
                         message="Test message",
                         wait_for_response=False
                     )
@@ -52,7 +52,7 @@ class TestConverseOpenAIErrors:
 
             with patch('voice_mode.config.TTS_BASE_URLS', ['https://api.openai.com/v1']):
                 with patch('voice_mode.config.OPENAI_API_KEY', 'invalid-key'):
-                    result = await converse.fn(
+                    result = await getattr(converse, 'fn', converse)(
                         message="Test message",
                         wait_for_response=False
                     )
@@ -76,7 +76,7 @@ class TestConverseOpenAIErrors:
             )
 
             with patch('voice_mode.config.TTS_BASE_URLS', ['https://api.openai.com/v1']):
-                result = await converse.fn(
+                result = await getattr(converse, 'fn', converse)(
                     message="Test message",
                     wait_for_response=False
                 )
@@ -111,7 +111,7 @@ class TestConverseFailoverBehavior:
             ]
 
             with patch('voice_mode.config.TTS_BASE_URLS', test_urls):
-                result = await converse.fn(
+                result = await getattr(converse, 'fn', converse)(
                     message="Test message",
                     wait_for_response=False
                 )
@@ -130,7 +130,7 @@ class TestConverseFailoverBehavior:
         with patch('voice_mode.simple_failover.simple_tts_failover') as mock_tts:
             mock_tts.return_value = (True, {'duration_ms': 100}, {'provider': 'openai'})
 
-            result = await converse.fn(
+            result = await getattr(converse, 'fn', converse)(
                 message="Test message",
                 wait_for_response=False
             )
@@ -158,7 +158,7 @@ class TestConverseErrorMessages:
             })
 
             with patch('voice_mode.config.OPENAI_API_KEY', None):
-                result = await converse.fn(
+                result = await getattr(converse, 'fn', converse)(
                     message="Test",
                     wait_for_response=False
                 )
@@ -185,7 +185,7 @@ class TestConverseErrorMessages:
                 ]
             })
 
-            result = await converse.fn(
+            result = await getattr(converse, 'fn', converse)(
                 message="Test",
                 wait_for_response=False
             )
@@ -223,7 +223,7 @@ class TestConverseSTTFailures:
                         ]
                     }
 
-                    result = await converse.fn(
+                    result = await getattr(converse, 'fn', converse)(
                         message="Test",
                         wait_for_response=True
                     )
@@ -252,7 +252,7 @@ class TestConverseSTTFailures:
                         'provider': 'whisper'
                     }
 
-                    result = await converse.fn(
+                    result = await getattr(converse, 'fn', converse)(
                         message="Are you there?",
                         wait_for_response=True
                     )
@@ -275,7 +275,7 @@ class TestConverseMetrics:
                 'ttfb_ms': 50
             }, {'provider': 'openai'})
 
-            result = await converse.fn(
+            result = await getattr(converse, 'fn', converse)(
                 message="Test",
                 wait_for_response=False
             )

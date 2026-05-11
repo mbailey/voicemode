@@ -20,7 +20,8 @@ class TestMinDurationIntegration:
         from voice_mode.tools.converse import converse
         
         # Get the actual function from the MCP tool wrapper
-        converse_func = converse.fn
+        # FastMCP 2.x: tool has .fn attribute; 3.x: tool IS the function
+        converse_func = getattr(converse, 'fn', converse)
         
         # Mock required dependencies
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):
@@ -63,7 +64,8 @@ class TestMinDurationIntegration:
         from voice_mode.tools.converse import converse
         
         # Get the actual function from the MCP tool wrapper
-        converse_func = converse.fn
+        # FastMCP 2.x: tool has .fn attribute; 3.x: tool IS the function
+        converse_func = getattr(converse, 'fn', converse)
         
         # Mock all dependencies
         with patch('voice_mode.tools.converse.startup_initialization', new_callable=AsyncMock):

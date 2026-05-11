@@ -495,7 +495,7 @@ def service_install(service_name, force):
     """
     if service_name == 'whisper':
         from voice_mode.tools.whisper.install import whisper_install
-        result = asyncio.run(whisper_install.fn(force_reinstall=force))
+        result = asyncio.run(getattr(whisper_install, 'fn', whisper_install)(force_reinstall=force))
         # Handle dict result from tool
         if isinstance(result, dict):
             if result.get("success"):
@@ -508,7 +508,7 @@ def service_install(service_name, force):
             click.echo(result)
     elif service_name == 'kokoro':
         from voice_mode.tools.kokoro.install import kokoro_install
-        result = asyncio.run(kokoro_install.fn(force_reinstall=force))
+        result = asyncio.run(getattr(kokoro_install, 'fn', kokoro_install)(force_reinstall=force))
         if isinstance(result, dict):
             if result.get("success"):
                 click.echo(f"✅ Kokoro installed successfully")
@@ -678,7 +678,7 @@ def health():
 def install(install_dir, port, force, version, auto_enable, skip_deps):
     """Install kokoro-fastapi TTS service."""
     from voice_mode.tools.kokoro.install import kokoro_install
-    result = asyncio.run(kokoro_install.fn(
+    result = asyncio.run(getattr(kokoro_install, 'fn', kokoro_install)(
         install_dir=install_dir,
         port=port,
         force_reinstall=force,
@@ -715,7 +715,7 @@ def install(install_dir, port, force, version, auto_enable, skip_deps):
 def uninstall(remove_models, remove_all_data):
     """Uninstall kokoro-fastapi service and optionally remove data."""
     from voice_mode.tools.kokoro.uninstall import kokoro_uninstall
-    result = asyncio.run(kokoro_uninstall.fn(
+    result = asyncio.run(getattr(kokoro_uninstall, 'fn', kokoro_uninstall)(
         remove_models=remove_models,
         remove_all_data=remove_all_data
     ))
@@ -849,7 +849,7 @@ def whisper_service_health():
 def whisper_service_install(install_dir, model, use_gpu, force, version, auto_enable, skip_deps):
     """Install whisper.cpp STT service with automatic system detection."""
     from voice_mode.tools.whisper.install import whisper_install
-    result = asyncio.run(whisper_install.fn(
+    result = asyncio.run(getattr(whisper_install, 'fn', whisper_install)(
         install_dir=install_dir,
         model=model,
         use_gpu=use_gpu,
@@ -904,7 +904,7 @@ def whisper_service_install(install_dir, model, use_gpu, force, version, auto_en
 def whisper_service_uninstall(remove_models, remove_all_data):
     """Uninstall whisper.cpp and optionally remove models and data."""
     from voice_mode.tools.whisper.uninstall import whisper_uninstall
-    result = asyncio.run(whisper_uninstall.fn(
+    result = asyncio.run(getattr(whisper_uninstall, 'fn', whisper_uninstall)(
         remove_models=remove_models,
         remove_all_data=remove_all_data
     ))
@@ -1511,7 +1511,7 @@ def config():
 def config_list():
     """List all configuration keys with their descriptions."""
     from voice_mode.tools.configuration_management import list_config_keys
-    result = asyncio.run(list_config_keys.fn())
+    result = asyncio.run(getattr(list_config_keys, 'fn', list_config_keys)())
     click.echo(result)
 
 
@@ -1560,7 +1560,7 @@ def config_get(key):
 def config_set(key, value):
     """Set a configuration value."""
     from voice_mode.tools.configuration_management import update_config
-    result = asyncio.run(update_config.fn(key, value))
+    result = asyncio.run(getattr(update_config, 'fn', update_config)(key, value))
     click.echo(result)
 
 
@@ -1709,7 +1709,7 @@ def diag():
 def info():
     """Show voicemode installation information."""
     from voice_mode.tools.diagnostics import voice_mode_info
-    result = asyncio.run(voice_mode_info.fn())
+    result = asyncio.run(getattr(voice_mode_info, 'fn', voice_mode_info)())
     click.echo(result)
 
 
@@ -1717,7 +1717,7 @@ def info():
 def devices():
     """List available audio input and output devices."""
     from voice_mode.tools.devices import check_audio_devices
-    result = asyncio.run(check_audio_devices.fn())
+    result = asyncio.run(getattr(check_audio_devices, 'fn', check_audio_devices)())
     click.echo(result)
 
 
@@ -1725,7 +1725,7 @@ def devices():
 def registry():
     """Show voice provider registry with all discovered endpoints."""
     from voice_mode.tools.voice_registry import voice_registry
-    result = asyncio.run(voice_registry.fn())
+    result = asyncio.run(getattr(voice_registry, 'fn', voice_registry)())
     click.echo(result)
 
 
@@ -1838,7 +1838,7 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
                 click.echo("   Press Ctrl+C to exit\n")
                 
                 # First message
-                result = await converse_fn.fn(
+                result = await getattr(converse_fn, 'fn', converse_fn)(
                     message=message,
                     wait_for_response=True,
                     listen_duration_max=duration,
@@ -1861,7 +1861,7 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
                 # Continue conversation
                 while True:
                     # Wait for user's next input
-                    result = await converse_fn.fn(
+                    result = await getattr(converse_fn, 'fn', converse_fn)(
                         message="",  # Empty message for listening only
                         wait_for_response=True,
                         listen_duration_max=duration,
@@ -1884,7 +1884,7 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
                         
                         # Check for exit commands
                         if user_text.lower() in ['exit', 'quit', 'goodbye', 'bye']:
-                            await converse_fn.fn(
+                            await getattr(converse_fn, 'fn', converse_fn)(
                                 message="Goodbye!",
                                 wait_for_response=False,
                                 voice=voice,
@@ -1897,7 +1897,7 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
                             break
             else:
                 # Single conversation
-                result = await converse_fn.fn(
+                result = await getattr(converse_fn, 'fn', converse_fn)(
                     message=message,
                     wait_for_response=wait,
                     listen_duration_max=duration,
