@@ -77,12 +77,6 @@ test = [
     "pytest-timeout>=2.2.0",  # For test timeouts
     "coverage[toml]>=7.4.0",
 ]
-notebooks = [
-    "gradio>=4.0.0",
-    "jupyter>=1.0.0",
-    "notebook>=7.0.0",
-    "pandas>=2.0.0",
-]
 scripts = [
     "flask>=3.0.0",
 ]
