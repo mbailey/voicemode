@@ -54,12 +54,6 @@ livekit = [
     "livekit-plugins-openai>=0.10.1",
     "livekit-plugins-silero>=0.6.5",
 ]
-coreml = [
-    "torch>=2.0.0",
-    "coremltools>=7.0",
-    "transformers",
-    "ane-transformers",
-]
 dev = [
     "build>=1.0.0",
     "twine>=4.0.0",
