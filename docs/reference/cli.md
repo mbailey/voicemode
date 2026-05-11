@@ -174,9 +174,14 @@ Options:
   --voice TEXT          Override TTS voice
   --model TEXT          Override TTS model
   --debug               Enable debug mode
-  --skip-tts            Text-only output
+  --skip-tts            Text-only output (skip TTS)
+  --skip-stt            Speak only; skip listening for a response (replaces --no-wait)
   --timeout INTEGER     Recording timeout in seconds
 ```
+
+> `--no-wait` is deprecated. It still works (and is still completed by the shell)
+> but prints a deprecation notice and will be removed in a future release. Use
+> `--skip-stt` instead.
 
 ### transcribe
 Transcribe audio with optional word-level timestamps
