@@ -103,7 +103,7 @@ The Qwen3-TTS model (~3.4 GB) downloads on the first synthesis call. Plan for a 
 
 ### `sayas` is removed
 
-The standalone `sayas <voice> <text>` CLI from the 8.6.x line is **gone in 8.7.0**. Use `voicemode converse --voice <name> -m "text" --no-wait` instead -- it routes through the same mlx-audio backend and gets the rest of the converse pipeline (silence detection, audio formats, providers) for free. From the MCP tool, pass `voice="<name>"` to `voicemode:converse`.
+The standalone `sayas <voice> <text>` CLI from the 8.6.x line is **gone in 8.7.0**. Use `voicemode converse --voice <name> -m "text" --skip-stt` instead -- it routes through the same mlx-audio backend and gets the rest of the converse pipeline (silence detection, audio formats, providers) for free. From the MCP tool, pass `voice="<name>"` to `voicemode:converse`. (`--no-wait` still works but is deprecated.)
 
 ## Configuration
 

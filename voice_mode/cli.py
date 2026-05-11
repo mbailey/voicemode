@@ -119,7 +119,7 @@ def clone():
     Quick Start:
       voicemode service install mlx-audio              # Install backend
       voicemode clone add mike ~/clip.wav              # Add a voice
-      voicemode converse --voice mike -m "Hello world" --no-wait  # Use it
+      voicemode converse --voice mike -m "Hello world" --skip-stt  # Use it
     """
     pass
 
@@ -1774,7 +1774,10 @@ voice_mode_main_cli.add_command(transcribe_audio_cmd)
 @voice_mode_main_cli.command()
 @click.help_option('-h', '--help')
 @click.option('--message', '-m', default="Hello! How can I help you today?", help='Initial message to speak')
-@click.option('--wait/--no-wait', default=True, help='Wait for response after speaking')
+@click.option('--wait/--no-wait', 'wait', default=True,
+              help='[DEPRECATED] --no-wait is deprecated; use --skip-stt instead. Wait for response after speaking.')
+@click.option('--skip-stt', is_flag=True, default=False,
+              help='Speak only; skip listening for a spoken response (STT). Replaces --no-wait.')
 @click.option('--duration', '-d', type=float, default=DEFAULT_LISTEN_DURATION, help='Listen duration in seconds')
 @click.option('--min-duration', type=float, default=MIN_RECORDING_DURATION, help='Minimum listen duration before silence detection')
 @click.option('--voice', help='TTS voice to use (e.g., nova, shimmer, af_sky)')
@@ -1788,7 +1791,7 @@ voice_mode_main_cli.add_command(transcribe_audio_cmd)
 @click.option('--vad-aggressiveness', type=int, help='VAD aggressiveness (0-3)')
 @click.option('--skip-tts/--no-skip-tts', default=None, help='Skip TTS and only show text')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
-def converse(message, wait, duration, min_duration, voice, tts_provider,
+def converse(message, wait, skip_stt, duration, min_duration, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
             speed, vad_aggressiveness, skip_tts, continuous):
     """Have a voice conversation directly from the command line.
@@ -1798,8 +1801,8 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
         # Simple conversation
         voicemode converse
 
-        # Speak a message without waiting
-        voicemode converse -m "Hello there!" --no-wait
+        # Speak a message without listening for a response
+        voicemode converse -m "Hello there!" --skip-stt
 
         # Continuous conversation mode
         voicemode converse --continuous
@@ -1807,6 +1810,21 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
         # Use specific voice
         voicemode converse --voice nova
     """
+    # Deprecation: --no-wait was renamed to --skip-stt.
+    # `wait` defaults to True, so `wait is False` means the user explicitly
+    # passed --no-wait on the command line.
+    if wait is False:
+        click.echo(
+            "⚠️  --no-wait is deprecated and will be removed in a future release. "
+            "Use --skip-stt instead.",
+            err=True,
+        )
+        # Fold the legacy flag into the new one so downstream logic only
+        # needs to consult `skip_stt`.
+        skip_stt = True
+
+    # `wait_for_response` is the inverse of skip_stt going forward.
+    wait_for_response = not skip_stt
     # Check core dependencies before running
     from voice_mode.utils.dependencies.checker import check_component_dependencies
 
@@ -1899,7 +1917,7 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
                 # Single conversation
                 result = await getattr(converse_fn, 'fn', converse_fn)(
                     message=message,
-                    wait_for_response=wait,
+                    wait_for_response=wait_for_response,
                     listen_duration_max=duration,
                     listen_duration_min=min_duration,
                     voice=voice,
@@ -1913,7 +1931,7 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
                     vad_aggressiveness=vad_aggressiveness,
                     skip_tts=skip_tts
                 )
-                
+
                 # Display result
                 if result:
                     if "Voice response:" in result:
@@ -1921,9 +1939,9 @@ def converse(message, wait, duration, min_duration, voice, tts_provider,
                         parts = result.split('|')
                         response_text = result.split('Voice response:')[1].split('|')[0].strip()
                         timing_info = parts[1].strip() if len(parts) > 1 else ""
-                        
+
                         click.echo(f"\n📢 Spoke: {message}")
-                        if wait:
+                        if wait_for_response:
                             click.echo(f"🎤 Heard: {response_text}")
                         if timing_info:
                             click.echo(f"⏱️  {timing_info}")

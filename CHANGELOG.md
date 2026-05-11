@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`voicemode converse --skip-stt`** -- Replaces `--no-wait` with a name that parallels the existing `--skip-tts` flag. Same behaviour: speak the message and exit without listening for a spoken response. The legacy `--no-wait` continues to work for now (see Deprecated).
+
 - **`voice://voices` and `voice://voices/{provider}` MCP resources for structured TTS voice discovery (VM-1208)** — Streamable HTTP MCP clients (iOS app, web client, other agents) can now enumerate available TTS voices as JSON instead of scraping prose from the `voice_registry` tool. Both resources advertise `mime_type=application/json`, share an enumerator with the `voice_registry` tool (so the JSON resource and the LLM-facing prose can never disagree), and include impressions only for local callers (toggleable via `VOICEMODE_EXPOSE_LOCAL_VOICES_REMOTE`). 60-second in-process TTL on `/audio/voices` probes; OpenAI voices come from a hand-maintained constant. As a side-effect the `voice_registry` tool now reports `Voices: none detected` for offline endpoints instead of the legacy 67-voice phantom fallback. See [`voice://voices` reference](docs/reference/voices-resource.md).
 
 #### Impressions (preview / experimental) (VM-1174)
@@ -65,10 +67,14 @@ Newer Claude Code releases collapse MCP tool calls in the visible transcript, wh
 - **Parallel tool calls section simplified** -- Trimmed the "speak + act in parallel" section in the voicemode skill while preserving the key teaching content.
 - **mlx-audio pin floored at `>=0.4.3`** (VM-1126) -- `MLX_AUDIO_PIP_PACKAGE` now embeds the version specifier, so `uv tool install` refuses earlier releases that needed the deleted patch.
 
+### Deprecated
+
+- **`voicemode converse --no-wait`** -- Renamed to `--skip-stt` to make the intent ("speak only; skip listening for a spoken response") obvious and parallel with `--skip-tts`. `--no-wait` still works for now: it continues to function, is still completed by shell completion, but its help text is marked `[DEPRECATED]` and using it prints a deprecation notice to stderr. It will be removed in a future release. Migrate to `voicemode converse --skip-stt`.
+
 ### Removed
 
 - **Bundled `voice_mode/data/patches/mlx_audio_server.patch`** (VM-1126) -- The Metal-lock half of the patch was upstreamed in mlx-audio 0.4.3. The patch-apply step in `voice_mode/tools/mlx_audio/install.py` (and its `_apply_server_patch` / `_find_installed_server_py` / `_query_installed_version` helpers) is gone, along with the `voice_mode/data/**/*.patch` packaging glob and the corresponding tests. (The STT `response_format` patch is restored separately under VM-1128.)
-- **`sayas` CLI** (VM-1174) -- the standalone `sayas <voice> "text"` command is gone, along with its bash completion (`voice_mode/data/completions/sayas.bash`), test module (`tests/test_sayas_cli.py`), and `[project.scripts]` entry. Migration: `voicemode converse --voice <name> -m "text" --no-wait` (or pass `voice="<name>"` to the `voicemode:converse` MCP tool).
+- **`sayas` CLI** (VM-1174) -- the standalone `sayas <voice> "text"` command is gone, along with its bash completion (`voice_mode/data/completions/sayas.bash`), test module (`tests/test_sayas_cli.py`), and `[project.scripts]` entry. Migration: `voicemode converse --voice <name> -m "text" --skip-stt` (or pass `voice="<name>"` to the `voicemode:converse` MCP tool).
 
 ## [8.6.1] - 2026-04-21
 

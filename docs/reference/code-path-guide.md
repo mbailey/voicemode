@@ -40,7 +40,7 @@ This is a Click command group that handles all subcommands. Without a subcommand
 
 Key parameters:
 - `--message, -m`: Initial message to speak
-- `--wait/--no-wait`: Whether to wait for response
+- `--skip-stt`: Speak only; skip listening for a spoken response (replaces `--no-wait`, which is deprecated)
 - `--duration, -d`: Listen duration
 - `--voice`: TTS voice to use
 - `--tts-provider`: OpenAI or Kokoro
