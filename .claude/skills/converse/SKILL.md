@@ -1,7 +1,7 @@
 ---
 name: converse
 description: Start an ongoing voice conversation
-argument-hint: [message]
+argument-hint: [voice] [message]
 ---
 
 # /voicemode:converse
@@ -10,7 +10,20 @@ Start an ongoing voice conversation with the user using the `voicemode:converse`
 
 ## Implementation
 
-Use the `voicemode:converse` tool with the user's message. All parameters have sensible defaults.
+Call the `voicemode:converse` MCP tool. Argument handling:
+
+- `$1` — optional voice name (e.g. `af_river`, `samantha`, `nova`). If non-empty, pass it as the `voice` parameter to the tool. If empty, omit `voice` so the tool uses its default.
+- `$2` — optional initial message. If non-empty, use it as the message to speak. If empty, let the tool / Claude choose an appropriate opener.
+
+All other parameters have sensible defaults.
+
+### Examples
+
+- `/voicemode:converse` — no args, default voice, Claude chooses opener
+- `/voicemode:converse af_river` — use voice `af_river`, Claude chooses opener
+- `/voicemode:converse af_river "let's plan the day"` — use voice `af_river`, open with the given message
+
+If `$1` is provided but doesn't look like a known voice name (e.g. it contains spaces or punctuation that voices don't have), assume the user meant it as a message and pass it as the message instead — don't fail silently on a typo.
 
 ## If MCP Connection Fails
 
