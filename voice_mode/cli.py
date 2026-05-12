@@ -110,22 +110,47 @@ _OPENAI_VOICES = (
 
 
 def _list_clone_voice_names() -> list[str]:
-    """Return voice names from ~/.voicemode/voices.json (cloned profiles).
+    """Return voice leaf-directory names under VOICEMODE_VOICES_DIR.
 
-    Kept dependency-free for fast shell completion -- reads JSON directly
-    without importing the impressions or config modules.
+    Mirrors the runtime resolution rule in :mod:`voice_mode.voice_profiles`:
+    a directory is a voice when it contains a ``.wav`` file directly;
+    otherwise it's a group and we descend. Stays dependency-free for fast
+    shell completion (no imports of config/voice_profiles).
     """
-    voices_json = Path(os.path.expanduser("~/.voicemode/voices.json"))
-    if not voices_json.exists():
+    base = os.path.expanduser(
+        os.environ.get("VOICEMODE_VOICES_DIR", "~/.voicemode/voices")
+    )
+    if not os.path.isdir(base):
         return []
-    try:
-        import json
-        with voices_json.open() as f:
-            data = json.load(f)
-        voices = data.get("voices", {})
-        return sorted(voices.keys())
-    except (OSError, ValueError):
-        return []
+
+    voices: list[str] = []
+    seen: set[str] = set()
+
+    def walk(path: str) -> None:
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
+            return
+        # A dir is a voice if it contains a .wav file directly.
+        has_wav = any(
+            e.is_file(follow_symlinks=False) and e.name.lower().endswith(".wav")
+            for e in entries
+        )
+        if has_wav:
+            name = os.path.basename(path)
+            if name not in seen:
+                seen.add(name)
+                voices.append(name)
+            return  # do NOT descend into a voice dir
+        for e in entries:
+            if e.is_dir(follow_symlinks=False):
+                walk(e.path)
+
+    for e in sorted(os.scandir(base), key=lambda x: x.name):
+        if e.is_dir(follow_symlinks=False):
+            walk(e.path)
+
+    return sorted(voices)
 
 
 def _complete_voice_names(ctx, param, incomplete):
