@@ -110,45 +110,65 @@ _OPENAI_VOICES = (
 
 
 def _list_clone_voice_names() -> list[str]:
-    """Return voice leaf-directory names under VOICEMODE_VOICES_DIR.
+    """Return cloned voice names from both registries.
 
-    Mirrors the runtime resolution rule in :mod:`voice_mode.voice_profiles`:
-    a directory is a voice when it contains a ``.wav`` file directly;
-    otherwise it's a group and we descend. Stays dependency-free for fast
-    shell completion (no imports of config/voice_profiles).
+    voicemode has two overlapping voice registries:
+
+    1. ``~/.voicemode/voices.json`` -- written by ``voicemode clone add``,
+       read by ``voicemode clone list``/``clone remove``. CRUD metadata.
+    2. ``$VOICEMODE_VOICES_DIR`` (default ``~/.voicemode/voices/``) --
+       walked at runtime by :mod:`voice_mode.voice_profiles` to resolve
+       a voice name to a WAV at TTS time. Treats any directory containing
+       a ``.wav`` as a voice; otherwise it's a group and we descend.
+
+    We union both so completion surfaces everything either path knows
+    about. Stays dependency-free for fast shell completion (no imports of
+    config, voice_profiles, or the impressions tool module).
     """
-    base = os.path.expanduser(
-        os.environ.get("VOICEMODE_VOICES_DIR", "~/.voicemode/voices")
-    )
-    if not os.path.isdir(base):
-        return []
-
     voices: list[str] = []
     seen: set[str] = set()
 
-    def walk(path: str) -> None:
+    def add(name: str) -> None:
+        if name and name not in seen:
+            seen.add(name)
+            voices.append(name)
+
+    # Registry #1: voices.json (CRUD metadata).
+    voices_json = os.path.expanduser("~/.voicemode/voices.json")
+    if os.path.isfile(voices_json):
         try:
-            entries = list(os.scandir(path))
-        except OSError:
-            return
-        # A dir is a voice if it contains a .wav file directly.
-        has_wav = any(
-            e.is_file(follow_symlinks=False) and e.name.lower().endswith(".wav")
-            for e in entries
-        )
-        if has_wav:
-            name = os.path.basename(path)
-            if name not in seen:
-                seen.add(name)
-                voices.append(name)
-            return  # do NOT descend into a voice dir
-        for e in entries:
+            import json
+            with open(voices_json) as f:
+                data = json.load(f)
+            for name in data.get("voices", {}).keys():
+                add(name)
+        except (OSError, ValueError):
+            pass
+
+    # Registry #2: VOICEMODE_VOICES_DIR walk (runtime resolution).
+    base = os.path.expanduser(
+        os.environ.get("VOICEMODE_VOICES_DIR", "~/.voicemode/voices")
+    )
+    if os.path.isdir(base):
+        def walk(path: str) -> None:
+            try:
+                entries = list(os.scandir(path))
+            except OSError:
+                return
+            has_wav = any(
+                e.is_file(follow_symlinks=False) and e.name.lower().endswith(".wav")
+                for e in entries
+            )
+            if has_wav:
+                add(os.path.basename(path))
+                return  # do NOT descend into a voice dir
+            for e in entries:
+                if e.is_dir(follow_symlinks=False):
+                    walk(e.path)
+
+        for e in sorted(os.scandir(base), key=lambda x: x.name):
             if e.is_dir(follow_symlinks=False):
                 walk(e.path)
-
-    for e in sorted(os.scandir(base), key=lambda x: x.name):
-        if e.is_dir(follow_symlinks=False):
-            walk(e.path)
 
     return sorted(voices)
 
