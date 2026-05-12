@@ -172,14 +172,25 @@ def write_env_file(file_path: Path, config: Dict[str, str], preserve_comments: b
                 commented_match = commented_config_pattern.match(stripped)
                 if commented_match:
                     key = commented_match.group(1)
-                    if key in config:
+                    # Only "uncomment" if this key is being written AND no
+                    # active line for the key has already been emitted in
+                    # this pass. Otherwise we'd duplicate the key -- e.g.
+                    # the voicemode.env template ships with both
+                    #     VOICEMODE_SOUNDFONTS_ENABLED=true
+                    #     # VOICEMODE_SOUNDFONTS_ENABLED=true   (docs)
+                    # and writing the key would produce two active lines,
+                    # silently breaking downstream consumers that don't
+                    # handle dotenv duplicates.
+                    if key in config and key not in existing_keys:
                         # Replace commented default with active value
                         formatted_value = _format_env_value(config[key])
                         existing_lines.append(f"{key}={formatted_value}\n")
                         existing_keys.add(key)
                         commented_keys_replaced.add(key)
                     else:
-                        # Keep the commented default as-is
+                        # Keep the commented default as-is (either we're not
+                        # updating this key, or an active line was already
+                        # emitted -- the comment is just docs in that case)
                         existing_lines.append(line)
                 else:
                     # Regular comment - preserve as-is
