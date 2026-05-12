@@ -1881,7 +1881,25 @@ transcribe_audio_cmd.name = 'transcribe'
 voice_mode_main_cli.add_command(transcribe_audio_cmd)
 
 # Converse command - direct voice conversation from CLI
-@voice_mode_main_cli.command()
+#
+# Help layout uses Click's `epilog` so examples render at the bottom (after
+# Options), and `\b` markers preserve our line breaks (otherwise Click
+# reflows the paragraph and runs comment + command together on one line).
+_CONVERSE_EPILOG = """\
+\b
+Examples:
+  voicemode converse                                    # default greeting
+  voicemode converse "Hello there!"                     # positional message
+  voicemode converse "Hello there!" --skip-stt          # speak only, no listen
+  voicemode converse -m "Hello there!" --skip-stt       # equivalent via -m (back-compat)
+  voicemode converse -- "-c is short for continuous"    # `--` escapes dash-prefixed text
+  voicemode converse --continuous                       # continuous conversation mode
+  voicemode converse "Hello there!" --voice nova        # pick a TTS voice
+  voicemode converse "Hey, urgent question." --skip-conch  # bypass the conch lock
+"""
+
+
+@voice_mode_main_cli.command(epilog=_CONVERSE_EPILOG)
 @click.help_option('-h', '--help')
 @click.argument('message_args', nargs=-1, metavar='[MESSAGE]...')
 @click.option('--message', '-m', default=None,
@@ -1911,34 +1929,8 @@ def converse(message_args, message, wait, skip_stt, duration, min_duration, voic
             speed, vad_aggressiveness, skip_tts, skip_conch, continuous):
     """Have a voice conversation directly from the command line.
 
-    The MESSAGE to speak can be passed as a positional argument or via -m/--message.
-    Use `--` to pass a message that starts with a dash.
-
-    Examples:
-
-        # Simple conversation (default greeting)
-        voicemode converse
-
-        # Speak a positional message
-        voicemode converse "Hello there!"
-
-        # Speak and skip listening for a response
-        voicemode converse "Hello there!" --skip-stt
-
-        # Equivalent using -m (kept for backward compatibility)
-        voicemode converse -m "Hello there!" --skip-stt
-
-        # Message starting with a dash — use `--` to stop option parsing
-        voicemode converse -- "-c is short for continuous"
-
-        # Continuous conversation mode
-        voicemode converse --continuous
-
-        # Use specific voice
-        voicemode converse "Hello there!" --voice nova
-
-        # Bypass the conch lock (talk over another agent if one is active)
-        voicemode converse "Hey, urgent question." --skip-conch
+    The MESSAGE to speak can be passed as a positional argument or via
+    -m/--message. Use `--` to pass a message that starts with a dash.
     """
     # Resolve the message source:
     #   - positional MESSAGE wins when given
