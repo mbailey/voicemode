@@ -87,6 +87,71 @@ def voice_mode() -> None:
     voice_mode_main_cli()
 
 
+# ============================================================================
+# Shell completion helpers
+# ============================================================================
+
+# Standard Kokoro voices (subset of common ones; full list is much longer but
+# these cover the defaults users will reach for). Kept inline so completion
+# does not require importing the provider modules, which is expensive.
+_KOKORO_COMMON_VOICES = (
+    "af_sky", "af_river", "af_nicole", "af_sarah", "af_alloy", "af_aoede",
+    "af_bella", "af_heart", "af_jadzia", "af_jessica", "af_kore", "af_nova",
+    "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael",
+    "am_onyx", "am_puck", "am_santa",
+    "bf_alice", "bf_emma", "bf_lily",
+    "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
+)
+
+# OpenAI TTS voices.
+_OPENAI_VOICES = (
+    "alloy", "echo", "fable", "nova", "onyx", "shimmer",
+)
+
+
+def _list_clone_voice_names() -> list[str]:
+    """Return voice names from ~/.voicemode/voices.json (cloned profiles).
+
+    Kept dependency-free for fast shell completion -- reads JSON directly
+    without importing the impressions or config modules.
+    """
+    voices_json = Path(os.path.expanduser("~/.voicemode/voices.json"))
+    if not voices_json.exists():
+        return []
+    try:
+        import json
+        with voices_json.open() as f:
+            data = json.load(f)
+        voices = data.get("voices", {})
+        return sorted(voices.keys())
+    except (OSError, ValueError):
+        return []
+
+
+def _complete_voice_names(ctx, param, incomplete):
+    """Click shell_complete callback for --voice options.
+
+    Combines cloned voices (from voices.json) with standard Kokoro and
+    OpenAI voice names. Returns CompletionItem objects whose values start
+    with the incomplete prefix.
+    """
+    all_voices = []
+    all_voices.extend(_list_clone_voice_names())
+    all_voices.extend(_KOKORO_COMMON_VOICES)
+    all_voices.extend(_OPENAI_VOICES)
+    # Deduplicate while preserving order so clone voices come first.
+    seen = set()
+    ordered = []
+    for v in all_voices:
+        if v not in seen:
+            seen.add(v)
+            ordered.append(v)
+    return [
+        click.shell_completion.CompletionItem(v)
+        for v in ordered
+        if v.startswith(incomplete)
+    ]
+
 
 # ============================================================================
 # Clone Voice Profile Command Group
@@ -1780,7 +1845,8 @@ voice_mode_main_cli.add_command(transcribe_audio_cmd)
               help='Speak only; skip listening for a spoken response (STT). Replaces --no-wait.')
 @click.option('--duration', '-d', type=float, default=DEFAULT_LISTEN_DURATION, help='Listen duration in seconds')
 @click.option('--min-duration', type=float, default=MIN_RECORDING_DURATION, help='Minimum listen duration before silence detection')
-@click.option('--voice', help='TTS voice to use (e.g., nova, shimmer, af_sky)')
+@click.option('--voice', help='TTS voice to use (e.g., nova, shimmer, af_sky)',
+              shell_complete=_complete_voice_names)
 @click.option('--tts-provider', type=click.Choice(['openai', 'kokoro']), help='TTS provider')
 @click.option('--tts-model', help='TTS model (e.g., tts-1, tts-1-hd)')
 @click.option('--tts-instructions', help='Tone/style instructions for gpt-4o-mini-tts')
