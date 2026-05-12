@@ -307,6 +307,40 @@ class TestWriteEnvFileCommentedDefaults:
         finally:
             os.unlink(temp_path)
 
+    def test_active_line_and_commented_default_no_duplicate(self):
+        """If both an active line and a commented doc-default exist for the
+        same key, writing the key must not produce two active lines.
+
+        Regression test: the voicemode.env template ships with both
+            VOICEMODE_SOUNDFONTS_ENABLED=true
+            # VOICEMODE_SOUNDFONTS_ENABLED=true   (docs)
+        and previously write_env_file would emit BOTH (replacing the active
+        line in place AND uncommenting the docs line), silently disabling
+        consumers that fail on duplicate keys (e.g. the soundfonts shell
+        hook receiver).
+        """
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write("# Enable sound fonts for tool use hooks (true/false)\n")
+                f.write("VOICEMODE_SOUNDFONTS_ENABLED=true\n")
+                f.write("# VOICEMODE_SOUNDFONTS_ENABLED=true\n")
+
+            temp_file = Path(temp_path)
+            write_env_file(temp_file, {"VOICEMODE_SOUNDFONTS_ENABLED": "true"})
+
+            content = temp_file.read_text()
+            # Exactly one active line
+            assert content.count("\nVOICEMODE_SOUNDFONTS_ENABLED=") + \
+                   content.startswith("VOICEMODE_SOUNDFONTS_ENABLED=") == 1, \
+                   f"Expected exactly one active line, got:\n{content}"
+            # And the commented docs line preserved
+            assert "# VOICEMODE_SOUNDFONTS_ENABLED=true" in content
+
+        finally:
+            os.unlink(temp_path)
+
+
 class TestMultilineValueHandling:
     """Test handling of multiline quoted values in config files."""
 
