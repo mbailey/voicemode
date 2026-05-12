@@ -1790,10 +1790,12 @@ voice_mode_main_cli.add_command(transcribe_audio_cmd)
 @click.option('--speed', type=float, help='Speech rate (0.25 to 4.0)')
 @click.option('--vad-aggressiveness', type=int, help='VAD aggressiveness (0-3)')
 @click.option('--skip-tts/--no-skip-tts', default=None, help='Skip TTS and only show text')
+@click.option('--skip-conch', is_flag=True, default=False,
+              help='Bypass the conch lock; speak immediately even if another agent holds it.')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
 def converse(message, wait, skip_stt, duration, min_duration, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
-            speed, vad_aggressiveness, skip_tts, continuous):
+            speed, vad_aggressiveness, skip_tts, skip_conch, continuous):
     """Have a voice conversation directly from the command line.
 
     Examples:
@@ -1809,6 +1811,9 @@ def converse(message, wait, skip_stt, duration, min_duration, voice, tts_provide
 
         # Use specific voice
         voicemode converse --voice nova
+
+        # Bypass the conch lock (talk over another agent if one is active)
+        voicemode converse -m "Hey, urgent question." --skip-conch
     """
     # Deprecation: --no-wait was renamed to --skip-stt.
     # `wait` defaults to True, so `wait is False` means the user explicitly
@@ -1870,12 +1875,13 @@ def converse(message, wait, skip_stt, duration, min_duration, voice, tts_provide
                     disable_silence_detection=disable_silence_detection,
                     speed=speed,
                     vad_aggressiveness=vad_aggressiveness,
-                    skip_tts=skip_tts
+                    skip_tts=skip_tts,
+                    skip_conch=skip_conch,
                 )
-                
+
                 if result and "Voice response:" in result:
                     click.echo(f"You: {result.split('Voice response:')[1].split('|')[0].strip()}")
-                
+
                 # Continue conversation
                 while True:
                     # Wait for user's next input
@@ -1893,7 +1899,8 @@ def converse(message, wait, skip_stt, duration, min_duration, voice, tts_provide
                         disable_silence_detection=disable_silence_detection,
                         speed=speed,
                         vad_aggressiveness=vad_aggressiveness,
-                        skip_tts=skip_tts
+                        skip_tts=skip_tts,
+                        skip_conch=skip_conch,
                     )
                     
                     if result and "Voice response:" in result:
@@ -1910,7 +1917,8 @@ def converse(message, wait, skip_stt, duration, min_duration, voice, tts_provide
                                 tts_model=tts_model,
                                 audio_format=audio_format,
                                 speed=speed,
-                                skip_tts=skip_tts
+                                skip_tts=skip_tts,
+                                skip_conch=skip_conch,
                             )
                             break
             else:
@@ -1929,7 +1937,8 @@ def converse(message, wait, skip_stt, duration, min_duration, voice, tts_provide
                     disable_silence_detection=disable_silence_detection,
                     speed=speed,
                     vad_aggressiveness=vad_aggressiveness,
-                    skip_tts=skip_tts
+                    skip_tts=skip_tts,
+                    skip_conch=skip_conch,
                 )
 
                 # Display result

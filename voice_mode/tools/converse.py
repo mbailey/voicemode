@@ -1203,7 +1203,8 @@ async def converse(
     chime_leading_silence: Optional[float] = None,
     chime_trailing_silence: Optional[float] = None,
     metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
-    wait_for_conch: Union[bool, str] = False
+    wait_for_conch: Union[bool, str] = False,
+    skip_conch: Union[bool, str] = False,
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -1250,6 +1251,11 @@ KEY PARAMETERS:
 • wait_for_conch (bool, default: false): Multi-agent coordination
   - false: If another agent is speaking, return status immediately
   - true: Wait until the other agent finishes, then speak
+• skip_conch (bool, default: false): Bypass conch entirely
+  - false: Honour the conch lock (default multi-agent coordination)
+  - true: Don't try to acquire or release the conch -- speak immediately
+    regardless of whether another agent holds it. Use when you intentionally
+    want to talk over other agents or run outside the coordination protocol.
 
 TIMING PARAMETERS (usually leave at defaults):
   Silence detection handles most cases automatically. Only override these if
@@ -1293,6 +1299,8 @@ consult the MCP resources listed above.
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
     if isinstance(wait_for_conch, str):
         wait_for_conch = wait_for_conch.lower() in ('true', '1', 'yes', 'on')
+    if isinstance(skip_conch, str):
+        skip_conch = skip_conch.lower() in ('true', '1', 'yes', 'on')
 
     # Convert vad_aggressiveness to integer if provided as string
     if vad_aggressiveness is not None and isinstance(vad_aggressiveness, str):
@@ -1413,7 +1421,9 @@ consult the MCP resources listed above.
 
     try:
         # Try to acquire conch atomically (no race condition)
-        if CONCH_ENABLED:
+        # skip_conch=true bypasses coordination entirely: don't acquire, don't
+        # check the holder, don't release. Speak regardless of who else has it.
+        if CONCH_ENABLED and not skip_conch:
             acquired = conch.try_acquire()
 
             if not acquired:
@@ -1465,6 +1475,19 @@ consult the MCP resources listed above.
                 })
 
             # Auto-focus tmux pane after conch acquisition, before audio playback
+            if AUTO_FOCUS_PANE and is_tmux():
+                focus_tmux_pane()
+        elif CONCH_ENABLED and skip_conch:
+            # Conch is enabled but the caller asked to bypass it.
+            if event_logger:
+                holder = Conch.get_holder()
+                event_logger.log_event("CONCH_SKIPPED", {
+                    "pid": os.getpid(),
+                    "agent": "converse",
+                    "holder_pid": holder.get('pid') if holder else None,
+                    "holder_agent": holder.get('agent') if holder else None,
+                })
+            # Still auto-focus tmux pane -- pane focus is unrelated to the conch.
             if AUTO_FOCUS_PANE and is_tmux():
                 focus_tmux_pane()
 
