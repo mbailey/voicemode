@@ -1883,7 +1883,9 @@ voice_mode_main_cli.add_command(transcribe_audio_cmd)
 # Converse command - direct voice conversation from CLI
 @voice_mode_main_cli.command()
 @click.help_option('-h', '--help')
-@click.option('--message', '-m', default="Hello! How can I help you today?", help='Initial message to speak')
+@click.argument('message_args', nargs=-1, metavar='[MESSAGE]...')
+@click.option('--message', '-m', default=None,
+              help='Initial message to speak (alternative to positional MESSAGE)')
 @click.option('--wait/--no-wait', 'wait', default=True,
               help='[DEPRECATED] --no-wait is deprecated; use --skip-stt instead. Wait for response after speaking.')
 @click.option('--skip-stt', is_flag=True, default=False,
@@ -1904,28 +1906,54 @@ voice_mode_main_cli.add_command(transcribe_audio_cmd)
 @click.option('--skip-conch', is_flag=True, default=False,
               help='Bypass the conch lock; speak immediately even if another agent holds it.')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
-def converse(message, wait, skip_stt, duration, min_duration, voice, tts_provider,
+def converse(message_args, message, wait, skip_stt, duration, min_duration, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
             speed, vad_aggressiveness, skip_tts, skip_conch, continuous):
     """Have a voice conversation directly from the command line.
 
+    The MESSAGE to speak can be passed as a positional argument or via -m/--message.
+    Use `--` to pass a message that starts with a dash.
+
     Examples:
 
-        # Simple conversation
+        # Simple conversation (default greeting)
         voicemode converse
 
-        # Speak a message without listening for a response
+        # Speak a positional message
+        voicemode converse "Hello there!"
+
+        # Speak and skip listening for a response
+        voicemode converse "Hello there!" --skip-stt
+
+        # Equivalent using -m (kept for backward compatibility)
         voicemode converse -m "Hello there!" --skip-stt
+
+        # Message starting with a dash — use `--` to stop option parsing
+        voicemode converse -- "-c is short for continuous"
 
         # Continuous conversation mode
         voicemode converse --continuous
 
         # Use specific voice
-        voicemode converse --voice nova
+        voicemode converse "Hello there!" --voice nova
 
         # Bypass the conch lock (talk over another agent if one is active)
-        voicemode converse -m "Hey, urgent question." --skip-conch
+        voicemode converse "Hey, urgent question." --skip-conch
     """
+    # Resolve the message source:
+    #   - positional MESSAGE wins when given
+    #   - --message/-m is kept for backward compatibility and scripts
+    #   - passing BOTH is ambiguous and errors loudly (no silent "pick one")
+    #   - if neither is given, fall back to the default greeting
+    if message_args:
+        if message is not None:
+            raise click.UsageError(
+                "Pass the message as either a positional argument OR --message/-m, not both."
+            )
+        message = ' '.join(message_args)
+    elif message is None:
+        message = "Hello! How can I help you today?"
+
     # Deprecation: --no-wait was renamed to --skip-stt.
     # `wait` defaults to True, so `wait is False` means the user explicitly
     # passed --no-wait on the command line.
