@@ -155,10 +155,15 @@ soundfonts_enabled() {
     return
   fi
 
-  # Check voicemode.env config file
+  # Check voicemode.env config file.
+  # Use tail -n 1 for last-wins semantics if the key appears multiple times
+  # (dotenv convention). Without this, a duplicate line produces a multi-line
+  # value ("true\ntrue") that fails the equality checks below and silently
+  # disables soundfonts.
+  # Use -f2- (not -f2) so values containing '=' aren't truncated.
   local config_file="$HOME/.voicemode/voicemode.env"
   if [[ -f "$config_file" ]]; then
-    enabled=$(grep -E '^VOICEMODE_SOUNDFONTS_ENABLED=' "$config_file" 2>/dev/null | cut -d= -f2 | tr -d '"' | tr -d "'" || echo "")
+    enabled=$(grep -E '^VOICEMODE_SOUNDFONTS_ENABLED=' "$config_file" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d '"' | tr -d "'" || echo "")
     if [[ -n "$enabled" ]]; then
       [[ "$enabled" == "true" || "$enabled" == "1" || "$enabled" == "yes" || "$enabled" == "on" ]]
       return
