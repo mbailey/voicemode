@@ -10,7 +10,6 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 import asyncio
-import aiohttp
 try:
     from importlib.resources import files
 except ImportError:

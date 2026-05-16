@@ -11,7 +11,7 @@ import threading
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
-from statistics import mean, median
+from statistics import mean
 from pathlib import Path
 
 import logging

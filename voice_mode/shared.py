@@ -83,21 +83,3 @@ async def startup_initialization():
     logger.info("Service initialization complete")
 
 
-def cleanup_on_shutdown():
-    """Cleanup function called on shutdown"""
-    from voice_mode.core import cleanup as cleanup_clients
-    
-    # Cleanup OpenAI clients
-    cleanup_clients()
-    
-    # Stop any services we started
-    for name, process in service_processes.items():
-        if process and process.poll() is None:
-            logger.info(f"Stopping {name} service (PID: {process.pid})...")
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            logger.info(f"✓ {name} service stopped")

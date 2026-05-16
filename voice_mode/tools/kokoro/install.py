@@ -9,7 +9,6 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 import asyncio
-import aiohttp
 
 from voice_mode.server import mcp
 from voice_mode.config import SERVICE_AUTO_ENABLE

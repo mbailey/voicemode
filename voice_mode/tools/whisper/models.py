@@ -1,7 +1,6 @@
 """Whisper model registry and utilities."""
 
 import os
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TypedDict
 from voice_mode.config import WHISPER_MODEL_PATH, WHISPER_MODEL
@@ -165,24 +164,6 @@ def get_installed_whisper_models() -> List[str]:
     return installed
 
 
-def get_total_size(models: Optional[List[str]] = None) -> int:
-    """Get total size of models in MB.
-    
-    Args:
-        models: List of model names. If None, uses all models.
-    
-    Returns:
-        Total size in MB
-    """
-    if models is None:
-        models = list(WHISPER_MODEL_REGISTRY.keys())
-    
-    total = 0
-    for model in models:
-        if model in WHISPER_MODEL_REGISTRY:
-            total += WHISPER_MODEL_REGISTRY[model]["size_mb"]
-    
-    return total
 
 
 def format_size(size_mb: int) -> str:
@@ -418,56 +399,3 @@ def benchmark_whisper_model(model_name: str, sample_file: Optional[str] = None) 
         }
 
 
-# Backwards compatibility - deprecated functions
-def get_current_model() -> str:
-    """DEPRECATED: Use get_active_model() instead."""
-    warnings.warn(
-        "get_current_model() is deprecated. Use get_active_model() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return get_active_model()
-
-
-def set_current_model(model_name: str) -> None:
-    """DEPRECATED: Use set_active_model() instead."""
-    warnings.warn(
-        "set_current_model() is deprecated. Use set_active_model() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return set_active_model(model_name)
-
-
-def is_model_installed(model_name: str) -> bool:
-    """DEPRECATED: Use is_whisper_model_installed() instead."""
-    warnings.warn(
-        "is_model_installed() is deprecated. Use is_whisper_model_installed() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return is_whisper_model_installed(model_name)
-
-
-def get_installed_models() -> List[str]:
-    """DEPRECATED: Use get_installed_whisper_models() instead."""
-    warnings.warn(
-        "get_installed_models() is deprecated. Use get_installed_whisper_models() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return get_installed_whisper_models()
-
-
-def has_coreml_model(model_name: str) -> bool:
-    """DEPRECATED: Use has_whisper_coreml_model() instead."""
-    warnings.warn(
-        "has_coreml_model() is deprecated. Use has_whisper_coreml_model() instead.",
-        DeprecationWarning,
-        stacklevel=2
-    )
-    return has_whisper_coreml_model(model_name)
-
-
-# Also provide WHISPER_MODELS as alias for backwards compatibility
-WHISPER_MODELS = WHISPER_MODEL_REGISTRY

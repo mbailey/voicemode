@@ -11,7 +11,7 @@ import logging
 import time
 import queue
 import threading
-from typing import Optional, Tuple, AsyncIterator
+from typing import Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np

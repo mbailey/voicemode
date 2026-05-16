@@ -6,7 +6,7 @@ working with the dynamic provider discovery system.
 """
 
 import logging
-from typing import Dict, Optional, List, Any, Tuple
+from typing import Dict, Optional, List, Tuple
 from openai import AsyncOpenAI
 
 from .config import TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS, OPENAI_API_KEY, get_voice_preferences
@@ -157,64 +157,6 @@ async def get_tts_client_and_voice(
     raise ValueError("No TTS endpoints found that support requested voice/model preferences")
 
 
-async def get_stt_client(
-    model: Optional[str] = None,
-    base_url: Optional[str] = None
-) -> Tuple[AsyncOpenAI, str, EndpointInfo]:
-    """
-    Get STT client with automatic selection.
-    
-    Args:
-        model: Specific model to use (optional)
-        base_url: Specific base URL to use (optional)
-    
-    Returns:
-        Tuple of (client, selected_model, endpoint_info)
-    
-    Raises:
-        ValueError: If no suitable endpoint is found
-    """
-    # Ensure registry is initialized
-    await provider_registry.initialize()
-    
-    # If specific base_url is requested, use it directly
-    if base_url:
-        endpoint_info = provider_registry.registry["stt"].get(base_url)
-        if not endpoint_info:
-            raise ValueError(f"Requested base URL {base_url} is not configured")
-
-        selected_model = _select_stt_model_for_endpoint(endpoint_info, model)
-
-        # Disable retries for local endpoints - they either work or don't
-        max_retries = 0 if is_local_provider(base_url) else 2
-        client = AsyncOpenAI(
-            api_key=OPENAI_API_KEY or "dummy-key-for-local",
-            base_url=base_url,
-            max_retries=max_retries
-        )
-
-        return client, selected_model, endpoint_info
-
-    # Get STT endpoints in priority order
-    endpoints = provider_registry.get_endpoints("stt")
-    if not endpoints:
-        raise ValueError("No STT endpoints available")
-
-    endpoint_info = endpoints[0]
-    selected_model = _select_stt_model_for_endpoint(endpoint_info, model)
-    
-    api_key = OPENAI_API_KEY if endpoint_info.provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
-    # Disable retries for local endpoints - they either work or don't
-    max_retries = 0 if is_local_provider(endpoint_info.base_url) else 2
-    client = AsyncOpenAI(
-        api_key=api_key,
-        base_url=endpoint_info.base_url,
-        max_retries=max_retries
-    )
-    
-    return client, selected_model, endpoint_info
-
-
 def _select_voice_for_endpoint(endpoint_info: EndpointInfo) -> str:
     """Select the best available voice for an endpoint."""
     # Try to find a preferred voice
@@ -274,74 +216,3 @@ def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model:
             return STT_MODELS[idx]
 
     return STT_MODEL
-
-
-# Compatibility functions for existing code
-
-async def is_provider_available(provider_id: str, timeout: float = 2.0) -> bool:
-    """Check if a provider is available (compatibility function)."""
-    # This is now handled by the provider registry
-    await provider_registry.initialize()
-    
-    # Map old provider IDs to base URLs
-    provider_map = {
-        "kokoro": "http://127.0.0.1:8880/v1",
-        "openai": "https://api.openai.com/v1",
-        "whisper-local": "http://127.0.0.1:2022/v1",
-        "openai-whisper": "https://api.openai.com/v1"
-    }
-    
-    base_url = provider_map.get(provider_id)
-    if not base_url:
-        return False
-    
-    # Check in appropriate registry
-    service_type = "tts" if provider_id in ["kokoro", "openai"] else "stt"
-    endpoint_info = provider_registry.registry[service_type].get(base_url)
-
-    # Without health checks, we just return if the endpoint is configured
-    return endpoint_info is not None
-
-
-def get_provider_by_voice(voice: str) -> Optional[Dict[str, Any]]:
-    """Get provider info by voice (compatibility function)."""
-    # Kokoro voices
-    if voice.startswith(('af_', 'am_', 'bf_', 'bm_')):
-        return {
-            "id": "kokoro",
-            "name": "Kokoro TTS",
-            "type": "tts",
-            "base_url": "http://127.0.0.1:8880/v1",
-            "voices": ["af_sky", "af_sarah", "am_adam", "af_river", "am_michael"]
-        }
-    
-    # OpenAI voices
-    return {
-        "id": "openai",
-        "name": "OpenAI TTS",
-        "type": "tts",
-        "base_url": "https://api.openai.com/v1",
-        "voices": ["alloy", "nova", "echo", "fable", "onyx", "shimmer"]
-    }
-
-
-def select_best_voice(provider: str, available_voices: Optional[List[str]] = None) -> Optional[str]:
-    """Select the best available voice (compatibility function)."""
-    if available_voices is None:
-        # Get from registry if possible
-        if provider == "kokoro":
-            available_voices = ["af_sky", "af_sarah", "am_adam", "af_river", "am_michael"]
-        else:
-            available_voices = ["alloy", "nova", "echo", "fable", "onyx", "shimmer"]
-    
-    # Get user preferences and prepend to system defaults
-    user_preferences = get_preferred_voices()
-    combined_voice_list = user_preferences + [v for v in TTS_VOICES if v not in user_preferences]
-    
-    # Find first preferred voice that's available
-    for voice in combined_voice_list:
-        if voice in available_voices:
-            return voice
-    
-    # Return first available
-    return available_voices[0] if available_voices else None
