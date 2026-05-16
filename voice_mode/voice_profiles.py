@@ -323,12 +323,19 @@ def resolve_voice_expr(expr: str) -> Optional[VoiceProfile]:
 
     name, selector = parse_voice_expr(expr)
 
-    # Absolute-path escape hatch: no profile lookup, no transcript.
+    # Absolute-path escape hatch: no profile lookup. If a sidecar
+    # transcript sits next to the clip (``<basename>.txt`` or a
+    # ``default.txt`` in the same dir) we pick it up so cloning has a
+    # ref_text without registering a profile. If there's no sidecar,
+    # ref_text stays empty and either a caller-supplied override
+    # (VM-1278: converse(ref_text=...)) or the TTS server default applies.
     if name is None and selector and selector.startswith("/"):
+        clip_path = Path(selector)
+        sidecar_text = _resolve_transcript(clip_path) if clip_path.exists() else ""
         return VoiceProfile(
             name=expr,
             ref_audio=selector,
-            ref_text="",
+            ref_text=sidecar_text,
             model=DEFAULT_CLONE_MODEL,
             base_url=DEFAULT_CLONE_BASE_URL,
             description="(absolute path)",

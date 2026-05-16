@@ -33,9 +33,15 @@ async def simple_tts_failover(
     logger.info(f"simple_tts_failover called with: text='{text[:50]}...', voice={voice}, model={model}")
     logger.info(f"kwargs: {kwargs}")
 
+    from dataclasses import replace as _dc_replace
     from .core import text_to_speech
     from .conversation_logger import get_conversation_logger
     from .voice_profiles import get_profile, is_clone_voice
+
+    # Pull the optional ref_text override out of kwargs before it gets
+    # forwarded to text_to_speech (which has no ref_text param). None means
+    # "no override" — use the profile/sidecar transcript as resolved.
+    ref_text_override = kwargs.pop("ref_text", None)
 
     # Track attempted endpoints and their errors
     attempted_endpoints = []
@@ -47,8 +53,19 @@ async def simple_tts_failover(
     # Check if this is a clone voice — if so, route directly to its endpoint
     clone_profile = get_profile(voice) if is_clone_voice(voice) else None
     if clone_profile:
+        # An explicit ref_text override wins over the profile/sidecar
+        # transcript (VM-1278). Empty string is a valid override (clone
+        # with no reference transcript).
+        if ref_text_override is not None:
+            clone_profile = _dc_replace(clone_profile, ref_text=ref_text_override)
+            logger.info(f"Voice '{voice}': applying ref_text override ({len(ref_text_override)} chars)")
         endpoints_to_try = [clone_profile.base_url]
         logger.info(f"Voice '{voice}' is a clone profile, routing to {clone_profile.base_url}")
+    elif ref_text_override is not None:
+        logger.warning(
+            f"ref_text override supplied but voice '{voice}' is not a clone "
+            f"voice (no abs-path clip or registered profile) — override ignored"
+        )
     else:
         endpoints_to_try = TTS_BASE_URLS
 

@@ -76,6 +76,40 @@ voicemode converse --voice fleabag
 
 VoiceMode automatically routes any voice name that matches a profile in `VOICEMODE_VOICES_DIR` to the mlx-audio service instead of Kokoro / OpenAI.
 
+### Ad-hoc clip without registering a profile
+
+You don't have to register a profile to clone from a clip. Pass an **absolute
+path to a `.wav`** as the voice and it's sent straight to mlx-audio as the
+reference audio:
+
+```python
+voicemode:converse("Audition take three.", voice="/abs/path/to/take-3.wav")
+```
+
+The reference transcript (`ref_text`) is resolved in this order:
+
+1. **`ref_text` argument** to `converse` — wins if supplied. It auto-detects
+   path-vs-inline: an existing file path is read; anything else is used as the
+   literal transcript text.
+2. **Sidecar transcript** next to the clip — `take-3.txt` (matching basename),
+   else `default.txt` in the same directory.
+3. **Empty** — sent with no `ref_text` (the server clones from audio alone).
+
+```python
+# Inline transcript
+voicemode:converse("…", voice="/clips/bit.wav", ref_text="so anyway, the thing is")
+
+# Transcript file
+voicemode:converse("…", voice="/clips/bit.wav", ref_text="/clips/bit.txt")
+```
+
+> **Remote-host constraint.** `voice=` and a `ref_text` *file path* are read
+> on the host running mlx-audio. With a remote mlx-audio (see
+> [Remote mlx-audio](#remote-mlx-audio-eg-running-on-a-beefy-ms2)) the audio
+> path must exist **on that remote host** — local sidecar auto-resolution only
+> works when the server can see the file. `ref_text` passed as *inline text*
+> is always safe; it travels as a string, not a path.
+
 ## Picking a good reference clip
 
 The model copies what it hears. Garbage in, garbage out.
