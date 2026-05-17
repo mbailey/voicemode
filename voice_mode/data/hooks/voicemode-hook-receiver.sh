@@ -421,7 +421,10 @@ debug "Found sound file: $SOUND_FILE"
 
 # Skip filler phrases when wait_for_response=false (no listening after speaking)
 # Filler phrases only make sense when Claude is waiting for user input
-if [[ "$EVENT" == "PostToolUse" && "$tool_lower" == "mcp__voicemode__converse" ]]; then
+# Match any voicemode converse namespace: mcp__voicemode__converse (legacy),
+# mcp__voicemode-remote__converse (VM-1292 plugin remote mode),
+# mcp__plugin_voicemode_voicemode__converse (plugin-namespaced).
+if [[ "$EVENT" == "PostToolUse" && "$tool_lower" == *voicemode*converse* ]]; then
   # Check if wait_for_response was false in tool_input
   if [[ -n "$JSON_INPUT" ]] && command -v jq &>/dev/null; then
     # Extract wait_for_response - check if field exists first, then convert to string
@@ -437,7 +440,10 @@ fi
 # Rate limiting for PostToolUse converse events (optional, disabled by default)
 # Set VOICEMODE_CONVERSE_RATE_LIMIT=true to enable
 # This prevents rapid-fire filler phrases when Claude batches tool calls
-if [[ "$EVENT" == "PostToolUse" && "$tool_lower" == "mcp__voicemode__converse" ]]; then
+# Match any voicemode converse namespace: mcp__voicemode__converse (legacy),
+# mcp__voicemode-remote__converse (VM-1292 plugin remote mode),
+# mcp__plugin_voicemode_voicemode__converse (plugin-namespaced).
+if [[ "$EVENT" == "PostToolUse" && "$tool_lower" == *voicemode*converse* ]]; then
   RATE_LIMIT_ENABLED="${VOICEMODE_CONVERSE_RATE_LIMIT:-false}"
   if [[ "$RATE_LIMIT_ENABLED" == "true" || "$RATE_LIMIT_ENABLED" == "1" ]]; then
     RATE_LIMIT_SECONDS="${VOICEMODE_CONVERSE_RATE_LIMIT_SECONDS:-2}"
@@ -446,7 +452,7 @@ if [[ "$EVENT" == "PostToolUse" && "$tool_lower" == "mcp__voicemode__converse" ]
     # Check if we played a converse filler recently
     if [[ -f "$LOG_FILE" ]]; then
       # Get the last PostToolUse converse timestamp
-      last_converse=$(grep "PostToolUse mcp__voicemode__converse" "$LOG_FILE" | tail -1 | cut -d' ' -f1-2)
+      last_converse=$(grep -E "PostToolUse mcp__[a-z0-9_-]*voicemode[a-z0-9_-]*converse" "$LOG_FILE" | tail -1 | cut -d' ' -f1-2)
       if [[ -n "$last_converse" ]]; then
         # Convert timestamp to epoch (cross-platform: macOS and Linux)
         if date -j -f "%Y-%m-%d %H:%M:%S" "$last_converse" "+%s" &>/dev/null; then
