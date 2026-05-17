@@ -134,6 +134,46 @@ def test_absolute_path_passes_through(vp):
     assert vp.is_clone_voice("/some/abs/path.wav")
 
 
+# ---------- absolute path + sidecar transcript (VM-1278) ----------
+
+def test_absolute_path_picks_up_sibling_sidecar(vp, tmp_path):
+    """An existing clip with a <basename>.txt sidecar resolves ref_text."""
+    clip = tmp_path / "louis-ck-bit.wav"
+    clip.write_bytes(b"riff-clip")
+    (tmp_path / "louis-ck-bit.txt").write_text("  so anyway, the thing is  \n")
+
+    p = vp.get_profile(str(clip))
+    assert p.ref_audio == str(clip)
+    assert p.ref_text == "so anyway, the thing is"
+
+
+def test_absolute_path_falls_back_to_default_txt(vp, tmp_path):
+    """No matching-basename sidecar -> default.txt in the same dir is used."""
+    clip = tmp_path / "take-3.wav"
+    clip.write_bytes(b"riff-clip")
+    (tmp_path / "default.txt").write_text("default clip transcript")
+
+    p = vp.get_profile(str(clip))
+    assert p.ref_text == "default clip transcript"
+
+
+def test_absolute_path_no_sidecar_keeps_empty_ref_text(vp, tmp_path):
+    """Existing clip but no sidecar at all -> ref_text stays empty."""
+    clip = tmp_path / "orphan.wav"
+    clip.write_bytes(b"riff-clip")
+
+    p = vp.get_profile(str(clip))
+    assert p.ref_audio == str(clip)
+    assert p.ref_text == ""
+
+
+def test_absolute_path_nonexistent_clip_keeps_empty_ref_text(vp):
+    """Non-existent path (e.g. remote-only) -> ref_text empty, no crash."""
+    p = vp.get_profile("/not/on/this/host/clip.wav")
+    assert p.ref_audio == "/not/on/this/host/clip.wav"
+    assert p.ref_text == ""
+
+
 # ---------- is_clone_voice ----------
 
 @pytest.mark.parametrize("expr", [

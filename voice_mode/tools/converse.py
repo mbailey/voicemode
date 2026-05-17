@@ -495,6 +495,32 @@ async def get_stt_config(provider: Optional[str] = None):
 
 
 
+def resolve_ref_text(ref_text: Optional[str]) -> Optional[str]:
+    """Resolve a ``ref_text`` argument that may be a file path OR literal text.
+
+    Auto-detect: if the value names an existing file, its contents (stripped)
+    are used as the transcript; otherwise the value is treated as the literal
+    transcript text. Returns ``None`` when no override was supplied, so callers
+    can distinguish "use the profile/sidecar transcript" from an explicit
+    override.
+
+    Note: path detection is local-only. For a remote TTS host the *audio*
+    path must exist on that host, but ``ref_text`` is sent as a string, so
+    reading the transcript file locally here is always correct.
+    """
+    if ref_text is None:
+        return None
+    candidate = os.path.expanduser(ref_text)
+    try:
+        if os.path.isfile(candidate):
+            with open(candidate, "r") as fh:
+                return fh.read().strip()
+    except OSError:
+        # Fall through and treat the value as literal text.
+        pass
+    return ref_text
+
+
 async def text_to_speech_with_failover(
     message: str,
     voice: Optional[str] = None,
@@ -502,7 +528,8 @@ async def text_to_speech_with_failover(
     instructions: Optional[str] = None,
     audio_format: Optional[str] = None,
     initial_provider: Optional[str] = None,
-    speed: Optional[float] = None
+    speed: Optional[float] = None,
+    ref_text: Optional[str] = None
 ) -> Tuple[bool, Optional[dict], Optional[dict]]:
     """
     Text to speech with automatic failover to next available endpoint.
@@ -527,7 +554,8 @@ async def text_to_speech_with_failover(
         debug_dir=DEBUG_DIR if DEBUG else None,
         save_audio=SAVE_AUDIO,
         audio_dir=AUDIO_DIR if SAVE_AUDIO else None,
-        speed=speed
+        speed=speed,
+        ref_text=ref_text
     )
 
 
@@ -1205,6 +1233,7 @@ async def converse(
     metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
     wait_for_conch: Union[bool, str] = False,
     skip_conch: Union[bool, str] = False,
+    ref_text: Optional[str] = None,
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -1237,6 +1266,10 @@ KEY PARAMETERS:
 • wait_for_response (bool, default: true): Listen for response after speaking
 • voice (string): TTS voice name (auto-selected unless specified)
   - To list available voices, read MCP resource voice://voices
+  - An absolute path to a .wav clones from that clip directly (no profile needed)
+• ref_text (string): Reference transcript for clip-based cloning. A file path
+  is read; anything else is the literal transcript. Overrides any sidecar.
+  Only used with a clone voice (abs-path clip or registered profile).
 • tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)
 • disable_silence_detection (bool, default: false): Disable auto-stop on silence
 • vad_aggressiveness (0-3, default: 3): Voice detection strictness (0=permissive, 3=strict)
@@ -1301,6 +1334,10 @@ consult the MCP resources listed above.
         wait_for_conch = wait_for_conch.lower() in ('true', '1', 'yes', 'on')
     if isinstance(skip_conch, str):
         skip_conch = skip_conch.lower() in ('true', '1', 'yes', 'on')
+
+    # Resolve ref_text override once (path-vs-inline auto-detect). None means
+    # "no override" — fall back to the resolved profile/sidecar transcript.
+    resolved_ref_text = resolve_ref_text(ref_text)
 
     # Convert vad_aggressiveness to integer if provided as string
     if vad_aggressiveness is not None and isinstance(vad_aggressiveness, str):
@@ -1518,7 +1555,8 @@ consult the MCP resources listed above.
                             instructions=tts_instructions,
                             audio_format=audio_format,
                             initial_provider=tts_provider,
-                            speed=speed
+                            speed=speed,
+                            ref_text=resolved_ref_text
                         )
                 
                 # Add TTS sub-metrics
@@ -1807,7 +1845,8 @@ consult the MCP resources listed above.
                                         instructions=tts_instructions,
                                         audio_format=audio_format,
                                         initial_provider=tts_provider,
-                                        speed=speed
+                                        speed=speed,
+                                        ref_text=resolved_ref_text
                                     )
                                 if not tts_success:
                                     logger.error("Failed to replay audio via TTS regeneration")
@@ -1822,7 +1861,8 @@ consult the MCP resources listed above.
                                     instructions=tts_instructions,
                                     audio_format=audio_format,
                                     initial_provider=tts_provider,
-                                    speed=speed
+                                    speed=speed,
+                                    ref_text=resolved_ref_text
                                 )
                             if not tts_success:
                                 logger.error("Failed to replay audio via TTS regeneration")
