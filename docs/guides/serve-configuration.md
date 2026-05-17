@@ -178,7 +178,28 @@ For older Claude Code versions, use mcp-remote:
 
 #### With VoiceMode Plugin
 
-If using the VoiceMode plugin for Claude Code, it automatically configures stdio transport. For remote access, disable the plugin and use the HTTP transport configuration above.
+The plugin defaults to local stdio transport. It **also** supports connecting
+to a remote (or same-machine) streamable-HTTP serve directly — you no longer
+have to disable the plugin to go remote. Set one environment variable:
+
+```bash
+export VOICEMODE_MCP_URL=https://your-server:8765/mcp/<secret>
+```
+
+The plugin's bundled `voicemode-remote` MCP entry connects to this endpoint.
+For remote-only use, also disable the bundled local stdio server in Claude
+Code settings:
+
+```json
+{ "disabledMcpjsonServers": ["voicemode"] }
+```
+
+This enables a **plugin-only install**: install just the plugin on a laptop,
+VM, or container and point it at a full `voicemode serve` running on a
+machine with audio devices — no local `voicemode` install required. Note the
+tool namespace becomes `mcp__voicemode-remote__*` in this mode. Full details,
+the per-mode disable table, and the duplicate-MCP precedence rule are in the
+[Claude Code Plugin guide](claude-code-plugin.md#transport-modes-local-stdio-vs-remote-http).
 
 ### Claude.ai and Claude Cowork
 

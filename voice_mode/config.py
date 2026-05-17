@@ -386,6 +386,26 @@ TTS \\bAPI\\b A P I # API as individual letters
 # VOICEMODE_SERVE_TOKEN=
 
 #############
+# Plugin MCP Transport
+#############
+
+# Point the voicemode plugin's MCP entry at a streamable-HTTP voicemode
+# endpoint instead of spawning a local stdio server. The endpoint can be
+# remote OR a `voicemode serve` running on this same machine. Unset = local
+# stdio (the default, unchanged). Full endpoint URL incl. the /mcp path
+# (and /mcp/<secret> if VOICEMODE_SERVE_SECRET is set on the serve side).
+# When set, the plugin's `voicemode-remote` MCP server connects here; to run
+# remote-only, also add disabledMcpjsonServers: ["voicemode"] to your Claude
+# Code settings so the bundled local stdio server does not run.
+# VOICEMODE_MCP_URL=
+
+# Bearer token sent by the plugin's remote MCP entry (Authorization: Bearer).
+# Optional -- secret-in-path via VOICEMODE_MCP_URL is the zero-config path.
+# Requires adding a headers block to the plugin .mcp.json (see the plugin
+# guide). Mirrors VOICEMODE_SERVE_TOKEN on the serve side.
+# VOICEMODE_MCP_TOKEN=
+
+#############
 # Advanced Configuration
 #############
 
