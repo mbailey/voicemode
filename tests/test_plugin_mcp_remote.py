@@ -1,17 +1,23 @@
-"""VM-1292: plugin MCP dual-mode transport (local stdio default + remote HTTP).
+"""VM-1292 plugin MCP transport tests, updated for the VM-1314 fix.
 
-Covers the acceptance criteria that are testable without a clean VM:
+VM-1292 shipped a two-entry ``.mcp.json`` (stdio ``voicemode`` + http
+``voicemode-remote``), which meant the local stdio server *always* spawned
+unless the user manually added ``disabledMcpjsonServers``. VM-1314 replaces
+that with ONE ``type: stdio`` entry whose command is a smart launcher
+(``voicemode-mcp-launcher``) that selects transport itself.
 
-- Plugin connects to a remote streamable-HTTP endpoint via ``VOICEMODE_MCP_URL``
-  (single checked-in ``.mcp.json``, no generator).
-- The remote entry is HTTP-only -- no stdio command is spawned for it.
-- Unset ``VOICEMODE_MCP_URL`` => the local stdio default is byte-for-byte
-  unchanged (regression-safe).
-- ``voicemode.env`` template documents ``VOICEMODE_MCP_URL`` with the
-  remote-OR-same-machine wording.
-- The hook receiver matches the converse tool regardless of MCP namespace
-  (``voicemode`` vs ``voicemode-remote``) so voice feedback keeps working in
-  remote mode (R2).
+This file therefore now asserts the **VM-1314 single-entry contract** (the
+old two-entry assertions tested the very design VM-1314 deliberately removes).
+The launcher's runtime branching is covered by ``test_plugin_mcp_launcher``.
+
+Still covered here:
+
+- One ``.mcp.json`` entry, ``type: stdio``, no ``voicemode-remote``, no http.
+- Unset ``VOICEMODE_MCP_URL`` => local stdio default unchanged (regression-safe).
+- ``voicemode.env`` template documents ``VOICEMODE_MCP_URL`` correctly and no
+  longer instructs the manual ``disabledMcpjsonServers`` workaround.
+- The hook receiver still matches the converse tool regardless of MCP
+  namespace (kept for backward compatibility of existing installs).
 """
 import json
 import os
@@ -27,11 +33,11 @@ MCP_JSON = REPO_ROOT / ".mcp.json"
 CONFIG_PY = REPO_ROOT / "voice_mode" / "config.py"
 HOOK_RECEIVER = REPO_ROOT / "voice_mode" / "data" / "hooks" / "voicemode-hook-receiver.sh"
 
-# The local stdio entry must remain exactly this -- regression-safe default.
+# VM-1314: the single entry runs the smart launcher, not `voicemode` directly.
 EXPECTED_STDIO_ENTRY = {
     "type": "stdio",
     "command": "uv",
-    "args": ["run", "voicemode"],
+    "args": ["run", "voicemode-mcp-launcher"],
     "env": {"#VOICEMODE_SAVE_ALL": "true"},
 }
 
@@ -42,29 +48,27 @@ def mcp_config():
 
 
 class TestMcpJson:
-    def test_is_valid_json_with_both_servers(self, mcp_config):
+    def test_single_voicemode_entry(self, mcp_config):
+        """VM-1314 AC1: exactly one entry, named ``voicemode``, no second
+        ``voicemode-remote`` entry. This is the assertion that would have
+        caught the VM-1292 always-spawn defect."""
         servers = mcp_config["mcpServers"]
-        assert "voicemode" in servers
-        assert "voicemode-remote" in servers
+        assert list(servers.keys()) == ["voicemode"]
+        assert "voicemode-remote" not in servers
 
-    def test_stdio_default_unchanged(self, mcp_config):
-        """Unset VOICEMODE_MCP_URL => byte-for-byte current local stdio."""
+    def test_only_entry_is_stdio_launcher(self, mcp_config):
+        """The one entry is stdio and runs the first-party launcher."""
         assert mcp_config["mcpServers"]["voicemode"] == EXPECTED_STDIO_ENTRY
 
-    def test_remote_entry_is_http_only(self, mcp_config):
-        """Remote mode is the HTTP connection only -- no local process."""
-        remote = mcp_config["mcpServers"]["voicemode-remote"]
-        assert remote["type"] == "http"
-        assert remote["url"] == "${VOICEMODE_MCP_URL}"
-        assert "command" not in remote
-        assert "args" not in remote
-
-    def test_remote_entry_has_distinct_name(self, mcp_config):
-        """Distinct name so an unset-URL failed http entry never degrades the
-        working stdio ``voicemode`` server (SPEC s0 spike consequence)."""
-        assert "voicemode-remote" in mcp_config["mcpServers"]
-        # The default working server keeps the canonical name/namespace.
-        assert mcp_config["mcpServers"]["voicemode"]["type"] == "stdio"
+    def test_no_http_entry_anywhere(self, mcp_config):
+        """No http transport / ``${VOICEMODE_MCP_URL}`` in .mcp.json: the
+        transport switch lives in the launcher, never in the config layer."""
+        blob = json.dumps(mcp_config)
+        assert '"http"' not in blob
+        assert "VOICEMODE_MCP_URL" not in blob
+        for entry in mcp_config["mcpServers"].values():
+            assert entry["type"] == "stdio"
+            assert "url" not in entry
 
 
 class TestConfigTemplate:
@@ -79,9 +83,21 @@ class TestConfigTemplate:
     def test_mcp_url_wording_not_remote_only(self, config_src):
         """Mike: must not describe it as remote-only; same machine is valid."""
         idx = config_src.index("# VOICEMODE_MCP_URL=")
-        block = config_src[idx - 700 : idx]
+        block = config_src[idx - 900 : idx]
         assert "same machine" in block
         assert "stdio" in block  # unset => local stdio default
+
+    def test_mcp_url_no_longer_instructs_manual_disable(self, config_src):
+        """VM-1314 defect 2: the template must NOT tell users to *add*
+        ``disabledMcpjsonServers: ["voicemode"]`` -- that manual workaround is
+        exactly the defect VM-1314 removes. (Reassuring the reader that no
+        such edit is needed is fine; instructing it is not.) This assertion
+        would have caught the VM-1292 misleading template."""
+        idx = config_src.index("# VOICEMODE_MCP_URL=")
+        block = config_src[idx - 900 : idx + 400]
+        # The old misleading instruction strings must be gone.
+        assert 'disabledMcpjsonServers: ["voicemode"]' not in block
+        assert "add disabledMcpjsonServers" not in block
 
     def test_mcp_url_positioned_after_serve_token(self, config_src):
         """SPEC s5a: insert near the VOICEMODE_SERVE_* block, after

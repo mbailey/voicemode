@@ -389,20 +389,25 @@ TTS \\bAPI\\b A P I # API as individual letters
 # Plugin MCP Transport
 #############
 
-# Point the voicemode plugin's MCP entry at a streamable-HTTP voicemode
-# endpoint instead of spawning a local stdio server. The endpoint can be
+# Point the voicemode plugin's single MCP entry at a streamable-HTTP voicemode
+# endpoint instead of spawning the local stdio server. The endpoint can be
 # remote OR a `voicemode serve` running on this same machine. Unset = local
-# stdio (the default, unchanged). Full endpoint URL incl. the /mcp path
-# (and /mcp/<secret> if VOICEMODE_SERVE_SECRET is set on the serve side).
-# When set, the plugin's `voicemode-remote` MCP server connects here; to run
-# remote-only, also add disabledMcpjsonServers: ["voicemode"] to your Claude
-# Code settings so the bundled local stdio server does not run.
+# stdio (the default, unchanged -- no second server, no manual settings step).
+# Full endpoint URL incl. the /mcp path (and /mcp/<secret> if
+# VOICEMODE_SERVE_SECRET is set on the serve side). When set, the plugin's
+# smart launcher acts as a native stdio<->HTTP bridge to this endpoint --
+# still ONE `voicemode` server / `mcp__voicemode__*` namespace, no
+# `voicemode-remote` second entry, no `disabledMcpjsonServers` edit.
+# Setting it HERE works: the launcher is a voicemode process and reads this
+# file. (A real env var exported into Claude Code's environment also works
+# and takes precedence over this file.)
 # VOICEMODE_MCP_URL=
 
-# Bearer token sent by the plugin's remote MCP entry (Authorization: Bearer).
-# Optional -- secret-in-path via VOICEMODE_MCP_URL is the zero-config path.
-# Requires adding a headers block to the plugin .mcp.json (see the plugin
-# guide). Mirrors VOICEMODE_SERVE_TOKEN on the serve side.
+# Bearer token the plugin's bridge sends as `Authorization: Bearer <token>`
+# when VOICEMODE_MCP_URL is set. Optional -- secret-in-path via
+# VOICEMODE_MCP_URL is the zero-config path. Mirrors VOICEMODE_SERVE_TOKEN on
+# the serve side. Read by the launcher (here or process env); no .mcp.json
+# edit required.
 # VOICEMODE_MCP_TOKEN=
 
 #############
