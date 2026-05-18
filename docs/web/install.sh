@@ -839,24 +839,25 @@ install_voice_services() {
         ok "Kokoro TTS already installed"
     fi
 
-    # If both are installed, nothing to do
-    if [[ "$whisper_installed" == "true" && "$kokoro_installed" == "true" ]]; then
-        return 0
-    fi
-
     # --- Apple Silicon: recommend mlx-audio, offer explicit choice (VM-1330) ---
-    # Additive branch. On macOS arm64 we resolve a backend choice; anything
-    # other than "local" short-circuits the legacy whisper.cpp+Kokoro flow
-    # below. Off Apple Silicon this whole block is skipped and behaviour is
-    # exactly as before.
+    # This MUST run BEFORE the "both already installed" early-return below:
+    # a user who already has whisper.cpp + Kokoro (very common -- anyone on a
+    # prior release) should still be offered mlx-audio as a switch/upgrade.
+    # Their existing whisper/Kokoro install is left in place as a fallback;
+    # choosing mlx just installs mlx-audio and re-points the BASE_URLs.
+    # Off Apple Silicon this whole block is skipped and behaviour is exactly
+    # as before (the both-installed early-return still applies).
     if is_apple_silicon "$os" "$arch"; then
         local choice
         choice=$(resolve_apple_silicon_choice)
         case "$choice" in
             mlx)
-                # If mlx-audio install fails, fall through to the existing
-                # whisper.cpp + Kokoro path rather than leaving the user
-                # with no voice backend.
+                # mlx-audio is independent of whisper/Kokoro -- it installs
+                # and points BASE_URLs at port 8890 even when whisper+Kokoro
+                # are already present (existing install kept as fallback).
+                # If the mlx-audio install fails, fall through to the
+                # existing whisper.cpp + Kokoro path rather than leaving the
+                # user with no voice backend.
                 if install_mlx_audio; then
                     return 0
                 fi
@@ -871,10 +872,19 @@ install_voice_services() {
             local)
                 # Fall through to the existing whisper.cpp + Kokoro flow,
                 # and treat it as an explicit opt-in so the legacy prompt /
-                # non-interactive skip is bypassed.
+                # non-interactive skip is bypassed. If both are already
+                # installed the legacy flow's per-service skips make this a
+                # no-op (correct: nothing to reinstall).
                 explicit_local=true
                 ;;
         esac
+    fi
+
+    # If both are installed, nothing to do. (On Apple Silicon we only reach
+    # here when the user chose "local" with nothing left to install, or the
+    # mlx install fell back -- the whisper+Kokoro early-return is still right.)
+    if [[ "$whisper_installed" == "true" && "$kokoro_installed" == "true" ]]; then
+        return 0
     fi
 
     # Assess system capability
