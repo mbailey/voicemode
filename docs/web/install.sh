@@ -5,9 +5,19 @@
 # Usage:
 #   curl -fsSL https://getvoicemode.com/install.sh | bash
 #   curl -fsSL https://getvoicemode.com/install.sh | bash -s -- -y  # non-interactive
+#   curl -fsSL https://getvoicemode.com/install.sh | bash -s -- -y --voice mlx
 #
 # This script installs VoiceMode and its dependencies.
 # It supports macOS and Linux (Debian/Ubuntu, Fedora).
+#
+# Voice backend (--voice, or VOICEMODE_VOICE_ENGINE env):
+#   mlx    Apple Silicon only: mlx-audio (one fast on-device server for
+#          STT+TTS). Recommended on Apple Silicon; opt-in.
+#   local  whisper.cpp + Kokoro (cross-platform; the only option off
+#          Apple Silicon).
+#   skip   install no local voice services.
+# Default when unset: interactive prompt; non-interactive skips the large
+# local-voice download (unchanged prior behaviour).
 
 set -o nounset -o pipefail -o errexit
 
@@ -18,6 +28,18 @@ set -o nounset -o pipefail -o errexit
 VOICEMODE_PACKAGE="voice-mode"
 INTERACTIVE=true
 
+# Voice backend selection (VM-1330).
+#   ""     - not explicitly chosen; resolved interactively or by the
+#            non-interactive skip default (preserves prior behaviour).
+#   mlx    - Apple Silicon only: install mlx-audio (one fast on-device
+#            server for STT+TTS) and point VoiceMode at it.
+#   local  - whisper.cpp + Kokoro (the cross-platform path; the only
+#            option off Apple Silicon).
+#   skip   - install no local voice services.
+# Explicit --voice (or VOICEMODE_VOICE_ENGINE env) takes precedence over
+# the interactive prompt and the non-interactive skip default.
+VOICE_CHOICE="${VOICEMODE_VOICE_ENGINE:-}"
+
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -25,11 +47,29 @@ while [[ $# -gt 0 ]]; do
             INTERACTIVE=false
             shift
             ;;
+        --voice)
+            VOICE_CHOICE="${2:-}"
+            shift 2
+            ;;
+        --voice=*)
+            VOICE_CHOICE="${1#*=}"
+            shift
+            ;;
         *)
             shift
             ;;
     esac
 done
+
+# Validate --voice value early so a typo fails fast rather than silently
+# falling through to the wrong backend.
+case "$VOICE_CHOICE" in
+    ""|mlx|local|skip) ;;
+    *)
+        echo "Error: --voice must be one of: mlx, local, skip (got: '$VOICE_CHOICE')" >&2
+        exit 1
+        ;;
+esac
 
 # -----------------------------------------------------------------------------
 # Color Support
@@ -611,6 +651,125 @@ is_kokoro_installed() {
     [[ -d "$HOME/.voicemode/services/kokoro" ]]
 }
 
+# -----------------------------------------------------------------------------
+# mlx-audio (Apple Silicon) -- VM-1330
+# -----------------------------------------------------------------------------
+#
+# mlx-audio is a single MLX-native server (STT + TTS + clone-voice) that runs
+# on its OWN port 8890. We point VoiceMode at it by putting the mlx-audio URL
+# FIRST in the preference-ordered base-URL lists (OpenAI kept as a trailing
+# cloud fallback). This mirrors voice_mode/tools/mlx_audio/install.py and the
+# VM-1088 port decision (8880 compat-shim was rejected).
+#
+# IMPORTANT (VM-1318 gate): mlx-audio is RECOMMENDED + opt-in on Apple
+# Silicon. It is NOT the silent non-interactive default until the
+# security/project-health review (VM-1318) clears. Selection is explicit:
+# an interactive choice, or an explicit --voice mlx flag.
+
+MLX_AUDIO_PORT=8890
+
+# True only on Apple Silicon (macOS arm64) -- the hard gate per ADR VM-1086.
+# Mirrors voice_mode/tools/mlx_audio/install.py::_is_apple_silicon and the
+# assess_voice_capability "excellent" branch.
+is_apple_silicon() {
+    local os="$1"
+    local arch="$2"
+    [[ "$os" == "macos" && "$arch" == "arm64" ]]
+}
+
+# Check if mlx-audio is already installed (uv-tool entry point present).
+is_mlx_audio_installed() {
+    [[ -x "$HOME/.local/bin/mlx_audio.server" ]]
+}
+
+# Point VoiceMode at mlx-audio's own port (8890) by making it the FIRST
+# entry in the preference-ordered base-URL lists. OpenAI stays as the
+# trailing cloud fallback so a cold mlx-audio still degrades gracefully.
+# Uses the existing `voicemode config set` primitive (writes
+# ~/.voicemode/voicemode.env) -- no fragile shell-side env munging.
+configure_mlx_audio_urls() {
+    local mlx_url="http://127.0.0.1:${MLX_AUDIO_PORT}/v1"
+    local urls="${mlx_url},https://api.openai.com/v1"
+
+    info "Pointing VoiceMode at mlx-audio (port ${MLX_AUDIO_PORT})..."
+    if voicemode config set VOICEMODE_TTS_BASE_URLS "$urls" \
+        && voicemode config set VOICEMODE_STT_BASE_URLS "$urls"; then
+        ok "VoiceMode configured to prefer mlx-audio (OpenAI cloud fallback kept)"
+    else
+        warn "Could not write mlx-audio base-URL config"
+        warn "Set it later with:"
+        warn "  voicemode config set VOICEMODE_TTS_BASE_URLS \"$urls\""
+        warn "  voicemode config set VOICEMODE_STT_BASE_URLS \"$urls\""
+    fi
+}
+
+# Install mlx-audio via the existing CLI primitive, then wire the config.
+# install.sh stays a thin orchestrator -- the uv tool install + bundled
+# patch + launchd plist all live in `voicemode service install mlx-audio`
+# (mlx_audio_install()), which is already Apple-Silicon-gated.
+install_mlx_audio() {
+    if is_mlx_audio_installed; then
+        ok "mlx-audio already installed"
+        configure_mlx_audio_urls
+        return 0
+    fi
+
+    echo ""
+    echo "${BOLD}Installing mlx-audio${RESET} (Apple Silicon on-device STT+TTS)"
+    info "One fast MLX server on port ${MLX_AUDIO_PORT} -- no Xcode, no source compile."
+    info "No models are downloaded now; weights pull on first voice use."
+
+    if voicemode service install mlx-audio; then
+        ok "mlx-audio installed"
+        configure_mlx_audio_urls
+    else
+        warn "mlx-audio installation failed - retry with: voicemode service install mlx-audio"
+        warn "Falling back to whisper.cpp + Kokoro is also available:"
+        warn "  voicemode whisper install && voicemode kokoro install"
+        return 1
+    fi
+}
+
+# Resolve the voice backend choice on Apple Silicon.
+# Precedence (per VM-1330 plan):
+#   explicit --voice flag  >  interactive prompt  >  non-interactive skip
+# Echoes one of: mlx | local | skip
+# Honors the VM-1318 gate: non-interactive without an explicit --voice
+# stays "skip" (the prior behaviour) -- mlx is never the silent default.
+resolve_apple_silicon_choice() {
+    # Explicit flag / env wins outright.
+    if [[ -n "$VOICE_CHOICE" ]]; then
+        echo "$VOICE_CHOICE"
+        return 0
+    fi
+
+    if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
+        echo "" >&2
+        echo "${BOLD}Apple Silicon detected${RESET} -- ${GREEN}mlx-audio is recommended${RESET}." >&2
+        info "mlx-audio: one fast on-device server for both speech-to-text and" >&2
+        info "text-to-speech. No Xcode, no source compile, ~instant warm latency." >&2
+        info "Alternative: whisper.cpp + Kokoro (the classic cross-platform path)." >&2
+        echo "" >&2
+        local response
+        read -r -p "Voice backend: [1] mlx-audio (recommended)  [2] whisper.cpp + Kokoro  [s] skip " response </dev/tty
+        case "$response" in
+            ""|1) echo "mlx" ;;
+            2)    echo "local" ;;
+            [sS])  echo "skip" ;;
+            *)
+                warn "Unrecognised choice '$response' -- defaulting to recommended (mlx-audio)" >&2
+                echo "mlx"
+                ;;
+        esac
+        return 0
+    fi
+
+    # Non-interactive, no explicit choice: preserve prior behaviour
+    # (skip the large download). Do NOT silently default to mlx --
+    # that decision is gated by VM-1318.
+    echo "skip"
+}
+
 # Assess system capability for local voice services
 # Returns: "excellent", "good", or "limited"
 assess_voice_capability() {
@@ -664,6 +823,10 @@ install_voice_services() {
     local arch="$2"
     local whisper_installed=false
     local kokoro_installed=false
+    # Set when the user has explicitly opted into whisper.cpp+Kokoro
+    # (Apple-Silicon "local" choice). Lets that choice bypass the legacy
+    # confirmation prompt / non-interactive skip below and install directly.
+    local explicit_local=false
 
     # Check what's already installed
     if is_whisper_installed; then
@@ -679,6 +842,39 @@ install_voice_services() {
     # If both are installed, nothing to do
     if [[ "$whisper_installed" == "true" && "$kokoro_installed" == "true" ]]; then
         return 0
+    fi
+
+    # --- Apple Silicon: recommend mlx-audio, offer explicit choice (VM-1330) ---
+    # Additive branch. On macOS arm64 we resolve a backend choice; anything
+    # other than "local" short-circuits the legacy whisper.cpp+Kokoro flow
+    # below. Off Apple Silicon this whole block is skipped and behaviour is
+    # exactly as before.
+    if is_apple_silicon "$os" "$arch"; then
+        local choice
+        choice=$(resolve_apple_silicon_choice)
+        case "$choice" in
+            mlx)
+                # If mlx-audio install fails, fall through to the existing
+                # whisper.cpp + Kokoro path rather than leaving the user
+                # with no voice backend.
+                if install_mlx_audio; then
+                    return 0
+                fi
+                warn "Continuing with whisper.cpp + Kokoro fallback"
+                ;;
+            skip)
+                info "Skipping local voice services"
+                info "Install mlx-audio later with: voicemode service install mlx-audio"
+                info "  (or whisper.cpp + Kokoro: voicemode whisper install && voicemode kokoro install)"
+                return 0
+                ;;
+            local)
+                # Fall through to the existing whisper.cpp + Kokoro flow,
+                # and treat it as an explicit opt-in so the legacy prompt /
+                # non-interactive skip is bypassed.
+                explicit_local=true
+                ;;
+        esac
     fi
 
     # Assess system capability
@@ -717,8 +913,34 @@ install_voice_services() {
 
     info "Available: $services_to_install ($download_size download)"
 
-    # Prompt for installation (only if interactive AND TTY available)
-    if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
+    # Honor an explicit backend choice on ANY platform (VM-1330). On
+    # non-Apple-Silicon, `--voice mlx` is not viable -- mlx-audio is
+    # Apple-Silicon-only -- so warn and treat it as the local path.
+    if [[ "$explicit_local" == "false" && -n "$VOICE_CHOICE" ]]; then
+        case "$VOICE_CHOICE" in
+            skip)
+                info "Skipping local voice services (--voice skip)"
+                info "Install later with: voicemode whisper install && voicemode kokoro install"
+                return 0
+                ;;
+            mlx)
+                # Reached here only if NOT Apple Silicon (the arm64 mac
+                # branch above handles mlx and returns). mlx-audio can't
+                # run here -- fall back to whisper.cpp + Kokoro.
+                warn "mlx-audio requires Apple Silicon (macOS arm64); using whisper.cpp + Kokoro instead"
+                explicit_local=true
+                ;;
+            local)
+                explicit_local=true
+                ;;
+        esac
+    fi
+
+    # Prompt for installation. An explicit local opt-in bypasses both the
+    # confirmation prompt and the non-interactive skip default.
+    if [[ "$explicit_local" == "true" ]]; then
+        info "Installing whisper.cpp + Kokoro (explicitly selected)"
+    elif [[ "$INTERACTIVE" == "true" ]] && tty_available; then
         echo ""
         read -r -p "Install local voice services? [Y/n] " response </dev/tty
         case "$response" in
