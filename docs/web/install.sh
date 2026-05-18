@@ -150,7 +150,7 @@ show_logo() {
     ║   ██║ ╚═╝ ██║╚██████╔╝██████╔╝███████╗     ║
     ║   ╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝     ║
     ║                                            ║
-    ║     🎙️  VoiceMode for Claude Code  🤖      ║
+    ║         VoiceMode for Claude Code          ║
     ║                                            ║
     ╚════════════════════════════════════════════╝
 EOF
@@ -745,17 +745,18 @@ resolve_apple_silicon_choice() {
 
     if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
         echo "" >&2
-        echo "${BOLD}Apple Silicon detected${RESET} -- ${GREEN}mlx-audio is recommended${RESET}." >&2
-        info "mlx-audio: one fast on-device server for both speech-to-text and" >&2
-        info "text-to-speech. No Xcode, no source compile, ~instant warm latency." >&2
-        info "Alternative: whisper.cpp + Kokoro (the classic cross-platform path)." >&2
+        echo "${BOLD}Install local voice services${RESET} -- text-to-speech & speech-to-text?" >&2
+        echo "" >&2
+        echo "  [1] mlx-audio -- fast TTS/STT + voice cloning (models load on first use)   ${GREEN}(recommended)${RESET}" >&2
+        echo "  [2] whisper.cpp + Kokoro -- classic, cross-platform (~3 GB)" >&2
+        echo "  [3] no thanks" >&2
         echo "" >&2
         local response
-        read -r -p "Voice backend: [1] mlx-audio (recommended)  [2] whisper.cpp + Kokoro  [s] skip " response </dev/tty
+        read -r -p "> " response </dev/tty
         case "$response" in
-            ""|1) echo "mlx" ;;
-            2)    echo "local" ;;
-            [sS])  echo "skip" ;;
+            ""|1)     echo "mlx" ;;
+            2)        echo "local" ;;
+            3|[sS])   echo "skip" ;;
             *)
                 warn "Unrecognised choice '$response' -- defaulting to recommended (mlx-audio)" >&2
                 echo "mlx"
@@ -817,6 +818,38 @@ get_capability_message() {
     esac
 }
 
+# Print the install status of each voice engine relevant to this platform,
+# mirroring the existing "✓ ... already installed" style. On Apple Silicon
+# this also covers mlx-audio; off Apple Silicon mlx-audio is never mentioned
+# (it can't run there).
+show_voice_status() {
+    local os="$1"
+    local arch="$2"
+
+    echo ""
+    echo "${BOLD}Local voice services${RESET}"
+
+    if is_apple_silicon "$os" "$arch"; then
+        if is_mlx_audio_installed; then
+            ok "mlx-audio already installed"
+        else
+            info "${DIM}–${RESET} mlx-audio not installed"
+        fi
+    fi
+
+    if is_whisper_installed; then
+        ok "Whisper STT already installed"
+    else
+        info "${DIM}–${RESET} Whisper STT not installed"
+    fi
+
+    if is_kokoro_installed; then
+        ok "Kokoro TTS already installed"
+    else
+        info "${DIM}–${RESET} Kokoro TTS not installed"
+    fi
+}
+
 # Prompt user to install local voice services
 install_voice_services() {
     local os="$1"
@@ -828,15 +861,17 @@ install_voice_services() {
     # confirmation prompt / non-interactive skip below and install directly.
     local explicit_local=false
 
-    # Check what's already installed
+    # STATUS DISPLAY FIRST: report what's installed before any prompt.
+    show_voice_status "$os" "$arch"
+
+    # Track install state (status already printed above; don't re-print
+    # the per-service "already installed" lines a second time).
     if is_whisper_installed; then
         whisper_installed=true
-        ok "Whisper STT already installed"
     fi
 
     if is_kokoro_installed; then
         kokoro_installed=true
-        ok "Kokoro TTS already installed"
     fi
 
     # --- Apple Silicon: recommend mlx-audio, offer explicit choice (VM-1330) ---
@@ -848,6 +883,18 @@ install_voice_services() {
     # Off Apple Silicon this whole block is skipped and behaviour is exactly
     # as before (the both-installed early-return still applies).
     if is_apple_silicon "$os" "$arch"; then
+        # Already-satisfied shortcut: if mlx-audio is installed and the user
+        # did NOT explicitly force a backend, there's nothing to ask. Just
+        # idempotently re-point VoiceMode at mlx-audio and finish cleanly
+        # (mirrors the whisper+Kokoro both-installed early-return). An
+        # explicit --voice (or VOICEMODE_VOICE_ENGINE) always wins and
+        # bypasses this shortcut so the user can force the other path.
+        if is_mlx_audio_installed && [[ -z "$VOICE_CHOICE" ]]; then
+            configure_mlx_audio_urls
+            ok "mlx-audio already installed and configured -- all set, nothing to do"
+            return 0
+        fi
+
         local choice
         choice=$(resolve_apple_silicon_choice)
         case "$choice" in
