@@ -53,7 +53,7 @@ setup_colors() {
         GREEN=$'\033[0;32m'
         YELLOW=$'\033[0;33m'
         BLUE=$'\033[0;34m'
-        ORANGE=$'\033[38;5;208m' # Claude Code orange
+        ORANGE=$'\033[38;2;255;135;0m' # Claude Code orange (24-bit truecolor, theme-independent)
         BOLD=$'\033[1m'
         DIM=$'\033[2m'
         RESET=$'\033[0m'
