@@ -55,7 +55,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uvx voice-mode-install
 
 # Add to Claude Code
-claude mcp add --scope user voicemode -- uvx --refresh voice-mode
+claude mcp add --scope user voicemode -- uvx --refresh --from voice-mode voicemode-mcp-launcher
 
 # Optional: Add OpenAI API key as fallback for local services
 export OPENAI_API_KEY=your-openai-key
