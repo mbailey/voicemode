@@ -44,14 +44,18 @@ setup_colors() {
         GREEN=""
         YELLOW=""
         BLUE=""
+        ORANGE=""
         BOLD=""
+        DIM=""
         RESET=""
     else
         RED=$'\033[0;31m'
         GREEN=$'\033[0;32m'
         YELLOW=$'\033[0;33m'
         BLUE=$'\033[0;34m'
+        ORANGE=$'\033[38;2;255;135;0m' # Claude Code orange (24-bit truecolor, theme-independent)
         BOLD=$'\033[1m'
+        DIM=$'\033[2m'
         RESET=$'\033[0m'
     fi
 }
@@ -85,12 +89,36 @@ info() {
 }
 
 # Display VoiceMode logo
-# Compact 3-line version that fits in ~45 columns
+# Large orange ASCII-art banner (Claude Code orange, ANSI 256-color 208)
 show_logo() {
     echo ""
-    echo "${BOLD}██╗   ██╗ ██████╗ ██╗ ██████╗███████╗${RESET}"
-    echo "${BOLD}██║   ██║██╔═══██╗██║██╔════╝██╔════╝${RESET}   ${BLUE}MODE${RESET}"
-    echo "${BOLD} ╚████╔╝ ╚██████╔╝██║╚██████╗███████╗${RESET}"
+    printf '%s' "${ORANGE}${BOLD}"
+    cat <<'EOF'
+    ╔════════════════════════════════════════════╗
+    ║                                            ║
+    ║   ██╗   ██╗ ██████╗ ██╗ ██████╗███████╗    ║
+    ║   ██║   ██║██╔═══██╗██║██╔════╝██╔════╝    ║
+    ║   ██║   ██║██║   ██║██║██║     █████╗      ║
+    ║   ╚██╗ ██╔╝██║   ██║██║██║     ██╔══╝      ║
+    ║    ╚████╔╝ ╚██████╔╝██║╚██████╗███████╗    ║
+    ║     ╚═══╝   ╚═════╝ ╚═╝ ╚═════╝╚══════╝    ║
+    ║                                            ║
+    ║   ███╗   ███╗ ██████╗ ██████╗ ███████╗     ║
+    ║   ████╗ ████║██╔═══██╗██╔══██╗██╔════╝     ║
+    ║   ██╔████╔██║██║   ██║██║  ██║█████╗       ║
+    ║   ██║╚██╔╝██║██║   ██║██║  ██║██╔══╝       ║
+    ║   ██║ ╚═╝ ██║╚██████╔╝██████╔╝███████╗     ║
+    ║   ╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝     ║
+    ║                                            ║
+    ║     🎙️  VoiceMode for Claude Code  🤖      ║
+    ║                                            ║
+    ╚════════════════════════════════════════════╝
+EOF
+    printf '%s\n' "${RESET}"
+    echo ""
+    echo "${BOLD}Talk to Claude like a colleague, not a chatbot.${RESET}"
+    echo ""
+    echo "${DIM}Transform your AI coding experience with natural voice conversations.${RESET}"
     echo ""
 }
 
