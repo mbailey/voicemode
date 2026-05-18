@@ -26,7 +26,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uvx voice-mode-install
 
 # Add to Claude Code MCP
-claude mcp add --scope user voicemode -- uvx --refresh voice-mode
+claude mcp add --scope user voicemode -- uvx --refresh --from voice-mode voicemode-mcp-launcher
 ```
 
 The installer will:

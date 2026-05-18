@@ -34,10 +34,18 @@ CONFIG_PY = REPO_ROOT / "voice_mode" / "config.py"
 HOOK_RECEIVER = REPO_ROOT / "voice_mode" / "data" / "hooks" / "voicemode-hook-receiver.sh"
 
 # VM-1314: the single entry runs the smart launcher, not `voicemode` directly.
+# VM-1340: invoked as a bare console-script command, NOT `uv run ...`. This
+# `.mcp.json` is dual-use -- it is both the shipped plugin MCP config AND the
+# repo's own project `.mcp.json` (used whenever Claude Code runs inside this
+# repo). That rules out `uv run` (resolves a project from cwd, so it couples
+# startup to whatever dir Claude Code is in) and any `${CLAUDE_PLUGIN_ROOT}`
+# form (expanded only in plugin context, empty in project context). A bare
+# console-script command is PATH-neutral vs the old `uv` (the `uv` binary
+# lives in the same bin dir as the script) and behaves identically in both
+# contexts. See task VM-1340.
 EXPECTED_STDIO_ENTRY = {
     "type": "stdio",
-    "command": "uv",
-    "args": ["run", "voicemode-mcp-launcher"],
+    "command": "voicemode-mcp-launcher",
     "env": {"#VOICEMODE_SAVE_ALL": "true"},
 }
 
