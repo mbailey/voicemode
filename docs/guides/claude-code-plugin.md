@@ -82,9 +82,9 @@ Once installed, Claude has access to these MCP tools:
 - `mcp__voicemode__converse` - Speak and listen for responses
 - `mcp__voicemode__service` - Manage voice services
 
-In **remote mode** (`VOICEMODE_MCP_URL` set) the same tools are exposed under
-the `voicemode-remote` namespace — `mcp__voicemode-remote__converse` /
-`mcp__voicemode-remote__service`. See [Transport Modes](#transport-modes-local-stdio-vs-remote-http).
+The namespace is **the same in remote mode** (`VOICEMODE_MCP_URL` set) —
+still `mcp__voicemode__*`. There is one server either way. See
+[Transport Modes](#transport-modes-local-stdio-vs-remote-http).
 
 ### Converse Tool Parameters
 
@@ -98,17 +98,31 @@ the `voicemode-remote` namespace — `mcp__voicemode-remote__converse` /
 
 ## Transport Modes: Local stdio vs Remote HTTP
 
-The plugin ships a single checked-in `.mcp.json` that supports **two
-transports**, selected by one environment variable, `VOICEMODE_MCP_URL`:
+The plugin ships **one** checked-in `.mcp.json` entry — a single `type: stdio`
+server, `voicemode`, whose command is a first-party smart launcher
+(`voicemode-mcp-launcher`, shipped in the package). The *launcher* selects the
+transport from one environment variable, `VOICEMODE_MCP_URL`:
 
 | Mode | `VOICEMODE_MCP_URL` | What runs | Tool namespace |
 |------|---------------------|-----------|----------------|
-| **Local (default)** | unset | bundled `voicemode` stdio server (`uv run voicemode`) | `mcp__voicemode__*` |
-| **Remote** | set to a serve URL | `voicemode-remote` connects to a streamable-HTTP `voicemode serve` | `mcp__voicemode-remote__*` |
+| **Local (default)** | unset | launcher runs the bundled `voicemode` stdio server in-process | `mcp__voicemode__*` |
+| **Remote** | set to a serve URL | launcher acts as a native stdio↔Streamable-HTTP bridge to `voicemode serve` | `mcp__voicemode__*` |
 
-When `VOICEMODE_MCP_URL` is **unset**, behaviour is exactly as before — the
-local stdio server runs and there is no remote connection. The remote entry
-adds nothing to the default experience.
+There is always exactly **one** `voicemode` server and **one**
+`mcp__voicemode__*` namespace. No second `voicemode-remote` entry, and **no
+`disabledMcpjsonServers` step is ever required** — remote mode means *only*
+remote because the launcher itself does not start the local server.
+
+When `VOICEMODE_MCP_URL` is **unset**, behaviour is byte-for-byte the pre-VM-1314
+local stdio default — the launcher is a thin in-process `exec` of the same
+server, no proxy hop and no added failure surface.
+
+> **Why a launcher?** Claude Code's `.mcp.json` cannot switch transport from an
+> env var (the `type` field is not env-expandable; the `${VAR:-default}` form
+> only works for value fields like `url`). VM-1292 worked around this with two
+> entries, which left the local stdio server always spawning. VM-1314 moves the
+> switch into our own process, where it is trivial — one entry, fully
+> env-configurable, no manual settings edit.
 
 ### Remote Mode (Plugin-Only Install)
 
@@ -117,8 +131,8 @@ container) and point its MCP at a full `voicemode` running somewhere with a
 microphone and speakers (the "audio host"). No local `voicemode` install, no
 `uv tool install voice-mode`, no Whisper/Kokoro on the plugin machine.
 
-1. Install the plugin (skills, commands, hooks, and the dormant remote MCP
-   entry):
+1. Install the plugin (skills, commands, hooks, and the single `voicemode`
+   MCP entry):
 
    ```bash
    claude plugin marketplace add https://github.com/mbailey/claude-plugins
@@ -133,36 +147,20 @@ microphone and speakers (the "audio host"). No local `voicemode` install, no
    ```
 
    The endpoint is the full URL including the `/mcp` path (and
-   `/mcp/<secret>` if the serve has `VOICEMODE_SERVE_SECRET` set). See the
-   [Serve Configuration guide](serve-configuration.md) for standing up the
-   audio host.
+   `/mcp/<secret>` if the serve has `VOICEMODE_SERVE_SECRET` set). Either
+   location works — the launcher reads its own process env and also loads
+   `~/.voicemode/voicemode.env` (a real exported env var wins over the file).
+   See the [Serve Configuration guide](serve-configuration.md) for standing
+   up the audio host.
 
-3. (Recommended for remote-only) Stop the unused local stdio server by
-   disabling the bundled `voicemode` in Claude Code settings:
+3. Use voice as normal. The tools are `mcp__voicemode__converse` /
+   `mcp__voicemode__service` — **the same namespace as local mode**. Nothing
+   to disable: remote mode runs *only* the remote bridge, the local stdio
+   server is never started.
 
-   ```json
-   { "disabledMcpjsonServers": ["voicemode"] }
-   ```
-
-4. Use voice as normal. In remote mode the tools are
-   `mcp__voicemode-remote__converse` / `mcp__voicemode-remote__service`
-   (the namespace differs from local mode — see below).
-
-### What to disable per mode
-
-| Mode | `VOICEMODE_MCP_URL` | Working server | Disable for a clean `claude mcp list` |
-|------|---------------------|----------------|----------------------------------------|
-| Local (default) | unset | `voicemode` (stdio) | `disabledMcpjsonServers: ["voicemode-remote"]` — optional, cosmetic |
-| Remote-only | set | `voicemode-remote` (http) | `disabledMcpjsonServers: ["voicemode"]` — recommended (stops the unused local stdio) |
-| Both (advanced) | set | both | nothing |
-
-> **Note on the default install:** with `VOICEMODE_MCP_URL` unset, the
-> `voicemode-remote` entry shows as a *failed* server in `claude mcp list`
-> (Claude Code does not skip an http entry with an unset URL variable — it
-> reports a connection failure). This is **cosmetic only** and never affects
-> the working local `voicemode` stdio server. Stdio-only users who want a
-> clean list can suppress it with
-> `disabledMcpjsonServers: ["voicemode-remote"]`.
+There is no per-mode `disabledMcpjsonServers` table any more, and no
+"failed server" cosmetic note: there is only ever the one `voicemode` entry,
+and it connects whichever way `VOICEMODE_MCP_URL` says.
 
 ### Authentication
 
@@ -172,17 +170,18 @@ serve-side config:
 - **Secret in path (zero extra config):** put the secret in the URL —
   `VOICEMODE_MCP_URL=https://host/mcp/<secret>` — matched by
   `VOICEMODE_SERVE_SECRET` on the serve side.
-- **Bearer token (optional):** set `VOICEMODE_MCP_TOKEN` and add a `headers`
-  block to the plugin `.mcp.json` so the remote entry sends
-  `Authorization: Bearer ${VOICEMODE_MCP_TOKEN}` (matched by
-  `VOICEMODE_SERVE_TOKEN`). Secret-in-path is the recommended default.
+- **Bearer token (optional):** set `VOICEMODE_MCP_TOKEN`. The launcher's
+  native bridge sends `Authorization: Bearer <token>` automatically (matched
+  by `VOICEMODE_SERVE_TOKEN`). No `.mcp.json` edit, no `headers` block — set
+  it in `voicemode.env` or the environment. Secret-in-path is the
+  recommended default.
 - **IP allowlist:** enforced at the serve side
   (`--allow-tailscale` / `--allow-ip`); nothing on the plugin side.
 
-If the endpoint is unreachable or unauthorized, Claude Code reports the
-remote `voicemode-remote` server as failed (with its config-issue hint and
-the HTTP status / URL via `/mcp`). Re-check `VOICEMODE_MCP_URL`, the secret,
-and that `voicemode serve` is running and allows your IP. See the
+If the endpoint is unreachable or unauthorized, the bridge surfaces the
+connection error on stderr and the `voicemode` server shows as failed in
+`claude mcp list`. Re-check `VOICEMODE_MCP_URL`, the secret, and that
+`voicemode serve` is running and allows your IP. See the
 [Serve Configuration troubleshooting](serve-configuration.md#troubleshooting).
 
 ### Duplicate-MCP precedence (the footgun)
@@ -196,12 +195,11 @@ precedence; the bundled server is the fallback). There is never a silent
 
 - A user who already ran
   `claude mcp add --transport http voicemode <url>` overrides the bundled
-  stdio server with no extra steps.
+  launcher with no extra steps.
 - To run *only* a separately-configured voicemode, disable the bundled one:
   `disabledMcpjsonServers: ["voicemode"]`.
-- The plugin's remote entry uses a **distinct** name (`voicemode-remote`),
-  so you can intentionally run bundled-local + plugin-remote side by side
-  (advanced).
+- The plugin no longer ships a second `voicemode-remote` entry; remote vs
+  local is selected by `VOICEMODE_MCP_URL` on the single bundled entry.
 
 ## Hooks and Soundfonts
 

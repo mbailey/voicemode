@@ -2340,6 +2340,32 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
         raise click.Abort()
 
 
+# VM-1314: native stdio<->Streamable-HTTP bridge. Hidden -- it is plumbing for
+# the plugin's smart launcher (voicemode-mcp-launcher), not a user-facing
+# command, but exposing it as a subcommand makes the bridge directly testable
+# end-to-end against a real `voicemode serve`.
+@voice_mode_main_cli.command(name="mcp-bridge", hidden=True)
+@click.help_option('-h', '--help')
+@click.argument('url')
+@click.option('--token', default=None,
+              help='Bearer token (Authorization: Bearer <token>). '
+                   'Defaults to $VOICEMODE_MCP_TOKEN.')
+def mcp_bridge(url: str, token: str | None):
+    """Bridge this stdio process to a remote Streamable-HTTP voicemode serve.
+
+    Native (no npx/Node). Used by the plugin's smart launcher when
+    VOICEMODE_MCP_URL is set; also runnable directly for testing:
+
+        voicemode mcp-bridge http://host:8765/mcp
+        voicemode mcp-bridge http://host:8765/mcp/<secret> --token <tok>
+    """
+    from .mcp_bridge import run_bridge
+
+    if token is None:
+        token = os.environ.get("VOICEMODE_MCP_TOKEN", "").strip() or None
+    run_bridge(url, token)
+
+
 # Completions command
 @voice_mode_main_cli.command()
 @click.help_option('-h', '--help')

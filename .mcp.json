@@ -5,15 +5,11 @@
       "command": "uv",
       "args": [
         "run",
-        "voicemode"
+        "voicemode-mcp-launcher"
       ],
       "env": {
         "#VOICEMODE_SAVE_ALL": "true"
       }
-    },
-    "voicemode-remote": {
-      "type": "http",
-      "url": "${VOICEMODE_MCP_URL}"
     }
   }
 }

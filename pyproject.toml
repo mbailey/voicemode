@@ -91,6 +91,9 @@ Issues = "https://github.com/mbailey/voicemode/issues"
 [project.scripts]
 voice-mode = "voice_mode.cli:voice_mode"
 voicemode = "voice_mode.cli:voice_mode"
+# VM-1314: the plugin's single .mcp.json entry runs this smart launcher.
+# Unset VOICEMODE_MCP_URL -> local stdio server; set -> native remote bridge.
+voicemode-mcp-launcher = "voice_mode.mcp_launcher:main"
 
 [tool.uv]
 # Constrain transitive deps that have known vulnerabilities but aren't bumped
