@@ -8,7 +8,6 @@ import numpy as np
 import sys
 sys.modules['webrtcvad'] = MagicMock()
 sys.modules['sounddevice'] = MagicMock()
-sys.modules['livekit'] = MagicMock()
 
 
 @pytest.mark.asyncio
