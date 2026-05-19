@@ -48,12 +48,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-livekit = [
-    "livekit>=0.13.1",
-    "livekit-agents>=0.10.2",
-    "livekit-plugins-openai>=0.10.1",
-    "livekit-plugins-silero>=0.6.5",
-]
 dev = [
     "build>=1.0.0",
     "twine>=4.0.0",
