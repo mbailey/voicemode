@@ -39,7 +39,7 @@ make build-dev
 # Test package installation
 make test-package
 
-# Release workflow (bumps version, tags, pushes)
+# Release workflow (bumps version, tags, pushes) — see "Releases & Changelog" below before running
 make release
 ```
 
@@ -54,6 +54,55 @@ make docs-build
 # Check docs for errors (strict mode)
 make docs-check
 ```
+
+## Releases & Changelog
+
+**The changelog is the release notes.** Keep it accurate continuously — it is not written at release time.
+
+### Versioning
+
+- Semantic Versioning, `X.Y.Z`. New backward-compatible features → minor bump (e.g. `8.6.1` → `8.7.0`); fixes only → patch.
+- **Source of truth: `voice_mode/__version__.py`** — auto-updated by the release script. **Never edit it by hand** (it says so itself). `pyproject.toml` reads it via `[tool.hatch.version]`.
+- The release script also bumps `server.json`, `installer/pyproject.toml`, and `.claude-plugin/plugin.json` (the plugin gets a `p0` suffix, e.g. `8.7.0p0`). Don't bump these manually either.
+
+### The CHANGELOG is continuously maintained
+
+- Format: [Keep a Changelog](https://keepachangelog.com/) — a `## [Unreleased]` section at the top with `### Added / Changed / Deprecated / Removed / Fixed` (this project also uses a `### Migration` subsection).
+- **As PRs land, their user-facing changes go into `## [Unreleased]`** — not deferred to release day. Reference task IDs (`VM-xxxx`) and PR links, matching the existing entry style.
+- Write entries as **release notes for users**: GitHub Actions extracts the version's changelog section verbatim into the GitHub Release (see below), so it must read well standalone and showcase new functionality.
+- The `/changelog` skill (`claude-code-tools:changelog`) can help draft entries, but headline/showcase wording is human-curated because it ships to users.
+
+### Cutting a release — `make release`
+
+```bash
+make release        # prompts for the new version, then runs scripts/release.py X.Y.Z
+```
+
+`scripts/release.py X.Y.Z` does **all of this automatically** — do NOT do these by hand:
+
+1. Bumps the version in all four files above.
+2. **Rewrites the CHANGELOG header**: turns `## [Unreleased]` into `## [Unreleased]` (fresh empty) + `## [X.Y.Z] - YYYY-MM-DD` below it. **So never manually cut the version header or add the date — that is the release script's job.** Your only changelog responsibility before a release is making sure the *Unreleased* section is complete and accurate.
+3. `git commit -m "chore: bump version to X.Y.Z for all packages"`.
+4. Creates annotated tag `vX.Y.Z`.
+5. `git push origin` (the **current branch**) + pushes the tag.
+
+Useful flags (pass via `scripts/release.py` directly): `--current` (print version), `--no-commit` (update files only), `--no-push` (commit + tag, no push), `--package package|installer`.
+
+### What the tag triggers
+
+Pushing a `v*` tag fires two GitHub Actions workflows:
+
+- **`create-release.yml`** — `awk`-extracts the `## [X.Y.Z] - DATE` section from CHANGELOG.md and publishes it as the GitHub Release body. **The header must be exactly `## [X.Y.Z] - DATE`** or extraction yields empty notes — another reason to let `release.py` write it.
+- **`publish-pypi-and-mcp.yml`** — builds and publishes packages to PyPI and the MCP registry.
+
+Monitor: https://github.com/mbailey/voicemode/actions
+
+### Pre-release checklist (do this before `make release`)
+
+1. **Be on `master` and `git pull` first.** Mike merges PRs locally (`--no-ff`) and pushes master; `release.py` pushes whatever branch you're on, so the tag must be cut from an up-to-date `master` or merged work is silently excluded.
+2. Verify `## [Unreleased]` is complete — every merged user-facing PR represented, headline features showcased. Cross-check against `git log <last-tag>..origin/master`.
+3. Decide the version bump per SemVer.
+4. `make release`, then watch the Actions run.
 
 ## Architecture Overview
 
