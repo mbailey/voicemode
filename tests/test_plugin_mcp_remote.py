@@ -1,4 +1,4 @@
-"""VM-1292 plugin MCP transport tests, updated for the VM-1314 fix.
+"""VM-1292 plugin MCP transport tests, updated for VM-1314 and the VM-1364 revert.
 
 VM-1292 shipped a two-entry ``.mcp.json`` (stdio ``voicemode`` + http
 ``voicemode-remote``), which meant the local stdio server *always* spawned
@@ -6,8 +6,21 @@ unless the user manually added ``disabledMcpjsonServers``. VM-1314 replaces
 that with ONE ``type: stdio`` entry whose command is a smart launcher
 (``voicemode-mcp-launcher``) that selects transport itself.
 
-This file therefore now asserts the **VM-1314 single-entry contract** (the
-old two-entry assertions tested the very design VM-1314 deliberately removes).
+**VM-1364 temporary revert:** the launcher binary isn't shipped in the latest
+PyPI release yet, and Claude Code plugins install ``.mcp.json`` from the
+default branch -- so fresh plugin installs were failing. ``.mcp.json`` is
+reverted to the v8.6.1 form (``uv run voicemode``) until the launcher binary
+ships. The launcher-form assertions will be restored as part of the next
+release commit (VM-1366).
+
+This file therefore asserts:
+
+- The VM-1314 single-entry contract (no two-entry config, no http transport
+  in ``.mcp.json``). Still applies — we're only changing *which* command the
+  single entry runs.
+- The VM-1364 reverted command (``uv run voicemode``). To re-apply VM-1314:
+  flip ``EXPECTED_STDIO_ENTRY`` back to the ``voicemode-mcp-launcher`` form.
+
 The launcher's runtime branching is covered by ``test_plugin_mcp_launcher``.
 
 Still covered here:
@@ -33,19 +46,27 @@ MCP_JSON = REPO_ROOT / ".mcp.json"
 CONFIG_PY = REPO_ROOT / "voice_mode" / "config.py"
 HOOK_RECEIVER = REPO_ROOT / "voice_mode" / "data" / "hooks" / "voicemode-hook-receiver.sh"
 
-# VM-1314: the single entry runs the smart launcher, not `voicemode` directly.
-# VM-1340: invoked as a bare console-script command, NOT `uv run ...`. This
-# `.mcp.json` is dual-use -- it is both the shipped plugin MCP config AND the
-# repo's own project `.mcp.json` (used whenever Claude Code runs inside this
-# repo). That rules out `uv run` (resolves a project from cwd, so it couples
-# startup to whatever dir Claude Code is in) and any `${CLAUDE_PLUGIN_ROOT}`
-# form (expanded only in plugin context, empty in project context). A bare
-# console-script command is PATH-neutral vs the old `uv` (the `uv` binary
-# lives in the same bin dir as the script) and behaves identically in both
+# VM-1364 (temporary revert): the launcher binary `voicemode-mcp-launcher` is
+# present in this branch but NOT yet shipped in the latest PyPI release
+# (v8.6.1). Claude Code plugins install `.mcp.json` from the default branch,
+# so every fresh `claude plugin install voicemode@voicemode` was failing with
+# `voicemode-mcp-launcher - ✗ Failed to connect`. `.mcp.json` is reverted to
+# the v8.6.1 form (`uv run voicemode`) until the next release ships the
+# launcher binary; the launcher invocation will be restored as part of that
+# release commit (VM-1366) so master never points at an unreleased binary.
+#
+# VM-1314 (pending re-application at next release): the single entry runs the
+# smart launcher, not `voicemode` directly.
+# VM-1340 (pending re-application at next release): bare console-script form,
+# not `uv run ...`, because `.mcp.json` is dual-use (shipped plugin MCP config
+# AND the repo's own project `.mcp.json`); `uv run` resolves a project from
+# cwd, coupling startup to whatever dir Claude Code is in. A bare
+# console-script command is PATH-neutral and behaves identically in both
 # contexts. See task VM-1340.
 EXPECTED_STDIO_ENTRY = {
     "type": "stdio",
-    "command": "voicemode-mcp-launcher",
+    "command": "uv",
+    "args": ["run", "voicemode"],
     "env": {"#VOICEMODE_SAVE_ALL": "true"},
 }
 
@@ -65,7 +86,11 @@ class TestMcpJson:
         assert "voicemode-remote" not in servers
 
     def test_only_entry_is_stdio_launcher(self, mcp_config):
-        """The one entry is stdio and runs the first-party launcher."""
+        """The one entry is stdio and points at a command shipped in the
+        latest PyPI release. VM-1364 temporarily uses ``uv run voicemode``
+        (the v8.6.1 form); this assertion flips back to the
+        ``voicemode-mcp-launcher`` smart-launcher form at the next release
+        (see VM-1366)."""
         assert mcp_config["mcpServers"]["voicemode"] == EXPECTED_STDIO_ENTRY
 
     def test_no_http_entry_anywhere(self, mcp_config):
