@@ -2,7 +2,11 @@
   "mcpServers": {
     "voicemode": {
       "type": "stdio",
-      "command": "voicemode-mcp-launcher",
+      "command": "uv",
+      "args": [
+        "run",
+        "voicemode"
+      ],
       "env": {
         "#VOICEMODE_SAVE_ALL": "true"
       }
