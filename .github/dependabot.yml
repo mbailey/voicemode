@@ -17,10 +17,13 @@ updates:
       prefix: "deps"
       include: "scope"
     groups:
-      python-minor-and-patch:
+      # Group every bump (major/minor/patch) into a single weekly PR.
+      # Trades fine-grained review for a clean inbox; CI is the gate.
+      python-all:
         patterns:
           - "*"
         update-types:
+          - "major"
           - "minor"
           - "patch"
 
@@ -39,10 +42,11 @@ updates:
       prefix: "deps(installer)"
       include: "scope"
     groups:
-      installer-minor-and-patch:
+      installer-all:
         patterns:
           - "*"
         update-types:
+          - "major"
           - "minor"
           - "patch"
 
@@ -60,9 +64,10 @@ updates:
       prefix: "ci"
       include: "scope"
     groups:
-      actions-minor-and-patch:
+      actions-all:
         patterns:
           - "*"
         update-types:
+          - "major"
           - "minor"
           - "patch"
