@@ -223,27 +223,38 @@ class TestSttModelSelection:
             last_error=None,
         )
 
-    def test_openai_override_returns_whisper_1_regardless_of_requested(self):
-        """Branch 1: provider_type == 'openai' always returns 'whisper-1',
-        even when caller passes a different model and STT_MODELS configures
-        a positional override."""
+    def test_positional_wins_over_openai_default(self):
+        """Branch 1 (new priority): positional STT_MODELS entry beats the
+        openai-default whisper-1 guard AND any caller-passed model.
+        When no positional entry exists, openai falls back to whisper-1."""
         endpoint = self._make_endpoint("https://api.openai.com/v1", "openai")
+        # Case A: positional entry present → positional wins over openai default AND caller
         with patch(
             "voice_mode.providers.STT_BASE_URLS",
             ["https://api.openai.com/v1"],
         ), patch(
             "voice_mode.providers.STT_MODELS",
-            ["mlx-community/whisper-large-v3-turbo"],
+            ["gpt-4o-mini-transcribe"],
         ), patch("voice_mode.providers.STT_MODEL", "global-default"):
-            assert _select_stt_model_for_endpoint(endpoint) == "whisper-1"
+            assert _select_stt_model_for_endpoint(endpoint) == "gpt-4o-mini-transcribe"
             assert (
                 _select_stt_model_for_endpoint(endpoint, "caller-passed")
-                == "whisper-1"
+                == "gpt-4o-mini-transcribe"
             )
+        # Case B: no positional entry → falls through to openai default whisper-1
+        with patch(
+            "voice_mode.providers.STT_BASE_URLS",
+            ["https://api.openai.com/v1"],
+        ), patch(
+            "voice_mode.providers.STT_MODELS",
+            [],
+        ), patch("voice_mode.providers.STT_MODEL", "global-default"):
+            assert _select_stt_model_for_endpoint(endpoint) == "whisper-1"
 
-    def test_caller_passed_wins_for_non_openai(self):
-        """Branch 2: caller-passed requested_model is honored for non-OpenAI
-        providers (whisper.cpp, mlx-audio, openai-compatible, unknown)."""
+    def test_positional_wins_over_caller_passed(self):
+        """Branch 2 (new priority): positional STT_MODELS entry beats a
+        caller-passed requested_model for ALL provider types.
+        When no positional entry is present, caller-passed is honored."""
         for provider_type in (
             "whisper",
             "mlx-audio",
@@ -253,6 +264,7 @@ class TestSttModelSelection:
             endpoint = self._make_endpoint(
                 "http://127.0.0.1:2022/v1", provider_type
             )
+            # Case A: positional entry present → positional beats caller-passed
             with patch(
                 "voice_mode.providers.STT_BASE_URLS",
                 ["http://127.0.0.1:2022/v1"],
@@ -261,8 +273,19 @@ class TestSttModelSelection:
             ), patch("voice_mode.providers.STT_MODEL", "global-default"):
                 assert (
                     _select_stt_model_for_endpoint(endpoint, "caller-model")
+                    == "positional-model"
+                ), f"positional should beat caller-passed for provider_type={provider_type}"
+            # Case B: no positional entry → caller-passed wins
+            with patch(
+                "voice_mode.providers.STT_BASE_URLS",
+                ["http://127.0.0.1:2022/v1"],
+            ), patch(
+                "voice_mode.providers.STT_MODELS", []
+            ), patch("voice_mode.providers.STT_MODEL", "global-default"):
+                assert (
+                    _select_stt_model_for_endpoint(endpoint, "caller-model")
                     == "caller-model"
-                ), f"caller-passed should win for provider_type={provider_type}"
+                ), f"caller-passed should win when no positional for provider_type={provider_type}"
 
     def test_positional_stt_models_used_when_caller_passed_is_none(self):
         """Branch 3: when caller-passed is None and the endpoint URL is in
