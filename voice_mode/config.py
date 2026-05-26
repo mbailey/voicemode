@@ -601,6 +601,8 @@ TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
 STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
 STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
+# Enable streaming transcription for models that support it (gpt-4o-transcribe, gpt-4o-mini-transcribe)
+STT_STREAMING = os.getenv("VOICEMODE_STT_STREAMING", "").lower() in ("1", "true", "yes")
 
 # STT prompt for vocabulary biasing (helps with specialized terminology)
 # See: https://platform.openai.com/docs/guides/speech-to-text#prompting
@@ -653,13 +655,14 @@ def reload_configuration():
     load_voicemode_env()
     
     # Update global configuration variables
-    global TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS
+    global TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS, STT_STREAMING
     TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
     STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
     TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
     TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
     STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
     STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
+    STT_STREAMING = os.getenv("VOICEMODE_STT_STREAMING", "").lower() in ("1", "true", "yes")
 
     logger.info("Configuration reloaded successfully")
 

@@ -64,7 +64,8 @@ from voice_mode.config import (
     CONCH_ENABLED,
     CONCH_TIMEOUT,
     CONCH_CHECK_INTERVAL,
-    AUTO_FOCUS_PANE
+    AUTO_FOCUS_PANE,
+    STT_MODEL
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -488,7 +489,7 @@ async def get_stt_config(provider: Optional[str] = None):
     # Return simplified configuration
     return {
         'base_url': base_url,
-        'model': 'whisper-1',
+        'model': STT_MODEL,
         'provider': 'whisper-local' if '127.0.0.1' in base_url or 'localhost' in base_url else 'openai-whisper',
         'provider_type': provider_type
     }
@@ -2003,7 +2004,7 @@ consult the MCP resources listed above.
                     
                     conversation_logger.log_stt(
                         text=response_text if response_text else "[no speech detected]",
-                        model=stt_config.get('model', 'whisper-1'),
+                        model=stt_config.get('model', STT_MODEL),
                         provider=stt_config.get('provider', 'openai'),
                         provider_url=stt_config.get('base_url'),
                         provider_type=stt_config.get('provider_type'),
@@ -2085,7 +2086,7 @@ consult the MCP resources listed above.
                         "transport": transport,
                         "voice": voice,
                         "model": tts_model,
-                        "stt_model": "whisper-1",  # Default STT model
+                        "stt_model": stt_config.get('model', STT_MODEL),
                         "timing": timing_str,
                         "timestamp": datetime.now().isoformat()
                     }

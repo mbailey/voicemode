@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from .openai_error_parser import OpenAIErrorParser
 from .provider_discovery import is_local_provider
 
-from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE
+from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE, STT_STREAMING
 from .provider_discovery import detect_provider_type, EndpointInfo
 from .providers import _select_stt_model_for_endpoint
 
@@ -295,7 +295,34 @@ async def simple_stt_failover(
                 transcription_kwargs["language"] = "auto"
             # For OpenAI with "auto" - don't pass parameter (auto-detect by default)
 
-            transcription = await client.audio.transcriptions.create(**transcription_kwargs)
+            # Use streaming transcription when enabled and model supports it.
+            # gpt-4o-transcribe / gpt-4o-mini-transcribe deliver first-token in
+            # ~500-800 ms vs ~2150 ms for whisper-1 batch. We still collect all
+            # deltas before returning so callers get a complete transcript.
+            _streaming_models = {"gpt-4o-transcribe", "gpt-4o-mini-transcribe"}
+            use_streaming = (
+                STT_STREAMING
+                and resolved_model in _streaming_models
+                and not is_local_provider(base_url)
+            )
+
+            if use_streaming:
+                text_parts = []
+                async with client.audio.transcriptions.stream(
+                    **transcription_kwargs
+                ) as stream:
+                    async for event in stream:
+                        if hasattr(event, "type"):
+                            if event.type == "transcript.text.delta":
+                                text_parts.append(event.delta)
+                            elif event.type == "transcript.text.done":
+                                # Final text supersedes accumulated deltas
+                                text_parts = [event.text]
+                                break
+                text_raw = "".join(text_parts)
+                transcription = type("_T", (), {"text": text_raw})()
+            else:
+                transcription = await client.audio.transcriptions.create(**transcription_kwargs)
             request_time_ms = (time.perf_counter() - request_start) * 1000
 
             text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
