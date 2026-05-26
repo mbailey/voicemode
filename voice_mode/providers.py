@@ -253,25 +253,24 @@ def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model:
     """Select the STT model name to send to an endpoint.
 
     Resolution order:
-      1. provider_type == "openai" -> always "whisper-1" (OpenAI's only STT model id)
-      2. caller-passed requested_model wins
-      3. positional STT_MODELS entry matching this endpoint's index in STT_BASE_URLS
+      1. positional STT_MODELS entry matching this endpoint's index in STT_BASE_URLS
+         (highest priority — allows gpt-4o-mini-transcribe on the OpenAI endpoint)
+      2. caller-passed requested_model
+      3. provider_type == "openai" -> "whisper-1" (legacy default)
       4. global STT_MODEL fallback
-
-    Note: the OpenAI override keys off endpoint_info.provider_type. If an
-    OpenAI-compatible endpoint ever sets provider_type="openai" this branch
-    would be too broad -- revisit when VM-1106-style provider detection lands.
     """
-    if endpoint_info.provider_type == "openai":
-        return "whisper-1"
-
-    if requested_model is not None:
-        return requested_model
-
+    # Positional per-endpoint config wins — allows gpt-4o-mini-transcribe on OpenAI endpoint
     if endpoint_info.base_url in STT_BASE_URLS:
         idx = STT_BASE_URLS.index(endpoint_info.base_url)
         if idx < len(STT_MODELS) and STT_MODELS[idx]:
             return STT_MODELS[idx]
+
+    if requested_model is not None:
+        return requested_model
+
+    # Legacy default: OpenAI only supported whisper-1 before gpt-4o-transcribe variants
+    if endpoint_info.provider_type == "openai":
+        return "whisper-1"
 
     return STT_MODEL
 
