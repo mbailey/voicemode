@@ -51,6 +51,14 @@
         "Standardized log paths to ~/.voicemode/logs/<service>/",
         "Removed WorkingDirectory from templates (start scripts handle it)"
       ]
+    },
+    "1.3.1": {
+      "date": "2026-05-28",
+      "changes": [
+        "Fixed: systemd templates now use Restart=always (was Restart=on-failure)",
+        "Kokoro's UVICORN_LIMIT_MAX_REQUESTS memory-leak workaround caused clean (status 0) exits that on-failure ignored, leaving the service dead after the request limit (GH-448, VM-1398)",
+        "whisper and serve units changed defensively for consistency"
+      ]
     }
   }
 }

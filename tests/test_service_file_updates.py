@@ -86,12 +86,76 @@ def test_get_service_config_vars_returns_empty_when_no_script_found():
             assert config_vars["START_SCRIPT"] == ""
 
 
+def test_systemd_templates_use_restart_always_not_on_failure():
+    """All systemd unit templates must use Restart=always, not Restart=on-failure.
+
+    Regression guard for VM-1398 / GH-448: kokoro's UVICORN_LIMIT_MAX_REQUESTS
+    workaround makes uvicorn exit cleanly (status 0) after N requests, but
+    Restart=on-failure only fires on non-zero exits. The two directives cancel
+    each other out and the service stays dead. Restart=always survives both
+    clean and dirty exits; RestartPreventExitStatus=127 still guards against
+    fight-looping on a missing executable.
+
+    Whisper and serve are checked defensively — same shape of bug if either
+    grew a max-requests env in future.
+    """
+    from pathlib import Path
+
+    templates_dir = Path(__file__).parent.parent / "voice_mode" / "templates" / "systemd"
+    units = [
+        templates_dir / "voicemode-kokoro.service",
+        templates_dir / "voicemode-whisper.service",
+        templates_dir / "voicemode-serve.service",
+    ]
+
+    for unit_path in units:
+        assert unit_path.exists(), f"missing template: {unit_path}"
+        content = unit_path.read_text()
+        # Catch both `Restart=on-failure` and `Restart = on-failure` (and
+        # commented-out historical references stay fine — they start with #).
+        for line in content.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            if stripped.startswith("Restart") and "=" in stripped:
+                key, _, value = stripped.partition("=")
+                if key.strip() == "Restart":
+                    assert value.strip() == "always", (
+                        f"{unit_path.name} has Restart={value.strip()!r}; "
+                        f"must be 'always' to survive clean exits from "
+                        f"UVICORN_LIMIT_MAX_REQUESTS (VM-1398 / GH-448)."
+                    )
+
+
+def test_kokoro_systemd_template_keeps_restart_prevent_exit_status_guard():
+    """Kokoro unit must keep RestartPreventExitStatus=127.
+
+    The VM-1398 fix relies on this to avoid fight-looping if start-gpu.sh is
+    missing (systemd exit code 127 = command not found). Documents the
+    safety-net so a future "simplify" pass doesn't drop it.
+    """
+    from pathlib import Path
+
+    unit = (
+        Path(__file__).parent.parent
+        / "voice_mode"
+        / "templates"
+        / "systemd"
+        / "voicemode-kokoro.service"
+    )
+    content = unit.read_text()
+    assert "RestartPreventExitStatus=127" in content, (
+        "voicemode-kokoro.service must keep RestartPreventExitStatus=127 to "
+        "prevent Restart=always fight-looping on missing executable (VM-1398)."
+    )
+
+
 def test_get_service_config_vars_selects_gpu_script_when_gpu_available():
     """Test that get_service_config_vars prefers GPU script when GPU is detected."""
     import platform
     import tempfile
     from pathlib import Path
-    
+
     if platform.system() == "Darwin":
         pytest.skip("macOS always uses start-gpu_mac.sh")
     

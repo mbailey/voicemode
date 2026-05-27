@@ -1,5 +1,5 @@
-# voicemode-whisper.service v1.2.0
-# Last updated: 2025-12-01
+# voicemode-whisper.service v1.2.1
+# Last updated: 2026-05-28
 # Simplified: start script handles config via voicemode.env
 
 [Unit]
@@ -9,7 +9,10 @@ After=network.target
 [Service]
 Type=simple
 ExecStart={START_SCRIPT}
-Restart=on-failure
+# Restart=always (not on-failure) so a clean exit (e.g. a future request-limit
+# workaround mirroring kokoro's UVICORN_LIMIT_MAX_REQUESTS) still triggers a
+# restart. Defensive alignment with kokoro fix (GH-448, VM-1398).
+Restart=always
 RestartSec=10
 
 # Environment - start script sources voicemode.env for port/model config
