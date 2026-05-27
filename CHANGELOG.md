@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.6.2] - 2026-05-28
+
 ### Fixed
 
 - **Kokoro service no longer silently dies after `UVICORN_LIMIT_MAX_REQUESTS` requests on Linux** (VM-1398, [#448](https://github.com/mbailey/voicemode/issues/448) — reported by @JulesGosnell) — The systemd unit `voicemode-kokoro.service` combined `Restart=on-failure` with `Environment="UVICORN_LIMIT_MAX_REQUESTS=25"` (the memory-leak workaround from VM-358). Hitting the request limit makes uvicorn exit cleanly (status 0), which `on-failure` treats as a successful shutdown — so the service stayed dead and the 26th TTS request failed with connection refused. The leak workaround was silently disabling the very service it was meant to protect. **Switched to `Restart=always`** in the kokoro template (and defensively in the whisper and serve templates for the same shape of bug). `RestartPreventExitStatus=127` still guards against fight-looping on a missing executable. **macOS / launchd was unaffected** — its plist uses `KeepAlive=true`, which restarts on clean exits too. To recover an existing v1.3.0 deployment without reinstalling: `sed -i 's/^Restart=on-failure/Restart=always/' ~/.config/systemd/user/voicemode-kokoro.service && systemctl --user daemon-reload && systemctl --user restart voicemode-kokoro.service`.
