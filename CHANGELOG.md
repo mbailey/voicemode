@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Kokoro service no longer silently dies after `UVICORN_LIMIT_MAX_REQUESTS` requests on Linux** (VM-1398, [#448](https://github.com/mbailey/voicemode/issues/448) — reported by @JulesGosnell) — The systemd unit `voicemode-kokoro.service` combined `Restart=on-failure` with `Environment="UVICORN_LIMIT_MAX_REQUESTS=25"` (the memory-leak workaround from VM-358). Hitting the request limit makes uvicorn exit cleanly (status 0), which `on-failure` treats as a successful shutdown — so the service stayed dead and the 26th TTS request failed with connection refused. The leak workaround was silently disabling the very service it was meant to protect. **Switched to `Restart=always`** in the kokoro template (and defensively in the whisper and serve templates for the same shape of bug). `RestartPreventExitStatus=127` still guards against fight-looping on a missing executable. **macOS / launchd was unaffected** — its plist uses `KeepAlive=true`, which restarts on clean exits too. To recover an existing v1.3.0 deployment without reinstalling: `sed -i 's/^Restart=on-failure/Restart=always/' ~/.config/systemd/user/voicemode-kokoro.service && systemctl --user daemon-reload && systemctl --user restart voicemode-kokoro.service`.
+
+- **Fresh plugin installs no longer fail with "voicemode-mcp-launcher not found"** (VM-1364, [#441](https://github.com/mbailey/voicemode/issues/441)) — `.mcp.json` on `master` was switched to invoke the new `voicemode-mcp-launcher` binary (VM-1314), but the binary only exists in `master` — it isn't shipped in the latest PyPI release (8.6.1). Because Claude Code plugins install `.mcp.json` from the default branch, every fresh `claude plugin install voicemode@voicemode` produced `voicemode: voicemode-mcp-launcher - ✗ Failed to connect`. Reverted `.mcp.json` to the v8.6.1 form (`command: uv`, `args: [run, voicemode]`) so plugin installs work against the released package. The launcher invocation will be restored at the next release, alongside the published binary.
+- **Provider tests no longer fail when user voicemode.env overrides TTS/STT base URLs** (VM-1138, [#370](https://github.com/mbailey/voicemode/pull/370)) -- `tests/test_providers.py` (and friends) now isolate themselves from the user's `~/.voicemode/voicemode.env`, so `VOICEMODE_TTS_BASE_URLS` / `VOICEMODE_STT_BASE_URLS` overrides on the dev machine no longer break the suite.
+- **Opus playback no longer truncates the tail** -- Pad trailing silence on opus output to prevent the last frame being clipped.
+- **Kokoro install pinned to fork with opus tail fix** -- `voicemode service install kokoro` now installs from `ai-cora/Kokoro-FastAPI` until the fix lands upstream.
+
+## [Pending 8.7.0]
+
+<!--
+PARKED CONTENT — DO NOT EDIT IN PLACE.
+
+This section was temporarily lifted out of [Unreleased] to keep the 8.6.2
+patch release narrowly scoped to Fixed entries (VM-1398 trigger, GH-448).
+
+After v8.6.2 ships, merge this section's contents back into the empty
+[Unreleased] header that `scripts/release.py` will have left at the top of
+the file, then delete this [Pending 8.7.0] heading.
+
+See PR chore/cut-862 for the split commit; restore happens in chore/restore-870.
+-->
+
 ### Added
 
 - **`install.sh` now detects system capability and offers mlx-audio on Apple Silicon (VM-1330)** — The `curl | bash` installer (`https://getvoicemode.com/install.sh`) assesses the host (Apple Silicon → excellent, other → good/limited) and, on Apple Silicon, offers to install and configure **mlx-audio** as the local voice engine — *even when whisper.cpp + Kokoro are already present*. The flow is **status-first**: it reports what's already installed and skips the prompt entirely when voice services are already satisfied. mlx-audio stays **opt-in** (whisper.cpp + Kokoro remain the cross-platform fallback; Intel Macs / Linux / Windows are unaffected). Reworded prompts and a de-emojified banner round out the pass. The large orange VoiceMode ASCII banner is restored (24-bit truecolor) after a regression to a compact 3-line version (VM-1324). Part of the installer overhaul for the mlx-audio release (epic VM-1322).
@@ -59,14 +83,8 @@ Newer Claude Code releases collapse MCP tool calls in the visible transcript, wh
 
 ### Fixed
 
-- **Kokoro service no longer silently dies after `UVICORN_LIMIT_MAX_REQUESTS` requests on Linux** (VM-1398, [#448](https://github.com/mbailey/voicemode/issues/448) — reported by @JulesGosnell) — The systemd unit `voicemode-kokoro.service` combined `Restart=on-failure` with `Environment="UVICORN_LIMIT_MAX_REQUESTS=25"` (the memory-leak workaround from VM-358). Hitting the request limit makes uvicorn exit cleanly (status 0), which `on-failure` treats as a successful shutdown — so the service stayed dead and the 26th TTS request failed with connection refused. The leak workaround was silently disabling the very service it was meant to protect. **Switched to `Restart=always`** in the kokoro template (and defensively in the whisper and serve templates for the same shape of bug). `RestartPreventExitStatus=127` still guards against fight-looping on a missing executable. **macOS / launchd was unaffected** — its plist uses `KeepAlive=true`, which restarts on clean exits too. To recover an existing v1.3.0 deployment without reinstalling: `sed -i 's/^Restart=on-failure/Restart=always/' ~/.config/systemd/user/voicemode-kokoro.service && systemctl --user daemon-reload && systemctl --user restart voicemode-kokoro.service`.
-
-- **Fresh plugin installs no longer fail with "voicemode-mcp-launcher not found"** (VM-1364, [#441](https://github.com/mbailey/voicemode/issues/441)) — `.mcp.json` on `master` was switched to invoke the new `voicemode-mcp-launcher` binary (VM-1314), but the binary only exists in `master` — it isn't shipped in the latest PyPI release (8.6.1). Because Claude Code plugins install `.mcp.json` from the default branch, every fresh `claude plugin install voicemode@voicemode` produced `voicemode: voicemode-mcp-launcher - ✗ Failed to connect`. Reverted `.mcp.json` to the v8.6.1 form (`command: uv`, `args: [run, voicemode]`) so plugin installs work against the released package. The launcher invocation will be restored at the next release, alongside the published binary.
-- **Provider tests no longer fail when user voicemode.env overrides TTS/STT base URLs** (VM-1138, [#370](https://github.com/mbailey/voicemode/pull/370)) -- `tests/test_providers.py` (and friends) now isolate themselves from the user's `~/.voicemode/voicemode.env`, so `VOICEMODE_TTS_BASE_URLS` / `VOICEMODE_STT_BASE_URLS` overrides on the dev machine no longer break the suite.
 - **mlx-audio install no longer fails at the patch step** (VM-1126) -- `voicemode service install mlx-audio` would fail with "Patch step failed: ... 2 out of 5 hunks failed" against mlx-audio 0.4.3. The MLX Metal serialisation lock the bundled patch carried ([ml-explore/mlx#2133](https://github.com/ml-explore/mlx/issues/2133)) is upstream from 0.4.3 on, so the patch now adds lines that already exist and rejects.
 - **mlx-audio STT `response_format` patch restored** (VM-1128) -- VM-1126 over-removed: while the Metal lock was upstreamed, the OpenAI-style STT `response_format` handling on `/v1/audio/transcriptions` is *not* yet in mlx-audio 0.4.3. Restored as a separate patch.
-- **Opus playback no longer truncates the tail** -- Pad trailing silence on opus output to prevent the last frame being clipped.
-- **Kokoro install pinned to fork with opus tail fix** -- `voicemode service install kokoro` now installs from `ai-cora/Kokoro-FastAPI` until the fix lands upstream.
 
 ### Changed
 
