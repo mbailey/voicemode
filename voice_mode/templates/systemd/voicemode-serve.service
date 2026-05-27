@@ -1,5 +1,5 @@
-# voicemode-serve.service v1.0.0
-# Last updated: 2026-01-21
+# voicemode-serve.service v1.0.1
+# Last updated: 2026-05-28
 # Simplified: start script handles config via voicemode.env
 
 [Unit]
@@ -9,7 +9,9 @@ After=network.target
 [Service]
 Type=simple
 ExecStart={START_SCRIPT}
-Restart=on-failure
+# Restart=always (not on-failure) so a clean exit still triggers a restart.
+# Defensive alignment with kokoro fix (GH-448, VM-1398).
+Restart=always
 RestartSec=10
 
 # Environment - start script sources voicemode.env for host/port/transport config
