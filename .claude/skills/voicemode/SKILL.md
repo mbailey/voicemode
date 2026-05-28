@@ -13,6 +13,8 @@ If VoiceMode isn't working or MCP fails to connect, run:
 
 After install, reconnect MCP: `/mcp` → select voicemode → "Reconnect" (or restart Claude Code).
 
+If Claude Code prompts you for permission on `voicemode:converse` or `voicemode:service`, see [references/permissions.md](references/permissions.md) for the one-time allow-list setup.
+
 ---
 
 # VoiceMode
