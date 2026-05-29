@@ -454,12 +454,12 @@ async def start_service(service_name: str) -> str:
         # Find whisper-server binary
         whisper_bin = find_whisper_server()
         if not whisper_bin:
-            return "❌ whisper-server not found. Please run whisper_install first."
+            return "❌ whisper-server not found. Run `voicemode service install whisper` first."
         
         # Find model
         model_file = find_whisper_model()
         if not model_file:
-            return "❌ No Whisper model found. Please run download_model first."
+            return "❌ No Whisper model found. Run `voicemode whisper model <name>` first (e.g. `voicemode whisper model large-v2`)."
         
         # Start whisper-server
         start_script = Path(config_vars["START_SCRIPT"])
@@ -478,7 +478,7 @@ async def start_service(service_name: str) -> str:
         # Find kokoro installation
         kokoro_dir = find_kokoro_fastapi()
         if not kokoro_dir:
-            return "❌ kokoro-fastapi not found. Please run kokoro_install first."
+            return "❌ kokoro-fastapi not found. Run `voicemode service install kokoro` first."
         
         # Use appropriate start script
         if platform.system() == "Darwin":
@@ -677,12 +677,12 @@ async def enable_service(service_name: str) -> str:
         if service_name == "whisper":
             start_script = config_vars.get("START_SCRIPT", "")
             if not start_script or not Path(start_script).exists():
-                return "❌ Whisper start script not found. Please run whisper_install first."
+                return "❌ Whisper start script not found. Run `voicemode service install whisper` first."
 
         elif service_name == "kokoro":
             start_script = config_vars.get("START_SCRIPT", "")
             if not start_script or not Path(start_script).exists():
-                return "❌ Kokoro start script not found. Please run kokoro_install first."
+                return "❌ Kokoro start script not found. Run `voicemode service install kokoro` first."
 
         elif service_name == "mlx_audio":
             # Validate the uv-tool entry point exists rather than a start
