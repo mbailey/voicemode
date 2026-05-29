@@ -78,7 +78,7 @@ async def whisper_model_install(
         else:
             return json.dumps({
                 "success": False,
-                "error": "Whisper.cpp not installed. Please run whisper_install first."
+                "error": "Whisper.cpp not installed. Run `voicemode service install whisper` first."
             }, indent=2)
         
         # CoreML dependencies no longer needed - using pre-built models from Hugging Face!

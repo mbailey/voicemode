@@ -59,6 +59,7 @@ Newer Claude Code releases collapse MCP tool calls in the visible transcript, wh
 
 ### Fixed
 
+- **Service install error messages now reference real CLI commands** (VM-1409) -- Errors like "Whisper start script not found. Please run whisper_install first." pointed at MCP tool names (`whisper_install`, `kokoro_install`, `download_model`) that don't exist as CLI commands, so users hitting the error from the CLI had no way to act on it. Updated to match the existing mlx-audio branch's style -- now reference `voicemode service install whisper`, `voicemode service install kokoro`, and `voicemode whisper model <name>`.
 - **mlx-audio install no longer fails at the patch step** (VM-1126) -- `voicemode service install mlx-audio` would fail with "Patch step failed: ... 2 out of 5 hunks failed" against mlx-audio 0.4.3. The MLX Metal serialisation lock the bundled patch carried ([ml-explore/mlx#2133](https://github.com/ml-explore/mlx/issues/2133)) is upstream from 0.4.3 on, so the patch now adds lines that already exist and rejects.
 - **mlx-audio STT `response_format` patch restored** (VM-1128) -- VM-1126 over-removed: while the Metal lock was upstreamed, the OpenAI-style STT `response_format` handling on `/v1/audio/transcriptions` is *not* yet in mlx-audio 0.4.3. Restored as a separate patch.
 
