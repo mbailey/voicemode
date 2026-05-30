@@ -399,6 +399,129 @@ async def stream_pcm_audio(
             stream.close()
 
 
+async def stream_cartesia_pcm(
+    text: str,
+    voice_id: Optional[str],
+    speed: Optional[float] = None,
+    sample_rate: int = SAMPLE_RATE,
+    save_audio: bool = False,
+    audio_dir: Optional[Path] = None,
+    conversation_id: Optional[str] = None,
+) -> Tuple[bool, StreamMetrics]:
+    """Stream raw PCM int16 from Cartesia SSE and play chunks as they arrive."""
+    from . import cartesia_tts
+
+    metrics = StreamMetrics()
+    start_time = time.perf_counter()
+    stream = None
+    first_chunk_time = None
+    save_buffer = io.BytesIO() if save_audio else None
+    bytes_received = 0
+    chunk_count = 0
+    event_logger = get_event_logger()
+
+    try:
+        stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16")
+        stream.start()
+
+        if event_logger:
+            event_logger.log_event(event_logger.TTS_PLAYBACK_START)
+
+        logger.info("Starting Cartesia SSE streaming")
+
+        async for chunk in cartesia_tts.stream(
+            text=text,
+            voice_id=voice_id,
+            sample_rate=sample_rate,
+            speed=speed,
+        ):
+            if not chunk:
+                continue
+            if first_chunk_time is None:
+                first_chunk_time = time.perf_counter()
+                logger.info(
+                    f"Cartesia first audio chunk after {first_chunk_time - start_time:.3f}s"
+                )
+                if event_logger:
+                    event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
+
+            audio_array = np.frombuffer(chunk, dtype=np.int16)
+            stream.write(audio_array)
+
+            if save_buffer:
+                save_buffer.write(chunk)
+            chunk_count += 1
+            bytes_received += len(chunk)
+
+        stream.stop()
+        end_time = time.perf_counter()
+
+        metrics.chunks_received = chunk_count
+        metrics.chunks_played = chunk_count
+        metrics.generation_time = (
+            (first_chunk_time - start_time) if first_chunk_time else 0.0
+        )
+        metrics.playback_time = end_time - start_time
+        metrics.ttfa = metrics.generation_time
+
+        if event_logger:
+            event_logger.log_event(
+                event_logger.TTS_PLAYBACK_END,
+                {
+                    "metrics": {
+                        "ttfa_ms": round(metrics.ttfa * 1000, 1),
+                        "total_time_ms": round(metrics.playback_time * 1000, 1),
+                        "bytes_received": bytes_received,
+                        "chunks": chunk_count,
+                        "format": "pcm",
+                        "sample_rate_hz": sample_rate,
+                        "provider": "cartesia",
+                    }
+                },
+            )
+
+        logger.info(
+            f"Cartesia streaming complete - TTFA: {metrics.ttfa:.3f}s, "
+            f"Total: {metrics.playback_time:.3f}s, Chunks: {chunk_count}"
+        )
+
+        if save_audio and save_buffer and audio_dir and bytes_received > 0:
+            try:
+                from .core import save_debug_file
+                import wave
+                import tempfile
+                import os
+
+                save_buffer.seek(0)
+                pcm_data = save_buffer.read()
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+                    with wave.open(tmp_wav.name, "wb") as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(sample_rate)
+                        wav_file.writeframes(pcm_data)
+                    with open(tmp_wav.name, "rb") as f:
+                        wav_data = f.read()
+                    os.unlink(tmp_wav.name)
+                audio_path = save_debug_file(
+                    wav_data, "tts", "wav", audio_dir, True, conversation_id
+                )
+                if audio_path:
+                    metrics.audio_path = audio_path
+                    update_latest_symlinks(audio_path, "tts")
+            except Exception as e:
+                logger.error(f"Failed to save Cartesia TTS audio: {e}")
+
+        return True, metrics
+
+    except Exception as e:
+        logger.error(f"Cartesia streaming failed: {e}")
+        return False, metrics
+    finally:
+        if stream:
+            stream.close()
+
+
 async def stream_tts_audio(
     text: str,
     openai_client,
