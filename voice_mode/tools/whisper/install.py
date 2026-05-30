@@ -507,7 +507,16 @@ async def whisper_install(
                 missing_deps.append("build-essential (run: sudo apt-get install build-essential)")
             
             if use_gpu and not shutil.which("nvcc"):
-                missing_deps.append("CUDA toolkit (for GPU support)")
+                # Suggest distro-appropriate install command, or --no-gpu as alternative
+                if shutil.which("apt-get"):
+                    cuda_install = "sudo apt-get install nvidia-cuda-toolkit"
+                elif shutil.which("dnf"):
+                    cuda_install = "sudo dnf install cuda-toolkit"
+                else:
+                    cuda_install = "your distribution's CUDA toolkit package"
+                missing_deps.append(
+                    f"CUDA toolkit (run: {cuda_install}, or use --no-gpu for CPU-only)"
+                )
         
         if missing_deps:
             return {
