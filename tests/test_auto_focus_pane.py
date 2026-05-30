@@ -137,6 +137,24 @@ class TestFocusTmuxPane:
 
                     mock_run.assert_not_called()
 
+    def test_respects_autofocus_disabled_sentinel(self):
+        """When the autofocus-disabled sentinel exists, focus is suppressed entirely.
+
+        Wired up for VM-1024 (`voicemode autofocus off`). Should fire before
+        the focus-hold check — i.e. user-toggled "off" wins over the transient
+        "another tool just took focus" suppressor as well as `_is_focus_held`.
+        """
+        with patch.dict("os.environ", {"TMUX_PANE": "%5"}, clear=False):
+            with patch(
+                "voice_mode.cli_commands.autofocus.is_autofocus_disabled_by_sentinel",
+                return_value=True,
+            ):
+                with patch("subprocess.run") as mock_run:
+                    from voice_mode.tools.converse import focus_tmux_pane
+                    focus_tmux_pane()
+
+                    mock_run.assert_not_called()
+
 
 class TestAutoFocusPaneConfig:
     """Test the AUTO_FOCUS_PANE config option."""

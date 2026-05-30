@@ -420,6 +420,11 @@ TTS \\bAPI\\b A P I # API as individual letters
 # Auto-focus tmux pane when speaking (for multi-agent setups)
 # Switches tmux focus to the agent's pane after conch acquisition
 # VOICEMODE_AUTO_FOCUS_PANE=false
+#
+# Quick toggle (sentinel file ~/.voicemode/autofocus-disabled):
+#   voicemode autofocus off   # disable immediately, overrides env var
+#   voicemode autofocus on    # remove sentinel
+#   voicemode autofocus status
 
 #############
 # Credential Storage
