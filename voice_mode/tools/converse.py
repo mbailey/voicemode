@@ -134,10 +134,11 @@ def focus_tmux_pane() -> None:
     """Make the agent's tmux window visible, and optionally switch a client.
 
     Steps:
-    1. Check focus-hold sentinel — skip if another tool recently took focus
-    2. select-window: make the agent's window current (without changing active pane)
-    3. Check if any client is already showing this session — if so, stop
-    4. If no client is showing the session, switch the focused client to it
+    1. Check autofocus-disabled sentinel — skip if user has toggled autofocus off
+    2. Check focus-hold sentinel — skip if another tool recently took focus
+    3. select-window: make the agent's window current (without changing active pane)
+    4. Check if any client is already showing this session — if so, stop
+    5. If no client is showing the session, switch the focused client to it
 
     Deliberately does NOT call select-pane — this avoids stealing focus from
     whichever pane the user is currently working in.  The window becomes
@@ -150,6 +151,12 @@ def focus_tmux_pane() -> None:
 
     tmux_pane = os.environ.get("TMUX_PANE", "")
     if not tmux_pane:
+        return
+
+    # Respect the autofocus quick-toggle sentinel — user disabled via
+    # `voicemode autofocus off`. Overrides VOICEMODE_AUTO_FOCUS_PANE.
+    from voice_mode.cli_commands.autofocus import is_autofocus_disabled_by_sentinel
+    if is_autofocus_disabled_by_sentinel():
         return
 
     # Respect the visual conch — another tool recently took focus
