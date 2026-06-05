@@ -25,6 +25,7 @@ from voice_mode.config import (
     SERVE_ALLOW_ANTHROPIC,
     SERVE_ALLOW_TAILSCALE,
     SERVE_ALLOWED_IPS,
+    SERVE_TRUSTED_PROXIES,
     SERVE_SECRET,
     SERVE_TOKEN,
     SERVE_TRANSPORT,
@@ -2120,6 +2121,10 @@ def converse(message_args, message, wait, skip_stt, duration, min_duration, voic
               help='Allow connections from Tailscale IP range (100.64.0.0/10)')
 @click.option('--allow-ip', multiple=True,
               help='Allow connections from custom CIDR ranges (can be specified multiple times)')
+@click.option('--trust-proxy', multiple=True,
+              help='Trust X-Forwarded-For from these reverse-proxy CIDRs (can be repeated). '
+                   'Required for the IP allowlist to honor forwarded client IPs behind a proxy. '
+                   'Leave unset unless you control the proxy (GHSA-2qvv-vjq9-g5r4).')
 @click.option('--allow-local/--no-allow-local', default=None,
               help='Allow connections from local/private IP ranges (default: enabled)')
 @click.option('--secret', default=None,
@@ -2127,7 +2132,7 @@ def converse(message_args, message, wait, skip_stt, duration, min_duration, voic
 @click.option('--token', default=None,
               help='Require Bearer token authentication via Authorization header')
 def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic: bool | None,
-          allow_tailscale: bool | None, allow_ip: tuple, allow_local: bool | None,
+          allow_tailscale: bool | None, allow_ip: tuple, trust_proxy: tuple, allow_local: bool | None,
           secret: str | None, token: str | None):
     """Start VoiceMode as an HTTP/SSE server for remote access.
 
@@ -2161,6 +2166,9 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
 
         # Add custom IP allowlist
         voicemode serve --allow-ip 10.0.0.0/8 --allow-ip 192.168.1.100/32
+
+        # Behind a trusted reverse proxy (honor X-Forwarded-For from it)
+        voicemode serve --allow-ip 203.0.113.0/24 --trust-proxy 127.0.0.1/32
 
         # Use secret path for authentication
         voicemode serve --secret my-secret-uuid
@@ -2208,6 +2216,9 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
     if not allow_ip and SERVE_ALLOWED_IPS:
         # Parse comma-separated CIDRs from config
         allow_ip = tuple(cidr.strip() for cidr in SERVE_ALLOWED_IPS.split(',') if cidr.strip())
+    if not trust_proxy and SERVE_TRUSTED_PROXIES:
+        # Parse comma-separated trusted-proxy CIDRs from config
+        trust_proxy = tuple(cidr.strip() for cidr in SERVE_TRUSTED_PROXIES.split(',') if cidr.strip())
     if secret is None and SERVE_SECRET:
         secret = SERVE_SECRET
     if token is None and SERVE_TOKEN:
@@ -2223,6 +2234,9 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
         allowed_cidrs.extend(TAILSCALE_CIDRS)
     if allow_ip:
         allowed_cidrs.extend(allow_ip)
+
+    # Trusted reverse-proxy CIDRs whose X-Forwarded-For header is honored.
+    trusted_proxies: list[str] = list(trust_proxy) if trust_proxy else []
 
     # Determine if any security is enabled
     has_ip_allowlist = bool(allowed_cidrs) and (allow_anthropic or allow_tailscale or allow_ip or not allow_local)
@@ -2267,6 +2281,10 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
             if allow_ip:
                 ip_parts.append(f"custom ({len(allow_ip)} CIDRs)")
             click.echo(f"  IP allowlist: {' + '.join(ip_parts)}")
+            if trusted_proxies:
+                click.echo(f"  Trusted proxies (X-Forwarded-For honored): {', '.join(trusted_proxies)}")
+            else:
+                click.echo("  Trusted proxies: none (X-Forwarded-For ignored for allowlist)")
         else:
             click.echo("  IP allowlist: disabled (--no-allow-local)")
 
@@ -2319,7 +2337,11 @@ def serve(host: str, port: int, transport: str, log_level: str, allow_anthropic:
 
     # Add IP allowlist middleware (checked first)
     if allowed_cidrs:
-        app.add_middleware(IPAllowlistMiddleware, allowed_cidrs=allowed_cidrs)
+        app.add_middleware(
+            IPAllowlistMiddleware,
+            allowed_cidrs=allowed_cidrs,
+            trusted_proxies=trusted_proxies,
+        )
 
     # Add access logging middleware (runs first, logs all requests)
     app.add_middleware(AccessLogMiddleware)

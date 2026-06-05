@@ -379,6 +379,12 @@ TTS \\bAPI\\b A P I # API as individual letters
 # Security: Additional allowed CIDR ranges (comma-separated)
 # VOICEMODE_SERVE_ALLOWED_IPS=
 
+# Security: Trusted reverse-proxy CIDRs (comma-separated). Only requests whose
+# direct TCP peer is within these ranges have their X-Forwarded-For header
+# trusted for the IP allowlist. Leave empty unless VoiceMode sits behind a
+# proxy you control (e.g. Tailscale Funnel). See GHSA-2qvv-vjq9-g5r4.
+# VOICEMODE_SERVE_TRUSTED_PROXIES=
+
 # Authentication: URL secret path segment (e.g., /secret-path/mcp)
 # VOICEMODE_SERVE_SECRET=
 
@@ -1417,6 +1423,10 @@ SERVE_ALLOW_TAILSCALE = env_bool("VOICEMODE_SERVE_ALLOW_TAILSCALE", False)
 
 # Additional allowed CIDR ranges (comma-separated, default: empty)
 SERVE_ALLOWED_IPS = os.getenv("VOICEMODE_SERVE_ALLOWED_IPS", "")
+
+# Trusted reverse-proxy CIDRs whose X-Forwarded-For header is honored for the
+# IP allowlist (comma-separated, default: empty = header never trusted).
+SERVE_TRUSTED_PROXIES = os.getenv("VOICEMODE_SERVE_TRUSTED_PROXIES", "")
 
 # URL secret path segment for authentication (default: empty/disabled)
 SERVE_SECRET = os.getenv("VOICEMODE_SERVE_SECRET", "")
