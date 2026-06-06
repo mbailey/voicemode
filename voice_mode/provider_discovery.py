@@ -29,6 +29,10 @@ def detect_provider_type(base_url: str) -> str:
     """Detect provider type from base URL."""
     if not base_url:
         return "unknown"
+    # In-process Parakeet backend (Apple Silicon / MLX), e.g. "parakeet://local".
+    # Dispatched in-process by the STT failover loop, not over HTTP.
+    if base_url.startswith("parakeet:"):
+        return "parakeet"
     if "openai.com" in base_url:
         return "openai"
     elif ":8880" in base_url:
@@ -55,7 +59,7 @@ def is_local_provider(base_url: str) -> bool:
     if not base_url:
         return False
     provider_type = detect_provider_type(base_url)
-    return provider_type in ["kokoro", "whisper", "mlx-audio", "local"] or \
+    return provider_type in ["kokoro", "whisper", "mlx-audio", "local", "parakeet"] or \
            "127.0.0.1" in base_url or \
            "localhost" in base_url
 

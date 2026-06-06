@@ -611,6 +611,15 @@ STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
 # See: https://platform.openai.com/docs/guides/speech-to-text#prompting
 STT_PROMPT = os.getenv("VOICEMODE_STT_PROMPT", "")
 
+# Parakeet in-process STT model (Apple Silicon / MLX). Used when a "parakeet://"
+# URL appears in VOICEMODE_STT_BASE_URLS. Requires the optional `parakeet` extra
+# (`uv tool install voice-mode[parakeet]`). Recommended for fast, fully-local
+# English STT on Apple Silicon, e.g.:
+#   VOICEMODE_STT_BASE_URLS=parakeet://local,http://127.0.0.1:2022/v1,https://api.openai.com/v1
+# Keep whisper.cpp / OpenAI in the chain as fallback: Parakeet v3 covers English
+# plus 25 European languages, but not e.g. Thai -- whisper handles the long tail.
+PARAKEET_MODEL = os.getenv("VOICEMODE_PARAKEET_MODEL", "mlx-community/parakeet-tdt-0.6b-v3")
+
 # Voice preferences cache
 _cached_voice_preferences: Optional[list] = None
 _voice_preferences_loaded = False

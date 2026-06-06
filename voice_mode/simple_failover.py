@@ -251,6 +251,35 @@ async def simple_stt_failover(
             else:
                 logger.warning(f"STT: Primary failed, attempting fallback #{i}: {base_url} ({provider_type})")
 
+            # In-process Parakeet backend (Apple Silicon / MLX): transcribe
+            # locally with no HTTP hop. Selected via a "parakeet://" URL in
+            # STT_BASE_URLS. Any failure (missing optional dep, load error)
+            # raises and is caught below, falling through to the next endpoint.
+            if provider_type == "parakeet":
+                from .stt_backends.parakeet import transcribe_parakeet
+                from .config import PARAKEET_MODEL
+
+                resolved_model = model or PARAKEET_MODEL
+                request_start = time.perf_counter()
+                text = (await transcribe_parakeet(audio_file, resolved_model)).strip()
+                request_time_ms = (time.perf_counter() - request_start) * 1000
+                metrics = {
+                    "file_size_bytes": file_size_bytes,
+                    "request_time_ms": round(request_time_ms, 1),
+                    "is_local": True,
+                }
+                if text:
+                    logger.info(f"✓ STT succeeded with parakeet (in-process, {resolved_model})")
+                    logger.info(f"  Transcribed: {text[:100]}{'...' if len(text) > 100 else ''}")
+                    logger.info(f"  Request time: {request_time_ms:.0f}ms, File size: {file_size_bytes/1024:.1f}KB")
+                    return {"text": text, "provider": "parakeet", "endpoint": base_url, "metrics": metrics}
+                # Connected/ran but no speech detected -- mirror the HTTP path.
+                logger.warning("Parakeet returned empty result (no speech detected)")
+                successful_but_empty = True
+                successful_provider = "parakeet"
+                successful_metrics = metrics
+                continue
+
             # Create client for this endpoint
             api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
 
