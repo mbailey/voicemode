@@ -56,6 +56,8 @@ from voice_mode.config import (
     TTS_MODELS,
     REPEAT_PHRASES,
     WAIT_PHRASES,
+    REPEAT_MAX_LEADING_WORDS,
+    WAIT_MAX_LEADING_WORDS,
     WAIT_DURATION,
     METRICS_LEVEL,
     STT_AUDIO_FORMAT,
@@ -303,55 +305,87 @@ class DJDucker:
         return False  # Don't suppress exceptions
 
 
-def should_repeat(text: str) -> bool:
+def _matching_trailing_phrase(text: str, phrases, max_leading_words: int):
     """
-    Check if the transcribed text ends with a repeat phrase.
+    Return the trigger phrase a message ends with, but ONLY when it is a
+    genuine standalone request rather than a long utterance that happens to
+    end with a trigger word.
+
+    A phrase matches when:
+      - it appears at the end of the (normalized) text, AND
+      - it sits on a word boundary (so "what" does not match "somewhat"), AND
+      - the number of words BEFORE the phrase is <= max_leading_words.
+
+    This prevents data loss: a substantive 30-word sentence ending in "what"
+    is delivered intact, while a bare "what?" (0 leading words) still fires.
+    See VM-291.
 
     Args:
         text: The transcribed text to check
+        phrases: Iterable of trigger phrases
+        max_leading_words: Max words allowed before the phrase for it to fire
 
     Returns:
-        True if text ends with a repeat phrase, False otherwise
+        The matched phrase (str) or None.
     """
     if not text:
-        return False
+        return None
 
     # Normalize text for comparison (lowercase, strip whitespace and punctuation)
     import string
     normalized_text = text.lower().strip().rstrip(string.punctuation).strip()
+    if not normalized_text:
+        return None
 
-    # Check if any repeat phrase appears at the end
-    for phrase in REPEAT_PHRASES:
-        if normalized_text.endswith(phrase.lower().strip()):
-            logger.info(f"Repeat phrase detected: '{phrase}' in '{text}'")
-            return True
+    for phrase in phrases:
+        p = phrase.lower().strip()
+        if not p:
+            continue
+        if not normalized_text.endswith(p):
+            continue
 
+        prefix = normalized_text[:-len(p)]
+        # Require a word boundary before the phrase so e.g. "somewhat" does not
+        # match the trigger "what". An empty prefix means the whole message is
+        # the phrase.
+        if prefix and not prefix[-1].isspace():
+            continue
+
+        leading_words = len(prefix.split())
+        if leading_words <= max_leading_words:
+            return phrase
+
+    return None
+
+
+def should_repeat(text: str) -> bool:
+    """
+    Check if the transcribed text is a standalone repeat request.
+
+    Returns True only when a repeat phrase is at the end AND preceded by at
+    most REPEAT_MAX_LEADING_WORDS words, so long messages ending in a trigger
+    word are not discarded (VM-291).
+    """
+    phrase = _matching_trailing_phrase(text, REPEAT_PHRASES, REPEAT_MAX_LEADING_WORDS)
+    if phrase is not None:
+        logger.info(f"Repeat phrase detected: '{phrase}' in '{text}'")
+        return True
     return False
 
 
 def should_wait(text: str) -> bool:
     """
-    Check if the transcribed text ends with a wait phrase.
+    Check if the transcribed text is a standalone wait request.
 
-    Args:
-        text: The transcribed text to check
-
-    Returns:
-        True if text ends with a wait phrase, False otherwise
+    Returns True only when a wait phrase is at the end AND preceded by at most
+    WAIT_MAX_LEADING_WORDS words, so long messages ending in a trigger word
+    are not discarded (VM-291). WAIT_MAX_LEADING_WORDS can be raised once
+    VM-1493 preserves pre-trigger speech across the pause.
     """
-    if not text:
-        return False
-
-    # Normalize text for comparison (lowercase, strip whitespace and punctuation)
-    import string
-    normalized_text = text.lower().strip().rstrip(string.punctuation).strip()
-
-    # Check if any wait phrase appears at the end
-    for phrase in WAIT_PHRASES:
-        if normalized_text.endswith(phrase.lower().strip()):
-            logger.info(f"Wait phrase detected: '{phrase}' in '{text}'")
-            return True
-
+    phrase = _matching_trailing_phrase(text, WAIT_PHRASES, WAIT_MAX_LEADING_WORDS)
+    if phrase is not None:
+        logger.info(f"Wait phrase detected: '{phrase}' in '{text}'")
+        return True
     return False
 
 

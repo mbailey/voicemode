@@ -178,6 +178,52 @@ class TestRepeatCommandDetection:
             assert should_repeat(f"Hello, {phrase}") is True
 
 
+class TestLongMessageDataLoss:
+    """VM-291: long utterances ending in a trigger word must NOT be discarded.
+
+    A substantive message that happens to end with a trigger phrase (e.g. a
+    30-word sentence ending in "what") should be delivered to the LLM intact,
+    while a bare standalone trigger ("what?") still fires the replay/wait.
+    """
+
+    LONG_TAIL = (
+        "so I was thinking about the architecture and how we might restructure "
+        "the provider registry to support failover more cleanly but I'm not sure "
+        "what"
+    )
+
+    def test_long_message_ending_in_repeat_word_not_detected(self):
+        """A long substantive message ending in 'what' is not a repeat request."""
+        assert should_repeat(self.LONG_TAIL) is False
+        assert should_repeat(
+            "let me explain the whole plan in detail and then you can repeat"
+        ) is False
+
+    def test_long_message_ending_in_wait_word_not_detected(self):
+        """A long substantive message ending in 'wait' is not a wait request."""
+        assert should_wait(
+            "there are several things we need to line up before we can ship so wait"
+        ) is False
+
+    def test_bare_trigger_still_fires_after_fix(self):
+        """The fix must not break genuine standalone requests."""
+        assert should_repeat("what") is True
+        assert should_repeat("what?") is True
+        assert should_repeat("say that again") is True
+        assert should_wait("wait") is True
+
+    def test_short_polite_request_still_fires(self):
+        """Natural short requests (<= max leading words) still trigger."""
+        assert should_repeat("sorry, what") is True
+        assert should_repeat("Just a moment, please repeat") is True
+        assert should_wait("just a moment, please wait") is True
+
+    def test_word_boundary_not_substring(self):
+        """'somewhat' must not match the trigger 'what' (boundary check)."""
+        assert should_repeat("somewhat") is False
+        assert should_repeat("I am somewhat") is False
+
+
 class TestWaitCommandIntegration:
     """Integration tests for wait command flow."""
 

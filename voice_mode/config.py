@@ -760,6 +760,23 @@ REPEAT_PHRASES = parse_comma_list("VOICEMODE_REPEAT_PHRASES", "repeat,say that a
 # Wait phrase detection for pausing conversation
 WAIT_PHRASES = parse_comma_list("VOICEMODE_WAIT_PHRASES", "wait")
 
+# Max number of words allowed BEFORE a trigger phrase for it to still fire.
+# This prevents data loss when a long, substantive utterance happens to end
+# with a trigger word (e.g. a 30-word sentence ending in "what"): such a
+# message is delivered intact instead of being discarded. A bare trigger
+# ("what?") has 0 leading words and always fires. See VM-291.
+#
+# Thresholds are PER control-word-class so each trigger can behave differently:
+#   - REPEAT (replays the last audio): only sensible on a SHORT message, since
+#     a long utterance ending in "what" is almost never a genuine replay
+#     request. Kept small.
+#   - WAIT (pauses the conversation): kept small FOR NOW so a long message
+#     ending in "wait" isn't lost. Once VM-1493 preserves pre-trigger speech
+#     across the pause, this can be raised so an urgent "...wait" mid-thought
+#     pauses without dropping what was already said.
+REPEAT_MAX_LEADING_WORDS = int(os.getenv("VOICEMODE_REPEAT_MAX_LEADING_WORDS", "4"))
+WAIT_MAX_LEADING_WORDS = int(os.getenv("VOICEMODE_WAIT_MAX_LEADING_WORDS", "4"))
+
 # Wait duration in seconds when wait phrase is detected
 WAIT_DURATION = float(os.getenv("VOICEMODE_WAIT_DURATION", "60.0"))  # Default 60s (1 minute)
 
