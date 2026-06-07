@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Fixed X-Forwarded-For IP allowlist bypass in `voicemode serve` ([GHSA-2qvv-vjq9-g5r4](https://github.com/mbailey/voicemode/security/advisories/GHSA-2qvv-vjq9-g5r4), VM-1466)** — `IPAllowlistMiddleware` previously trusted the client-supplied `X-Forwarded-For` header unconditionally, so a remote unauthenticated attacker could send `X-Forwarded-For: 127.0.0.1` (or any allowed IP) to bypass the IP allowlist entirely and reach all HTTP MCP endpoints, including microphone recording and transcription (CVSS 8.6, High). The allowlist now decides on the **direct TCP peer**, and `X-Forwarded-For` is only honored when the peer is a configured trusted proxy. Affected `voice-mode <= 8.6.2`.
+
+  **Migration (only if you run `voicemode serve` behind a reverse proxy):** if you rely on forwarded client IPs — e.g. Tailscale Funnel or another reverse proxy in front of `voicemode serve` — you must now declare the proxy's address so its `X-Forwarded-For` is trusted, via `--trust-proxy <CIDR>` (repeatable) or `VOICEMODE_SERVE_TRUSTED_PROXIES=<comma-separated CIDRs>`. When trusted, the forwarded chain is parsed right-to-left (skipping trusted hops) instead of blindly taking the leftmost, spoofable entry. Direct (non-proxied) deployments need no changes.
+
 ### Added
 
 - **`install.sh` now detects system capability and offers mlx-audio on Apple Silicon (VM-1330)** — The `curl | bash` installer (`https://getvoicemode.com/install.sh`) assesses the host (Apple Silicon → excellent, other → good/limited) and, on Apple Silicon, offers to install and configure **mlx-audio** as the local voice engine — *even when whisper.cpp + Kokoro are already present*. The flow is **status-first**: it reports what's already installed and skips the prompt entirely when voice services are already satisfied. mlx-audio stays **opt-in** (whisper.cpp + Kokoro remain the cross-platform fallback; Intel Macs / Linux / Windows are unaffected). Reworded prompts and a de-emojified banner round out the pass. The large orange VoiceMode ASCII banner is restored (24-bit truecolor) after a regression to a compact 3-line version (VM-1324). Part of the installer overhaul for the mlx-audio release (epic VM-1322).

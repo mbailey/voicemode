@@ -3,8 +3,9 @@
 This module provides middleware to restrict access to the VoiceMode server:
 
 1. IPAllowlistMiddleware - Restrict access based on client IP addresses.
-   Supports CIDR notation for flexible IP range configuration and handles
-   X-Forwarded-For headers for proxied requests.
+   Supports CIDR notation for flexible IP range configuration. The allowlist
+   is checked against the direct TCP peer; X-Forwarded-For is only honored
+   when the peer is a configured trusted proxy (GHSA-2qvv-vjq9-g5r4).
 
 2. SecretPathMiddleware - Require a secret path segment for access.
    Provides simple authentication by requiring a pre-shared secret in the URL.
@@ -71,33 +72,52 @@ LOCAL_CIDRS: List[str] = [
 ]
 
 
-def get_client_ip(request: Request) -> str:
+def get_client_ip(
+    request: Request, trusted_proxies: Optional[List[str]] = None
+) -> str:
     """Extract the real client IP address from a request.
 
-    Handles X-Forwarded-For header for proxied requests (e.g., behind
-    Tailscale Funnel or other reverse proxies). Takes the first IP in
-    the chain, which is the original client IP.
+    Security (GHSA-2qvv-vjq9-g5r4): the ``X-Forwarded-For`` header is
+    attacker-controllable, so it is only honored when the *direct TCP peer*
+    is itself a configured trusted proxy. When ``trusted_proxies`` is empty
+    or the direct peer is not within it, the header is ignored entirely and
+    the direct peer address is returned. This prevents an unauthenticated
+    attacker from spoofing an allowed IP to bypass the IP allowlist.
+
+    When the direct peer *is* a trusted proxy, the forwarded chain is walked
+    from right to left, skipping any hops that are themselves trusted
+    proxies, and the first untrusted address is returned as the real client.
+    If the whole chain is trusted (or the header is absent/empty), the direct
+    peer is returned.
 
     Args:
         request: The Starlette request object.
+        trusted_proxies: CIDR ranges whose members are trusted to set
+            ``X-Forwarded-For``. Defaults to none (header never trusted).
 
     Returns:
         The client IP address as a string.
     """
-    # Check X-Forwarded-For header first (for proxied requests)
+    direct_peer = request.client.host if request.client else "0.0.0.0"
+
+    # Only trust forwarding headers when the immediate peer is a known proxy.
+    if not trusted_proxies or not ip_in_cidrs(direct_peer, trusted_proxies):
+        return direct_peer
+
     forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # X-Forwarded-For can contain multiple IPs: "client, proxy1, proxy2"
-        # The first IP is the original client
-        client_ip = forwarded_for.split(",")[0].strip()
-        return client_ip
+    if not forwarded_for:
+        return direct_peer
 
-    # Fall back to direct client IP
-    if request.client:
-        return request.client.host
+    # X-Forwarded-For is "client, proxy1, proxy2" (left = original client).
+    # The leftmost entries are attacker-controllable, so walk from the right
+    # and skip trusted-proxy hops; the first untrusted address is the client.
+    hops = [ip.strip() for ip in forwarded_for.split(",") if ip.strip()]
+    for ip in reversed(hops):
+        if not ip_in_cidrs(ip, trusted_proxies):
+            return ip
 
-    # Last resort fallback
-    return "0.0.0.0"
+    # Entire chain is trusted proxies (or empty) — fall back to direct peer.
+    return direct_peer
 
 
 def ip_in_cidrs(
@@ -204,14 +224,22 @@ class IPAllowlistMiddleware:
     Uses pure ASGI style instead of BaseHTTPMiddleware to support SSE
     streaming without response buffering issues.
 
+    The allowlist decision is made on the *direct TCP peer* by default.
+    ``X-Forwarded-For`` is only consulted when the peer is within
+    ``trusted_proxies`` (see :func:`get_client_ip`), so a spoofed header
+    cannot bypass the allowlist (GHSA-2qvv-vjq9-g5r4).
+
     Attributes:
         app: The wrapped ASGI application.
         allowed_cidrs: List of allowed CIDR notation strings.
+        trusted_proxies: CIDR ranges whose members are trusted to set
+            X-Forwarded-For (default: none).
 
     Example:
         app.add_middleware(
             IPAllowlistMiddleware,
-            allowed_cidrs=["127.0.0.0/8", "160.79.104.0/21"]
+            allowed_cidrs=["127.0.0.0/8", "160.79.104.0/21"],
+            trusted_proxies=["127.0.0.1/32"],  # e.g. local reverse proxy
         )
     """
 
@@ -219,15 +247,20 @@ class IPAllowlistMiddleware:
         self,
         app: ASGIApp,
         allowed_cidrs: List[str],
+        trusted_proxies: Optional[List[str]] = None,
     ) -> None:
         """Initialize the IP allowlist middleware.
 
         Args:
             app: The ASGI application to wrap.
             allowed_cidrs: List of allowed CIDR notation strings.
+            trusted_proxies: CIDR ranges whose members are trusted to set
+                X-Forwarded-For. When empty (default), the header is ignored
+                and the direct peer is used for the allowlist check.
         """
         self.app = app
         self.allowed_cidrs = allowed_cidrs
+        self.trusted_proxies = trusted_proxies or []
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send
@@ -246,7 +279,7 @@ class IPAllowlistMiddleware:
 
         # Build a Request object to use get_client_ip helper
         request = Request(scope, receive, send)
-        client_ip = get_client_ip(request)
+        client_ip = get_client_ip(request, self.trusted_proxies)
 
         if not ip_in_cidrs(client_ip, self.allowed_cidrs):
             # Return 403 Forbidden
