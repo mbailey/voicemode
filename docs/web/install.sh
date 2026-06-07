@@ -667,6 +667,8 @@ is_kokoro_installed() {
 # an interactive choice, or an explicit --voice mlx flag.
 
 MLX_AUDIO_PORT=8890
+WHISPER_CPP_PORT=2022
+KOKORO_PORT=8880
 
 # True only on Apple Silicon (macOS arm64) -- the hard gate per ADR VM-1086.
 # Mirrors voice_mode/tools/mlx_audio/install.py::_is_apple_silicon and the
@@ -682,50 +684,88 @@ is_mlx_audio_installed() {
     [[ -x "$HOME/.local/bin/mlx_audio.server" ]]
 }
 
-# Point VoiceMode at mlx-audio's own port (8890) by making it the FIRST
-# entry in the preference-ordered base-URL lists. OpenAI stays as the
-# trailing cloud fallback so a cold mlx-audio still degrades gracefully.
-# Uses the existing `voicemode config set` primitive (writes
-# ~/.voicemode/voicemode.env) -- no fragile shell-side env munging.
-configure_mlx_audio_urls() {
-    local mlx_url="http://127.0.0.1:${MLX_AUDIO_PORT}/v1"
-    local urls="${mlx_url},https://api.openai.com/v1"
+# Point VoiceMode at the chosen STT + TTS backends by writing the two
+# preference-ordered base-URL lists separately. STT always goes to
+# whisper.cpp (VM-1421); only the TTS URL varies between mlx-audio (8890)
+# and Kokoro (8880). OpenAI stays as the trailing cloud fallback on both
+# so a cold local server still degrades gracefully. Uses the existing
+# `voicemode config set` primitive (writes ~/.voicemode/voicemode.env) --
+# no fragile shell-side env munging.
+configure_voice_urls() {
+    local stt_url="$1"
+    local tts_url="$2"
+    local stt_urls="${stt_url},https://api.openai.com/v1"
+    local tts_urls="${tts_url},https://api.openai.com/v1"
 
-    info "Pointing VoiceMode at mlx-audio (port ${MLX_AUDIO_PORT})..."
-    if voicemode config set VOICEMODE_TTS_BASE_URLS "$urls" \
-        && voicemode config set VOICEMODE_STT_BASE_URLS "$urls"; then
-        ok "VoiceMode configured to prefer mlx-audio (OpenAI cloud fallback kept)"
+    info "Pointing VoiceMode at STT ${stt_url} and TTS ${tts_url}..."
+    if voicemode config set VOICEMODE_STT_BASE_URLS "$stt_urls" \
+        && voicemode config set VOICEMODE_TTS_BASE_URLS "$tts_urls"; then
+        ok "VoiceMode configured (OpenAI cloud fallback kept)"
     else
-        warn "Could not write mlx-audio base-URL config"
+        warn "Could not write voice base-URL config"
         warn "Set it later with:"
-        warn "  voicemode config set VOICEMODE_TTS_BASE_URLS \"$urls\""
-        warn "  voicemode config set VOICEMODE_STT_BASE_URLS \"$urls\""
+        warn "  voicemode config set VOICEMODE_STT_BASE_URLS \"$stt_urls\""
+        warn "  voicemode config set VOICEMODE_TTS_BASE_URLS \"$tts_urls\""
     fi
 }
 
-# Install mlx-audio via the existing CLI primitive, then wire the config.
-# install.sh stays a thin orchestrator -- the uv tool install + bundled
-# patch + launchd plist all live in `voicemode service install mlx-audio`
-# (mlx_audio_install()), which is already Apple-Silicon-gated.
-install_mlx_audio() {
-    if is_mlx_audio_installed; then
-        ok "mlx-audio already installed"
-        configure_mlx_audio_urls
+# Install whisper.cpp via the existing CLI primitive. install.sh stays a
+# thin orchestrator -- the build, launchd plist and model download all live
+# in `voicemode whisper install`.
+install_whisper_cpp() {
+    if is_whisper_installed; then
+        ok "whisper.cpp already installed"
         return 0
     fi
 
     echo ""
-    echo "${BOLD}Installing mlx-audio${RESET} (Apple Silicon on-device STT+TTS)"
-    info "One fast MLX server on port ${MLX_AUDIO_PORT} -- no Xcode, no source compile."
-    info "No models are downloaded now; weights pull on first voice use."
+    echo "${BOLD}Installing whisper.cpp${RESET} (on-device STT on port ${WHISPER_CPP_PORT})"
+    if voicemode whisper install; then
+        ok "whisper.cpp installed"
+    else
+        warn "whisper.cpp installation failed - retry with: voicemode whisper install"
+        return 1
+    fi
+}
+
+# Install mlx-audio via the existing CLI primitive. install.sh stays a thin
+# orchestrator -- the uv tool install + bundled patch + launchd plist all
+# live in `voicemode service install mlx-audio` (mlx_audio_install()),
+# which is already Apple-Silicon-gated. URL config is the caller's job
+# (see install_voice_services) so STT + TTS get written together.
+install_mlx_audio() {
+    if is_mlx_audio_installed; then
+        ok "mlx-audio already installed"
+        return 0
+    fi
+
+    echo ""
+    echo "${BOLD}Installing mlx-audio${RESET} (Apple Silicon on-device TTS on port ${MLX_AUDIO_PORT})"
+    info "No Xcode, no source compile. Models pull on first voice use."
 
     if voicemode service install mlx-audio; then
         ok "mlx-audio installed"
-        configure_mlx_audio_urls
     else
         warn "mlx-audio installation failed - retry with: voicemode service install mlx-audio"
-        warn "Falling back to whisper.cpp + Kokoro is also available:"
-        warn "  voicemode whisper install && voicemode kokoro install"
+        return 1
+    fi
+}
+
+# Install Kokoro-FastAPI TTS via the existing CLI primitive. Used both for
+# the explicit "local" choice and as the Apple-Silicon fallback when
+# mlx-audio install fails. URL config stays at the call-site.
+install_kokoro() {
+    if is_kokoro_installed; then
+        ok "Kokoro already installed"
+        return 0
+    fi
+
+    echo ""
+    echo "${BOLD}Installing Kokoro${RESET} (cross-platform TTS on port ${KOKORO_PORT})"
+    if voicemode kokoro install; then
+        ok "Kokoro installed"
+    else
+        warn "Kokoro installation failed - retry with: voicemode kokoro install"
         return 1
     fi
 }
@@ -745,10 +785,10 @@ resolve_apple_silicon_choice() {
 
     if [[ "$INTERACTIVE" == "true" ]] && tty_available; then
         echo "" >&2
-        echo "${BOLD}Install local voice services${RESET} -- text-to-speech & speech-to-text?" >&2
+        echo "${BOLD}Install local voice services${RESET} -- speech-to-text & text-to-speech?" >&2
         echo "" >&2
-        echo "  [1] mlx-audio -- fast TTS/STT + voice cloning (models load on first use)   ${GREEN}(recommended)${RESET}" >&2
-        echo "  [2] whisper.cpp + Kokoro -- classic, cross-platform (~3 GB)" >&2
+        echo "  [1] Whisper (STT) + mlx-audio (TTS) -- fast on-device, voice cloning   ${GREEN}(recommended)${RESET}" >&2
+        echo "  [2] Whisper (STT) + Kokoro (TTS) -- classic, cross-platform" >&2
         echo "  [3] no thanks" >&2
         echo "" >&2
         local response
@@ -758,7 +798,7 @@ resolve_apple_silicon_choice() {
             2)        echo "local" ;;
             3|[sS])   echo "skip" ;;
             *)
-                warn "Unrecognised choice '$response' -- defaulting to recommended (mlx-audio)" >&2
+                warn "Unrecognised choice '$response' -- defaulting to recommended (Whisper + mlx-audio)" >&2
                 echo "mlx"
                 ;;
         esac
@@ -874,24 +914,27 @@ install_voice_services() {
         kokoro_installed=true
     fi
 
-    # --- Apple Silicon: recommend mlx-audio, offer explicit choice (VM-1330) ---
-    # This MUST run BEFORE the "both already installed" early-return below:
-    # a user who already has whisper.cpp + Kokoro (very common -- anyone on a
-    # prior release) should still be offered mlx-audio as a switch/upgrade.
-    # Their existing whisper/Kokoro install is left in place as a fallback;
-    # choosing mlx just installs mlx-audio and re-points the BASE_URLs.
-    # Off Apple Silicon this whole block is skipped and behaviour is exactly
-    # as before (the both-installed early-return still applies).
+    # --- Apple Silicon: whisper.cpp (STT) + choice of TTS engine (VM-1421) ---
+    # All three Apple-Silicon paths (mlx / local / skip) return from inside
+    # the case below -- the off-Apple-Silicon legacy block further down
+    # never runs on arm64 macs. This block MUST run BEFORE the "both
+    # already installed" early-return so a user on a prior release (likely
+    # already has whisper + Kokoro) is still offered the mlx-audio TTS
+    # upgrade.
     if is_apple_silicon "$os" "$arch"; then
-        # Already-satisfied shortcut: if mlx-audio is installed and the user
-        # did NOT explicitly force a backend, there's nothing to ask. Just
-        # idempotently re-point VoiceMode at mlx-audio and finish cleanly
-        # (mirrors the whisper+Kokoro both-installed early-return). An
-        # explicit --voice (or VOICEMODE_VOICE_ENGINE) always wins and
-        # bypasses this shortcut so the user can force the other path.
-        if is_mlx_audio_installed && [[ -z "$VOICE_CHOICE" ]]; then
-            configure_mlx_audio_urls
-            ok "mlx-audio already installed and configured -- all set, nothing to do"
+        local stt_url="http://127.0.0.1:${WHISPER_CPP_PORT}/v1"
+        local mlx_tts_url="http://127.0.0.1:${MLX_AUDIO_PORT}/v1"
+        local kokoro_tts_url="http://127.0.0.1:${KOKORO_PORT}/v1"
+
+        # Already-satisfied shortcut: if whisper.cpp + mlx-audio are both
+        # installed and the user did NOT explicitly force a backend,
+        # there's nothing to ask. Just idempotently write the split URLs
+        # and finish cleanly. An explicit --voice (or VOICEMODE_VOICE_ENGINE)
+        # always wins and bypasses this shortcut so the user can force the
+        # other path.
+        if is_whisper_installed && is_mlx_audio_installed && [[ -z "$VOICE_CHOICE" ]]; then
+            configure_voice_urls "$stt_url" "$mlx_tts_url"
+            ok "Whisper + mlx-audio already installed and configured -- all set, nothing to do"
             return 0
         fi
 
@@ -899,37 +942,53 @@ install_voice_services() {
         choice=$(resolve_apple_silicon_choice)
         case "$choice" in
             mlx)
-                # mlx-audio is independent of whisper/Kokoro -- it installs
-                # and points BASE_URLs at port 8890 even when whisper+Kokoro
-                # are already present (existing install kept as fallback).
-                # If the mlx-audio install fails, fall through to the
-                # existing whisper.cpp + Kokoro path rather than leaving the
-                # user with no voice backend.
+                # Whisper is load-bearing for STT regardless of which TTS
+                # is chosen (VM-1421 -- mlx-whisper repetition bug VM-94
+                # blocks using mlx-audio for STT). Install whisper.cpp
+                # first, then mlx-audio for TTS. If mlx-audio install
+                # fails, install Kokoro and re-point TTS at port
+                # ${KOKORO_PORT} instead of leaving the user with no TTS.
+                if ! install_whisper_cpp; then
+                    warn "STT not available -- retry with: voicemode whisper install"
+                    return 1
+                fi
                 if install_mlx_audio; then
+                    configure_voice_urls "$stt_url" "$mlx_tts_url"
                     return 0
                 fi
-                warn "Continuing with whisper.cpp + Kokoro fallback"
+                warn "mlx-audio failed -- falling back to Kokoro for TTS"
+                if install_kokoro; then
+                    configure_voice_urls "$stt_url" "$kokoro_tts_url"
+                    return 0
+                fi
+                warn "Kokoro fallback also failed -- TTS not configured"
+                return 1
                 ;;
             skip)
                 info "Skipping local voice services"
-                info "Install mlx-audio later with: voicemode service install mlx-audio"
-                info "  (or whisper.cpp + Kokoro: voicemode whisper install && voicemode kokoro install)"
+                info "Install Whisper + mlx-audio later with:"
+                info "  voicemode whisper install && voicemode service install mlx-audio"
+                info "  (or Whisper + Kokoro: voicemode whisper install && voicemode kokoro install)"
                 return 0
                 ;;
             local)
-                # Fall through to the existing whisper.cpp + Kokoro flow,
-                # and treat it as an explicit opt-in so the legacy prompt /
-                # non-interactive skip is bypassed. If both are already
-                # installed the legacy flow's per-service skips make this a
-                # no-op (correct: nothing to reinstall).
-                explicit_local=true
+                # Whisper (STT) + Kokoro (TTS). Install both, then write
+                # the split URLs explicitly (don't rely on package
+                # defaults). Treat as explicit opt-in so the legacy
+                # confirm/skip prompt below is bypassed -- but skip the
+                # legacy install block by handling it inline here.
+                if install_whisper_cpp && install_kokoro; then
+                    configure_voice_urls "$stt_url" "$kokoro_tts_url"
+                    return 0
+                fi
+                warn "Whisper + Kokoro install incomplete -- check messages above"
+                return 1
                 ;;
         esac
     fi
 
-    # If both are installed, nothing to do. (On Apple Silicon we only reach
-    # here when the user chose "local" with nothing left to install, or the
-    # mlx install fell back -- the whisper+Kokoro early-return is still right.)
+    # Off Apple Silicon only (the arm64 branch above always returns from
+    # inside its case). If both are installed, nothing to do.
     if [[ "$whisper_installed" == "true" && "$kokoro_installed" == "true" ]]; then
         return 0
     fi
@@ -948,13 +1007,13 @@ install_voice_services() {
     # Build list of what would be installed
     local services_to_install=""
     if [[ "$whisper_installed" == "false" ]]; then
-        services_to_install="Whisper (speech-to-text)"
+        services_to_install="Whisper (STT)"
     fi
     if [[ "$kokoro_installed" == "false" ]]; then
         if [[ -n "$services_to_install" ]]; then
-            services_to_install="$services_to_install, Kokoro (text-to-speech)"
+            services_to_install="$services_to_install, Kokoro (TTS)"
         else
-            services_to_install="Kokoro (text-to-speech)"
+            services_to_install="Kokoro (TTS)"
         fi
     fi
 
@@ -996,10 +1055,10 @@ install_voice_services() {
     # Prompt for installation. An explicit local opt-in bypasses both the
     # confirmation prompt and the non-interactive skip default.
     if [[ "$explicit_local" == "true" ]]; then
-        info "Installing whisper.cpp + Kokoro (explicitly selected)"
+        info "Installing Whisper (STT) + Kokoro (TTS) (explicitly selected)"
     elif [[ "$INTERACTIVE" == "true" ]] && tty_available; then
         echo ""
-        read -r -p "Install local voice services? [Y/n] " response </dev/tty
+        read -r -p "Install Whisper (STT) + Kokoro (TTS)? [Y/n] " response </dev/tty
         case "$response" in
             [nN][oO]|[nN])
                 info "Skipping local voice services"
@@ -1016,9 +1075,9 @@ install_voice_services() {
 
     # Install Whisper if needed
     if [[ "$whisper_installed" == "false" ]]; then
-        info "Installing Whisper STT..."
+        info "Installing Whisper (STT)..."
         if voicemode whisper install; then
-            ok "Whisper STT installed"
+            ok "Whisper (STT) installed"
         else
             warn "Whisper installation failed - you can retry with: voicemode whisper install"
         fi
@@ -1026,12 +1085,21 @@ install_voice_services() {
 
     # Install Kokoro if needed
     if [[ "$kokoro_installed" == "false" ]]; then
-        info "Installing Kokoro TTS..."
+        info "Installing Kokoro (TTS)..."
         if voicemode kokoro install; then
-            ok "Kokoro TTS installed"
+            ok "Kokoro (TTS) installed"
         else
             warn "Kokoro installation failed - you can retry with: voicemode kokoro install"
         fi
+    fi
+
+    # Write split URLs explicitly (don't rely on package defaults) so STT
+    # lands on whisper.cpp and TTS on Kokoro -- matches the Apple-Silicon
+    # "local" branch above (VM-1421).
+    if is_whisper_installed && is_kokoro_installed; then
+        configure_voice_urls \
+            "http://127.0.0.1:${WHISPER_CPP_PORT}/v1" \
+            "http://127.0.0.1:${KOKORO_PORT}/v1"
     fi
 }
 
