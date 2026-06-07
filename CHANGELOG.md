@@ -53,6 +53,8 @@ Newer Claude Code releases collapse MCP tool calls in the visible transcript, wh
 
 - **Whisper start uses wrapper script** ([#283](https://github.com/mbailey/voicemode/pull/283) by @codesmax) -- Whisper service start now goes through a wrapper script that handles fallback paths cleanly.
 
+- **`voicemode autofocus on|off|status` — toggle tmux auto-focus mid-session (VM-1024)** — A new CLI command (modelled on `voicemode soundfonts`) to flip the "focus the agent's tmux pane when it speaks" behaviour on or off without editing `voicemode.env` or restarting agents. `off` drops a sentinel at `~/.voicemode/autofocus-disabled` that wins over transient visual-conch holds; `--config` persists the matching env var. Ships the `off` mode (today's behaviour is the implicit `gentle`; an `aggressive` mode is deferred).
+
 ### Migration
 
 - **`VOICEMODE_CLONE_BASE_URL` and `VOICEMODE_CLONE_MODEL` are renamed.** Replace them in your `~/.voicemode/voicemode.env`:
@@ -75,6 +77,7 @@ Newer Claude Code releases collapse MCP tool calls in the visible transcript, wh
 - **Voice names must be lowercase in the skill** -- Skill guidance updated to require lowercase voice names (e.g. `af_sky`, not `AF_Sky`) to match the provider voice catalog.
 - **Parallel tool calls section simplified** -- Trimmed the "speak + act in parallel" section in the voicemode skill while preserving the key teaching content.
 - **mlx-audio pin floored at `>=0.4.3`** (VM-1126) -- `MLX_AUDIO_PIP_PACKAGE` now embeds the version specifier, so `uv tool install` refuses earlier releases that needed the deleted patch.
+- **`install.sh` now picks STT and TTS engines separately (VM-1421)** -- The `curl | bash` installer's Apple Silicon prompt is now a **TTS-engine** choice — `[1]` Whisper + mlx-audio (recommended), `[2]` Whisper + Kokoro, `[3]` skip — and **STT is always whisper.cpp** (mlx-whisper still ships the VM-94 seed/repetition bug in 0.4.3). STT and TTS endpoint preferences are written separately, and if mlx-audio install fails the installer falls back to Kokoro and re-points TTS rather than leaving you with no voice. Off-Apple-Silicon prompts gain `(STT)`/`(TTS)` labels. The `VM-1318` gate is preserved: non-interactive installs without `--voice` still skip local voice services.
 
 ### Deprecated
 
