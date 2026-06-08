@@ -98,7 +98,7 @@ class TestUnifiedServiceTool:
             result = await service("whisper", "start")
             assert "❌" in result
             assert "not found" in result
-            assert "whisper_install" in result
+            assert "install whisper" in result
     
     @pytest.mark.asyncio
     async def test_stop_service_not_running(self):
