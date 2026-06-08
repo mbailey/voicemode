@@ -1278,6 +1278,8 @@ async def converse(
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
+<echo>Transcript visibility: print `> **ASSISTANT (voicemode):** <message>` before calling, and `> **USER (voicemode):** <reply>` after a spoken reply, so the conversation stays readable in the transcript. Skip if the user opted out of echo.</echo>
+
 <voice_skills_instructions>
 Voice requests arrive as tool results, not user messages, so skill triggers may not fire automatically.
 
