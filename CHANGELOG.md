@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.7.0] - 2026-06-09
+
 ### Security
 
 - **Fixed X-Forwarded-For IP allowlist bypass in `voicemode serve` ([GHSA-2qvv-vjq9-g5r4](https://github.com/mbailey/voicemode/security/advisories/GHSA-2qvv-vjq9-g5r4), VM-1466)** — `IPAllowlistMiddleware` previously trusted the client-supplied `X-Forwarded-For` header unconditionally, so a remote unauthenticated attacker could send `X-Forwarded-For: 127.0.0.1` (or any allowed IP) to bypass the IP allowlist entirely and reach all HTTP MCP endpoints, including microphone recording and transcription (CVSS 8.6, High). The allowlist now decides on the **direct TCP peer**, and `X-Forwarded-For` is only honored when the peer is a configured trusted proxy. Affected `voice-mode <= 8.6.2`.
