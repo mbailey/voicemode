@@ -134,6 +134,30 @@ def isolate_home_directory(tmp_path, monkeypatch):
 
     monkeypatch.setattr("os.path.expanduser", mock_expanduser)
 
+    # Re-pin module-level path constants that captured Path.home() at IMPORT
+    # time, so patching Path.home() above doesn't reach them. Without this, a
+    # test transparently shares (and can clobber) the developer's real
+    # ~/.voicemode state — e.g. converse() blocks on the live `conch` lock held
+    # by a running voicemode process, and the autofocus sentinel toggles focus
+    # off. Pin them into the isolated fake home instead.
+    try:
+        from voice_mode.conch import Conch
+        monkeypatch.setattr(Conch, "LOCK_FILE", fake_home / ".voicemode" / "conch")
+    except Exception:
+        pass
+    try:
+        from voice_mode.cli_commands import autofocus
+        monkeypatch.setattr(
+            autofocus, "SENTINEL_FILE",
+            fake_home / ".voicemode" / "autofocus-disabled",
+        )
+        monkeypatch.setattr(
+            autofocus, "VOICEMODE_ENV_FILE",
+            fake_home / ".voicemode" / "voicemode.env",
+        )
+    except Exception:
+        pass
+
     yield fake_home
 
 

@@ -191,14 +191,31 @@ class TestConchConfig:
         importlib.reload(voice_mode.config)
 
 
-def _try_acquire_worker(name: str, queue: multiprocessing.Queue, hold_time: float = 0.5):
+def _pin_lock_file(lock_file):
+    """Point this (possibly spawned) process's Conch at the given lock path.
+
+    Spawned child processes re-import voice_mode.conch fresh, so they do NOT
+    inherit the parent test's monkeypatched Conch.LOCK_FILE — they'd otherwise
+    fall back to the real ~/.voicemode/conch and collide with a live voicemode
+    process. Tests pass the isolated lock path explicitly so parent and children
+    all share the same (isolated) file.
+    """
+    if lock_file is not None:
+        Conch.LOCK_FILE = lock_file
+        Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _try_acquire_worker(name: str, queue: multiprocessing.Queue, hold_time: float = 0.5,
+                        lock_file=None):
     """Worker function for multiprocessing tests.
 
     Args:
         name: Agent name for the conch
         queue: Queue to report results back
         hold_time: How long to hold the lock if acquired
+        lock_file: Isolated conch lock path to use (see _pin_lock_file)
     """
+    _pin_lock_file(lock_file)
     conch = Conch(agent_name=name)
     acquired = conch.try_acquire()
     queue.put((name, acquired))
@@ -207,8 +224,10 @@ def _try_acquire_worker(name: str, queue: multiprocessing.Queue, hold_time: floa
         conch.release()
 
 
-def _acquire_release_then_signal(name: str, queue: multiprocessing.Queue, barrier):
+def _acquire_release_then_signal(name: str, queue: multiprocessing.Queue, barrier,
+                                 lock_file=None):
     """Acquire, release, then signal completion via barrier."""
+    _pin_lock_file(lock_file)
     conch = Conch(agent_name=name)
     acquired = conch.try_acquire()
     queue.put((name, "first_try", acquired))
@@ -218,8 +237,10 @@ def _acquire_release_then_signal(name: str, queue: multiprocessing.Queue, barrie
     barrier.wait()
 
 
-def _wait_then_acquire(name: str, queue: multiprocessing.Queue, barrier):
+def _wait_then_acquire(name: str, queue: multiprocessing.Queue, barrier,
+                       lock_file=None):
     """Wait for barrier then try to acquire."""
+    _pin_lock_file(lock_file)
     barrier.wait()
     time.sleep(0.05)  # Small delay to ensure release is complete
     conch = Conch(agent_name=name)
@@ -298,9 +319,14 @@ class TestConchAtomicLocking:
         """Only one process can acquire at a time (multiprocessing test)."""
         results = multiprocessing.Queue()
 
-        # Start two processes simultaneously
-        p1 = multiprocessing.Process(target=_try_acquire_worker, args=("agent1", results))
-        p2 = multiprocessing.Process(target=_try_acquire_worker, args=("agent2", results))
+        # Start two processes simultaneously. Pass the isolated lock path so the
+        # spawned children share the parent's (home-isolated) conch file rather
+        # than the real ~/.voicemode/conch.
+        lock_file = Conch.LOCK_FILE
+        p1 = multiprocessing.Process(
+            target=_try_acquire_worker, args=("agent1", results, 0.5, lock_file))
+        p2 = multiprocessing.Process(
+            target=_try_acquire_worker, args=("agent2", results, 0.5, lock_file))
 
         p1.start()
         p2.start()
@@ -321,13 +347,14 @@ class TestConchAtomicLocking:
         results = multiprocessing.Queue()
         barrier = multiprocessing.Barrier(2)
 
+        lock_file = Conch.LOCK_FILE
         p1 = multiprocessing.Process(
             target=_acquire_release_then_signal,
-            args=("first", results, barrier)
+            args=("first", results, barrier, lock_file)
         )
         p2 = multiprocessing.Process(
             target=_wait_then_acquire,
-            args=("second", results, barrier)
+            args=("second", results, barrier, lock_file)
         )
 
         p1.start()
