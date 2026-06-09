@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pin the mlx-audio install spec to `>=0.4.3,<0.4.4` to block the broken 0.4.4 release (VM-1550, VM-1547)** — mlx-audio 0.4.4 regressed the Kokoro TTS decoder: `istftnet.py` SineGen crashes with a `[broadcast_shapes]` `ValueError` on longer utterances and returns HTTP 500. With mlx-audio as the primary TTS endpoint, voicemode's failover then masks this as a spurious "OpenAI API key is not set" error, producing intermittent, confusing converse failures. `voicemode service install mlx-audio` now caps below 0.4.4 (resolving to the crash-free 0.4.3) until a fixed upstream release ships. Existing installs on 0.4.4 should reinstall: `uv tool uninstall mlx-audio` then `voicemode service install mlx-audio` (or `uv tool install "mlx-audio==0.4.3" --force` with the server extras).
+
 ## [8.7.1] - 2026-06-09
 
 ## [8.7.0] - 2026-06-09

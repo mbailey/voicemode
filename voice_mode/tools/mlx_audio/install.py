@@ -52,7 +52,13 @@ MLX_AUDIO_DEFAULT_PORT = 8890
 # of a bundled patch. See VM-1126. The OpenAI-style STT ``response_format``
 # half of the original patch was NOT upstreamed -- voicemode still bundles
 # a minimal patch to add it. See VM-1128.
-MLX_AUDIO_PIP_PACKAGE = "mlx-audio>=0.4.3"
+#
+# Capped ``<0.4.4`` because mlx-audio 0.4.4 regressed the Kokoro TTS decoder:
+# ``istftnet.py`` SineGen crashes with a ``[broadcast_shapes]`` ValueError on
+# longer utterances, returning HTTP 500 (which voicemode then masks as a
+# spurious "OPENAI_API_KEY not set" failover error). 0.4.3 is crash-free. Lift
+# the ceiling once a fixed upstream release ships. See VM-1547 / VM-1550.
+MLX_AUDIO_PIP_PACKAGE = "mlx-audio>=0.4.3,<0.4.4"
 MLX_AUDIO_ENTRY_POINT = "mlx_audio.server"
 
 # Sentinel string that proves the bundled patch has already been applied
