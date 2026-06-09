@@ -149,7 +149,7 @@ class TestExtrasList:
 
 
 class TestPipPackagePin:
-    """The pip-package spec must keep the ``>=0.4.3`` floor."""
+    """The pip-package spec must keep the ``>=0.4.3`` floor and ``<0.4.4`` cap."""
 
     def test_pip_package_specifier_pins_at_or_above_0_4_3(self):
         # 0.4.3 is the first upstream release that absorbed the MLX Metal
@@ -158,6 +158,12 @@ class TestPipPackagePin:
         # mlx-audio releases will misbehave on real workloads.
         assert MLX_AUDIO_PIP_PACKAGE.startswith("mlx-audio")
         assert ">=0.4.3" in MLX_AUDIO_PIP_PACKAGE
+
+    def test_pip_package_specifier_caps_below_0_4_4(self):
+        # mlx-audio 0.4.4 regressed the Kokoro istftnet SineGen decoder:
+        # a [broadcast_shapes] ValueError → HTTP 500 on longer utterances
+        # (VM-1547). Cap below it until a fixed upstream release ships.
+        assert "<0.4.4" in MLX_AUDIO_PIP_PACKAGE
 
 
 class TestInstallCommandShape:
