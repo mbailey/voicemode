@@ -152,7 +152,9 @@ def load_voicemode_env():
 # Example: VOICEMODE_STT_PROMPT=tmux, Tali, kubectl, VoiceMode
 # VOICEMODE_STT_PROMPT=
 
-# Comma-separated list of preferred voices
+# Comma-separated list of preferred voices (local-only by default)
+VOICEMODE_VOICES=af_sky
+# To use OpenAI voices, set OPENAI_API_KEY and add them here:
 # VOICEMODE_VOICES=af_sky,alloy
 
 # Comma-separated list of preferred models
