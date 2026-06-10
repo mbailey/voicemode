@@ -53,6 +53,7 @@ class Conch:
     """
 
     LOCK_FILE = Path.home() / ".voicemode" / "conch"
+    HOLD_FILE = Path.home() / ".voicemode" / "conch_hold"
 
     def __init__(self, agent_name: Optional[str] = None):
         """Initialize Conch with optional agent name.
@@ -105,6 +106,10 @@ class Conch:
         """
         if self._acquired:
             return True  # Already holding it
+
+        # Check if another process has a hold on the conch
+        if self.is_held_by_other():
+            return False
 
         agent = agent_name or self.agent_name or "unknown"
         self.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -327,3 +332,44 @@ class Conch:
         """Context manager exit - release the lock."""
         self.release()
         return False  # Don't suppress exceptions
+
+    @classmethod
+    def set_hold(cls, agent_name: str = "unknown") -> None:
+        """Set a hold on the conch for the current process.
+
+        While a hold is active, other processes' try_acquire will fail
+        even when the conch lock file is not held (between turns).
+        """
+        cls.HOLD_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {"pid": os.getpid(), "agent": agent_name}
+        cls.HOLD_FILE.write_text(json.dumps(data))
+
+    @classmethod
+    def release_hold(cls) -> None:
+        """Release the hold, allowing other agents to acquire the conch."""
+        try:
+            if cls.HOLD_FILE.exists():
+                data = json.loads(cls.HOLD_FILE.read_text())
+                if data.get("pid") == os.getpid():
+                    cls.HOLD_FILE.unlink()
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    @classmethod
+    def is_held_by_other(cls) -> bool:
+        """Check if another process has a hold on the conch.
+
+        Returns:
+            True if another live process holds the conch, False otherwise
+        """
+        if not cls.HOLD_FILE.exists():
+            return False
+        try:
+            data = json.loads(cls.HOLD_FILE.read_text())
+            pid = data.get("pid")
+            if pid is None or pid == os.getpid():
+                return False
+            os.kill(pid, 0)  # Check if process is alive
+            return True
+        except (json.JSONDecodeError, ProcessLookupError, PermissionError, OSError):
+            return False

@@ -7,7 +7,7 @@ import time
 import traceback
 from typing import Optional, Literal, Tuple, Dict, Union
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import numpy as np
 import sounddevice as sd
@@ -1273,6 +1273,7 @@ async def converse(
     chime_trailing_silence: Optional[float] = None,
     metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
     wait_for_conch: Union[bool, str] = False,
+    hold_conch: Union[bool, str] = False,
     skip_conch: Union[bool, str] = False,
     ref_text: Optional[str] = None,
 ) -> str:
@@ -1327,6 +1328,11 @@ KEY PARAMETERS:
 • wait_for_conch (bool, default: false): Multi-agent coordination
   - false: If another agent is speaking, return status immediately
   - true: Wait until the other agent finishes, then speak
+• hold_conch (bool, default: false): Retain exclusive access across turns
+  - false: Release the conch fully after each turn
+  - true: Set a hold between turns so other agents queue rather than speak
+    while you are processing. Release the hold by calling converse again
+    with hold_conch=false, or let it expire when your process exits.
 • skip_conch (bool, default: false): Bypass conch entirely
   - false: Honour the conch lock (default multi-agent coordination)
   - true: Don't try to acquire or release the conch -- speak immediately
@@ -1375,6 +1381,8 @@ consult the MCP resources listed above.
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
     if isinstance(wait_for_conch, str):
         wait_for_conch = wait_for_conch.lower() in ('true', '1', 'yes', 'on')
+    if isinstance(hold_conch, str):
+        hold_conch = hold_conch.lower() in ('true', '1', 'yes', 'on')
     if isinstance(skip_conch, str):
         skip_conch = skip_conch.lower() in ('true', '1', 'yes', 'on')
 
@@ -2218,10 +2226,15 @@ consult the MCP resources listed above.
         # Release the conch to signal voice conversation has ended
         if CONCH_ENABLED and conch._acquired:
             held_seconds = conch.release()
+            if hold_conch:
+                Conch.set_hold(conch.agent_name or "converse")
+            else:
+                Conch.release_hold()
             if event_logger:
                 event_logger.log_event("CONCH_RELEASE", {
                     "pid": os.getpid(),
-                    "held_seconds": held_seconds
+                    "held_seconds": held_seconds,
+                    "hold_active": hold_conch
                 })
         else:
             # Don't call release() when not acquired — it would delete the lock
@@ -2254,4 +2267,40 @@ consult the MCP resources listed above.
 
 
 
+@mcp.tool()
+async def pause_conversation(
+    seconds: float,
+    message: Optional[str] = None,
+) -> str:
+    """Pause the conversation for a specified duration, maintaining the conch hold.
 
+    While paused, other agents queued with wait_for_conch will continue to wait.
+    This is useful for pausing a conversation while doing background work, then
+    resuming without losing your turn.
+
+    Args:
+        seconds: Duration to pause in seconds.
+        message: Optional note visible in the tool call display while pausing.
+                 Calculate the resume time before calling and pass it here so
+                 it is visible during the pause, e.g. "Resuming at 22:09:45"
+                 or "Resuming at 22:09:45 — waiting for background task".
+
+    Returns:
+        A message indicating the pause has completed.
+    """
+    end_time = datetime.now() + timedelta(seconds=seconds)
+    end_str = end_time.strftime("%H:%M:%S")
+    logger.info(f"Pause started: {seconds:.0f}s, resuming at {end_str}")
+    Conch.set_hold("pause_conversation")
+    try:
+        interval = min(10.0, seconds)
+        elapsed = 0.0
+        while elapsed < seconds:
+            chunk = min(interval, seconds - elapsed)
+            await asyncio.sleep(chunk)
+            elapsed += chunk
+            if elapsed < seconds:
+                logger.info(f"Pause: {elapsed:.0f}s / {seconds:.0f}s elapsed, resuming at {end_str}")
+    finally:
+        Conch.release_hold()
+    return f"Pause complete. Resumed at {end_str} (after {seconds:.0f}s)."
