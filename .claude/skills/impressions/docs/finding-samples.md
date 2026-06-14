@@ -69,6 +69,8 @@ ffmpeg -ss 00:01:23.400 -i source.wav -t 7 -c copy candidate.wav
 
 Use `-c copy` for stream copy (fast, no re-encode) when you don't need to change format. Combine with the loudnorm pass when you do.
 
+**Write the transcript at the same time you cut the clip.** Save the exact words as `candidate.txt` beside `candidate.wav` -- you know what's said right now (you just picked the window from a transcript); future-you and the TTS model both need it. A clip without its transcript synthesises with stammering on noisy/vintage sources, because the model has to ASR the reference itself (VL-50 finding, 2026-06-11). If you mined the window from whisper word-timestamps, the text is already in hand -- saving it costs nothing.
+
 ## Removing background noise
 
 Light hum or HVAC whir? `arnndn` (RNNoise) does a decent job:

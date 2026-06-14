@@ -14,6 +14,7 @@ Call the `voicemode:converse` MCP tool. Argument handling:
 
 - `$1` — optional voice name (e.g. `af_river`, `samantha`, `nova`). If non-empty, pass it as the `voice` parameter to the tool. If empty, omit `voice` so the tool uses its default.
 - `$2` — optional initial message. If non-empty, use it as the message to speak. If empty, let the tool / Claude choose an appropriate opener.
+- To discover voices, read the `voice://voices` MCP resource; to speak in character, first read the persona at `~/.voicemode/voices/<voice>/README.md` (index: `~/.voicemode/voices/PERSONAS.md`).
 
 All other parameters have sensible defaults.
 

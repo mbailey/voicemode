@@ -39,6 +39,7 @@ In the MCP `converse` tool, pass `voice="fleabag"` -- VoiceMode auto-routes any 
 - **Mono speech, no music or cross-talk.** The model copies what it hears -- including hum, music beds, laugh tracks, and overlapping speakers.
 - **Any input format accepted.** WAV, MP3, M4A, etc. -- ffmpeg normalises whatever you hand it.
 - **Output is always mono 24 kHz 16-bit PCM with loudnorm I=-16 TP=-1.5 LRA=11.** This is the canonical voice-lab format; the original input is replaced by this normalised render at `default.wav`.
+- **ALWAYS pair the clip with its transcript.** The model conditions on the reference text; without one it ASRs the clip itself, and any mis-hearing (noisy or vintage audio especially) corrupts the conditioning -- the symptom is **stammering / stuttered synthesis**. `voicemode clone add` auto-transcribes into `voice.md` (verify it -- correct mis-hearings by hand); voice-lab's `sayas` reads `<clip>.txt` next to each wav; the MCP `converse` tool takes `ref_text` alongside a clip-path `voice`. (Root-caused on VL-50, 2026-06-11: 1977 Doctor Who clips stammered until transcripts were supplied -- then "much better!!!".)
 
 ### Trimming a too-long clip
 
@@ -91,6 +92,7 @@ If you see those in a user's `voicemode.env`, suggest updating them.
 
 ## Footguns
 
+- **Missing reference transcript = stammering.** A clip without its transcript forces the model to ASR the reference itself; on anything but clean modern audio that mis-hears, and the synthesis stutters. Fix: `<clip>.txt` beside the wav (sayas), `ref_text` in converse, corrected `transcript:` in `voice.md`. See "Reference clip requirements".
 - **Kokoro name collisions** -- naming a voice `af_sky` (or any other Kokoro voice name) shadows the Kokoro voice. Pick distinctive names like `fleabag`, `mike-2026`, `bryan_morning`.
 - **Apple Silicon only** -- no fallback for Intel Macs / Linux / Windows. Don't suggest installing mlx-audio on those platforms.
 - **First synthesis is slow** -- ~3.4 GB model download on first call. Warn the user.
