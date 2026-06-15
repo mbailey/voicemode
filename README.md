@@ -205,7 +205,7 @@ export VOICEMODE_SAVE_AUDIO=true
 - [Kokoro Setup](docs/guides/kokoro-setup.md) - Local text-to-speech
 - [Development Setup](docs/tutorials/development-setup.md) - Contributing guide
 
-Full documentation: [voice-mode.readthedocs.io](https://voice-mode.readthedocs.io)
+Full documentation: [voicemode.dev](https://voicemode.dev)
 
 ## Links
 
