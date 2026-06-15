@@ -41,6 +41,21 @@ def _get_lock_expiry() -> float:
         return 120.0  # Default 2 minutes
 
 
+def _get_hold_expiry() -> float:
+    """Get the idle-expiry (seconds) for a between-turns *hold*, with fallback.
+
+    A hold persists across turns while the kernel flock is released, so it can
+    only be cleared by the holder dying (pid check) or by going stale. This is
+    that staleness window. It is re-stamped every turn, so it only ever needs to
+    cover the gap between two turns (agent thinking / light tool use).
+    """
+    try:
+        from voice_mode.config import CONCH_HOLD_EXPIRY
+        return CONCH_HOLD_EXPIRY
+    except ImportError:
+        return 300.0  # Default 5 minutes
+
+
 class Conch:
     """Simple lock file for voice conversation coordination.
 
@@ -48,24 +63,151 @@ class Conch:
     is active. The lock file contains:
     - pid: Process ID of the lock holder (for stale lock detection)
     - agent: Name of the agent holding the lock
-    - acquired: ISO timestamp when lock was acquired
+    - session_id: Caller-provided harness session ID, or null (VM-1562)
+    - project_path: Holder's working directory, or null (CID-62) — lets
+      consumers (e.g. the Stream Deck) show who's talking on which project
+      with zero lookups, even for a dead/cross-machine session
+    - voice: TTS voice name in use, or null (VM-914) — lets another agent read
+      the holder's voice and pick a different one to avoid a voice clash
+    - acquired: ISO timestamp when the lock/hold was last (re-)stamped
+    - held: True when this is a *hold* persisting between turns (the file is
+      left in place with the kernel flock released); False during an active
+      call (flock held)
     - expires: Optional expiry time (reserved for future use)
+
+    Two layers of liveness coordinate multiple agents:
+    1. The kernel flock (held for the duration of a call) answers "is an
+       exchange running right now?" — crash-safe, auto-released by the OS.
+    2. The on-disk ``held`` marker answers "is the floor reserved between
+       turns?" — guarded by a pid-alive check and an idle-expiry timestamp,
+       since plain bytes do not self-clean when a process dies.
     """
 
     LOCK_FILE = Path.home() / ".voicemode" / "conch"
 
-    def __init__(self, agent_name: Optional[str] = None):
+    def __init__(
+        self,
+        agent_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+        project_path: Optional[str] = None,
+        voice: Optional[str] = None,
+    ):
         """Initialize Conch with optional agent name.
 
         Args:
             agent_name: Name of the agent (e.g., "cora"). Used for debugging/logging.
+            session_id: Optional caller-provided harness session ID (VM-1562).
+                Stored verbatim in the lock payload; null when not provided.
+            project_path: Optional holder working directory (CID-62). Stored in
+                the payload so consumers can render "who, on which project".
+            voice: Optional TTS voice name in use (VM-914). Stored so another
+                agent can read the holder's voice and pick a different one to
+                avoid a voice clash.
         """
         self.agent_name = agent_name
+        self.session_id = session_id
+        self.project_path = project_path
+        self.voice = voice
         self._acquired = False
         self._fd = None  # File descriptor for flock
         self._acquire_time = None  # Track when acquired
 
-    def acquire(self, agent_name: Optional[str] = None) -> bool:
+    def _payload(self, held: bool) -> dict:
+        """Build the lock-file payload for this holder."""
+        return {
+            "pid": os.getpid(),
+            "agent": self.agent_name or "unknown",
+            "session_id": self.session_id,
+            "project_path": self.project_path,
+            "voice": self.voice,
+            "acquired": (self._acquire_time or datetime.now()).isoformat(),
+            "held": held,
+            "expires": None,
+        }
+
+    def _write_locked_payload(self, held: bool) -> None:
+        """Overwrite the lock file via the held fd (atomic while we hold flock)."""
+        data = json.dumps(self._payload(held), indent=2).encode()
+        os.ftruncate(self._fd, 0)
+        os.lseek(self._fd, 0, os.SEEK_SET)
+        os.write(self._fd, data)
+        os.fsync(self._fd)
+
+    @classmethod
+    def _held_by_other(cls) -> bool:
+        """True if the lock file marks a live, non-expired *hold* by another process.
+
+        Holds persist between turns with the kernel flock released, so a naive
+        ``flock`` would succeed and steal a reserved floor. Acquirers must
+        consult this explicitly. Returns False for: no file, no ``held`` flag,
+        our own pid, a dead holder, or an idle-expired hold (those are all
+        safe to take — stale clearance unlinks dead/expired holds separately).
+        """
+        try:
+            data = json.loads(cls.LOCK_FILE.read_text())
+        except (json.JSONDecodeError, OSError, ValueError):
+            return False
+        if not data.get("held"):
+            return False
+        pid = data.get("pid")
+        if pid is None or pid == os.getpid():
+            return False
+        # Holder process alive?
+        try:
+            os.kill(pid, 0)
+        except PermissionError:
+            pass  # exists but not signalable by us — treat as alive
+        except (ProcessLookupError, TypeError, OSError):
+            return False
+        # Hold not idle-expired?
+        hold_expiry = _get_hold_expiry()
+        if hold_expiry > 0:
+            acquired_str = data.get("acquired")
+            if acquired_str:
+                try:
+                    age = (datetime.now() - datetime.fromisoformat(acquired_str)).total_seconds()
+                    if age > hold_expiry:
+                        return False
+                except ValueError:
+                    pass
+        return True
+
+    @classmethod
+    def write_hold(
+        cls,
+        agent_name: str = "unknown",
+        session_id: Optional[str] = None,
+        project_path: Optional[str] = None,
+        voice: Optional[str] = None,
+    ) -> None:
+        """Write a between-turns hold marker owned by the current process,
+        WITHOUT taking the kernel flock.
+
+        Used by ``pause_conversation``: it must not flock-block the same
+        process's later ``converse`` call (flock locks conflict between two
+        open file descriptions in one process). Callers must first ensure the
+        conch is free or already theirs (see ``get_holder``) to avoid
+        clobbering an active holder's payload.
+        """
+        cls.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "pid": os.getpid(),
+            "agent": agent_name,
+            "session_id": session_id,
+            "project_path": project_path,
+            "voice": voice,
+            "acquired": datetime.now().isoformat(),
+            "held": True,
+            "expires": None,
+        }
+        cls.LOCK_FILE.write_text(json.dumps(data, indent=2))
+
+    def acquire(
+        self,
+        agent_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+        project_path: Optional[str] = None,
+    ) -> bool:
         """Create the lock file.
 
         Args:
@@ -74,43 +216,63 @@ class Conch:
         Returns:
             True if lock was acquired successfully
         """
-        agent = agent_name or self.agent_name or "unknown"
+        self.agent_name = agent_name or self.agent_name or "unknown"
+        if session_id is not None:
+            self.session_id = session_id
+        if project_path is not None:
+            self.project_path = project_path
 
         # Ensure parent directory exists
         self.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-        data = {
-            "pid": os.getpid(),
-            "agent": agent,
-            "acquired": datetime.now().isoformat(),
-            "expires": None
-        }
-
-        self.LOCK_FILE.write_text(json.dumps(data, indent=2))
+        self._acquire_time = datetime.now()
+        self.LOCK_FILE.write_text(json.dumps(self._payload(held=False), indent=2))
         self._acquired = True
         return True
 
-    def try_acquire(self, agent_name: Optional[str] = None) -> bool:
+    def try_acquire(
+        self,
+        agent_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+        project_path: Optional[str] = None,
+    ) -> bool:
         """Atomically try to acquire the conch.
 
         Uses fcntl.flock() for true atomic locking across processes.
-        Also handles stale locks: if a lock is older than CONCH_LOCK_EXPIRY
-        seconds, it will be forcibly released and re-acquired.
+        Also handles stale locks: a lock whose holder PID is dead, or that is
+        older than its expiry window (CONCH_LOCK_EXPIRY for active locks,
+        CONCH_HOLD_EXPIRY for between-turns holds), is forcibly cleared.
+
+        Respects an active *hold* by another live process: between turns the
+        holder releases the kernel flock but leaves a ``held`` marker in the
+        file, so this returns False even though the flock is free.
 
         Args:
             agent_name: Name of the agent acquiring the lock
+            session_id: Optional caller-provided session ID (stored verbatim)
+            project_path: Optional holder working directory (stored verbatim)
 
         Returns:
-            True if lock acquired, False if already held by another process
+            True if lock acquired, False if held (live flock) or reserved
+            (live hold) by another process
         """
         if self._acquired:
             return True  # Already holding it
 
-        agent = agent_name or self.agent_name or "unknown"
+        self.agent_name = agent_name or self.agent_name or "unknown"
+        if session_id is not None:
+            self.session_id = session_id
+        if project_path is not None:
+            self.project_path = project_path
         self.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-        # First check: is there a stale lock we can forcibly clear?
+        # First check: is there a dead/expired lock we can forcibly clear?
         self._check_and_clear_stale_lock()
+
+        # Respect a live hold owned by another process. The flock is free
+        # between turns, so without this we would clobber a reserved floor.
+        if self._held_by_other():
+            return False
 
         try:
             # Open file for read/write, create if doesn't exist
@@ -119,19 +281,9 @@ class Conch:
             # Try to get exclusive lock (non-blocking)
             fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-            # Got lock - write our info
+            # Got lock - write our info (held=False: we hold the flock now)
             self._acquire_time = datetime.now()
-            data = {
-                "pid": os.getpid(),
-                "agent": agent,
-                "acquired": self._acquire_time.isoformat(),
-                "expires": None
-            }
-
-            os.ftruncate(self._fd, 0)
-            os.lseek(self._fd, 0, os.SEEK_SET)
-            os.write(self._fd, json.dumps(data, indent=2).encode())
-            os.fsync(self._fd)  # Ensure data is written
+            self._write_locked_payload(held=False)
 
             self._acquired = True
             return True
@@ -204,8 +356,10 @@ class Conch:
                 # fall through to timestamp check.
                 pass
 
-        # Timestamp-based stale clearance.
-        lock_expiry = _get_lock_expiry()
+        # Timestamp-based stale clearance. A between-turns hold uses its own
+        # (typically longer) idle-expiry window; an active lock uses the
+        # standard one.
+        lock_expiry = _get_hold_expiry() if data.get("held") else _get_lock_expiry()
         if lock_expiry <= 0:
             return  # Stale lock detection disabled
 
@@ -226,20 +380,47 @@ class Conch:
             except OSError:
                 pass
 
-    def release(self) -> float:
+    def release(self, hold: bool = False) -> float:
         """Release the lock and return seconds held.
 
         Only removes the lock file if this instance actually acquired the lock.
         Removing it when not acquired would destroy the lock held by another
         process (they'd be flocking different inodes after re-creation).
 
+        Args:
+            hold: If True, keep the floor between turns — re-stamp the payload
+                with ``held=True`` (auto-extending the idle-expiry), drop the
+                kernel flock so others can detect no call is running, but LEAVE
+                the file so other agents queue behind the hold. The same
+                process reclaims it on its next ``try_acquire`` (its own pid is
+                not "another" holder). If False, fully release: drop flock and
+                unlink (unchanged default behaviour).
+
         Returns:
-            Seconds the lock was held, or 0.0 if not acquired
+            Seconds the lock was held this turn, or 0.0 if not acquired
         """
         held_seconds = 0.0
 
         if self._acquire_time:
             held_seconds = (datetime.now() - self._acquire_time).total_seconds()
+
+        if hold and self._acquired and self._fd is not None:
+            # Keep the floor: re-stamp + mark held while we still hold the
+            # flock (atomic), then drop the flock but leave the file.
+            self._acquire_time = datetime.now()
+            try:
+                self._write_locked_payload(held=True)
+            except OSError:
+                pass
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                os.close(self._fd)
+            except OSError:
+                pass
+            self._fd = None
+            self._acquired = False
+            self._acquire_time = None
+            return held_seconds
 
         if self._fd is not None:
             try:

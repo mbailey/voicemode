@@ -17,6 +17,8 @@ Call the `voicemode:converse` MCP tool. Argument handling:
 
 All other parameters have sensible defaults.
 
+**Multi-agent turn-taking:** in a session where more than one agent shares the voice channel, pass `hold_conch=true` when your *next* converse call will continue the thread (you're asking a question you'll answer, or speaking across several turns). It keeps the floor so other agents wait instead of cutting in at the turn boundary; the default `false` releases it after the exchange.
+
 ### Examples
 
 - `/voicemode:converse` — no args, default voice, Claude chooses opener

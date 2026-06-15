@@ -4,12 +4,37 @@ import json
 import multiprocessing
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from voice_mode.conch import Conch
+
+
+def _idle_child():
+    """Module-level target for multiprocessing: a live process that just sleeps.
+
+    Used by hold tests that need a real, *other* live PID (the parent's own PID
+    is treated as 'self', so two Conch instances in one process can't exercise
+    the cross-process hold path)."""
+    time.sleep(60)
+
+
+def _write_marker(pid, *, held, acquired=None, agent="other",
+                  session_id=None, project_path=None):
+    """Write a raw lock-file payload (simulating another holder)."""
+    Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    Conch.LOCK_FILE.write_text(json.dumps({
+        "pid": pid,
+        "agent": agent,
+        "session_id": session_id,
+        "project_path": project_path,
+        "acquired": acquired or datetime.now().isoformat(),
+        "held": held,
+        "expires": None,
+    }))
 
 
 @pytest.fixture
@@ -145,10 +170,17 @@ class TestConchConfig:
         assert isinstance(CONCH_ENABLED, bool)
 
     def test_conch_timeout_default(self):
-        """CONCH_TIMEOUT defaults to 60 seconds."""
+        """CONCH_TIMEOUT defaults to 300 seconds (VM-1433: wait through a held
+        floor's between-turn gaps rather than bouncing at 60s)."""
         from voice_mode.config import CONCH_TIMEOUT
         assert isinstance(CONCH_TIMEOUT, float)
-        assert CONCH_TIMEOUT == 60.0
+        assert CONCH_TIMEOUT == 300.0
+
+    def test_conch_hold_expiry_default(self):
+        """CONCH_HOLD_EXPIRY defaults to 300 seconds (VM-1433 idle-expiry safety valve)."""
+        from voice_mode.config import CONCH_HOLD_EXPIRY
+        assert isinstance(CONCH_HOLD_EXPIRY, float)
+        assert CONCH_HOLD_EXPIRY == 300.0
 
     def test_conch_check_interval_default(self):
         """CONCH_CHECK_INTERVAL defaults to 0.5 seconds."""
@@ -596,3 +628,144 @@ class TestConchAtomicLocking:
 
         # Clean up
         agent_a.release()
+
+
+class TestConchPayload:
+    """VM-1562 / CID-62: enriched lock payload."""
+
+    def test_try_acquire_writes_enriched_payload(self, clean_conch):
+        """try_acquire() records session_id, project_path, voice and held=False."""
+        conch = Conch(agent_name="cora", session_id="sess-123",
+                      project_path="/home/mike/proj", voice="af_sky")
+        assert conch.try_acquire() is True
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["session_id"] == "sess-123"
+        assert data["project_path"] == "/home/mike/proj"
+        assert data["voice"] == "af_sky"
+        assert data["held"] is False
+        assert data["agent"] == "cora"
+        conch.release()
+
+    def test_payload_fields_null_when_not_provided(self, clean_conch):
+        """session_id / project_path / voice are null (not missing) when absent."""
+        conch = Conch(agent_name="cora")
+        assert conch.try_acquire() is True
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["session_id"] is None
+        assert data["project_path"] is None
+        assert data["voice"] is None
+        conch.release()
+
+    def test_voice_visible_to_other_agent_via_get_holder(self, clean_conch):
+        """VM-914: another agent can read the holder's voice for clash avoidance."""
+        conch = Conch(agent_name="cora-a", voice="af_sky")
+        assert conch.try_acquire() is True
+        holder = Conch.get_holder()
+        assert holder is not None
+        assert holder["voice"] == "af_sky"  # a second agent would pick a different one
+        conch.release()
+
+    def test_acquire_also_writes_enriched_payload(self, clean_conch):
+        """The non-atomic acquire() path carries the same fields."""
+        conch = Conch(agent_name="cora")
+        conch.acquire(session_id="s9", project_path="/p")
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["session_id"] == "s9"
+        assert data["project_path"] == "/p"
+        assert data["held"] is False
+        conch.release()
+
+
+class TestConchHold:
+    """VM-1433: between-turns hold on the single conch file."""
+
+    def test_hold_keeps_file_and_marks_held(self, clean_conch):
+        """release(hold=True) leaves the file with held=True and re-stamps it."""
+        conch = Conch(agent_name="cora", session_id="s1", project_path="/p",
+                      voice="af_sky")
+        assert conch.try_acquire() is True
+        conch.release(hold=True)
+
+        assert Conch.LOCK_FILE.exists(), "hold must NOT unlink the file"
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["held"] is True
+        assert data["pid"] == os.getpid()
+        # Enriched fields survive the hand-off to the held state.
+        assert data["session_id"] == "s1"
+        assert data["project_path"] == "/p"
+        assert data["voice"] == "af_sky"
+
+    def test_default_release_still_unlinks(self, clean_conch):
+        """release() with no hold is unchanged: file is removed."""
+        conch = Conch(agent_name="cora")
+        conch.try_acquire()
+        conch.release()  # hold defaults to False
+        assert not Conch.LOCK_FILE.exists()
+
+    def test_holder_reclaims_its_own_hold(self, clean_conch):
+        """The same process re-acquires across a hold (its pid isn't 'other')."""
+        conch = Conch(agent_name="cora")
+        conch.try_acquire()
+        conch.release(hold=True)
+
+        # Next turn: same instance re-acquires the floor it reserved.
+        assert conch.try_acquire() is True
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["held"] is False  # active call again
+        conch.release()
+
+    def test_live_other_hold_blocks_acquire(self, clean_conch):
+        """A live hold owned by ANOTHER process blocks try_acquire."""
+        proc = multiprocessing.Process(target=_idle_child, daemon=True)
+        proc.start()
+        try:
+            _write_marker(proc.pid, held=True)  # fresh hold by a live other pid
+            conch = Conch(agent_name="cora")
+            assert conch.try_acquire() is False
+            assert Conch.LOCK_FILE.exists(), "must not steal a live hold"
+        finally:
+            proc.terminate()
+            proc.join(timeout=5)
+
+    def test_dead_holder_hold_is_cleared(self, clean_conch):
+        """A hold whose holder PID is dead is cleared immediately (fast-fail)."""
+        _write_marker(999999999, held=True)  # dead pid
+        conch = Conch(agent_name="cora")
+        assert conch.try_acquire() is True
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["pid"] == os.getpid()
+        conch.release()
+
+    def test_idle_expired_hold_is_takeable(self, clean_conch):
+        """A live-but-stale (idle-expired) hold can be taken."""
+        proc = multiprocessing.Process(target=_idle_child, daemon=True)
+        proc.start()
+        try:
+            # Live other pid, but the hold was stamped long ago.
+            _write_marker(proc.pid, held=True, acquired="2000-01-01T00:00:00")
+            with patch("voice_mode.conch._get_hold_expiry", return_value=60.0):
+                conch = Conch(agent_name="cora")
+                assert conch.try_acquire() is True
+            conch.release()
+        finally:
+            proc.terminate()
+            proc.join(timeout=5)
+
+    def test_active_call_flock_blocks_even_without_hold(self, clean_conch):
+        """An in-flight call (flock held, held=False) still blocks others."""
+        holder = Conch(agent_name="holderA")
+        assert holder.try_acquire() is True  # holds the flock
+        other = Conch(agent_name="other")
+        # Different instance, same process — but the flock is exclusive per fd.
+        assert other.try_acquire() is False
+        holder.release()
+
+    def test_write_hold_marks_held_without_flock(self, clean_conch):
+        """write_hold() (used by pause_conversation) writes a held marker."""
+        Conch.write_hold("pause_conversation", session_id="sp",
+                         project_path="/pp")
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["held"] is True
+        assert data["agent"] == "pause_conversation"
+        assert data["session_id"] == "sp"
+        assert data["pid"] == os.getpid()
