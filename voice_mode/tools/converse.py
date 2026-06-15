@@ -1280,6 +1280,8 @@ async def converse(
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
+Multi-agent turn-taking: if your next converse call will continue this thread (asking a question you'll answer, or speaking across several turns), pass hold_conch=true so other agents wait instead of cutting in at the turn boundary.
+
 <echo>Transcript visibility: print `> **ASSISTANT (voicemode):** <message>` before calling, and `> **USER (voicemode):** <reply>` after a spoken reply, so the conversation stays readable in the transcript. Skip if the user opted out of echo.</echo>
 
 <voice_skills_instructions>
@@ -1332,14 +1334,14 @@ KEY PARAMETERS:
     then speak. Fast-fails the moment the holder's process dies.
   - a number: Wait at most that many seconds (implies waiting), overriding the
     configured default for this call.
-• hold_conch (bool, default: false): Retain the floor across turns
-  - false: Release the conch fully after this exchange (default)
-  - true: Keep a hold between turns so other agents queue rather than slip in
-    at the turn boundary while you think. Set it when you're asking a question
-    you'll answer, or otherwise intend to keep speaking. The hold auto-extends
-    each turn and is released by your next converse(hold_conch=false), by your
-    process dying, or by idle-expiry. Use pause_conversation to hold across a
-    deliberate pause.
+• hold_conch (bool, default: false): Keep the floor across turns (opt-in)
+  - WHEN: set true if your NEXT converse call will continue this thread —
+    you're asking a question you'll answer, or speaking over several turns —
+    so other agents queue instead of cutting in at the turn boundary. Leave
+    false (the default) for a one-off reply that ends the exchange.
+  - Auto-extends each turn; released by your next converse(hold_conch=false),
+    your process exiting, or idle-expiry. For a deliberate pause, use
+    pause_conversation.
 • skip_conch (bool, default: false): Bypass conch entirely
   - false: Honour the conch lock (default multi-agent coordination)
   - true: Don't try to acquire or release the conch -- speak immediately
