@@ -580,8 +580,13 @@ AUTO_START_KOKORO = os.getenv("VOICEMODE_AUTO_START_KOKORO", "").lower() in ("tr
 # Enable/disable the conch system entirely
 CONCH_ENABLED = os.getenv("VOICEMODE_CONCH_ENABLED", "true").lower() in ("true", "1", "yes", "on")
 
-# Maximum time (seconds) to wait for conch when wait_for_conch=true
-CONCH_TIMEOUT = float(os.getenv("VOICEMODE_CONCH_TIMEOUT", "60"))
+# Maximum time (seconds) a queued caller waits for the conch when
+# wait_for_conch=true. Should be generous enough to outlast a held floor's
+# between-turn gaps, but no longer than your harness's MCP tool-call timeout
+# (a longer wait would just be killed by the client). A waiter also fast-fails
+# the instant the holder's PID dies, so this is an upper bound, not a fixed
+# delay. Overridable per call by passing a number of seconds to wait_for_conch.
+CONCH_TIMEOUT = float(os.getenv("VOICEMODE_CONCH_TIMEOUT", "300"))
 
 # How often (seconds) to check if conch is free when waiting
 CONCH_CHECK_INTERVAL = float(os.getenv("VOICEMODE_CONCH_CHECK_INTERVAL", "0.5"))
@@ -591,6 +596,14 @@ CONCH_CHECK_INTERVAL = float(os.getenv("VOICEMODE_CONCH_CHECK_INTERVAL", "0.5"))
 # Should be longer than your typical conversation turn (listen + TTS + buffer)
 # Default 300s (5 min) covers 2 min listen + long TTS. Set to 0 to disable.
 CONCH_LOCK_EXPIRY = float(os.getenv("VOICEMODE_CONCH_LOCK_EXPIRY", "300"))
+
+# Maximum idle age (seconds) before a between-turns HOLD (hold_conch=true) is
+# considered stale and can be taken by another agent. A hold is re-stamped on
+# every turn, so this only has to cover the gap between two turns (the holder
+# thinking / light tool use). The safety valve for a crashed-or-forgetful
+# holder; dead holders are cleared immediately via the PID check regardless.
+# Set to 0 to disable idle-expiry (dead-holder clearance still applies).
+CONCH_HOLD_EXPIRY = float(os.getenv("VOICEMODE_CONCH_HOLD_EXPIRY", "300"))
 
 # Auto-focus tmux pane when conch is acquired (for multi-agent setups)
 # When enabled, automatically switches tmux focus to the speaking agent's pane
