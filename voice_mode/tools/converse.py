@@ -1314,6 +1314,9 @@ KEY PARAMETERS:
 • voice (string): TTS voice name (auto-selected unless specified)
   - To list available voices, read MCP resource voice://voices
   - An absolute path to a .wav clones from that clip directly (no profile needed)
+  - The chosen voice is recorded in the conch, so in a multi-agent session you
+    can read another agent's voice (Conch.get_holder) and pick a different one
+    to avoid a voice clash.
 • ref_text (string): Reference transcript for clip-based cloning. A file path
   is read; anything else is the literal transcript. Overrides any sidecar.
   Only used with a clone voice (abs-path clip or registered profile).
@@ -1433,6 +1436,11 @@ consult the MCP resources listed above.
         resolved_project_path = os.getcwd()
     except OSError:
         resolved_project_path = None
+    # The nominal voice this call will use (param, else the first configured
+    # default). Resolved cheaply here (no provider/network) so it can go in the
+    # conch for voice-clash avoidance (VM-914) — another agent can read the
+    # holder's voice and choose a different one.
+    resolved_voice = voice or (TTS_VOICES[0] if TTS_VOICES else None)
 
     # Resolve ref_text override once (path-vs-inline auto-detect). None means
     # "no override" — fall back to the resolved profile/sidecar transcript.
@@ -1557,6 +1565,7 @@ consult the MCP resources listed above.
         agent_name="converse",
         session_id=resolved_session_id,
         project_path=resolved_project_path,
+        voice=resolved_voice,
     )
 
     try:
@@ -2371,6 +2380,9 @@ async def pause_conversation(
         project_path = os.getcwd()
     except OSError:
         project_path = None
+    # Preserve the voice already recorded by our own prior converse hold (if
+    # any) so a pause doesn't blank it out.
+    holder_voice = holder.get("voice") if holder else None
 
     logger.info(
         f"pause_conversation: holding for {seconds:.0f}s, resuming at {end_str}"
@@ -2385,6 +2397,7 @@ async def pause_conversation(
             "pause_conversation",
             session_id=resolved_session_id,
             project_path=project_path,
+            voice=holder_voice,
         )
         chunk = min(interval, seconds - elapsed)
         await asyncio.sleep(chunk)

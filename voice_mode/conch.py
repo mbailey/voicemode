@@ -67,6 +67,8 @@ class Conch:
     - project_path: Holder's working directory, or null (CID-62) — lets
       consumers (e.g. the Stream Deck) show who's talking on which project
       with zero lookups, even for a dead/cross-machine session
+    - voice: TTS voice name in use, or null (VM-914) — lets another agent read
+      the holder's voice and pick a different one to avoid a voice clash
     - acquired: ISO timestamp when the lock/hold was last (re-)stamped
     - held: True when this is a *hold* persisting between turns (the file is
       left in place with the kernel flock released); False during an active
@@ -88,6 +90,7 @@ class Conch:
         agent_name: Optional[str] = None,
         session_id: Optional[str] = None,
         project_path: Optional[str] = None,
+        voice: Optional[str] = None,
     ):
         """Initialize Conch with optional agent name.
 
@@ -97,10 +100,14 @@ class Conch:
                 Stored verbatim in the lock payload; null when not provided.
             project_path: Optional holder working directory (CID-62). Stored in
                 the payload so consumers can render "who, on which project".
+            voice: Optional TTS voice name in use (VM-914). Stored so another
+                agent can read the holder's voice and pick a different one to
+                avoid a voice clash.
         """
         self.agent_name = agent_name
         self.session_id = session_id
         self.project_path = project_path
+        self.voice = voice
         self._acquired = False
         self._fd = None  # File descriptor for flock
         self._acquire_time = None  # Track when acquired
@@ -112,6 +119,7 @@ class Conch:
             "agent": self.agent_name or "unknown",
             "session_id": self.session_id,
             "project_path": self.project_path,
+            "voice": self.voice,
             "acquired": (self._acquire_time or datetime.now()).isoformat(),
             "held": held,
             "expires": None,
@@ -170,6 +178,7 @@ class Conch:
         agent_name: str = "unknown",
         session_id: Optional[str] = None,
         project_path: Optional[str] = None,
+        voice: Optional[str] = None,
     ) -> None:
         """Write a between-turns hold marker owned by the current process,
         WITHOUT taking the kernel flock.
@@ -186,6 +195,7 @@ class Conch:
             "agent": agent_name,
             "session_id": session_id,
             "project_path": project_path,
+            "voice": voice,
             "acquired": datetime.now().isoformat(),
             "held": True,
             "expires": None,

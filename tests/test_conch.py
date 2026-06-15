@@ -634,24 +634,35 @@ class TestConchPayload:
     """VM-1562 / CID-62: enriched lock payload."""
 
     def test_try_acquire_writes_enriched_payload(self, clean_conch):
-        """try_acquire() records session_id, project_path and held=False."""
+        """try_acquire() records session_id, project_path, voice and held=False."""
         conch = Conch(agent_name="cora", session_id="sess-123",
-                      project_path="/home/mike/proj")
+                      project_path="/home/mike/proj", voice="af_sky")
         assert conch.try_acquire() is True
         data = json.loads(Conch.LOCK_FILE.read_text())
         assert data["session_id"] == "sess-123"
         assert data["project_path"] == "/home/mike/proj"
+        assert data["voice"] == "af_sky"
         assert data["held"] is False
         assert data["agent"] == "cora"
         conch.release()
 
     def test_payload_fields_null_when_not_provided(self, clean_conch):
-        """session_id / project_path are null (not missing) when absent."""
+        """session_id / project_path / voice are null (not missing) when absent."""
         conch = Conch(agent_name="cora")
         assert conch.try_acquire() is True
         data = json.loads(Conch.LOCK_FILE.read_text())
         assert data["session_id"] is None
         assert data["project_path"] is None
+        assert data["voice"] is None
+        conch.release()
+
+    def test_voice_visible_to_other_agent_via_get_holder(self, clean_conch):
+        """VM-914: another agent can read the holder's voice for clash avoidance."""
+        conch = Conch(agent_name="cora-a", voice="af_sky")
+        assert conch.try_acquire() is True
+        holder = Conch.get_holder()
+        assert holder is not None
+        assert holder["voice"] == "af_sky"  # a second agent would pick a different one
         conch.release()
 
     def test_acquire_also_writes_enriched_payload(self, clean_conch):
@@ -670,7 +681,8 @@ class TestConchHold:
 
     def test_hold_keeps_file_and_marks_held(self, clean_conch):
         """release(hold=True) leaves the file with held=True and re-stamps it."""
-        conch = Conch(agent_name="cora", session_id="s1", project_path="/p")
+        conch = Conch(agent_name="cora", session_id="s1", project_path="/p",
+                      voice="af_sky")
         assert conch.try_acquire() is True
         conch.release(hold=True)
 
@@ -681,6 +693,7 @@ class TestConchHold:
         # Enriched fields survive the hand-off to the held state.
         assert data["session_id"] == "s1"
         assert data["project_path"] == "/p"
+        assert data["voice"] == "af_sky"
 
     def test_default_release_still_unlinks(self, clean_conch):
         """release() with no hold is unchanged: file is removed."""
