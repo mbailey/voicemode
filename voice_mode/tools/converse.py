@@ -1307,6 +1307,9 @@ Example: If user says "search for tasks created yesterday", check for and invoke
    - voicemode://docs/troubleshooting - Audio, VAD, and connectivity issues
    - voice://voices - JSON list of available TTS voices
      (filter by provider with voice://voices/{provider}, e.g. voice://voices/kokoro)
+   - voice://voices/persona convention — a voice's character (who they are, how they
+     speak, sample lines) lives at ~/.voicemode/voices/<name>/README.md; read it before
+     speaking in-character (index: PERSONAS.md). MCP-resource version planned: VM-1222.
 
 KEY PARAMETERS:
 • message (required): The message to speak

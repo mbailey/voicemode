@@ -70,6 +70,8 @@ resource for a structured JSON list of available voices (with
 mid-conversation. Both share the underlying enumerator so they never
 drift. See [voices resource reference](../../docs/reference/voices-resource.md).
 
+**Persona discovery:** voice IDs from `voice://voices` map to character profiles on disk at `~/.voicemode/voices/<name>/README.md` (grouped voices: `<group>/<name>/README.md`; index at `~/.voicemode/voices/PERSONAS.md`). Read that README before speaking in character — who they are, how they speak, sample lines. Not every voice has one yet; fall back to the bare voice if absent.
+
 For all parameters, see [Converse Parameters](../../docs/reference/converse-parameters.md).
 
 ## Best Practices
