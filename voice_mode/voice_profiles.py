@@ -17,6 +17,8 @@ Voice expression syntax (``voice="<expr>"`` at converse time):
 * ``samantha[2]``        — the third ``*.wav`` (SuperDirt-style indexing)
 * ``samantha/angry.wav`` — an explicit file inside the voice dir
 * ``/abs/path.wav``      — absolute path passed straight to the TTS server
+* ``./clip.wav``         — path relative to the CWD (also ``../`` and ``~/``);
+  expanded to an absolute path before it reaches the server
 
 Remote TTS servers (e.g. mlx-audio on ms2) need the ref_audio path that
 exists on *their* filesystem, not ours. Set ``VOICEMODE_REMOTE_VOICES_DIR``
@@ -256,8 +258,20 @@ def parse_voice_expr(expr: str) -> Tuple[Optional[str], Optional[str]]:
 
     Selector is either ``None`` (use default), a string like ``"[N]"``
     (indexed sample), or a relative file path inside the voice dir
-    (e.g. ``"angry.wav"``). For absolute paths the voice_name is ``None``
-    and the selector is the absolute path itself.
+    (e.g. ``"angry.wav"``). For a filesystem path the voice_name is
+    ``None`` and the selector is the path itself.
+
+    Filesystem paths are recognised when the expression starts with a
+    path marker — ``/`` (absolute), ``./`` or ``../`` (relative to the
+    CWD), or ``~`` (home). Relative and home forms are expanded and made
+    absolute against the CWD so the rest of the pipeline — and the TTS
+    server — always sees a concrete path. We use ``os.path.abspath``
+    (lexical) rather than ``Path.resolve()`` so a symlinked
+    ``default.wav`` is preserved: resolving the symlink would change
+    which sidecar transcript (``<basename>.txt``) we pick up.
+
+    A bare ``name/file.wav`` (no leading ``./``) stays the
+    profile-selector form, so the path markers don't collide with it.
 
     Examples::
 
@@ -265,11 +279,17 @@ def parse_voice_expr(expr: str) -> Tuple[Optional[str], Optional[str]]:
         parse_voice_expr("samantha[0]")        == ("samantha", "[0]")
         parse_voice_expr("samantha/angry.wav") == ("samantha", "angry.wav")
         parse_voice_expr("/abs/path.wav")      == (None, "/abs/path.wav")
+        parse_voice_expr("./clip.wav")         == (None, "/cwd/clip.wav")
+        parse_voice_expr("~/clip.wav")         == (None, "/home/clip.wav")
     """
     if not expr:
         return None, None
     if expr.startswith("/"):
         return None, expr
+    # Explicit-relative (./, ../) and home (~) paths → expand to an
+    # absolute path and hand off to the absolute-path escape hatch.
+    if expr.startswith(("./", "../", "~")):
+        return None, os.path.abspath(os.path.expanduser(expr))
 
     m = _INDEX_RE.match(expr)
     if m:

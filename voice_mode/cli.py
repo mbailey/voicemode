@@ -1900,6 +1900,7 @@ Examples:
   voicemode converse -- "-c is short for continuous"    # `--` escapes dash-prefixed text
   voicemode converse --continuous                       # continuous conversation mode
   voicemode converse "Hello there!" --voice nova        # pick a TTS voice
+  voicemode converse "Hi" --voice ./voices/ray/default.wav  # clone from a relative path
   voicemode converse "Hey, urgent question." --skip-conch  # bypass the conch lock
 """
 
@@ -1915,7 +1916,8 @@ Examples:
               help='Speak only; skip listening for a spoken response (STT). Replaces --no-wait.')
 @click.option('--duration', '-d', type=float, default=DEFAULT_LISTEN_DURATION, help='Listen duration in seconds')
 @click.option('--min-duration', type=float, default=MIN_RECORDING_DURATION, help='Minimum listen duration before silence detection')
-@click.option('--voice', help='TTS voice to use (e.g., nova, shimmer, af_sky)',
+@click.option('--voice', help='TTS voice: a name (nova, shimmer, af_sky), a clone '
+                               'profile, or a path to a .wav clip (absolute, ./relative, or ~/)',
               shell_complete=_complete_voice_names)
 @click.option('--tts-provider', type=click.Choice(['openai', 'kokoro']), help='TTS provider')
 @click.option('--tts-model', help='TTS model (e.g., tts-1, tts-1-hd)')
