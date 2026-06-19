@@ -1,6 +1,6 @@
 ---
 description: Start an ongoing voice conversation
-argument-hint: [voice] [message]
+argument-hint: "[voice] [message]"
 ---
 
 # /voicemode:converse
