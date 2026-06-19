@@ -174,6 +174,71 @@ def test_absolute_path_nonexistent_clip_keeps_empty_ref_text(vp):
     assert p.ref_text == ""
 
 
+# ---------- relative / home path escape hatch (VM-1607) ----------
+
+def test_parse_relative_path_is_made_absolute(vp):
+    """./ and ../ exprs parse to (None, <absolute path>)."""
+    name, sel = vp.parse_voice_expr("./clip.wav")
+    assert name is None
+    assert sel.startswith("/") and sel.endswith("/clip.wav")
+
+    name, sel = vp.parse_voice_expr("../clip.wav")
+    assert name is None
+    assert sel.startswith("/") and sel.endswith("/clip.wav")
+
+
+def test_relative_path_resolves_against_cwd(vp, tmp_path, monkeypatch):
+    """`--voice ./clip.wav` resolves relative to the CWD, with sidecar."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "ray.wav").write_bytes(b"riff-ray")
+    (tmp_path / "ray.txt").write_text("  what are you doing here  \n")
+
+    p = vp.get_profile("./ray.wav")
+    assert p.ref_audio == str(tmp_path / "ray.wav")
+    assert p.ref_text == "what are you doing here"
+    assert vp.is_clone_voice("./ray.wav")
+
+
+def test_parent_relative_path_resolves(vp, tmp_path, monkeypatch):
+    """`../sub/clip.wav` walks up from the CWD."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (tmp_path / "clip.wav").write_bytes(b"riff-clip")
+    monkeypatch.chdir(sub)
+
+    p = vp.get_profile("../clip.wav")
+    assert p.ref_audio == str(tmp_path / "clip.wav")
+
+
+def test_home_relative_path_expands(vp, tmp_path):
+    """`~/clip.wav` expands against HOME.
+
+    The conftest `isolate_home_directory` fixture maps ~ to
+    ``tmp_path / "home"``, so the clip goes there.
+    """
+    fake_home = tmp_path / "home"
+    (fake_home / "clip.wav").write_bytes(b"riff-clip")
+
+    p = vp.get_profile("~/clip.wav")
+    assert p.ref_audio == str(fake_home / "clip.wav")
+    assert vp.is_clone_voice("~/clip.wav")
+
+
+def test_relative_path_preserves_symlink_for_sidecar(vp, tmp_path, monkeypatch):
+    """A symlinked default.wav keeps its own name (not the target's), so the
+    default.txt sidecar is picked up — abspath must not resolve the symlink."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "take-7.wav").write_bytes(b"riff-real")
+    (tmp_path / "default.txt").write_text("the default transcript")
+    (tmp_path / "default.wav").symlink_to(tmp_path / "take-7.wav")
+
+    p = vp.get_profile("./default.wav")
+    # ref_audio is the symlink path, not the resolved target
+    assert p.ref_audio == str(tmp_path / "default.wav")
+    # and the sidecar resolves via the symlink's basename → default.txt
+    assert p.ref_text == "the default transcript"
+
+
 # ---------- is_clone_voice ----------
 
 @pytest.mark.parametrize("expr", [
