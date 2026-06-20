@@ -401,6 +401,15 @@ async def clone_add(
         dest_path.unlink(missing_ok=True)
         return {"success": False, "error": f"Failed to write voice.md: {e}"}
 
+    # Also write a default.txt sidecar so the cloned voice matches the
+    # canonical hand-curated layout (default.wav + default.txt) and the
+    # loader's primary lookup resolves ref_text directly (VM-1439).
+    try:
+        (voice_dir / "default.txt").write_text(f"{ref_text}\n")
+    except OSError as e:
+        dest_path.unlink(missing_ok=True)
+        return {"success": False, "error": f"Failed to write default.txt: {e}"}
+
     # Build profile entry -- voices.json points at the new layout (relative path)
     rel_audio = f"{name}/default.wav"
     profile: Dict[str, str] = {

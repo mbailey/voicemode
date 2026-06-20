@@ -66,6 +66,7 @@ async def simple_tts_failover(
             f"ref_text override supplied but voice '{voice}' is not a clone "
             f"voice (no abs-path clip or registered profile) — override ignored"
         )
+        endpoints_to_try = TTS_BASE_URLS
     else:
         endpoints_to_try = TTS_BASE_URLS
 

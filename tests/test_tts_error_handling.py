@@ -176,3 +176,33 @@ class TestTTSErrorHandling:
             assert endpoint2['provider'] == 'openai'
             assert endpoint2['voice'] == 'nova'
             assert 'Rate limit' in endpoint2['error']
+
+    @pytest.mark.asyncio
+    async def test_ref_text_override_on_non_clone_voice_does_not_raise(self):
+        """A ref_text override targeting a non-clone voice must fall through to
+        the normal TTS endpoints, not raise UnboundLocalError (VM-1439).
+
+        Before the fix, the ``elif ref_text_override is not None`` branch
+        logged a warning but never assigned ``endpoints_to_try``, so the
+        for-loop hit ``local variable 'endpoints_to_try' referenced before
+        assignment``.
+        """
+        with patch('voice_mode.simple_failover.TTS_BASE_URLS', ['http://localhost:8880/v1']), \
+             patch('voice_mode.simple_failover.OPENAI_API_KEY', None), \
+             patch('voice_mode.voice_profiles.is_clone_voice', return_value=False), \
+             patch('voice_mode.core.text_to_speech') as mock_tts:
+
+            mock_tts.return_value = (True, {'duration': 1.0})
+
+            success, metrics, config = await simple_tts_failover(
+                text="Hello world",
+                voice="nova",  # not a clone voice
+                model="tts-1",
+                ref_text="this override is ignored for a non-clone voice",
+            )
+
+            assert success is True
+            assert config['endpoint'] == 'http://localhost:8880/v1/audio/speech'
+            mock_tts.assert_called_once()
+            # The ref_text override is popped before forwarding to TTS.
+            assert 'ref_text' not in mock_tts.call_args[1]

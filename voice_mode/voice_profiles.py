@@ -34,6 +34,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import yaml
+
 logger = logging.getLogger("voicemode")
 
 VOICES_DIR = Path(os.path.expanduser(
@@ -120,7 +122,16 @@ def _resolve_default_wav(voice_dir: Path) -> Optional[Path]:
 def _resolve_transcript(wav_path: Path) -> str:
     """Read the matching transcript for a reference WAV.
 
-    Looks for ``<basename>.txt`` first, then ``default.txt`` as a fallback.
+    Resolution order:
+
+    1. ``<basename>.txt`` sidecar next to the WAV.
+    2. ``default.txt`` sidecar in the same directory.
+    3. the ``transcript`` field of a ``voice.md`` frontmatter in the same
+       directory — the layout ``voicemode clone add`` writes (VM-1439). This
+       lazily repairs voice.md-only profiles (those created before clone add
+       also wrote a ``default.txt``) so they resolve a non-empty ref_text with
+       no migration step.
+
     Returns empty string if no transcript is found (caller will warn).
     """
     same_name = wav_path.with_suffix(".txt")
@@ -131,7 +142,51 @@ def _resolve_transcript(wav_path: Path) -> str:
     if fallback.exists():
         return fallback.read_text().strip()
 
-    return ""
+    return _transcript_from_voice_md(wav_path.parent / "voice.md")
+
+
+def _extract_frontmatter(text: str) -> Optional[str]:
+    """Return the YAML frontmatter delimited by the first two ``---`` fences.
+
+    Returns ``None`` if ``text`` doesn't open with a ``---`` fence or the
+    closing fence is missing.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return "\n".join(lines[1:i])
+    return None
+
+
+def _transcript_from_voice_md(voice_md: Path) -> str:
+    """Read the ``transcript`` field from a ``voice.md`` frontmatter.
+
+    ``voicemode clone add`` records the reference transcript in the voice.md
+    YAML frontmatter (``transcript:``). Reading it here lets the loader
+    resolve a non-empty ref_text for cloned voices that have no ``.txt``
+    sidecar. Returns empty string when the file is missing, has no
+    frontmatter, or has no usable ``transcript`` field.
+    """
+    if not voice_md.exists():
+        return ""
+    try:
+        front = _extract_frontmatter(voice_md.read_text())
+    except OSError:
+        return ""
+    if front is None:
+        return ""
+    try:
+        data = yaml.safe_load(front)
+    except yaml.YAMLError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    transcript = data.get("transcript")
+    if not isinstance(transcript, str):
+        return ""
+    return transcript.strip()
 
 
 def _read_description(voice_dir: Path) -> str:
