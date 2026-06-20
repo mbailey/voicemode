@@ -34,7 +34,10 @@ class TestConverseSkipConch:
 
     @pytest.mark.asyncio
     async def test_default_returns_blocked_when_other_holder(self, clean_conch):
-        """Baseline: without skip_conch, an unavailable conch returns the blocked string."""
+        """Baseline: without skip_conch, an unavailable conch returns a status
+        string immediately (VM-1619 reworded this; the immediate-return contract
+        is unchanged — the holder is named and the caller is told they are not
+        queued)."""
         from voice_mode.tools.converse import converse
 
         # Simulate "another agent owns the conch" by making try_acquire always fail.
@@ -48,7 +51,7 @@ class TestConverseSkipConch:
                 wait_for_response=False,
             )
 
-        assert "User is currently speaking" in result, (
+        assert "other_agent" in result and "NOT queued" in result, (
             f"Without skip_conch, blocked conch must surface as status string. Got: {result!r}"
         )
 
