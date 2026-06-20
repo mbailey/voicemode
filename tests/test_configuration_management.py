@@ -62,6 +62,36 @@ class TestConfigurationManagement:
             os.unlink(temp_path)
 
     @pytest.mark.asyncio
+    async def test_update_config_noop_when_value_unchanged(self):
+        """VM-1628: setting a key to its existing value must skip the file
+        write and report 'no change' -- not a spurious 'updated successfully'.
+        """
+        import tempfile
+        import os
+
+        fd, temp_path = tempfile.mkstemp(suffix='.env')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write("# Test config\n")
+                f.write("KEEP_KEY=keep_me\n")
+
+            with patch("voice_mode.tools.configuration_management.USER_CONFIG_PATH", Path(temp_path)):
+                # Same value -> no-op: the file write must be skipped.
+                with patch("voice_mode.tools.configuration_management.write_env_file") as mock_write:
+                    result = await getattr(update_config, 'fn', update_config)("KEEP_KEY", "keep_me")
+                    mock_write.assert_not_called()
+
+                assert "no change" in result.lower()
+                assert "updated successfully" not in result.lower()
+
+                # A genuine change still updates exactly as before.
+                result2 = await getattr(update_config, 'fn', update_config)("KEEP_KEY", "new_value")
+                assert "updated successfully" in result2.lower()
+                assert "new_value" in result2
+        finally:
+            os.unlink(temp_path)
+
+    @pytest.mark.asyncio
     async def test_update_config_function_exists(self):
         """Test that update_config function is callable."""
         # Just verify the function exists and is callable

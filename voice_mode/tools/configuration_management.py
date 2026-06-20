@@ -272,8 +272,19 @@ async def update_config(key: str, value: str) -> str:
         # Read existing configuration
         config = parse_env_file(config_path)
         
-        # Store old value for reporting
-        old_value = config.get(key, "[not set]")
+        # Store old value for reporting (None when the key isn't set yet)
+        old_value = config.get(key)
+
+        # Idempotent: if the value already equals what we'd write, skip the
+        # rewrite and report "no change" instead of a spurious "updated".
+        # Keeps re-runs (e.g. the installer pointing VoiceMode at local
+        # services on every run) from emitting misleading success output.
+        if old_value == value:
+            logger.info(f"{key} already set to requested value in {config_path}; no change")
+            return f"""✓ {key} already set to this value — no change.
+
+File: {config_path}
+Value: {value}"""
         
         # Update the configuration
         config[key] = value
@@ -288,7 +299,7 @@ async def update_config(key: str, value: str) -> str:
 
 File: {config_path}
 Key: {key}
-Old Value: {old_value}
+Old Value: {old_value if old_value is not None else "[not set]"}
 New Value: {value}
 
 Note: You may need to restart services or reload the configuration for changes to take effect."""
