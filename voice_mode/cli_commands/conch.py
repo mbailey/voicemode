@@ -130,14 +130,26 @@ def _ambiguous(token: str, matches: List[WaiterEntry]) -> None:
 
 
 def _notify_granted(session_id: str) -> None:
-    """Seam for notify-on-give (VM-1625): ping a session that isn't watching.
+    """Notify-on-give (VM-1625): push a "your turn" nudge to ``session_id``.
 
-    Intentionally a no-op here. ``give``/``bump`` call it after writing the
-    grant so VM-1625 can wire a local tmux nudge (we have ``session_id`` +
-    ``project_path`` in the queue entry) / remote MCP notification without
-    touching this CLI's control flow.
+    ``give``/``bump`` call this after writing the grant. It resolves the
+    grantee's live queue entry and delegates to
+    :func:`voice_mode.conch_notify.notify_granted`, which owns the mode gate
+    (callback ⇒ push, wait ⇒ pull, no push) and the local/remote routing — the
+    same reusable push VM-1619's converse callback path will share. Best-effort:
+    a vanished waiter or any notify glitch is a silent no-op and never breaks the
+    command.
     """
-    return None
+    if not session_id:
+        return
+    try:
+        from voice_mode.conch_notify import notify_granted
+        entry = next(
+            (e for e in ConchQueue.list() if e.session_id == session_id), None
+        )
+        notify_granted(entry)
+    except Exception:
+        pass
 
 
 def _force_clear_lock() -> Optional[dict]:

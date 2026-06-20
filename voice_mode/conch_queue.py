@@ -433,38 +433,98 @@ class ConchQueue:
         cls.list()
 
     @classmethod
-    def grant_next(cls) -> Optional[WaiterEntry]:
-        """Promote the head as next acquirer -- unless an explicit give stands.
+    def grant_next(cls, *, notify_block: bool = True) -> Optional[WaiterEntry]:
+        """Promote the next acquirer on release -- unless an explicit give stands.
 
-        Called on the holder's full release. Normally records the lowest-seq
-        live waiter (the head) in ``conch.grant`` so only that session acquires
-        next (FIFO, no thundering-herd re-acquire), returning it -- or ``None``
-        (clearing any grant) when the queue is empty.
+        Called on the holder's full release. Normally records a live waiter in
+        ``conch.grant`` so only that session acquires next (FIFO, no
+        thundering-herd re-acquire), returning it -- or ``None`` (clearing any
+        grant) when the queue is empty.
 
-        **Exception (VM-1616):** if a grant already names a still-live waiter,
-        it is preserved rather than overwritten by head-promotion. That grant
-        can only exist because an operator ran ``conch give <session>`` while
-        the holder was still speaking; honouring it here is what lets ``give``
-        survive the holder's release and jump a chosen waiter ahead of the head.
-        In the normal flow no grant exists at release time (the previous grantee
-        consumed it on acquire), so this defers *only* to a deliberate give. A
-        stale give (grantee died/left) is cleared by ``granted_to`` and falls
-        through to head-promotion, so a dead give can never wedge the queue.
+        **Explicit give wins (VM-1616):** if a grant already names a still-live
+        waiter, it is preserved rather than overwritten by head-promotion. That
+        grant can only exist because an operator ran ``conch give <session>``
+        while the holder was still speaking; honouring it here is what lets
+        ``give`` survive the holder's release and jump a chosen waiter ahead of
+        the head. In the normal flow no grant exists at release time (the
+        previous grantee consumed it on acquire), so this defers *only* to a
+        deliberate give. A stale give (grantee died/left) is cleared by
+        ``granted_to`` and falls through to promotion, so a dead give can never
+        wedge the queue.
+
+        **Skip leading callback waiters (VM-1625, F1):** a ``callback`` waiter
+        never self-acquires (delivery is out-of-band) yet stays a live waiter,
+        so a grant standing on it gates **every** ``wait`` waiter behind it via
+        ``Conch._queue_grant_blocks`` -- starving blocking waiters until they
+        time out. So when at least one ``wait`` waiter exists, grant the
+        first one, skipping any leading callback waiters, and ping each skipped
+        callback waiter to return (``conch_notify.notify_granted``). With **only**
+        callback waiters (no blocking waiter to starve) the head is granted
+        unchanged -- the lone-callback case VM-1619's converse delivery handles.
+
+        Trade-off (intended): a later ``wait`` waiter can acquire ahead of an
+        idle callback waiter -- callback means "ping me, I'm not blocking", so a
+        blocking waiter should not starve behind it.
+
+        ``notify_block`` controls how the skipped-callback pings are delivered.
+        Default ``True`` runs them synchronously -- right for the one-shot CLI
+        ``bump`` path. The converse **release** hot path
+        (``Conch._queue_promote_next``) passes ``notify_block=False`` so each
+        ping is fire-and-forget and a wedged ``session send`` can never add to
+        the holder's release latency (VM-1625 impl-001 peer-review finding).
         """
         existing = cls.granted_to()  # validates liveness; clears a stale grant
         if existing is not None:
             for e in cls.list():
                 if e.session_id == existing:
                     return e  # explicit give stands -- do not clobber
-        head = cls.head()  # runs cleanup
-        if head is None:
+
+        waiters = cls.list()  # live, ordered; runs cleanup
+        if not waiters:
             cls.clear_grant()
             return None
+
+        # First wait-mode waiter wins; everything ahead of it is a callback
+        # waiter we skip (and ping). No wait waiter => only callbacks => grant
+        # the head unchanged (nothing to starve).
+        target = None
+        skipped = []
+        for e in waiters:
+            if e.mode == "wait":
+                target = e
+                break
+            skipped.append(e)
+        if target is None:
+            target = waiters[0]
+        else:
+            for e in skipped:
+                if e.mode == "callback":
+                    cls._notify_callback(e, block=notify_block)
+
         cls._atomic_write_json(
             cls._grant_file(),
-            {"session_id": head.session_id, "seq": head.seq},
+            {"session_id": target.session_id, "seq": target.seq},
         )
-        return head
+        return target
+
+    @classmethod
+    def _notify_callback(cls, entry, *, block: bool = True) -> None:
+        """Best-effort ping to a skipped callback waiter (VM-1625).
+
+        Lazy import + swallow-all, matching the fail-safe queue integration in
+        ``Conch``: notifying is never allowed to break grant promotion, which is
+        critical-path coordination, and the queue stays usable when the notify
+        module / ``session`` binary is absent.
+
+        ``block`` is forwarded to ``notify_granted``: the release hot path passes
+        ``block=False`` so the ping is dispatched off-thread and never delays the
+        holder's release; the CLI ``bump`` path keeps the synchronous default.
+        """
+        try:
+            from voice_mode.conch_notify import notify_granted
+            notify_granted(entry, block=block)
+        except Exception:
+            pass
 
     @classmethod
     def grant(cls, session_id: str) -> bool:

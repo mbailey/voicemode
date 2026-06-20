@@ -11,6 +11,7 @@ the isolated lock path explicitly and re-pin it (see ``_pin_lock_file``).
 import json
 import multiprocessing
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -327,6 +328,153 @@ class TestGrant:
         granted = ConchQueue.grant_next()
         assert granted.session_id == "a"
         assert ConchQueue.granted_to() == "a"
+
+
+# --------------------------------------------------------------------------- #
+# grant_next skips leading callback waiters (VM-1625, F1)
+# --------------------------------------------------------------------------- #
+
+def _mock_session_send(monkeypatch):
+    """Capture the local notify push (``session send``) instead of spawning it.
+
+    Returns the list of recorded argv lists. A callback waiter skipped by
+    grant_next is a *local* waiter here (current PID), so it would otherwise
+    shell out to the real ``session send`` and type into a live tmux pane.
+    """
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append(args[0] if args else kwargs.get("args"))
+
+        class _Result:
+            returncode = 0
+
+        return _Result()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    return calls
+
+
+def _join_notify_threads(timeout=5.0):
+    """Join the fire-and-forget notify threads grant_next spawns on the release
+    hot path (``notify_block=False``), so a test can assert their side effect
+    deterministically instead of racing them. Named ``conch-notify`` by
+    ``conch_notify._dispatch_async``.
+    """
+    for t in list(threading.enumerate()):
+        if t.name == "conch-notify":
+            t.join(timeout)
+
+
+class TestGrantNextCallbackSkip:
+    def test_skips_leading_callback_to_grant_wait_waiter(self, monkeypatch):
+        calls = _mock_session_send(monkeypatch)
+        _write_entry(1, "cb-head", mode="callback")     # idle callback at head
+        _write_entry(2, "wait-behind", mode="wait")     # blocking waiter behind it
+
+        granted = ConchQueue.grant_next()
+        assert granted.session_id == "wait-behind"       # wait waiter wins, not cb-head
+        assert ConchQueue.granted_to() == "wait-behind"
+        # The skipped callback head was pinged to return.
+        assert any("cb-head" in argv for argv in calls)
+
+    def test_callback_head_no_longer_starves_wait_waiter(self, monkeypatch):
+        """F1 closing the loop: the wait waiter actually acquires now.
+
+        Pre-fix grant_next promoted the head regardless of mode, so the granted
+        callback head (which never self-acquires) gated the wait waiter behind
+        it until it timed out. Now the wait waiter is the grantee and acquires.
+        """
+        _mock_session_send(monkeypatch)
+        _write_entry(1, "cb-head", mode="callback")
+        _write_entry(2, "wait-behind", mode="wait")
+        ConchQueue.grant_next()  # holder releases -> promote next
+
+        # cb-head is not the grantee, so it can't (and never would) take the floor;
+        # wait-behind is the grantee and acquires cleanly.
+        assert Conch(agent_name="cb", session_id="cb-head").try_acquire() is False
+        assert Conch(agent_name="w", session_id="wait-behind").try_acquire() is True
+
+    def test_only_callback_waiters_grant_head_unchanged(self, monkeypatch):
+        calls = _mock_session_send(monkeypatch)
+        _write_entry(1, "cb-1", mode="callback")
+        _write_entry(2, "cb-2", mode="callback")
+
+        granted = ConchQueue.grant_next()
+        assert granted.session_id == "cb-1"              # head granted, unchanged
+        assert ConchQueue.granted_to() == "cb-1"
+        # Only-callback path is unchanged: grant_next pings no one (the lone
+        # callback case VM-1619's converse delivery owns; bump notifies it).
+        assert calls == []
+
+    def test_multiple_leading_callbacks_all_pinged(self, monkeypatch):
+        calls = _mock_session_send(monkeypatch)
+        _write_entry(1, "cb-a", mode="callback")
+        _write_entry(2, "cb-b", mode="callback")
+        _write_entry(3, "wait-c", mode="wait")
+
+        granted = ConchQueue.grant_next()
+        assert granted.session_id == "wait-c"
+        pinged = {argv[2] for argv in calls}  # ["session", "send", <target>, text]
+        assert pinged == {"cb-a", "cb-b"}
+
+    def test_callbacks_after_wait_head_are_untouched(self, monkeypatch):
+        """A wait waiter at the head grants normally; trailing callbacks aren't pinged."""
+        calls = _mock_session_send(monkeypatch)
+        _write_entry(1, "wait-head", mode="wait")
+        _write_entry(2, "cb-trailing", mode="callback")
+
+        granted = ConchQueue.grant_next()
+        assert granted.session_id == "wait-head"
+        assert calls == []  # nothing skipped, nothing pinged
+
+    def test_skip_ping_fires_via_real_release(self, monkeypatch):
+        """The skip-and-ping is reachable through a real holder release, not only
+        a direct ``grant_next`` call (impl-002 review coverage gap).
+
+        ``Conch.release`` -> ``_queue_promote_next`` -> ``grant_next`` still
+        promotes the wait waiter (F1) and pings the skipped callback head -- but
+        on this hot path the ping is fire-and-forget (``notify_block=False``), so
+        we join the named notify thread before asserting its side effect.
+        """
+        calls = _mock_session_send(monkeypatch)
+        _write_entry(1, "cb-head", mode="callback")
+        _write_entry(2, "wait-behind", mode="wait")
+
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        holder.release()  # full release -> promote next on the converse hot path
+
+        # F1 still holds via the real release: the wait waiter is the grantee...
+        assert ConchQueue.granted_to() == "wait-behind"
+        # ...and the skipped callback head was pinged -- off-thread, so join first.
+        _join_notify_threads()
+        assert any("cb-head" in argv for argv in calls)
+
+    def test_release_skip_ping_is_off_the_release_thread(self, monkeypatch):
+        """The release-path ping is dispatched, not run inline, so a wedged
+        ``session send`` can't add latency to the holder's release (impl-002)."""
+        captured = []
+        # Intercept the dispatcher so we can prove the ping was handed off rather
+        # than executed on the release thread.
+        import voice_mode.conch_notify as conch_notify
+        monkeypatch.setattr(
+            conch_notify, "_dispatch_async",
+            lambda fn, *a: captured.append((fn, a)),
+        )
+        _write_entry(1, "cb-head", mode="callback")
+        _write_entry(2, "wait-behind", mode="wait")
+
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        holder.release()
+
+        assert ConchQueue.granted_to() == "wait-behind"
+        # Exactly one ping, handed to the async dispatcher for the skipped head.
+        assert len(captured) == 1
+        fn, fn_args = captured[0]
+        assert fn is conch_notify._local_nudge
+        assert fn_args[0].session_id == "cb-head"
 
 
 # --------------------------------------------------------------------------- #
