@@ -274,6 +274,12 @@ class Conch:
         if self._held_by_other():
             return False
 
+        # Respect a live waiter-queue grant for another session (VM-1613). On
+        # release the head of the queue is recorded as the designated next
+        # acquirer; everyone else must keep waiting so FIFO order holds.
+        if self._queue_grant_blocks():
+            return False
+
         try:
             # Open file for read/write, create if doesn't exist
             self._fd = os.open(str(self.LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
@@ -286,6 +292,9 @@ class Conch:
             self._write_locked_payload(held=False)
 
             self._acquired = True
+            # We now hold the floor, so we are no longer waiting: leave the
+            # queue and clear any grant we consumed (VM-1613).
+            self._queue_on_acquired()
             return True
 
         except (BlockingIOError, OSError) as e:
@@ -422,6 +431,8 @@ class Conch:
             self._acquire_time = None
             return held_seconds
 
+        was_acquired = self._acquired
+
         if self._fd is not None:
             try:
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
@@ -441,7 +452,64 @@ class Conch:
         self._acquired = False
         self._acquire_time = None
 
+        # Full release of a floor we held: promote the head of the waiter queue
+        # so the next-in-line becomes the designated acquirer (VM-1613). A
+        # between-turns hold (handled above) keeps the floor and does NOT
+        # promote; a non-holder release must not promote either.
+        if was_acquired:
+            self._queue_promote_next()
+
         return held_seconds
+
+    # ---- waiter-queue integration (VM-1613) ----
+    #
+    # The queue layer (voice_mode.conch_queue.ConchQueue) is imported lazily to
+    # avoid a circular import (it imports Conch for its base path), and every
+    # call is fail-safe: a queue glitch must never break the holder lock, which
+    # is critical-path coordination. When no queue is in use (the common
+    # single-agent case) these are cheap no-ops -- there is no grant file and no
+    # queue entry, so behaviour is unchanged.
+
+    def _queue_grant_blocks(self) -> bool:
+        """True if a live waiter-queue grant designates a session other than ours."""
+        try:
+            from voice_mode.conch_queue import ConchQueue
+        except ImportError:
+            return False
+        try:
+            grantee = ConchQueue.granted_to()
+        except Exception:
+            return False
+        return grantee is not None and grantee != self.session_id
+
+    def _queue_on_acquired(self) -> None:
+        """Leave the waiter queue now that we hold the floor.
+
+        ``deregister`` also clears the grant if it named us, so acquiring as the
+        grantee both consumes the grant and removes us from the line -- letting
+        the *next* release promote the following waiter.
+        """
+        if self.session_id is None:
+            return
+        try:
+            from voice_mode.conch_queue import ConchQueue
+        except ImportError:
+            return
+        try:
+            ConchQueue.deregister(self.session_id)
+        except Exception:
+            pass
+
+    def _queue_promote_next(self) -> None:
+        """Record the head of the queue as the designated next acquirer."""
+        try:
+            from voice_mode.conch_queue import ConchQueue
+        except ImportError:
+            return
+        try:
+            ConchQueue.grant_next()
+        except Exception:
+            pass
 
     @classmethod
     def is_active(cls) -> bool:
