@@ -152,6 +152,9 @@ class TestGive:
         assert ConchQueue.granted_to() == "beta-222"
         holder.release()  # full release -> grant_next; must respect the give
         assert ConchQueue.granted_to() == "beta-222"  # NOT promoted to alpha
+        # Close the loop: the give-grant actively gates the next acquire.
+        assert Conch(session_id="alpha-111").try_acquire(agent_name="alpha") is False
+        assert Conch(session_id="beta-222").try_acquire(agent_name="beta") is True
 
 
 # --------------------------------------------------------------------------- #
@@ -256,6 +259,23 @@ class TestWait:
         assert "timed out" in result.output.lower()
         # Cleaned up after itself.
         assert all(e.session_id != "mine-bbb" for e in ConchQueue.list())
+
+    def test_head_does_not_return_while_give_grant_points_elsewhere(self, runner, monkeypatch):
+        """A waiter at the head of a free conch must NOT get a false 'your turn'
+        when an explicit give-grant designates a *different* session — that
+        session's grant gates the next acquire, so the head can't act yet."""
+        import voice_mode.config as cfg
+        monkeypatch.setattr(cfg, "CONCH_CHECK_INTERVAL", 0.02, raising=False)
+        _register("alpha-111", agent="alpha")   # head
+        _register("gamma-222", agent="gamma")   # behind alpha
+        ConchQueue.grant("gamma-222")           # operator gave it to gamma
+        # Conch is free, alpha is head — but gamma holds the grant.
+        result = runner.invoke(
+            conch, ["wait", "--session", "alpha-111", "--timeout", "0.1"]
+        )
+        assert result.exit_code == 1            # timed out, no false grant
+        assert "timed out" in result.output.lower()
+        assert ConchQueue.granted_to() == "gamma-222"  # gamma's grant untouched
 
     def test_json_granted_output(self, runner):
         _register("me-111", agent="me")

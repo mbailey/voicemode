@@ -301,6 +301,9 @@ def conch_bump():
             raise click.ClickException(
                 "No live holder — the lock looks stale. Use 'voicemode conch release' to clear it."
             )
+        # bump always promotes the head — clear any pending give first so this
+        # path matches the holder-bump path (which also clears the grant).
+        ConchQueue.clear_grant()
         head = ConchQueue.grant_next()
         if head is None:
             click.echo("Conch is free and no one is waiting — nothing to bump.")
@@ -392,7 +395,11 @@ def conch_wait(session_id, timeout, as_json):
                 break
             holder = _holder_dict()
             head = ConchQueue.head()
-            if holder is None and head is not None and head.session_id == sid:
+            # Head of a free conch is our turn -- UNLESS an explicit give points
+            # at someone else (then their grant gates the next acquire and we
+            # would only get a false "your turn" we can't act on).
+            if (holder is None and head is not None and head.session_id == sid
+                    and ConchQueue.granted_to() in (None, sid)):
                 granted = True
                 break
             if waited >= timeout:
