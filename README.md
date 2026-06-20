@@ -209,7 +209,7 @@ Full documentation: [voicemode.dev](https://voicemode.dev)
 
 ## Links
 
-- **Website**: [getvoicemode.com](https://getvoicemode.com)
+- **Website**: [voicemode.dev](https://voicemode.dev)
 - **GitHub**: [github.com/mbailey/voicemode](https://github.com/mbailey/voicemode)
 - **PyPI**: [pypi.org/project/voice-mode](https://pypi.org/project/voice-mode/)
 - **YouTube**: [@getvoicemode](https://youtube.com/@getvoicemode)
