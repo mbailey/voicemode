@@ -103,6 +103,26 @@ async def test_voice_md_has_required_keys(tmp_voicemode, stub_wav):
 
 
 @pytest.mark.asyncio
+async def test_clone_add_writes_default_txt_sidecar(tmp_voicemode, stub_wav):
+    """clone_add writes a default.txt sidecar holding the transcript, so the
+    loader resolves a non-empty ref_text from its primary lookup (VM-1439)."""
+    voices_dir = tmp_voicemode["voices_dir"]
+    with patch(
+        "voice_mode.tools.impressions.profiles._normalise_audio",
+        side_effect=_patch_normalise(voices_dir),
+    ), patch(
+        "voice_mode.tools.impressions.profiles._transcribe_audio",
+        return_value="this is the transcript",
+    ):
+        result = await clone_add("testfoo", str(stub_wav))
+
+    assert result["success"] is True
+    sidecar = voices_dir / "testfoo" / "default.txt"
+    assert sidecar.exists()
+    assert sidecar.read_text().strip() == "this is the transcript"
+
+
+@pytest.mark.asyncio
 async def test_voices_json_points_at_per_voice_default_wav(tmp_voicemode, stub_wav):
     voices_dir = tmp_voicemode["voices_dir"]
     with patch(
