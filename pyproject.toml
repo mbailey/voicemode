@@ -33,7 +33,7 @@ dependencies = [
     "numpy",
     "sounddevice",
     "scipy",
-    "openai>=1.0.0",
+    "openai>=2",  # was >=1.0.0 (VM-1640 / VM-1240)
     "pydub",
     "audioop-lts; python_version >= '3.13'",
     "simpleaudio",
@@ -98,7 +98,9 @@ constraint-dependencies = [
     # vulns (GHSA-r6ph-v2qm-q3c2 CVSS 8.2, plus 6.9 and 5.3 mediums). None of
     # the transitive deps require >=46, so without this constraint uv resolves
     # to the lowest acceptable (vulnerable) version. See VM-1244.
-    "cryptography>=46.0.7",
+    "cryptography>=46.0.7",   # VM-1244
+    "urllib3>=2.7.0",         # VM-1640: GHSA-2xpw/38jv/gm62 + PYSEC-2026-141
+    "jaraco-context>=6.1.0",  # VM-1640: GHSA-58pv-8j8x-9vj2
 ]
 
 [tool.hatch.build.targets.wheel]
