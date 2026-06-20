@@ -32,6 +32,7 @@ the queue layer and stays trivially callable from anywhere.
 
 import os
 import subprocess
+import threading
 
 #: The nudge an idle (callback-mode) grantee receives. Short, names the action,
 #: and is the single tunable string for the push (VM-1625 decision).
@@ -42,7 +43,7 @@ NUDGE_TEXT = "🐚 You've been granted the conch — call converse() to take the
 _SEND_TIMEOUT = 10.0
 
 
-def notify_granted(entry) -> None:
+def notify_granted(entry, *, block: bool = True) -> None:
     """Push a "your turn" nudge to a grantee that is **not** actively watching.
 
     The idempotency / "not watching" gate is mode-based (VM-1625 decision):
@@ -56,6 +57,21 @@ def notify_granted(entry) -> None:
     remote (``pid is None``) ⇒ remote-marker seam (VM-970). A ``None`` entry (the
     waiter vanished between grant and notify) is a harmless no-op.
 
+    ``block`` controls the **local** push only (the remote seam is already a
+    no-op):
+
+    - ``block=True`` (default) — run ``session send`` synchronously, bounded by
+      ``_SEND_TIMEOUT``. Right for the one-shot CLI ``give`` / ``bump``: the
+      command is about to exit, so it should deliver the nudge before returning.
+    - ``block=False`` — fire the local push on a daemon thread and return at
+      once. Right for the converse **release** hot path
+      (``Conch.release`` → ``ConchQueue.grant_next`` pinging skipped callback
+      heads, the VM-1625 impl-001 peer-review finding): the holder must never
+      block its release on session discovery / tmux. The thread's
+      ``subprocess.run`` still waits on and reaps its child, so no zombie
+      accumulates in the long-lived MCP server, and the thread is a daemon so a
+      slow nudge can never hold up interpreter exit.
+
     Never raises: any failure is swallowed so ``give`` / ``bump`` / ``grant_next``
     are never broken by a notification glitch.
     """
@@ -67,10 +83,35 @@ def notify_granted(entry) -> None:
     try:
         if getattr(entry, "pid", None) is None:
             _remote_marker(entry)
-        else:
+        elif block:
             _local_nudge(entry)
+        else:
+            _dispatch_async(_local_nudge, entry)
     except Exception:
         # Best-effort: a push must never propagate into the grant site.
+        pass
+
+
+def _dispatch_async(fn, *args) -> None:
+    """Run ``fn(*args)`` on a daemon thread — fire-and-forget, never raises.
+
+    Used by the non-blocking (release-path) push so a grant site never waits on
+    the nudge. ``fn`` (``_local_nudge``) shells out via ``subprocess.run``, which
+    waits on and reaps its own child *inside* the thread, so the child is never
+    left a zombie even in the long-lived MCP server. The thread is a daemon so a
+    slow nudge cannot hold up interpreter exit; the worker is guarded and the
+    ``start()`` is wrapped so neither a nudge failure nor a thread-start failure
+    can propagate into the grant site.
+    """
+    def _guarded() -> None:
+        try:
+            fn(*args)
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_guarded, name="conch-notify", daemon=True).start()
+    except Exception:
         pass
 
 

@@ -15,13 +15,14 @@ so nothing is ever typed into a real tmux pane.
 """
 
 import os
+import threading
 
 import pytest
 from click.testing import CliRunner
 
 from voice_mode.conch_queue import ConchQueue, WaiterEntry
 from voice_mode.cli_commands.conch import conch
-from voice_mode.conch_notify import NUDGE_TEXT, notify_granted
+from voice_mode.conch_notify import NUDGE_TEXT, notify_granted, _local_nudge
 
 
 # --------------------------------------------------------------------------- #
@@ -183,3 +184,111 @@ class TestGiveNotifies:
         assert result.exit_code == 0
         assert rec.calls == []  # no tmux nudge for a remote grantee
         assert ConchQueue.granted_to() == "remote-abc-111"  # grant file is the marker
+
+
+# --------------------------------------------------------------------------- #
+# CLI: `conch bump` pushes to a lone callback waiter it promotes
+# --------------------------------------------------------------------------- #
+
+class TestBumpNotifies:
+    def test_bump_lone_callback_waiter_pushes_nudge(self, runner, monkeypatch):
+        """Bump promoting a lone callback waiter pushes the nudge synchronously.
+
+        With only a callback waiter (no blocking waiter to starve) ``grant_next``
+        grants the head and pings no one -- so it is ``bump``'s own CLI seam that
+        must deliver the nudge. The one-shot CLI path stays synchronous, so the
+        ``session send`` is captured here without any thread to join. (Asserted
+        directly now, not just by comment -- impl-001 review coverage gap.)
+        """
+        rec = _RecordingRun(returncode=0)
+        monkeypatch.setattr("subprocess.run", rec)
+        # Conch free (no holder/lock in the isolated home) + one idle callback waiter.
+        ConchQueue.register("cb-solo-1", agent="cbagent", mode="callback")
+
+        result = runner.invoke(conch, ["bump"])
+        assert result.exit_code == 0
+        assert ConchQueue.granted_to() == "cb-solo-1"  # promoted as next in line
+        # ...and the lone callback was actively pushed by the CLI seam.
+        assert len(rec.calls) == 1
+        argv = rec.calls[0]
+        assert argv[:3] == ["session", "send", "cb-solo-1"]
+        assert argv[3] == NUDGE_TEXT
+
+
+# --------------------------------------------------------------------------- #
+# notify_granted — blocking vs non-blocking (release-path) local push (impl-002)
+# --------------------------------------------------------------------------- #
+
+class TestNonBlockingDispatch:
+    """``block=True`` (default, one-shot CLI) runs the local push inline;
+    ``block=False`` (the converse release hot path) fires it off-thread so a
+    grant site never waits on session discovery / tmux (VM-1625 impl-002)."""
+
+    def test_block_true_runs_synchronously(self, monkeypatch):
+        dispatched = []
+        monkeypatch.setattr(
+            "voice_mode.conch_notify._dispatch_async",
+            lambda fn, *a: dispatched.append((fn, a)),
+        )
+        rec = _RecordingRun(returncode=0)
+        monkeypatch.setattr("subprocess.run", rec)
+
+        notify_granted(_entry("cb-sync", mode="callback"), block=True)
+
+        # Inline: the session send ran now; the async dispatcher was untouched.
+        assert dispatched == []
+        assert len(rec.calls) == 1
+        assert rec.calls[0][2] == "cb-sync"
+
+    def test_block_false_dispatches_async(self, monkeypatch):
+        dispatched = []
+        monkeypatch.setattr(
+            "voice_mode.conch_notify._dispatch_async",
+            lambda fn, *a: dispatched.append((fn, a)),
+        )
+        rec = _RecordingRun(returncode=0)
+        monkeypatch.setattr("subprocess.run", rec)
+
+        notify_granted(_entry("cb-async", mode="callback"), block=False)
+
+        # Routed through the async dispatcher with the real worker + entry, and
+        # NOT run inline (the dispatcher is intercepted here).
+        assert rec.calls == []
+        assert len(dispatched) == 1
+        fn, fn_args = dispatched[0]
+        assert fn is _local_nudge
+        assert fn_args[0].session_id == "cb-async"
+
+    def test_block_false_real_thread_delivers_and_reaps(self, monkeypatch):
+        """The real daemon thread runs the nudge to completion.
+
+        ``subprocess.run`` (here the recording stand-in) waits on and reaps its
+        child inside the thread, so nothing is left a zombie; joining the named
+        ``conch-notify`` thread lets us assert the side effect deterministically.
+        """
+        rec = _RecordingRun(returncode=0)
+        monkeypatch.setattr("subprocess.run", rec)
+
+        notify_granted(_entry("cb-thread", mode="callback"), block=False)
+
+        for t in list(threading.enumerate()):
+            if t.name == "conch-notify":
+                t.join(timeout=5.0)
+        assert len(rec.calls) == 1
+        assert rec.calls[0][2] == "cb-thread"
+
+    def test_block_false_remote_does_not_dispatch(self, monkeypatch):
+        """A remote grantee (pid=None) takes the remote-marker seam, never the
+        async local dispatcher -- regardless of ``block``."""
+        dispatched = []
+        monkeypatch.setattr(
+            "voice_mode.conch_notify._dispatch_async",
+            lambda fn, *a: dispatched.append((fn, a)),
+        )
+        rec = _RecordingRun(returncode=0)
+        monkeypatch.setattr("subprocess.run", rec)
+
+        notify_granted(_entry("remote-x", mode="callback", pid=None), block=False)
+
+        assert rec.calls == []
+        assert dispatched == []

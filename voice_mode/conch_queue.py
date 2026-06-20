@@ -433,7 +433,7 @@ class ConchQueue:
         cls.list()
 
     @classmethod
-    def grant_next(cls) -> Optional[WaiterEntry]:
+    def grant_next(cls, *, notify_block: bool = True) -> Optional[WaiterEntry]:
         """Promote the next acquirer on release -- unless an explicit give stands.
 
         Called on the holder's full release. Normally records a live waiter in
@@ -465,6 +465,13 @@ class ConchQueue:
         Trade-off (intended): a later ``wait`` waiter can acquire ahead of an
         idle callback waiter -- callback means "ping me, I'm not blocking", so a
         blocking waiter should not starve behind it.
+
+        ``notify_block`` controls how the skipped-callback pings are delivered.
+        Default ``True`` runs them synchronously -- right for the one-shot CLI
+        ``bump`` path. The converse **release** hot path
+        (``Conch._queue_promote_next``) passes ``notify_block=False`` so each
+        ping is fire-and-forget and a wedged ``session send`` can never add to
+        the holder's release latency (VM-1625 impl-001 peer-review finding).
         """
         existing = cls.granted_to()  # validates liveness; clears a stale grant
         if existing is not None:
@@ -492,7 +499,7 @@ class ConchQueue:
         else:
             for e in skipped:
                 if e.mode == "callback":
-                    cls._notify_callback(e)
+                    cls._notify_callback(e, block=notify_block)
 
         cls._atomic_write_json(
             cls._grant_file(),
@@ -501,17 +508,21 @@ class ConchQueue:
         return target
 
     @classmethod
-    def _notify_callback(cls, entry) -> None:
+    def _notify_callback(cls, entry, *, block: bool = True) -> None:
         """Best-effort ping to a skipped callback waiter (VM-1625).
 
         Lazy import + swallow-all, matching the fail-safe queue integration in
         ``Conch``: notifying is never allowed to break grant promotion, which is
         critical-path coordination, and the queue stays usable when the notify
         module / ``session`` binary is absent.
+
+        ``block`` is forwarded to ``notify_granted``: the release hot path passes
+        ``block=False`` so the ping is dispatched off-thread and never delays the
+        holder's release; the CLI ``bump`` path keeps the synchronous default.
         """
         try:
             from voice_mode.conch_notify import notify_granted
-            notify_granted(entry)
+            notify_granted(entry, block=block)
         except Exception:
             pass
 
