@@ -168,7 +168,23 @@ class ConchQueue:
         return str(expires)
 
     @staticmethod
-    def _is_live(data: dict) -> bool:
+    def _parse_iso(value) -> Optional[datetime]:
+        """Parse an ISO-8601 timestamp, tolerating a trailing ``Z`` (UTC).
+
+        Python 3.10's ``datetime.fromisoformat`` does not accept the ``Z``
+        designator, yet remote front ends (JS/Go MCP clients, VM-1622) routinely
+        emit it, so normalise ``Z`` -> ``+00:00`` first. Returns ``None`` when
+        the value cannot be parsed.
+        """
+        try:
+            if value.endswith("Z"):
+                value = value[:-1] + "+00:00"
+            return datetime.fromisoformat(value)
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    @classmethod
+    def _is_live(cls, data: dict) -> bool:
         """Is this waiter still alive?
 
         Local waiter (``pid`` set): liveness by PID (signal 0). A
@@ -189,10 +205,16 @@ class ConchQueue:
         expires = data.get("expires")
         if not expires:
             return True
-        try:
-            return datetime.now() <= datetime.fromisoformat(expires)
-        except (ValueError, TypeError):
+        exp = cls._parse_iso(expires)
+        if exp is None:
             return False
+        # Compare in the timestamp's own awareness. A cross-machine remote agent
+        # naturally heartbeats with a tz-aware UTC ``expires``; judging that
+        # against a naive local clock raises ``TypeError`` and would wrongly
+        # prune a live waiter, so pair a naive ``now`` with naive ``exp`` and an
+        # aware ``now`` with aware ``exp``.
+        now = datetime.now(exp.tzinfo) if exp.tzinfo is not None else datetime.now()
+        return now <= exp
 
     @classmethod
     def _next_seq(cls) -> int:

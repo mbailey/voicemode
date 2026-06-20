@@ -12,7 +12,7 @@ import json
 import multiprocessing
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -199,6 +199,44 @@ class TestCleanup:
                      expires=datetime.now() + timedelta(seconds=300))
         order = [e.session_id for e in ConchQueue.list()]
         assert order == ["remote-live"]
+
+    def test_remote_tz_aware_future_heartbeat_is_kept(self):
+        # A cross-machine remote agent naturally heartbeats with a tz-aware UTC
+        # expiry. It must survive cleanup, not be pruned by a naive-vs-aware
+        # comparison (VM-1613 review fix).
+        _write_entry(1, "remote-utc", pid=None,
+                     expires=datetime.now(timezone.utc) + timedelta(seconds=300))
+        assert [e.session_id for e in ConchQueue.list()] == ["remote-utc"]
+
+    def test_remote_tz_aware_expired_heartbeat_is_removed(self):
+        # The same tz-aware path must still expire a stale heartbeat.
+        _write_entry(1, "remote-utc-stale", pid=None,
+                     expires=datetime.now(timezone.utc) - timedelta(seconds=30))
+        assert ConchQueue.list() == []
+
+    def test_remote_z_suffixed_heartbeat_is_parsed(self):
+        # The 'Z' UTC designator (rejected by 3.10's fromisoformat) must be
+        # tolerated, else a live remote waiter is wrongly pruned.
+        qdir = ConchQueue._queue_dir()
+        qdir.mkdir(parents=True, exist_ok=True)
+        zstr = (datetime.now(timezone.utc) + timedelta(seconds=300)
+                ).isoformat().replace("+00:00", "Z")
+        (qdir / ConchQueue._filename(1, "rz")).write_text(json.dumps({
+            "session_id": "rz", "seq": 1, "agent": "remote", "project_path": None,
+            "voice": None, "pid": None, "mode": "wait",
+            "requested_at": datetime.now().isoformat(), "expires": zstr,
+        }))
+        assert [e.session_id for e in ConchQueue.list()] == ["rz"]
+
+    def test_register_remote_with_tz_aware_expires_persists(self):
+        # End-to-end via the public API: registering a remote waiter with a
+        # tz-aware UTC heartbeat must return its real position and survive the
+        # cleanup that register() itself runs to compute that position.
+        pos = ConchQueue.register(
+            "remote", pid=None,
+            expires=datetime.now(timezone.utc) + timedelta(seconds=300))
+        assert pos == 1
+        assert [e.session_id for e in ConchQueue.list()] == ["remote"]
 
     def test_corrupt_entry_is_removed(self):
         qdir = ConchQueue._queue_dir()
