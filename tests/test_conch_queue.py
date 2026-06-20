@@ -300,6 +300,34 @@ class TestGrant:
         ConchQueue.grant_next()
         assert ConchQueue.is_granted(None) is False
 
+    def test_grant_named_waiter(self):
+        ConchQueue.register("a")
+        ConchQueue.register("b")
+        assert ConchQueue.grant("b") is True   # grant the non-head explicitly
+        assert ConchQueue.granted_to() == "b"
+        assert ConchQueue.grant("ghost") is False  # not a waiter
+        assert ConchQueue.granted_to() == "b"      # unchanged
+
+    def test_grant_next_respects_explicit_give(self):
+        # An explicit give (conch give) sets a grant for a non-head waiter; a
+        # later head-promotion on the holder's release must NOT clobber it.
+        ConchQueue.register("a")  # head
+        ConchQueue.register("b")
+        ConchQueue.grant("b")     # operator gave the conch to b
+        granted = ConchQueue.grant_next()  # holder releases -> promote next
+        assert granted.session_id == "b"   # give stands, not head 'a'
+        assert ConchQueue.granted_to() == "b"
+
+    def test_grant_next_falls_through_when_give_is_stale(self):
+        # A give to a dead/departed waiter must not wedge the queue: grant_next
+        # clears the stale grant and promotes the head instead.
+        ConchQueue.register("a")  # head, live
+        ConchQueue._atomic_write_json(
+            ConchQueue._grant_file(), {"session_id": "gone", "seq": 99})
+        granted = ConchQueue.grant_next()
+        assert granted.session_id == "a"
+        assert ConchQueue.granted_to() == "a"
+
 
 # --------------------------------------------------------------------------- #
 # Conch <-> queue integration (try_acquire grant-respect, release promotion)
