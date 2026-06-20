@@ -2,6 +2,7 @@
 """Version management script for voice-mode packages."""
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -166,23 +167,127 @@ def commit_and_tag(version, packages=None):
         return False
 
 
-def push_to_remote(version):
-    """Push commits and tags to remote repository."""
-    try:
-        # Push commits
-        subprocess.run(["git", "push", "origin"], check=True)
-        print("✅ Pushed commits to origin")
+# The canonical GitHub repo that carries the release pipeline (Actions fire on
+# a `v*` tag push there). Resolve the remote dynamically by URL — never assume
+# the remote is named "origin": post-2026-06-10 migration, origin -> ms2 (a bare
+# git host with no Actions), so a tag push to origin ships nothing.
+CANONICAL_GITHUB = ("mbailey", "voicemode")
 
-        # Push tag
-        tag_name = f"v{version}"
-        subprocess.run(["git", "push", "origin", tag_name], check=True)
-        print(f"✅ Pushed tag {tag_name} to origin")
 
-        return True
+def _parse_remote_url(url):
+    """Parse a git remote URL into (host, owner, repo), or None if unparseable.
 
-    except subprocess.CalledProcessError as e:
-        print(f"\n❌ Git push failed: {e}")
+    Handles HTTPS (https://github.com/owner/repo[.git]), ssh:// URLs
+    (ssh://git@github.com/owner/repo), and scp-like SSH
+    (git@github.com:owner/repo, including ssh-config host aliases such as
+    git@github.com_work:owner/repo).
+    """
+    url = url.strip()
+    if url.endswith(".git"):
+        url = url[:-4]
+    m = re.match(r"^(?:https?|ssh)://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$", url)
+    if m:
+        host, path = m.group(1), m.group(2)
+    else:
+        m = re.match(r"^(?:[^@]+@)?([^:/]+):(.+)$", url)  # scp-like
+        if not m:
+            return None
+        host, path = m.group(1), m.group(2)
+    parts = [p for p in path.split("/") if p]
+    if len(parts) < 2:
+        return None
+    return host, parts[-2], parts[-1]
+
+
+def _is_canonical_github(url):
+    parsed = _parse_remote_url(url)
+    if not parsed:
         return False
+    host, owner, repo = parsed
+    is_github = host == "github.com" or host.startswith("github.com_")
+    return is_github and (owner, repo) == CANONICAL_GITHUB
+
+
+def get_remotes():
+    """Return {remote_name: url} for the current repo."""
+    names = subprocess.run(
+        ["git", "remote"], capture_output=True, text=True, check=True
+    ).stdout.split()
+    remotes = {}
+    for name in names:
+        remotes[name] = subprocess.run(
+            ["git", "remote", "get-url", name], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    return remotes
+
+
+def resolve_github_remote(remotes=None):
+    """Return the name of the remote pointing at github.com/mbailey/voicemode.
+
+    Matches by parsed host + owner/repo so a fork remote (e.g.
+    Sallvainian/voicemode) is never selected. Honours a
+    VOICEMODE_GITHUB_REMOTE override for non-canonical clones. Returns None if
+    no canonical GitHub remote is configured.
+    """
+    if remotes is None:
+        remotes = get_remotes()
+    override = os.environ.get("VOICEMODE_GITHUB_REMOTE")
+    if override and override in remotes:
+        return override
+    for name, url in remotes.items():
+        if _is_canonical_github(url):
+            return name
+    return None
+
+
+def push_to_remote(version):
+    """Push the release commit + v-tag to the GitHub remote (Actions pipeline).
+
+    The GitHub push is loud and blocking — if no canonical GitHub remote exists
+    or the push fails, the release stops with a non-zero result rather than
+    silently shipping nothing. The ms2 `origin` mirror is kept in sync on a
+    best-effort basis (a mirror failure does not fail the release).
+    """
+    tag_name = f"v{version}"
+    remotes = get_remotes()
+    github_remote = resolve_github_remote(remotes)
+
+    if github_remote is None:
+        print(
+            "\n❌ No GitHub remote for github.com/mbailey/voicemode is configured."
+        )
+        print(f"   Remotes found: {', '.join(remotes) or '(none)'}")
+        print(
+            "   The release pipeline (PyPI publish + GitHub Release) only fires on a"
+            " tag push to GitHub, so this release would ship nothing."
+        )
+        print("   Add it, then re-run:")
+        print("     git remote add github https://github.com/mbailey/voicemode.git")
+        print("   (or set VOICEMODE_GITHUB_REMOTE=<remote-name> for a non-canonical clone)")
+        return False
+
+    try:
+        # Push commits + tag to GitHub — this fires the release workflows.
+        subprocess.run(["git", "push", github_remote], check=True)
+        print(f"✅ Pushed commits to {github_remote} (GitHub)")
+        subprocess.run(["git", "push", github_remote, tag_name], check=True)
+        print(f"✅ Pushed tag {tag_name} to {github_remote} (GitHub) — Actions will fire")
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ Push to GitHub remote '{github_remote}' failed: {e}")
+        return False
+
+    # Keep the origin (ms2) mirror in sync — best effort; do not fail the release.
+    if "origin" in remotes and "origin" != github_remote:
+        try:
+            subprocess.run(["git", "push", "origin"], check=True)
+            subprocess.run(["git", "push", "origin", tag_name], check=True)
+            print("✅ Mirrored commits + tag to origin")
+        except subprocess.CalledProcessError as e:
+            print(
+                f"⚠️  Warning: could not mirror to origin (release already on GitHub): {e}"
+            )
+
+    return True
 
 
 def main():
@@ -282,10 +387,14 @@ Examples:
 
     # Stop here if --no-push
     if args.no_push:
+        github_remote = resolve_github_remote() or "github"
         print()
         print("Changes committed and tagged. Push manually when ready:")
-        print(f"  git push origin")
-        print(f"  git push origin v{args.version}")
+        print(f"  # Push to GitHub to fire the release pipeline (Actions):")
+        print(f"  git push {github_remote}")
+        print(f"  git push {github_remote} v{args.version}")
+        print(f"  # (optional) mirror to the origin (ms2) remote:")
+        print(f"  git push origin && git push origin v{args.version}")
         return 0
 
     # Push to remote
