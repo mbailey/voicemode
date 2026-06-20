@@ -434,13 +434,28 @@ class ConchQueue:
 
     @classmethod
     def grant_next(cls) -> Optional[WaiterEntry]:
-        """Promote the head: record it as the designated next acquirer.
+        """Promote the head as next acquirer -- unless an explicit give stands.
 
-        Called on the holder's full release. Picks the lowest-seq live waiter
-        and writes ``conch.grant`` so only that session acquires next (FIFO,
-        no thundering-herd re-acquire). Returns the granted waiter, or ``None``
-        (clearing any existing grant) when the queue is empty.
+        Called on the holder's full release. Normally records the lowest-seq
+        live waiter (the head) in ``conch.grant`` so only that session acquires
+        next (FIFO, no thundering-herd re-acquire), returning it -- or ``None``
+        (clearing any grant) when the queue is empty.
+
+        **Exception (VM-1616):** if a grant already names a still-live waiter,
+        it is preserved rather than overwritten by head-promotion. That grant
+        can only exist because an operator ran ``conch give <session>`` while
+        the holder was still speaking; honouring it here is what lets ``give``
+        survive the holder's release and jump a chosen waiter ahead of the head.
+        In the normal flow no grant exists at release time (the previous grantee
+        consumed it on acquire), so this defers *only* to a deliberate give. A
+        stale give (grantee died/left) is cleared by ``granted_to`` and falls
+        through to head-promotion, so a dead give can never wedge the queue.
         """
+        existing = cls.granted_to()  # validates liveness; clears a stale grant
+        if existing is not None:
+            for e in cls.list():
+                if e.session_id == existing:
+                    return e  # explicit give stands -- do not clobber
         head = cls.head()  # runs cleanup
         if head is None:
             cls.clear_grant()
@@ -450,6 +465,34 @@ class ConchQueue:
             {"session_id": head.session_id, "seq": head.seq},
         )
         return head
+
+    @classmethod
+    def grant(cls, session_id: str) -> bool:
+        """Grant the conch to a *named* live waiter (used by ``conch give``).
+
+        Unlike :meth:`grant_next` (which always promotes the head), this writes
+        the grant for an arbitrary session -- but only if that session is
+        currently a live waiter, preserving the invariant that a grant always
+        names someone in the queue (``granted_to`` validates against the live
+        scan, so a grant to a non-waiter would be cleared on the next read).
+
+        Args:
+            session_id: the waiter to grant to.
+
+        Returns:
+            ``True`` if the session was a live waiter and the grant was written;
+            ``False`` (no grant written) if it is not in the queue.
+        """
+        if session_id is None:
+            return False
+        for e in cls.list():  # runs cleanup; only live waiters
+            if e.session_id == session_id:
+                cls._atomic_write_json(
+                    cls._grant_file(),
+                    {"session_id": e.session_id, "seq": e.seq},
+                )
+                return True
+        return False
 
     @classmethod
     def granted_to(cls) -> Optional[str]:
