@@ -605,6 +605,18 @@ CONCH_LOCK_EXPIRY = float(os.getenv("VOICEMODE_CONCH_LOCK_EXPIRY", "300"))
 # Set to 0 to disable idle-expiry (dead-holder clearance still applies).
 CONCH_HOLD_EXPIRY = float(os.getenv("VOICEMODE_CONCH_HOLD_EXPIRY", "300"))
 
+# Default delivery mode when a busy converse() engages the waiter queue (i.e.
+# wait_for_conch is truthy — that flag remains the gate for whether we queue at
+# all). VM-1415's "configurable default mode":
+#   "wait"     — block until the conch is granted to us, bounded by the timeout.
+#   "callback" — register and return immediately with the queue position; the
+#                turn is delivered out-of-band later (delivery is VM-1625).
+# Overridable per call via converse(conch_mode=...). Unknown values fall back to
+# "wait" so a misconfiguration never silently downgrades a wait into a callback.
+CONCH_MODE = os.getenv("VOICEMODE_CONCH_MODE", "wait").strip().lower()
+if CONCH_MODE not in ("wait", "callback"):
+    CONCH_MODE = "wait"
+
 # Auto-focus tmux pane when conch is acquired (for multi-agent setups)
 # When enabled, automatically switches tmux focus to the speaking agent's pane
 AUTO_FOCUS_PANE = env_bool("VOICEMODE_AUTO_FOCUS_PANE", False)

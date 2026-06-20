@@ -26,6 +26,7 @@ except ImportError as e:
 
 from voice_mode.server import mcp
 from voice_mode.conch import Conch
+from voice_mode.conch_queue import ConchQueue
 from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
     audio_operation_lock,
@@ -66,6 +67,7 @@ from voice_mode.config import (
     CONCH_ENABLED,
     CONCH_TIMEOUT,
     CONCH_CHECK_INTERVAL,
+    CONCH_MODE,
     AUTO_FOCUS_PANE
 )
 import voice_mode.config
@@ -1273,6 +1275,7 @@ async def converse(
     chime_trailing_silence: Optional[float] = None,
     metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
     wait_for_conch: Union[bool, str, int, float] = False,
+    conch_mode: Optional[Literal["wait", "callback"]] = None,
     hold_conch: Union[bool, str] = False,
     skip_conch: Union[bool, str] = False,
     session_id: Optional[str] = None,
@@ -1334,12 +1337,25 @@ KEY PARAMETERS:
   - minimal: Just response text (saves tokens)
   - summary: Response + compact timing (default)
   - verbose: Response + detailed metrics breakdown
-• wait_for_conch (bool|number, default: false): Multi-agent coordination
-  - false: If another agent is speaking, return status immediately
-  - true: Wait until the other agent finishes (or its hold expires / it dies),
-    then speak. Fast-fails the moment the holder's process dies.
-  - a number: Wait at most that many seconds (implies waiting), overriding the
-    configured default for this call.
+• wait_for_conch (bool|number, default: false): Multi-agent coordination — the
+  GATE for whether a busy conch puts you in the waiter queue at all.
+  - false: If another agent is speaking, return a status immediately WITHOUT
+    queuing (back-compat; you are never silently blocked). The status names the
+    holder and tells you how to queue.
+  - true: Join the FIFO waiter queue (you show up in `voicemode conch status`),
+    then behave per conch_mode (below). Fast-fails the moment the holder dies.
+  - a number: As true, but wait at most that many seconds, overriding the
+    configured default timeout for this call.
+• conch_mode ("wait"|"callback", default: VOICEMODE_CONCH_MODE, itself "wait"):
+  How a queued caller is served once wait_for_conch has engaged the queue. Has
+  NO effect unless wait_for_conch is truthy.
+  - wait: Block until the conch is granted to you (FIFO; the queue's grant hint
+    ensures only the next-in-line acquires — no thundering-herd steal), bounded
+    by the timeout. On timeout you are cleanly deregistered.
+  - callback: Register and return IMMEDIATELY with your queue position; your
+    message is NOT spoken now. The turn is delivered out-of-band when granted
+    (the push is VM-1625; until then, watch `voicemode conch status` / run
+    `voicemode conch wait`). You stay registered — that's the point.
 • hold_conch (bool, default: false): Keep the floor across turns (opt-in)
   - WHEN: set true if your NEXT converse call will continue this thread —
     you're asking a question you'll answer, or speaking over several turns —
@@ -1423,6 +1439,17 @@ consult the MCP resources listed above.
         hold_conch = hold_conch.lower() in ('true', '1', 'yes', 'on')
     if isinstance(skip_conch, str):
         skip_conch = skip_conch.lower() in ('true', '1', 'yes', 'on')
+    # conch_mode (VM-1619) selects how a *queued* caller is served once
+    # wait_for_conch has engaged the queue. The arg overrides the
+    # VOICEMODE_CONCH_MODE config default (VM-1415); an unknown/empty value
+    # falls back to "wait" so a typo never silently downgrades a wait into a
+    # silent callback.
+    if conch_mode is None:
+        resolved_conch_mode = CONCH_MODE
+    else:
+        resolved_conch_mode = str(conch_mode).strip().lower()
+    if resolved_conch_mode not in ("wait", "callback"):
+        resolved_conch_mode = "wait"
 
     # Resolve the session ID and project path once, for the conch payload.
     # Precedence: explicit param > VOICEMODE_SESSION_ID > Claude Code's stdio
@@ -1579,7 +1606,7 @@ consult the MCP resources listed above.
             acquired = conch.try_acquire()
 
             if not acquired:
-                # Another agent has the conch
+                # Another agent holds the conch (or a grant points elsewhere).
                 holder = Conch.get_holder()
                 holder_agent = holder.get('agent', 'unknown') if holder else 'unknown'
 
@@ -1588,23 +1615,81 @@ consult the MCP resources listed above.
                         "pid": os.getpid(),
                         "holder_pid": holder.get('pid') if holder else None,
                         "holder_agent": holder_agent,
-                        "wait_for_conch": wait_for_conch
+                        "wait_for_conch": wait_for_conch,
+                        "conch_mode": resolved_conch_mode,
                     })
 
                 if not wait_for_conch:
-                    # Default: return immediately with status info
-                    return (f"User is currently speaking with {holder_agent}. "
-                            "Use wait_for_conch=true to queue, or try again later.")
+                    # Gate closed (default): return IMMEDIATELY without queuing.
+                    # Mike's hard constraint — never silently block a caller who
+                    # did not opt in. Leave no registration behind. Tell them how
+                    # to engage the queue (and that a callback is an option).
+                    return (
+                        f"{holder_agent} currently holds the voice channel — your "
+                        f"message was NOT spoken, and you are NOT queued. Pass "
+                        f"wait_for_conch=true to join the queue: conch_mode=wait "
+                        f"blocks until your turn, conch_mode=callback returns "
+                        f"immediately with your position and delivers your turn "
+                        f"when granted. Or just try again later."
+                    )
 
-                # Wait mode - poll with atomic retry. try_acquire() fast-fails
-                # a dead holder (clears the stale lock) and respects a live
-                # hold, so this loop naturally queues behind a held floor and
-                # wins the instant the holder releases, expires, or dies.
+                # Gate open: become a first-class queue participant (visible in
+                # `voicemode conch status`) instead of blind-polling. A session
+                # id is required to be a tracked waiter — the queue and grant
+                # hint key on it — so fall back to a per-process id when the
+                # harness didn't supply one, pinning it on the conch so the grant
+                # machinery (grant-aware acquire + deregister-on-acquired) stays
+                # coherent through the wait.
+                if conch.session_id is None:
+                    conch.session_id = f"converse-{os.getpid()}"
+                queue_session_id = conch.session_id
+                try:
+                    position = ConchQueue.register(
+                        queue_session_id,
+                        agent="converse",
+                        project_path=resolved_project_path,
+                        voice=resolved_voice,
+                        mode=resolved_conch_mode,
+                        pid=os.getpid(),
+                    )
+                except Exception as e:
+                    # The queue must never break the critical-path lock. If
+                    # registration fails, fall back to legacy poll-and-block.
+                    logger.warning(f"Conch queue register failed ({e}); polling without a queue entry")
+                    position = None
+
+                if resolved_conch_mode == "callback":
+                    # Do NOT block. Return immediately with the position and stay
+                    # registered, so the turn can be delivered out-of-band when
+                    # granted (the push is VM-1625). Make crystal clear the
+                    # message was not spoken and how the turn resumes.
+                    if event_logger:
+                        event_logger.log_event("CONCH_CALLBACK_REGISTERED", {
+                            "pid": os.getpid(),
+                            "session_id": queue_session_id,
+                            "position": position,
+                            "holder_agent": holder_agent,
+                        })
+                    where = f"position #{position}" if position else "the queue"
+                    return (
+                        f"Queued for a callback at {where} — your message was NOT "
+                        f"spoken ({holder_agent} holds the voice channel). Your turn "
+                        f"will be delivered when the conch is granted to you; until "
+                        f"then track it with `voicemode conch status` or `voicemode "
+                        f"conch wait`. (Out-of-band notification lands in VM-1625.)"
+                    )
+
+                # WAIT mode — block until granted, bounded by the timeout. Now
+                # that we are registered, try_acquire() is grant-aware: only the
+                # granted head acquires when the floor frees (FIFO; no steal),
+                # and it consumes the grant + deregisters us on success. It also
+                # fast-fails a dead holder and waits through a live hold.
                 if event_logger:
                     event_logger.log_event("CONCH_WAIT_START", {
                         "pid": os.getpid(),
                         "holder_agent": holder_agent,
-                        "timeout": conch_wait_timeout
+                        "timeout": conch_wait_timeout,
+                        "position": position,
                     })
 
                 waited = 0.0
@@ -1620,7 +1705,17 @@ consult the MCP resources listed above.
                     })
 
                 if not conch._acquired:
-                    return f"Timed out waiting for conch ({conch_wait_timeout:.0f}s). {holder_agent} is still speaking."
+                    # Timed out — deregister cleanly so we leave no wedged entry
+                    # in the queue (a stale head would block promotion of others).
+                    try:
+                        ConchQueue.deregister(queue_session_id)
+                    except Exception:
+                        pass
+                    return (
+                        f"Timed out waiting for conch ({conch_wait_timeout:.0f}s). "
+                        f"{holder_agent} is still speaking. You can request a "
+                        f"callback instead with conch_mode=callback."
+                    )
 
             # Successfully acquired
             if event_logger:

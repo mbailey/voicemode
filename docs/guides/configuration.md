@@ -193,7 +193,41 @@ VOICEMODE_CONCH_ENABLED=true
 VOICEMODE_CONCH_TIMEOUT=60           # Seconds to wait for the conch
 VOICEMODE_CONCH_CHECK_INTERVAL=0.5   # Polling interval
 VOICEMODE_CONCH_LOCK_EXPIRY=300      # Stale-lock expiry (0 disables)
+VOICEMODE_CONCH_MODE=wait            # Default mode when a busy converse() queues:
+                                     #   wait     = block until your turn
+                                     #   callback = return now with your position
 ```
+
+#### The waiter queue: visibility, fairness, and overrides
+
+When `converse` finds the conch busy, what happens next is controlled by two
+independent knobs:
+
+- **`wait_for_conch`** is the *gate*. Left at its default (`false`), a busy
+  `converse` returns **immediately** with a status that names the holder and
+  notes you are *not* queued — it never silently blocks a caller who didn't opt
+  in. Set it `true` (or to a number of seconds) to join the queue.
+- **`conch_mode`** (default `VOICEMODE_CONCH_MODE`) chooses how you're served
+  *once queued*: `wait` blocks until your turn; `callback` registers you and
+  returns straight away with your queue position (your turn is delivered later —
+  out-of-band push is tracked in VM-1625).
+
+Two properties the queue buys you over the old blind poll-and-block:
+
+- **Visibility** — a waiting `converse` shows up in `voicemode conch status`
+  as a queued waiter (with its mode and position), instead of polling silently
+  where no one can see it.
+- **Fairness** — the floor is handed out in FIFO order via a *grant hint*: when
+  the holder releases, only the next-in-line is allowed to acquire, so several
+  waiters can't thunder in and race for it. WAIT honours the grant; it does not
+  steal ahead of the head.
+
+The deliberate counterweight to fairness is **operator override**:
+`voicemode conch give <session>` hands the floor to a chosen waiter (jumping the
+line), and `voicemode conch bump` drops the current holder and promotes the
+head. These are the intentional "line-cutting" escape hatches — godmode for when
+strict FIFO is the wrong answer. (A grantee can even `give` onward to another
+waiter, chaining the hand-off.)
 
 ### LiveKit Configuration
 
