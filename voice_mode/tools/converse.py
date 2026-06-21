@@ -1353,9 +1353,11 @@ KEY PARAMETERS:
     ensures only the next-in-line acquires — no thundering-herd steal), bounded
     by the timeout. On timeout you are cleanly deregistered.
   - callback: Register and return IMMEDIATELY with your queue position; your
-    message is NOT spoken now. The turn is delivered out-of-band when granted
-    (the push is VM-1625; until then, watch `voicemode conch status` / run
-    `voicemode conch wait`). You stay registered — that's the point.
+    message is NOT spoken now. When the conch is granted to you, your turn is
+    actively delivered out-of-band: a session nudge prompts you to call
+    converse() and take the floor (requires a session id; `voicemode conch
+    status` is always available as a supplementary view of your place in line).
+    You stay registered — that's the point.
 • hold_conch (bool, default: false): Keep the floor across turns (opt-in)
   - WHEN: set true if your NEXT converse call will continue this thread —
     you're asking a question you'll answer, or speaking over several turns —
@@ -1661,8 +1663,10 @@ consult the MCP resources listed above.
                 if resolved_conch_mode == "callback":
                     # Do NOT block. Return immediately with the position and stay
                     # registered, so the turn can be delivered out-of-band when
-                    # granted (the push is VM-1625). Make crystal clear the
-                    # message was not spoken and how the turn resumes.
+                    # granted: on a holder's release, grant_next pings a skipped
+                    # callback waiter via conch_notify.notify_granted (a session
+                    # nudge). Make crystal clear the message was not spoken and
+                    # how the turn resumes.
                     if event_logger:
                         event_logger.log_event("CONCH_CALLBACK_REGISTERED", {
                             "pid": os.getpid(),
@@ -1674,9 +1678,11 @@ consult the MCP resources listed above.
                     return (
                         f"Queued for a callback at {where} — your message was NOT "
                         f"spoken ({holder_agent} holds the voice channel). Your turn "
-                        f"will be delivered when the conch is granted to you; until "
-                        f"then track it with `voicemode conch status` or `voicemode "
-                        f"conch wait`. (Out-of-band notification lands in VM-1625.)"
+                        f"will be actively delivered when the conch is granted to "
+                        f"you: a session nudge prompts you to call converse() and "
+                        f"take the floor (requires a session id). `voicemode conch "
+                        f"status` shows your place in line any time as a "
+                        f"supplementary view."
                     )
 
                 # WAIT mode — block until granted, bounded by the timeout. Now

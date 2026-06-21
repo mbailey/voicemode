@@ -10,7 +10,8 @@ participant in the VM-1613 waiter queue:
     - ``wait``     — block until granted (FIFO via the grant hint), bounded by
                      timeout; deregister cleanly on timeout.
     - ``callback`` — register and return immediately with the position, staying
-                     registered (out-of-band delivery is VM-1625).
+                     registered; the turn is pushed out-of-band when granted
+                     (a session nudge via ``conch_notify.notify_granted``, VM-1625).
 
 Home isolation comes from the autouse ``isolate_home_directory`` fixture in
 conftest.py, which re-pins ``Conch.LOCK_FILE`` into a per-test fake home;
@@ -129,6 +130,37 @@ class TestCallbackMode:
         assert entry is not None, "callback waiter must remain registered"
         assert entry.mode == "callback"
         assert entry.agent == "converse"
+
+    @pytest.mark.asyncio
+    async def test_callback_message_is_truthful_about_delivery(self, clean_conch):
+        """VM-1646 regression guard: the callback copy must NOT claim delivery is
+        unimplemented now that VM-1625 has landed.
+
+        The pre-fix message told callers the push was a future task ("the push
+        is VM-1625" / "Out-of-band notification lands in VM-1625") and pointed at
+        polling as the only path. It now actively delivers (a session nudge), so
+        the copy must say so and offer `conch status` as a supplementary view.
+        """
+        with patch.object(Conch, "try_acquire", return_value=False), \
+             patch.object(Conch, "get_holder", return_value=FAKE_HOLDER):
+            result = await _converse()(
+                message="Hello",
+                wait_for_response=False,
+                wait_for_conch=True,
+                conch_mode="callback",
+                session_id="sess-a",
+            )
+
+        # No stale "delivery doesn't exist yet" framing.
+        assert "VM-1625" not in result
+        assert "lands in" not in result.lower()
+        # States active out-of-band delivery via a session nudge...
+        assert "delivered" in result
+        assert "nudge" in result.lower()
+        # ...keeps `conch status` as a supplementary view, not the only path...
+        assert "conch status" in result
+        # ...and honestly discloses the session-id caveat (F2), in one clause.
+        assert "session id" in result.lower()
 
     @pytest.mark.asyncio
     async def test_callback_reports_position_behind_existing_waiter(self, clean_conch):
@@ -346,3 +378,113 @@ class TestModeResolution:
 
         assert "Timed out" in result  # fell back to WAIT, not an instant callback
         assert _sessions() == []
+
+
+# --------------------------------------------------------------------------- #
+# E2E: the VM-1619 → VM-1625 notify seam
+#
+# A real converse(conch_mode="callback") registration (VM-1619) wired through a
+# genuine Conch.release() to the notify push (VM-1625). The unit-level coverage
+# in test_conch_queue.py fabricates queue entries via _write_entry and/or calls
+# grant_next directly; this drives the whole seam end to end — converse() itself
+# registers the callback waiter, then a real holder release promotes the wait
+# waiter behind it and pushes the skipped callback head via
+# conch_notify.notify_granted.
+# --------------------------------------------------------------------------- #
+
+def _join_notify_threads(timeout=5.0):
+    """Join the fire-and-forget notify threads the release hot path spawns
+    (``notify_block=False``), so the ``session send`` side effect can be asserted
+    deterministically rather than raced. Named ``conch-notify`` by
+    ``conch_notify._dispatch_async``.
+    """
+    import threading
+
+    for t in list(threading.enumerate()):
+        if t.name == "conch-notify":
+            t.join(timeout)
+
+
+class TestCallbackNotifySeamE2E:
+    @pytest.mark.asyncio
+    async def test_converse_callback_waiter_is_pushed_on_real_release(
+        self, clean_conch, monkeypatch
+    ):
+        """A converse()-registered callback waiter gets an active notify push
+        when a real holder releases the floor.
+
+        Real holder + real converse() callback registration + real
+        ``Conch.release()``. Only the ``session send`` shell-out is stubbed (so
+        the test never types into a live tmux pane); ``notify_granted`` is
+        wrapped to record that the push fired for the callback waiter while the
+        real push still runs through to ``session send``.
+        """
+        import voice_mode.conch_notify as conch_notify
+
+        # Stub the actual `session send` shell-out: capture argv, never spawn it.
+        sends = []
+
+        def _fake_run(*args, **kwargs):
+            sends.append(args[0] if args else kwargs.get("args"))
+
+            class _Result:
+                returncode = 0
+
+            return _Result()
+
+        monkeypatch.setattr("subprocess.run", _fake_run)
+
+        # Wrap notify_granted to record the seam firing AND let the real push
+        # run. grant_next lazy-imports it from the module at call time, so
+        # patching the module attribute is what the release path picks up.
+        notify_calls = []
+        real_notify = conch_notify.notify_granted
+
+        def _spy(entry, *, block=True):
+            notify_calls.append((entry, block))
+            return real_notify(entry, block=block)
+
+        monkeypatch.setattr(conch_notify, "notify_granted", _spy)
+
+        # A genuine in-process holder makes the floor really busy (an fcntl
+        # flock conflicts even between two fds in one process), so converse()'s
+        # try_acquire fails for real and it takes the callback-register path.
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire()
+
+        # VM-1619: converse() registers a CALLBACK waiter and returns at once.
+        result = await _converse()(
+            message="Hello",
+            wait_for_response=False,
+            wait_for_conch=True,
+            conch_mode="callback",
+            session_id="cb-e2e",
+        )
+        assert "NOT spoken" in result
+        assert _entry("cb-e2e").mode == "callback"
+
+        # A wait waiter joins behind it so the callback head is *skipped* (and
+        # therefore pushed) when the floor is promoted — grant_next pings a
+        # leading callback only when a blocking waiter would otherwise starve
+        # behind it.
+        ConchQueue.register("wait-behind", agent="ahead", mode="wait")
+        assert _sessions() == ["cb-e2e", "wait-behind"]
+
+        # VM-1625: a real release promotes the wait waiter and pushes the head.
+        holder.release()
+
+        # F1: the wait waiter is the grantee — the callback head never starves it.
+        assert ConchQueue.granted_to() == "wait-behind"
+        # The seam fired notify_granted exactly once, for the callback waiter,
+        # fire-and-forget off the release thread (block=False).
+        assert len(notify_calls) == 1, f"expected exactly one push; got {notify_calls}"
+        entry, block = notify_calls[0]
+        assert entry.session_id == "cb-e2e"
+        assert entry.mode == "callback"
+        assert block is False, "release hot path must push fire-and-forget"
+
+        # The actual push reached the converse-registered callback waiter.
+        _join_notify_threads()
+        assert any("cb-e2e" in argv for argv in sends), (
+            f"the session nudge must target the callback waiter; got {sends}"
+        )
