@@ -302,7 +302,13 @@ def _do_heartbeat(session_id, agent, project_path, voice) -> dict:
 # --------------------------------------------------------------------------- #
 
 def _do_give(target) -> dict:
-    """Hand the floor to a named waiting session (resolved like the CLI)."""
+    """Hand the floor to a session — a waiter, else summon a running one (VM-1637).
+
+    Mirrors the CLI ``give`` (parity, via the shared ``conch_ops`` core):
+    resolve a waiter first; on a genuine no-match fall back to summoning a
+    running non-waiter (auto-enqueue callback + grant + notify). An *ambiguous*
+    token is surfaced rather than summoned.
+    """
     if not target:
         return {
             "ok": False, "action": "give",
@@ -311,7 +317,18 @@ def _do_give(target) -> dict:
     try:
         waiter = conch_ops.resolve_session(target, ConchQueue.list())
     except ConchResolveError as e:
-        return {"ok": False, "action": "give", "message": e.message}
+        if e.ambiguous:
+            return {"ok": False, "action": "give", "message": e.message}
+        try:
+            outcome = conch_ops.summon_and_grant(target)
+        except ConchResolveError as summon_err:
+            return {"ok": False, "action": "give", "message": summon_err.message}
+        return {
+            "ok": True, "action": "give",
+            "target": outcome["session_id"], "agent": outcome["agent"],
+            "summoned": outcome["summoned"],
+            "message": outcome["message"],
+        }
     if not ConchQueue.grant(waiter.session_id):
         # Race: the waiter vanished between list() and grant().
         return {
@@ -325,6 +342,7 @@ def _do_give(target) -> dict:
     return {
         "ok": True, "action": "give",
         "target": waiter.session_id, "agent": waiter.agent,
+        "summoned": False,
         "message": (
             f"Gave the conch to {waiter.agent or conch_ops.short(waiter.session_id)} "
             f"(session {conch_ops.short(waiter.session_id)}); they acquire {when}."

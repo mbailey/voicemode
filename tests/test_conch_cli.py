@@ -8,13 +8,19 @@ isolated automatically. All commands are exercised through Click's
 """
 
 import json
+import os
 
 import pytest
 from click.testing import CliRunner
 
 from voice_mode.conch import Conch
 from voice_mode.conch_queue import ConchQueue
+from voice_mode import conch_ops
 from voice_mode.cli_commands.conch import conch
+
+#: The real discovery function, captured before the autouse fixture shadows it,
+#: so the discovery-parser unit tests can exercise it directly.
+_REAL_LIST_RUNNING = conch_ops._list_running_sessions
 
 
 @pytest.fixture
@@ -22,9 +28,30 @@ def runner():
     return CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _no_discovery(monkeypatch):
+    """Default: ``session list`` discovery finds nothing (VM-1637).
+
+    Keeps the pre-VM-1637 waiter-only ``give`` tests behaving as before (a
+    no-waiter token degrades to the "not waiting" error) and stops any test from
+    shelling out to the real ``session`` binary. Summon tests override this with
+    their own running-session list.
+    """
+    monkeypatch.setattr(conch_ops, "_list_running_sessions", lambda: [])
+
+
 def _register(sid, *, agent=None, mode="wait"):
     """Register a live local waiter (pid = current process)."""
     return ConchQueue.register(sid, agent=agent, mode=mode)
+
+
+def _running(sid, *, agent=None, name=None, pid=None, cwd=None):
+    """A fake discovered running session; pid defaults to this (live) process so
+    the summoned waiter survives ConchQueue's dead-PID cleanup."""
+    return conch_ops.RunningSession(
+        session_id=sid, pid=pid if pid is not None else os.getpid(),
+        agent=agent, name=name, project_path=cwd,
+    )
 
 
 def _make_holder(agent="holder", sid="holder-sess"):
@@ -155,6 +182,169 @@ class TestGive:
         # Close the loop: the give-grant actively gates the next acquire.
         assert Conch(session_id="alpha-111").try_acquire(agent_name="alpha") is False
         assert Conch(session_id="beta-222").try_acquire(agent_name="beta") is True
+
+
+# --------------------------------------------------------------------------- #
+# give → summon a non-waiter (VM-1637)
+# --------------------------------------------------------------------------- #
+
+class _RecordingRun:
+    """``subprocess.run`` stand-in: records argv, never spawns (notify nudge)."""
+
+    def __init__(self, returncode=0):
+        self.calls = []
+        self.returncode = returncode
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append(args[0] if args else kwargs.get("args"))
+
+        class _Result:
+            pass
+
+        r = _Result()
+        r.returncode = self.returncode
+        return r
+
+
+class TestSummon:
+    def test_summon_non_waiter_enqueues_grants_nudges(self, runner, monkeypatch):
+        """give a running non-waiter ⇒ auto-enqueue (callback) + grant + nudge (SC1)."""
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
+        rec = _RecordingRun()
+        monkeypatch.setattr("subprocess.run", rec)
+
+        result = runner.invoke(conch, ["give", "dora"])
+        assert result.exit_code == 0
+        assert "summoned" in result.output.lower()
+        assert "dora" in result.output
+        # Enqueued as a callback waiter carrying the notify fields, and granted.
+        entry = next((e for e in ConchQueue.list() if e.session_id == "run-1"), None)
+        assert entry is not None
+        assert entry.mode == "callback"
+        assert entry.agent == "dora"
+        assert entry.pid == os.getpid()
+        assert ConchQueue.granted_to() == "run-1"
+        # The VM-1625 push fired (callback + local pid ⇒ tmux nudge).
+        assert any(call and call[:2] == ["session", "send"] for call in rec.calls)
+
+    def test_summon_by_session_id_prefix(self, runner, monkeypatch):
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("abc12345-run", name="x")])
+        monkeypatch.setattr("subprocess.run", _RecordingRun())
+        result = runner.invoke(conch, ["give", "abc123"])
+        assert result.exit_code == 0
+        assert ConchQueue.granted_to() == "abc12345-run"
+
+    def test_summon_becomes_next_acquirer_behind_holder(self, runner, monkeypatch):
+        """A summoned session is granted and acquires next on the holder's release."""
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("run-1", agent="dora")])
+        monkeypatch.setattr("subprocess.run", _RecordingRun())
+        holder = Conch(session_id="boss-sess")
+        holder.acquire(agent_name="boss")
+
+        result = runner.invoke(conch, ["give", "dora"])
+        assert result.exit_code == 0
+        assert "boss" in result.output  # "they acquire when boss releases"
+        assert ConchQueue.granted_to() == "run-1"
+        holder.release()  # grant_next must respect the explicit give
+        assert ConchQueue.granted_to() == "run-1"
+        assert Conch(session_id="run-1").try_acquire(agent_name="dora") is True
+
+    def test_summon_target_is_holder_is_noop(self, runner, monkeypatch):
+        """give to the current holder: clear no-op, not double-enqueued (SC3)."""
+        Conch().acquire(agent_name="boss", session_id="held-1")
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("held-1", agent="boss")])
+        result = runner.invoke(conch, ["give", "boss"])
+        assert result.exit_code == 0
+        assert "already holds" in result.output.lower()
+        assert ConchQueue.list() == []        # not enqueued
+        assert ConchQueue.granted_to() is None
+
+    def test_summon_ambiguous_no_orphan(self, runner, monkeypatch):
+        """An ambiguous running token errors and leaves no partial queue entry (SC4)."""
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("dup-1", agent="a"),
+                                     _running("dup-2", agent="b")])
+        result = runner.invoke(conch, ["give", "dup-"])
+        assert result.exit_code != 0
+        assert "ambiguous" in result.output.lower()
+        assert ConchQueue.list() == []
+        assert ConchQueue.granted_to() is None
+
+    def test_summon_no_match_degrades_to_not_waiting(self, runner, monkeypatch):
+        """No waiter and no matching running session ⇒ the 'not waiting' error (R7/SC6)."""
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("other", agent="zzz")])
+        result = runner.invoke(conch, ["give", "ghost"])
+        assert result.exit_code != 0
+        assert "no one is waiting" in result.output.lower()
+        assert ConchQueue.granted_to() is None
+
+    def test_existing_waiter_path_skips_discovery(self, runner, monkeypatch):
+        """The waiter path never touches running-session discovery (SC2)."""
+        called = []
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: called.append(1) or [])
+        _register("alpha-111", agent="alpha")
+        result = runner.invoke(conch, ["give", "alpha"])
+        assert result.exit_code == 0
+        assert ConchQueue.granted_to() == "alpha-111"
+        assert called == []
+
+
+# --------------------------------------------------------------------------- #
+# running-session discovery (the `session list --json` parser, VM-1637)
+# --------------------------------------------------------------------------- #
+
+class _FakeProc:
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+class TestDiscovery:
+    """``_list_running_sessions`` is best-effort: any failure ⇒ ``[]`` (R7/SC6)."""
+
+    def test_missing_binary_returns_empty(self, monkeypatch):
+        monkeypatch.setattr("subprocess.run",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("no session")))
+        assert _REAL_LIST_RUNNING() == []
+
+    def test_timeout_returns_empty(self, monkeypatch):
+        import subprocess
+        monkeypatch.setattr("subprocess.run",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                subprocess.TimeoutExpired("session", 5)))
+        assert _REAL_LIST_RUNNING() == []
+
+    def test_nonzero_exit_returns_empty(self, monkeypatch):
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: _FakeProc(1, "[]"))
+        assert _REAL_LIST_RUNNING() == []
+
+    def test_bad_json_returns_empty(self, monkeypatch):
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: _FakeProc(0, "not json{"))
+        assert _REAL_LIST_RUNNING() == []
+
+    def test_non_list_json_returns_empty(self, monkeypatch):
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: _FakeProc(0, '{"x": 1}'))
+        assert _REAL_LIST_RUNNING() == []
+
+    def test_parses_sessions_and_maps_cwd_to_project_path(self, monkeypatch):
+        payload = json.dumps([
+            {"session_id": "s1", "pid": 5, "agent": "a", "name": "n1", "cwd": "/c"},
+            {"pid": 9},                       # no session_id ⇒ skipped
+            {"session_id": "s2", "name": "n2", "cwd": "/d"},  # agent null
+        ])
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: _FakeProc(0, payload))
+        out = _REAL_LIST_RUNNING()
+        assert [s.session_id for s in out] == ["s1", "s2"]
+        assert out[0].pid == 5 and out[0].agent == "a" and out[0].project_path == "/c"
+        assert out[1].agent is None and out[1].name == "n2"
+        # label falls back name → short(session_id) when agent is absent.
+        assert out[1].label == "n2"
 
 
 # --------------------------------------------------------------------------- #

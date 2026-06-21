@@ -160,15 +160,31 @@ def conch_status(as_json):
 @conch.command("give")
 @click.argument("session")
 def conch_give(session):
-    """Hand the floor to a waiting SESSION (resolved by session-id or agent).
+    """Hand the floor to a SESSION (resolved by session-id or agent name).
 
-    Writes the grant so SESSION is the designated next acquirer; it takes the
-    floor when the current holder releases. This does NOT evict the holder —
-    use 'bump' for an immediate hand-off. SESSION must currently be in the
-    queue (a non-waiting session has no place to grant).
+    Resolves SESSION against the waiter queue first: a matching waiter is made
+    the designated next acquirer (it takes the floor when the current holder
+    releases). If no waiter matches, SESSION is resolved against the *running*
+    sessions (``session list``) and **summoned** — auto-enqueued as a callback
+    waiter, granted, and nudged to take the floor (VM-1637). This does NOT evict
+    the holder — use 'bump' for an immediate hand-off.
     """
     waiters = ConchQueue.list()
-    target = _resolve_session(session, waiters)
+    try:
+        target = conch_ops.resolve_session(session, waiters)
+    except ConchResolveError as e:
+        # An ambiguous waiter token is surfaced as-is (the operator must
+        # disambiguate); a genuine no-match falls back to summoning a running
+        # non-waiter (VM-1637).
+        if e.ambiguous:
+            raise click.ClickException(str(e))
+        try:
+            outcome = conch_ops.summon_and_grant(session)
+        except ConchResolveError as summon_err:
+            raise click.ClickException(str(summon_err))
+        click.echo(outcome["message"])
+        return
+
     if not ConchQueue.grant(target.session_id):
         # Race: the waiter vanished between list() and grant().
         raise click.ClickException(

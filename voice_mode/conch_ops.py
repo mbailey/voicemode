@@ -24,6 +24,8 @@ direction risk called out in the VM-1622 design).
 """
 
 import json
+import subprocess
+from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
@@ -115,12 +117,20 @@ class ConchResolveError(Exception):
     ``click.ClickException``; the MCP tool returns it as ``{"ok": False,
     "message": ...}``. ``candidates`` carries the ambiguous/closest matches (may
     be empty) for richer rendering.
+
+    ``ambiguous`` distinguishes a *too-many-matches* failure from a *no-match*
+    one. The ``give`` front ends (VM-1637) use it to decide the no-waiter
+    fallback: a genuine no-match falls through to summoning a running session,
+    but an *ambiguous* waiter token is surfaced as-is — the operator must
+    disambiguate rather than have a different session silently summoned.
     """
 
-    def __init__(self, message: str, candidates: Optional[List[WaiterEntry]] = None):
+    def __init__(self, message: str, candidates: Optional[List] = None,
+                 *, ambiguous: bool = False):
         super().__init__(message)
         self.message = message
         self.candidates = candidates or []
+        self.ambiguous = ambiguous
 
 
 def resolve_session(token: str, waiters: List[WaiterEntry]) -> WaiterEntry:
@@ -161,7 +171,131 @@ def resolve_session(token: str, waiters: List[WaiterEntry]) -> WaiterEntry:
 
 def _raise_ambiguous(token: str, matches: List[WaiterEntry]) -> None:
     listing = "\n".join(f"  - {e.agent or '?'}  (session {e.session_id})" for e in matches)
-    raise ConchResolveError(f"'{token}' is ambiguous; it matches:\n{listing}", matches)
+    raise ConchResolveError(
+        f"'{token}' is ambiguous; it matches:\n{listing}", matches, ambiguous=True
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Running-session discovery + summon (for `give` to a non-waiter, VM-1637)
+# --------------------------------------------------------------------------- #
+
+#: Bound the best-effort discovery shell-out so `give` can never hang on it.
+_SESSION_LIST_TIMEOUT = 5.0
+
+
+@dataclass
+class RunningSession:
+    """A discovered running session (one entry of ``session list --json``).
+
+    Carries exactly the fields the summon path needs: ``session_id`` (queue +
+    grant key), ``pid`` (local liveness + local/remote notify routing),
+    ``project_path`` (from the session's ``cwd``, the notify fallback token) and
+    the human labels ``agent`` / ``name`` used for token resolution.
+    """
+
+    session_id: str
+    pid: Optional[int] = None
+    agent: Optional[str] = None
+    name: Optional[str] = None
+    project_path: Optional[str] = None
+
+    @property
+    def label(self) -> str:
+        """Best display label: agent, else name, else the short session id."""
+        return self.agent or self.name or short(self.session_id)
+
+
+def _list_running_sessions() -> List[RunningSession]:
+    """Discover running sessions via ``session list --json`` (best-effort).
+
+    The skillbox ``session`` binary is already a runtime dependency of the
+    notify path (``session send``). A missing binary, a non-zero exit, or
+    unparseable JSON is treated as **"no running sessions"** (returns ``[]``) so
+    the summon path degrades gracefully to today's "not waiting" error (R7/SC6)
+    rather than raising.
+    """
+    try:
+        result = subprocess.run(
+            ["session", "list", "--json"],
+            capture_output=True, text=True, timeout=_SESSION_LIST_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0:
+        return []
+    try:
+        data = json.loads(result.stdout or "[]")
+    except (json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    sessions: List[RunningSession] = []
+    for d in data:
+        if not isinstance(d, dict):
+            continue
+        sid = d.get("session_id")
+        if not sid:
+            continue
+        sessions.append(RunningSession(
+            session_id=sid,
+            pid=d.get("pid"),
+            agent=d.get("agent"),
+            name=d.get("name"),
+            project_path=d.get("cwd"),
+        ))
+    return sessions
+
+
+def _running_labels(s: RunningSession) -> List[str]:
+    """The non-empty match labels for a running session (``agent`` and ``name``)."""
+    return [lbl for lbl in (s.agent, s.name) if lbl]
+
+
+def resolve_running_session(token: str) -> RunningSession:
+    """Resolve ``token`` to exactly one running session, mirroring ``resolve_session``.
+
+    Discovery is via :func:`_list_running_sessions`. Match order matches the
+    waiter resolver: session-id prefix, then exact agent/name, then agent/name
+    prefix. Raises :class:`ConchResolveError` (``ambiguous=True`` on multiple
+    matches) so a guess is never summoned. When nothing matches — including the
+    discovery-unavailable case (empty list) — it raises the same "no one is
+    waiting" style message the waiter path uses, so ``give <non-waiter>``
+    degrades cleanly (R7/SC6).
+    """
+    sessions = _list_running_sessions()
+
+    sid_matches = [s for s in sessions if s.session_id and s.session_id.startswith(token)]
+    if len(sid_matches) == 1:
+        return sid_matches[0]
+    if len(sid_matches) > 1:
+        _raise_ambiguous_running(token, sid_matches)
+
+    exact = [s for s in sessions if token in _running_labels(s)]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        _raise_ambiguous_running(token, exact)
+
+    prefix = [s for s in sessions if any(lbl.startswith(token) for lbl in _running_labels(s))]
+    if len(prefix) == 1:
+        return prefix[0]
+    if len(prefix) > 1:
+        _raise_ambiguous_running(token, prefix)
+
+    raise ConchResolveError(
+        f"No one is waiting and no running session matches '{token}', so there's "
+        f"nobody to give the conch to. A session must join the queue first (via "
+        f"converse wait / MCP) or be reachable via `session list`."
+    )
+
+
+def _raise_ambiguous_running(token: str, matches: List[RunningSession]) -> None:
+    listing = "\n".join(f"  - {s.label}  (session {short(s.session_id)})" for s in matches)
+    raise ConchResolveError(
+        f"'{token}' is ambiguous; it matches running sessions:\n{listing}",
+        matches, ambiguous=True,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -214,3 +348,74 @@ def notify_granted_session(session_id: Optional[str]) -> None:
         notify_granted(entry)
     except Exception:
         pass
+
+
+# --------------------------------------------------------------------------- #
+# Summon-and-grant (the `give` no-waiter fallback, VM-1637)
+# --------------------------------------------------------------------------- #
+
+def summon_and_grant(token: str) -> dict:
+    """Summon a running non-waiter and hand it the conch — the ``give`` fallback.
+
+    Called by both front ends only when ``token`` resolves to no waiter. It:
+
+    1. resolves ``token`` to one running session (``resolve_running_session``;
+       may raise :class:`ConchResolveError`),
+    2. no-ops if that session is the **current holder** (it already has the
+       floor — do not double-enqueue),
+    3. otherwise auto-enqueues it as a ``callback``-mode waiter carrying the
+       fields notify needs (``session_id``, ``pid``, ``project_path``, ``agent``),
+       grants it the conch (now a live waiter, so ``ConchQueue.grant`` succeeds
+       and the grant hint makes it the next acquirer), and pushes the VM-1625
+       nudge,
+
+    returning a structured outcome dict (``summoned``/``noop`` + identity +
+    ``message``) that each front end renders in its own style.
+
+    **No orphan entry (SC4):** the resolve — which can raise — happens *before*
+    ``register``, so a failed or ambiguous resolve never leaves a half-enqueued
+    waiter. ``ConchQueue.grant()`` itself is unchanged: we satisfy its
+    live-waiter invariant by registering first.
+    """
+    target = resolve_running_session(token)  # may raise — before any register
+
+    holder = Conch.get_holder()
+    if holder is not None and holder.get("session_id") == target.session_id:
+        return {
+            "action": "give",
+            "summoned": False,
+            "noop": True,
+            "session_id": target.session_id,
+            "agent": target.label,
+            "message": (
+                f"{target.label} (session {short(target.session_id)}) already holds "
+                f"the conch — nothing to do."
+            ),
+        }
+
+    ConchQueue.register(
+        target.session_id,
+        agent=target.agent or target.name,
+        project_path=target.project_path,
+        voice=None,
+        mode="callback",
+        pid=target.pid,
+    )
+    granted = ConchQueue.grant(target.session_id)
+    notify_granted_session(target.session_id)
+
+    when = "now (the conch is free)" if holder is None else \
+        f"when {holder.get('agent') or 'the holder'} releases"
+    return {
+        "action": "give",
+        "summoned": True,
+        "noop": False,
+        "granted": granted,
+        "session_id": target.session_id,
+        "agent": target.label,
+        "when": when,
+        "message": (
+            f"Summoned {target.label} (session {short(target.session_id)}) and gave "
+            f"them the conch; they acquire {when}."
+        ),
+    }
