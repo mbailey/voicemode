@@ -27,7 +27,7 @@ Usage:
 import fcntl
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -47,13 +47,53 @@ def _get_hold_expiry() -> float:
     A hold persists across turns while the kernel flock is released, so it can
     only be cleared by the holder dying (pid check) or by going stale. This is
     that staleness window. It is re-stamped every turn, so it only ever needs to
-    cover the gap between two turns (agent thinking / light tool use).
+    cover the gap between two turns (agent thinking / light tool use). This is
+    the *global* default fallback; a holder may stamp a per-hold TTL into the
+    payload's ``expires`` field (VM-1649), which cross-process staleness checks
+    honour ahead of this value.
     """
     try:
         from voice_mode.config import CONCH_HOLD_EXPIRY
         return CONCH_HOLD_EXPIRY
     except ImportError:
-        return 300.0  # Default 5 minutes
+        return 10.0  # Default 10s short refreshed TTL (VM-1649)
+
+
+def _hold_is_expired(data: dict) -> bool:
+    """True if a between-turns *hold* payload has passed its idle-expiry.
+
+    The per-hold TTL governs cross-process: a holder stamps an absolute
+    ``expires`` (now + its chosen TTL) into the lock file, and any other
+    process honours that here ahead of the global ``CONCH_HOLD_EXPIRY``
+    default. This is what makes ``converse(conch_hold_timeout=...)`` work across
+    agents — without it, a would-be acquirer reads only the global default and
+    the override is a no-op (VM-1649 RCA).
+
+    Resolution order:
+      1. Absolute ``expires`` stamped by the holder — past it ⇒ expired.
+      2. Fallback: ``acquired`` + the global ``_get_hold_expiry()`` window.
+
+    Returns False (not expired) when expiry can't be determined or idle-expiry
+    is disabled (global window <= 0 and no ``expires`` stamped), so an
+    undecidable hold is treated as still live rather than stolen.
+    """
+    expires_str = data.get("expires")
+    if expires_str:
+        try:
+            return datetime.now() > datetime.fromisoformat(expires_str)
+        except (ValueError, TypeError):
+            pass  # malformed expiry — fall back to acquired + global window
+    hold_expiry = _get_hold_expiry()
+    if hold_expiry <= 0:
+        return False  # idle-expiry disabled and no absolute expiry to honour
+    acquired_str = data.get("acquired")
+    if not acquired_str:
+        return False
+    try:
+        age = (datetime.now() - datetime.fromisoformat(acquired_str)).total_seconds()
+    except (ValueError, TypeError):
+        return False
+    return age > hold_expiry
 
 
 class Conch:
@@ -73,7 +113,11 @@ class Conch:
     - held: True when this is a *hold* persisting between turns (the file is
       left in place with the kernel flock released); False during an active
       call (flock held)
-    - expires: Optional expiry time (reserved for future use)
+    - expires: Absolute ISO time at which a *hold* idle-expires (VM-1649). The
+      holder stamps now + its TTL here so OTHER processes — which otherwise read
+      only the global CONCH_HOLD_EXPIRY — honour this holder's chosen window,
+      making converse(conch_hold_timeout=...) effective across agents. None for
+      an active (flock-held) lock and when idle-expiry is disabled.
 
     Two layers of liveness coordinate multiple agents:
     1. The kernel flock (held for the duration of a call) answers "is an
@@ -91,6 +135,7 @@ class Conch:
         session_id: Optional[str] = None,
         project_path: Optional[str] = None,
         voice: Optional[str] = None,
+        hold_timeout: Optional[float] = None,
     ):
         """Initialize Conch with optional agent name.
 
@@ -103,17 +148,43 @@ class Conch:
             voice: Optional TTS voice name in use (VM-914). Stored so another
                 agent can read the holder's voice and pick a different one to
                 avoid a voice clash.
+            hold_timeout: Optional per-hold idle-expiry override in seconds
+                (VM-1649). When this instance reserves the floor between turns
+                (release(hold=True)), now + this TTL is stamped into the
+                payload's ``expires`` so other agents honour it; None falls back
+                to the configured CONCH_HOLD_EXPIRY default.
         """
         self.agent_name = agent_name
         self.session_id = session_id
         self.project_path = project_path
         self.voice = voice
+        self.hold_timeout = hold_timeout
         self._acquired = False
         self._fd = None  # File descriptor for flock
         self._acquire_time = None  # Track when acquired
 
+    def _hold_expires_at(self) -> Optional[str]:
+        """Absolute ISO expiry for a hold this instance is stamping, or None.
+
+        Uses the per-hold override (self.hold_timeout) when set, else the global
+        CONCH_HOLD_EXPIRY default. Returns None when idle-expiry is disabled
+        (TTL <= 0) — no absolute deadline to record. Anchored on the re-stamp
+        time (self._acquire_time), which release(hold=True) sets to "now".
+        """
+        ttl = self.hold_timeout if self.hold_timeout is not None else _get_hold_expiry()
+        if ttl is None or ttl <= 0:
+            return None
+        base = self._acquire_time or datetime.now()
+        return (base + timedelta(seconds=ttl)).isoformat()
+
     def _payload(self, held: bool) -> dict:
-        """Build the lock-file payload for this holder."""
+        """Build the lock-file payload for this holder.
+
+        ``expires`` is stamped only for a *hold* (held=True): an absolute
+        deadline other processes honour so a per-call TTL governs cross-process
+        (VM-1649). An active flock-backed lock (held=False) is governed by the
+        flock plus CONCH_LOCK_EXPIRY, so it carries no expiry.
+        """
         return {
             "pid": os.getpid(),
             "agent": self.agent_name or "unknown",
@@ -122,7 +193,7 @@ class Conch:
             "voice": self.voice,
             "acquired": (self._acquire_time or datetime.now()).isoformat(),
             "held": held,
-            "expires": None,
+            "expires": self._hold_expires_at() if held else None,
         }
 
     def _write_locked_payload(self, held: bool) -> None:
@@ -159,17 +230,10 @@ class Conch:
             pass  # exists but not signalable by us — treat as alive
         except (ProcessLookupError, TypeError, OSError):
             return False
-        # Hold not idle-expired?
-        hold_expiry = _get_hold_expiry()
-        if hold_expiry > 0:
-            acquired_str = data.get("acquired")
-            if acquired_str:
-                try:
-                    age = (datetime.now() - datetime.fromisoformat(acquired_str)).total_seconds()
-                    if age > hold_expiry:
-                        return False
-                except ValueError:
-                    pass
+        # Hold not idle-expired? Honour the holder's stamped per-hold TTL
+        # (payload ``expires``) ahead of the global default (VM-1649).
+        if _hold_is_expired(data):
+            return False
         return True
 
     @classmethod
@@ -179,6 +243,7 @@ class Conch:
         session_id: Optional[str] = None,
         project_path: Optional[str] = None,
         voice: Optional[str] = None,
+        hold_timeout: Optional[float] = None,
     ) -> None:
         """Write a between-turns hold marker owned by the current process,
         WITHOUT taking the kernel flock.
@@ -188,17 +253,26 @@ class Conch:
         open file descriptions in one process). Callers must first ensure the
         conch is free or already theirs (see ``get_holder``) to avoid
         clobbering an active holder's payload.
+
+        Stamps an absolute ``expires`` (now + ``hold_timeout`` or the global
+        CONCH_HOLD_EXPIRY default) so the hold honours the same per-hold TTL
+        machinery as a converse hold (VM-1649). ``pause_conversation``
+        re-stamps well within the window, so a maintained pause never lapses;
+        if the caller stops re-stamping, the hold idle-expires like any other.
         """
         cls.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        ttl = hold_timeout if hold_timeout is not None else _get_hold_expiry()
+        now = datetime.now()
+        expires = (now + timedelta(seconds=ttl)).isoformat() if ttl and ttl > 0 else None
         data = {
             "pid": os.getpid(),
             "agent": agent_name,
             "session_id": session_id,
             "project_path": project_path,
             "voice": voice,
-            "acquired": datetime.now().isoformat(),
+            "acquired": now.isoformat(),
             "held": True,
-            "expires": None,
+            "expires": expires,
         }
         cls.LOCK_FILE.write_text(json.dumps(data, indent=2))
 
@@ -365,10 +439,20 @@ class Conch:
                 # fall through to timestamp check.
                 pass
 
-        # Timestamp-based stale clearance. A between-turns hold uses its own
-        # (typically longer) idle-expiry window; an active lock uses the
-        # standard one.
-        lock_expiry = _get_hold_expiry() if data.get("held") else _get_lock_expiry()
+        # Timestamp-based stale clearance.
+        if data.get("held"):
+            # A between-turns hold: honour the holder's stamped per-hold TTL
+            # (payload ``expires``), falling back to the global idle-expiry
+            # window — the same resolution other acquirers use (VM-1649).
+            if _hold_is_expired(data):
+                try:
+                    self.LOCK_FILE.unlink()
+                except OSError:
+                    pass
+            return
+
+        # An active (flock-held) lock uses the standard lock-expiry window.
+        lock_expiry = _get_lock_expiry()
         if lock_expiry <= 0:
             return  # Stale lock detection disabled
 

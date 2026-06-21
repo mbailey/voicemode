@@ -598,12 +598,16 @@ CONCH_CHECK_INTERVAL = float(os.getenv("VOICEMODE_CONCH_CHECK_INTERVAL", "0.5"))
 CONCH_LOCK_EXPIRY = float(os.getenv("VOICEMODE_CONCH_LOCK_EXPIRY", "300"))
 
 # Maximum idle age (seconds) before a between-turns HOLD (hold_conch=true) is
-# considered stale and can be taken by another agent. A hold is re-stamped on
-# every turn, so this only has to cover the gap between two turns (the holder
-# thinking / light tool use). The safety valve for a crashed-or-forgetful
-# holder; dead holders are cleared immediately via the PID check regardless.
-# Set to 0 to disable idle-expiry (dead-holder clearance still applies).
-CONCH_HOLD_EXPIRY = float(os.getenv("VOICEMODE_CONCH_HOLD_EXPIRY", "300"))
+# considered stale and can be taken by another agent. A hold is a SHORT,
+# converse-refreshed TTL: every converse(hold_conch=true) re-stamps it, so this
+# only has to cover the gap between two turns (the holder thinking / light tool
+# use). Stop conversing and within this window the hold lapses and the queue
+# promotes the next waiter — no 30-minute wedge (VM-1649). Default 10s; tune
+# toward 5s once the short window proves comfortable. Overridable per call via
+# converse(conch_hold_timeout=...). Dead holders are cleared immediately via the
+# PID check regardless. Set to 0 to disable idle-expiry (dead-holder clearance
+# still applies).
+CONCH_HOLD_EXPIRY = float(os.getenv("VOICEMODE_CONCH_HOLD_EXPIRY", "10"))
 
 # Default delivery mode when a busy converse() engages the waiter queue (i.e.
 # wait_for_conch is truthy — that flag remains the gate for whether we queue at
