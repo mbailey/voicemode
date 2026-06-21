@@ -25,7 +25,7 @@ except ImportError as e:
     VAD_AVAILABLE = False
 
 from voice_mode.server import mcp
-from voice_mode.conch import Conch
+from voice_mode.conch import Conch, _get_hold_expiry
 from voice_mode.conch_queue import ConchQueue
 from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
@@ -1277,6 +1277,7 @@ async def converse(
     wait_for_conch: Union[bool, str, int, float] = False,
     conch_mode: Optional[Literal["wait", "callback"]] = None,
     hold_conch: Union[bool, str] = False,
+    conch_hold_timeout: Optional[Union[float, str]] = None,
     skip_conch: Union[bool, str] = False,
     session_id: Optional[str] = None,
     ref_text: Optional[str] = None,
@@ -1363,9 +1364,17 @@ KEY PARAMETERS:
     you're asking a question you'll answer, or speaking over several turns —
     so other agents queue instead of cutting in at the turn boundary. Leave
     false (the default) for a one-off reply that ends the exchange.
-  - Auto-extends each turn; released by your next converse(hold_conch=false),
-    your process exiting, or idle-expiry. For a deliberate pause, use
-    pause_conversation.
+  - The hold is a SHORT, refreshed TTL: each converse(hold_conch=true)
+    re-stamps it to now + the hold timeout (default ~10s). Keep conversing
+    inside the window and the floor stays yours; stop and within the window
+    the hold lapses and the next queued agent is promoted — no stale wedge.
+    Released immediately by your next converse(hold_conch=false), your process
+    exiting, or idle-expiry. For a deliberate pause, use pause_conversation.
+• conch_hold_timeout (number, optional): Override the hold idle-expiry TTL for
+  THIS hold, in seconds (default: VOICEMODE_CONCH_HOLD_EXPIRY, ~10s). Only has
+  effect alongside hold_conch=true. The value is stamped into the conch lock so
+  OTHER agents honour your chosen window — raise it when you know the next turn
+  needs longer (heavy tool use between turns), lower it to release faster.
 • skip_conch (bool, default: false): Bypass conch entirely
   - false: Honour the conch lock (default multi-agent coordination)
   - true: Don't try to acquire or release the conch -- speak immediately
@@ -1439,6 +1448,22 @@ consult the MCP resources listed above.
                 wait_for_conch = False
     if isinstance(hold_conch, str):
         hold_conch = hold_conch.lower() in ('true', '1', 'yes', 'on')
+    # conch_hold_timeout (VM-1649): per-call override for THIS hold's idle-expiry
+    # TTL, in seconds. None ⇒ fall back to the configured CONCH_HOLD_EXPIRY
+    # default. A numeric string is coerced; a non-numeric/negative value is
+    # ignored (falls back to the default) so a typo never disables the safety
+    # valve. It is threaded into the Conch payload so other agents honour it.
+    resolved_hold_timeout: Optional[float] = None
+    if conch_hold_timeout is not None:
+        try:
+            parsed = float(conch_hold_timeout)
+            if parsed > 0:
+                resolved_hold_timeout = parsed
+        except (ValueError, TypeError):
+            logger.warning(
+                f"Invalid conch_hold_timeout value {conch_hold_timeout!r}; "
+                "using configured default"
+            )
     if isinstance(skip_conch, str):
         skip_conch = skip_conch.lower() in ('true', '1', 'yes', 'on')
     # conch_mode (VM-1619) selects how a *queued* caller is served once
@@ -1598,6 +1623,7 @@ consult the MCP resources listed above.
         session_id=resolved_session_id,
         project_path=resolved_project_path,
         voice=resolved_voice,
+        hold_timeout=resolved_hold_timeout,  # VM-1649 per-call hold TTL override
     )
 
     try:
@@ -2493,7 +2519,13 @@ async def pause_conversation(
         + (f" — {message}" if message else "")
     )
 
-    interval = 10.0
+    # Re-stamp well within the hold TTL so a maintained pause never lapses.
+    # The TTL is now short (~10s, VM-1649), so the old fixed 10s interval would
+    # leave no headroom; re-stamp at most every half-TTL (min 1s). When idle-
+    # expiry is disabled (ttl <= 0) the hold never lapses, so the original 10s
+    # cadence is fine.
+    hold_ttl = _get_hold_expiry()
+    interval = max(1.0, min(10.0, hold_ttl / 2)) if hold_ttl > 0 else 10.0
     elapsed = 0.0
     while elapsed < seconds:
         # Re-stamp the hold each chunk so a long pause never idle-expires.
@@ -2502,6 +2534,7 @@ async def pause_conversation(
             session_id=resolved_session_id,
             project_path=project_path,
             voice=holder_voice,
+            hold_timeout=hold_ttl if hold_ttl > 0 else None,
         )
         chunk = min(interval, seconds - elapsed)
         await asyncio.sleep(chunk)

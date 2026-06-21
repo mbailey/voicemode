@@ -4,7 +4,7 @@ import json
 import multiprocessing
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,7 +23,7 @@ def _idle_child():
 
 
 def _write_marker(pid, *, held, acquired=None, agent="other",
-                  session_id=None, project_path=None):
+                  session_id=None, project_path=None, expires=None):
     """Write a raw lock-file payload (simulating another holder)."""
     Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
     Conch.LOCK_FILE.write_text(json.dumps({
@@ -33,7 +33,7 @@ def _write_marker(pid, *, held, acquired=None, agent="other",
         "project_path": project_path,
         "acquired": acquired or datetime.now().isoformat(),
         "held": held,
-        "expires": None,
+        "expires": expires,
     }))
 
 
@@ -177,10 +177,15 @@ class TestConchConfig:
         assert CONCH_TIMEOUT == 300.0
 
     def test_conch_hold_expiry_default(self):
-        """CONCH_HOLD_EXPIRY defaults to 300 seconds (VM-1433 idle-expiry safety valve)."""
+        """CONCH_HOLD_EXPIRY defaults to 10s — a SHORT refreshed TTL (VM-1649).
+
+        Was 300s, which let an idle holder wedge the floor for ~5 minutes. A
+        between-turns hold only needs to cover the gap between two turns, so the
+        default is now 10s (tune toward 5s later).
+        """
         from voice_mode.config import CONCH_HOLD_EXPIRY
         assert isinstance(CONCH_HOLD_EXPIRY, float)
-        assert CONCH_HOLD_EXPIRY == 300.0
+        assert CONCH_HOLD_EXPIRY == 10.0
 
     def test_conch_check_interval_default(self):
         """CONCH_CHECK_INTERVAL defaults to 0.5 seconds."""
@@ -769,3 +774,149 @@ class TestConchHold:
         assert data["agent"] == "pause_conversation"
         assert data["session_id"] == "sp"
         assert data["pid"] == os.getpid()
+
+
+class TestConchHoldTTL:
+    """VM-1649: short, refreshed, per-call hold TTL stamped into the payload.
+
+    The wedge bug had two facets and these tests would have caught both:
+      (a) the default idle-expiry was far too long (300s);
+      (b) a per-call override that only lived in the holder's process was a
+          cross-process no-op — other agents read the global default, so the
+          override never governed whether the hold was stale. The fix stamps an
+          absolute ``expires`` into the lock file and has the cross-process
+          staleness checks honour it ahead of the global default.
+    """
+
+    def _seconds_until(self, iso_str):
+        return (datetime.fromisoformat(iso_str) - datetime.now()).total_seconds()
+
+    def test_hold_stamps_absolute_expires(self, clean_conch):
+        """release(hold=True) stamps expires ≈ now + the global TTL (not None)."""
+        with patch("voice_mode.conch._get_hold_expiry", return_value=10.0):
+            conch = Conch(agent_name="cora")
+            assert conch.try_acquire() is True
+            conch.release(hold=True)
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["held"] is True
+        assert data["expires"] is not None, "a hold must stamp an absolute expiry"
+        assert 8.0 < self._seconds_until(data["expires"]) <= 10.0
+
+    def test_per_call_timeout_stamped_into_payload(self, clean_conch):
+        """A per-call hold_timeout overrides the global default in the payload.
+
+        With a long global default, a holder that asked for a 2s TTL must stamp
+        ~2s — proof the override reaches the on-disk payload other agents read.
+        """
+        with patch("voice_mode.conch._get_hold_expiry", return_value=300.0):
+            conch = Conch(agent_name="cora", hold_timeout=2.0)
+            assert conch.try_acquire() is True
+            conch.release(hold=True)
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert 1.0 < self._seconds_until(data["expires"]) <= 2.0, (
+            "per-call hold_timeout must govern the stamped expiry, not the "
+            "global default"
+        )
+
+    def test_active_lock_has_no_expires(self, clean_conch):
+        """An active (flock-held) lock carries no expiry — only holds do."""
+        conch = Conch(agent_name="cora", hold_timeout=2.0)
+        assert conch.try_acquire() is True
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["held"] is False
+        assert data["expires"] is None
+        conch.release()
+
+    def test_short_override_lapses_despite_long_global(self, clean_conch):
+        """THE cross-process regression: a holder's short expires governs.
+
+        Another live process holds, but its stamped expires is already in the
+        past. Even with a LONG global default (300s — what the would-be acquirer
+        reads), the hold must be takeable. Before the fix the acquirer honoured
+        only the global default, so this would (wrongly) stay blocked: the
+        per-call override was a cross-process no-op.
+        """
+        proc = multiprocessing.Process(target=_idle_child, daemon=True)
+        proc.start()
+        try:
+            past = (datetime.now() - timedelta(seconds=1)).isoformat()
+            _write_marker(proc.pid, held=True, expires=past)
+            with patch("voice_mode.conch._get_hold_expiry", return_value=300.0):
+                conch = Conch(agent_name="cora")
+                assert conch.try_acquire() is True, (
+                    "a hold past its stamped expires must be takeable even when "
+                    "the global default is long"
+                )
+            conch.release()
+        finally:
+            proc.terminate()
+            proc.join(timeout=5)
+
+    def test_long_override_respected_despite_short_global(self, clean_conch):
+        """A holder's far-future expires blocks acquisition despite a short global.
+
+        The hold was stamped long ago (so the global-default fallback would call
+        it stale), but its absolute expires is in the future. The acquirer must
+        honour the stamped expires and stay blocked — proof expires is consulted
+        ahead of acquired + global default.
+        """
+        proc = multiprocessing.Process(target=_idle_child, daemon=True)
+        proc.start()
+        try:
+            future = (datetime.now() + timedelta(seconds=60)).isoformat()
+            _write_marker(proc.pid, held=True,
+                          acquired="2000-01-01T00:00:00", expires=future)
+            with patch("voice_mode.conch._get_hold_expiry", return_value=1.0):
+                conch = Conch(agent_name="cora")
+                assert conch.try_acquire() is False, (
+                    "a hold with a future stamped expires must be respected even "
+                    "when the acquired timestamp looks stale to the global window"
+                )
+                assert Conch.LOCK_FILE.exists(), "must not steal a live hold"
+        finally:
+            proc.terminate()
+            proc.join(timeout=5)
+
+    def test_idle_hold_lapses_after_short_default(self, clean_conch):
+        """An idle hold older than the (now short) default lapses — no wedge.
+
+        This is the headline bug: with the old 300s default an idle holder sat
+        on the floor for minutes. With the 10s default a hold stamped 15s ago
+        (no per-call expires) is takeable; one stamped 3s ago is not.
+        """
+        proc = multiprocessing.Process(target=_idle_child, daemon=True)
+        proc.start()
+        try:
+            with patch("voice_mode.conch._get_hold_expiry", return_value=10.0):
+                stale = (datetime.now() - timedelta(seconds=15)).isoformat()
+                _write_marker(proc.pid, held=True, acquired=stale)
+                takeable = Conch(agent_name="cora")
+                assert takeable.try_acquire() is True
+                takeable.release()
+
+                fresh = (datetime.now() - timedelta(seconds=3)).isoformat()
+                _write_marker(proc.pid, held=True, acquired=fresh)
+                blocked = Conch(agent_name="cora")
+                assert blocked.try_acquire() is False
+                assert Conch.LOCK_FILE.exists()
+        finally:
+            proc.terminate()
+            proc.join(timeout=5)
+
+    def test_write_hold_stamps_expires(self, clean_conch):
+        """write_hold (pause_conversation) also stamps an absolute expiry."""
+        with patch("voice_mode.conch._get_hold_expiry", return_value=10.0):
+            Conch.write_hold("pause_conversation", hold_timeout=4.0)
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["expires"] is not None
+        assert 3.0 < self._seconds_until(data["expires"]) <= 4.0
+
+    def test_hold_timeout_disabled_stamps_no_expires(self, clean_conch):
+        """TTL <= 0 disables idle-expiry: a hold stamps expires=None."""
+        with patch("voice_mode.conch._get_hold_expiry", return_value=0.0):
+            conch = Conch(agent_name="cora")
+            assert conch.try_acquire() is True
+            conch.release(hold=True)
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["held"] is True
+        assert data["expires"] is None
