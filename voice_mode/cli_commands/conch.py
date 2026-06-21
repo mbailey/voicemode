@@ -24,12 +24,12 @@ Mirrors the ``autofocus.py`` / ``soundfonts.py`` Click-group pattern.
 import json
 import os
 import time
-from typing import List, Optional
+from typing import Optional
 
 import click
 
 from voice_mode.conch import Conch
-from voice_mode.conch_queue import ConchQueue, WaiterEntry
+from voice_mode.conch_queue import ConchQueue
 from voice_mode import conch_ops
 from voice_mode.conch_ops import (
     ConchResolveError,
@@ -76,19 +76,6 @@ def _position(session_id: str) -> Optional[int]:
         if e.session_id == session_id:
             return i + 1
     return None
-
-
-def _resolve_session(token: str, waiters: List[WaiterEntry]) -> WaiterEntry:
-    """Resolve ``token`` to exactly one waiter, raising ``click.ClickException``.
-
-    Thin CLI wrapper over :func:`voice_mode.conch_ops.resolve_session`: the
-    shared resolver raises the UI-neutral ``ConchResolveError``; here we render
-    it as a Click error so the CLI behaviour is unchanged.
-    """
-    try:
-        return conch_ops.resolve_session(token, waiters)
-    except ConchResolveError as e:
-        raise click.ClickException(str(e))
 
 
 # --------------------------------------------------------------------------- #
