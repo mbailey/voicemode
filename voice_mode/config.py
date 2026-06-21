@@ -617,6 +617,22 @@ CONCH_MODE = os.getenv("VOICEMODE_CONCH_MODE", "wait").strip().lower()
 if CONCH_MODE not in ("wait", "callback"):
     CONCH_MODE = "wait"
 
+# Heartbeat TTL (seconds) for a REMOTE waiter registered via the MCP `conch`
+# tool (VM-1622). A streamable-HTTP agent has no host PID, so its liveness is
+# the `expires` TTL on its queue entry (VM-1613's WaiterEntry.expires, honoured
+# by ConchQueue._is_live): the MCP front end stamps expires = now + TTL on every
+# wait/callback/heartbeat call, and an entry past its expires is pruned so the
+# queue never wedges on a dead remote waiter. 90s tolerates a couple of missed
+# ~30s beats yet prunes a genuinely-dead remote waiter within ~1.5 min.
+CONCH_REMOTE_TTL = float(os.getenv("VOICEMODE_CONCH_REMOTE_TTL", "90"))
+
+# Hard cap (seconds) on a blocking `conch(action="wait")` MCP call (VM-1622). A
+# blocking await-turn can exceed a streamable-HTTP client's request timeout, so
+# MCP defaults to register-and-return (callback); `wait` is still offered but
+# bounded by this cap (and by any smaller per-call timeout) well under typical
+# client timeouts. On timeout the waiter is deregistered cleanly.
+CONCH_MCP_WAIT_CAP = float(os.getenv("VOICEMODE_CONCH_MCP_WAIT_CAP", "25"))
+
 # Auto-focus tmux pane when conch is acquired (for multi-agent setups)
 # When enabled, automatically switches tmux focus to the speaking agent's pane
 AUTO_FOCUS_PANE = env_bool("VOICEMODE_AUTO_FOCUS_PANE", False)

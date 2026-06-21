@@ -196,6 +196,8 @@ VOICEMODE_CONCH_LOCK_EXPIRY=300      # Stale-lock expiry (0 disables)
 VOICEMODE_CONCH_MODE=wait            # Default mode when a busy converse() queues:
                                      #   wait     = block until your turn
                                      #   callback = return now with your position
+VOICEMODE_CONCH_REMOTE_TTL=90        # Heartbeat TTL (s) for a REMOTE MCP waiter
+VOICEMODE_CONCH_MCP_WAIT_CAP=25      # Hard cap (s) on a blocking MCP conch wait
 ```
 
 #### The waiter queue: visibility, fairness, and overrides
@@ -228,6 +230,45 @@ line), and `voicemode conch bump` drops the current holder and promotes the
 head. These are the intentional "line-cutting" escape hatches — godmode for when
 strict FIFO is the wrong answer. (A grantee can even `give` onward to another
 waiter, chaining the hand-off.)
+
+#### Remote agents: the MCP `conch` tool
+
+Agents on a **streamable-HTTP** voicemode server have no access to the host's
+`~/.voicemode/` conch files, so they reach the same queue through the MCP
+`conch` tool — the second of two equal front ends alongside the CLI (both share
+one implementation in `voice_mode/conch_ops.py`, so `give`/`bump`/`release`
+issued over MCP mutate the *same* state the CLI does). One composite tool with
+an `action` arg mirrors the CLI verbs:
+
+- `conch(action="status")` — holder + ordered queue (no session needed).
+- `conch(action="callback", session_id=…)` — **the recommended way to join when
+  busy.** Registers and returns your position immediately; your turn is
+  delivered out-of-band when granted. Timeout-safe.
+- `conch(action="wait", session_id=…, timeout=…)` — block until your turn,
+  **hard-capped** by `VOICEMODE_CONCH_MCP_WAIT_CAP` (default 25 s) so it can't
+  exceed a client's request timeout. On success the conch is free for you — call
+  `converse()` next. On timeout you're deregistered.
+- `conch(action="heartbeat", session_id=…)` — refresh your remote-liveness TTL
+  while idle (keeps your place and mode). Send roughly every ~30 s in callback
+  mode.
+- `conch(action="leave", session_id=…)` — give up your place.
+- `conch(action="give", target=…)` / `bump` / `release` — the same operator
+  overrides as the CLI.
+
+A remote agent has no host PID, so its liveness is the `expires` heartbeat TTL
+(`VOICEMODE_CONCH_REMOTE_TTL`, default 90 s) the tool stamps on every
+`wait`/`callback`/`heartbeat` call; a waiter past its TTL is auto-pruned so a
+dead remote agent never wedges the queue. **`session_id` is required** for the
+register/heartbeat/leave actions — it is the remote agent's stable queue and
+grant key (there is no `CLAUDE_CODE_SESSION_ID` env over HTTP). Remote *push*
+notify-on-give lands with VM-970; until then the grant is discovered on the
+agent's next `status`/`heartbeat`/`callback` call (the pull-only path).
+
+The `conch` tool is **not** in the default tool set (which loads only `converse`
+and `service` to keep token usage low). Enable it on a server that should expose
+queue management to remote agents via `VOICEMODE_TOOLS_ENABLED` (whitelist) or
+`VOICEMODE_TOOLS_DISABLED` (blacklist) — e.g.
+`VOICEMODE_TOOLS_ENABLED=converse,service,conch`.
 
 ### LiveKit Configuration
 
