@@ -18,15 +18,34 @@ Coverage mirrors the task's Testing Strategy:
 """
 
 import json
+import os
 
 import pytest
 from click.testing import CliRunner
 
 from voice_mode.conch import Conch
 from voice_mode.conch_queue import ConchQueue
+from voice_mode import conch_ops
 from voice_mode.conch_ops import parse_ts
 from voice_mode.tools.conch import conch as _conch_tool
 from voice_mode.cli_commands.conch import conch as conch_cli
+
+
+@pytest.fixture(autouse=True)
+def _no_discovery(monkeypatch):
+    """Default: ``session list`` discovery finds nothing (VM-1637) — keeps the
+    waiter-only give tests pre-VM-1637 and stops any shell-out to ``session``.
+    Summon tests override this with their own running-session list."""
+    monkeypatch.setattr(conch_ops, "_list_running_sessions", lambda: [])
+
+
+def _running(sid, *, agent=None, name=None, pid=None, cwd=None):
+    """A fake discovered running session; pid defaults to this (live) process so
+    the summoned waiter survives ConchQueue's dead-PID cleanup."""
+    return conch_ops.RunningSession(
+        session_id=sid, pid=pid if pid is not None else os.getpid(),
+        agent=agent, name=name, project_path=cwd,
+    )
 
 
 def _tool():
@@ -298,6 +317,55 @@ class TestGive:
         assert ConchQueue.granted_to() is None
 
 
+class TestSummon:
+    """give over MCP to a running non-waiter ⇒ summon (VM-1637)."""
+
+    @pytest.mark.asyncio
+    async def test_summon_non_waiter_enqueues_and_grants(self, clean_conch, monkeypatch):
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+        res = await call(action="give", target="dora")
+        assert res["ok"] is True
+        assert res["summoned"] is True
+        assert res["target"] == "run-1"
+        entry = _entry("run-1")
+        assert entry is not None and entry.mode == "callback" and entry.pid == os.getpid()
+        assert ConchQueue.granted_to() == "run-1"
+
+    @pytest.mark.asyncio
+    async def test_summon_target_is_holder_is_noop(self, clean_conch, monkeypatch):
+        _make_holder(agent="boss", sid="held-1")
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("held-1", agent="boss")])
+        res = await call(action="give", target="boss")
+        assert res["ok"] is True
+        assert res["summoned"] is False
+        assert "already holds" in res["message"].lower()
+        assert ConchQueue.list() == []      # not enqueued
+        assert ConchQueue.granted_to() is None
+
+    @pytest.mark.asyncio
+    async def test_summon_ambiguous_no_orphan(self, clean_conch, monkeypatch):
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("dup-1", agent="a"),
+                                     _running("dup-2", agent="b")])
+        res = await call(action="give", target="dup-")
+        assert res["ok"] is False
+        assert "ambiguous" in res["message"].lower()
+        assert ConchQueue.list() == []
+        assert ConchQueue.granted_to() is None
+
+    @pytest.mark.asyncio
+    async def test_summon_no_match_degrades(self, clean_conch, monkeypatch):
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("other", agent="zzz")])
+        res = await call(action="give", target="ghost")
+        assert res["ok"] is False
+        assert "no one is waiting" in res["message"].lower()
+        assert ConchQueue.granted_to() is None
+
+
 class TestBump:
     @pytest.mark.asyncio
     async def test_bump_drops_holder_and_promotes_head(self, clean_conch):
@@ -385,6 +453,28 @@ class TestParityWithCLI:
         assert mcp_state == cli_state
         assert mcp_state["granted"] == "beta-2"
         assert mcp_grant_sid == cli_grant_sid == "beta-2"
+
+    @pytest.mark.asyncio
+    async def test_summon_parity(self, clean_conch, runner, monkeypatch):
+        """MCP and CLI summon land the identical queue + grant state (SC5)."""
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+
+        await call(action="give", target="dora")
+        mcp_state = _norm_state()
+        mcp_grant_sid = _grant_file_dict()["session_id"]
+
+        _clear_all()
+        result = runner.invoke(conch_cli, ["give", "dora"])
+        assert result.exit_code == 0
+        cli_state = _norm_state()
+        cli_grant_sid = _grant_file_dict()["session_id"]
+
+        assert mcp_state == cli_state
+        assert mcp_state["granted"] == "run-1"
+        assert mcp_state["queue"] == [("run-1", "callback")]
+        assert mcp_grant_sid == cli_grant_sid == "run-1"
 
     @pytest.mark.asyncio
     async def test_bump_parity(self, clean_conch, runner):
