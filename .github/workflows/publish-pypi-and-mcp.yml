@@ -84,10 +84,17 @@ jobs:
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
       uses: actions/setup-go@v6
       with:
-        go-version: '1.23'
-    
+        go-version: 'stable'
+
     - name: Install MCP Publisher
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+      # actions/setup-go pins GOTOOLCHAIN=local, which blocks Go from fetching a
+      # newer toolchain. The upstream registry's go.mod requires a newer Go than
+      # the runner ships (broke v8.8.0: needed >= 1.26, runner had 1.23) — set
+      # GOTOOLCHAIN=auto so `make publisher` downloads whatever go.mod demands,
+      # self-healing across future upstream bumps (VM-1655).
+      env:
+        GOTOOLCHAIN: auto
       run: |
         # Build publisher from source as per documentation
         git clone https://github.com/modelcontextprotocol/registry publisher-repo
