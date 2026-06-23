@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.9.0] - 2026-06-24
+
 ### Added
 
 - **A minimal voice-only example agent (VM-1658)** — The voicemode plugin now ships a `voice-only` subagent whose *only* tool is `converse` — no file access, shell, or editing, by design. It's the smallest thing that can hold a spoken conversation, so it starts with a tiny context footprint, and works whether voicemode is provided by the plugin or by a project `.mcp.json` (both `converse` tool names are whitelisted). Launch it for a quick voice-only chat, or copy it as a template for your own lean voice agents.
