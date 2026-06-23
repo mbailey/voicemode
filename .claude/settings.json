@@ -1,4 +1,7 @@
 {
+  "enabledMcpjsonServers": [
+    "voicemode"
+  ],
   "hooks": {
     "PreToolUse": [
       {
