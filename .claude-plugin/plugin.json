@@ -8,7 +8,9 @@
   },
   "commands": "./.claude/commands/",
   "skills": "./.claude/skills/",
-  "agents": [],
+  "agents": [
+    "./agents/voice-only.md"
+  ],
   "hooks": [
     "./voice_mode/data/hooks/pre-tool-use.json",
     "./voice_mode/data/hooks/post-tool-use.json",
@@ -19,4 +21,3 @@
   ],
   "homepage": "https://github.com/mbailey/voicemode"
 }
-
