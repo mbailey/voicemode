@@ -67,7 +67,9 @@ plugins:
   - gen-files:
       scripts:
         - docs/gen_pages.py
-  - social
+  # social-cards plugin removed (VM-1667): it required mkdocs-material[imaging]
+  # (pillow + cairosvg, source of 7 Dependabot alerts). OG cards only matter
+  # for a deployed site; this mkdocs config is a local-only preview.
   - git-revision-date-localized:
       enable_creation_date: true
   - minify:

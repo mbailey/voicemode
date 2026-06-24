@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Cleared the remaining 19 Dependabot alerts, all in dev/docs tooling (VM-1667)** — None of these reached an installed `voice-mode`; they lived only in the `docs` and `scripts` extras and in non-shipped transitives. The `docs` extra no longer pulls `mkdocs-material[imaging]` (Pillow + CairoSVG): that imaging stack existed solely to render mkdocs-material *social cards*, which are pointless for a docs site we preview locally rather than deploy — removing it drops both packages from the tree entirely (7 alerts) and makes `pip install "voice-mode[docs]"` noticeably lighter. The rest are pinned to patched versions via uv constraints: `GitPython>=3.1.50` (5 alerts), and `idna>=3.15`, `python-dotenv>=1.2.2`, `requests>=2.33.0`, `Pygments>=2.20.0`, `Werkzeug>=3.1.6` (one each). No runtime behavior changes; the docs site still builds.
+
 ## [8.9.0] - 2026-06-24
 
 ### Added

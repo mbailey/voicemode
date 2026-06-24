@@ -70,7 +70,11 @@ scripts = [
 ]
 docs = [
     "mkdocs>=1.5.0",
-    "mkdocs-material[imaging]>=9.0.0",
+    # VM-1667: dropped the [imaging] extra (pillow + cairosvg) — it only
+    # powered mkdocs-material's social-cards plugin, which we removed from
+    # mkdocs.yml. mkdocs is a local-only preview (undeployed; ReadTheDocs
+    # retired in VMMT-120), so OG social cards have no use. Clears 7 alerts.
+    "mkdocs-material>=9.0.0",
     "pymdown-extensions>=10.0",
     "mkdocs-git-revision-date-localized-plugin>=1.2.0",
     "mkdocs-minify-plugin>=0.7.0",
@@ -101,6 +105,16 @@ constraint-dependencies = [
     "cryptography>=46.0.7",   # VM-1244
     "urllib3>=2.7.0",         # VM-1640: GHSA-2xpw/38jv/gm62 + PYSEC-2026-141
     "jaraco-context>=6.1.0",  # VM-1640: GHSA-58pv-8j8x-9vj2
+    # VM-1667: remaining Dependabot transitives. None of the requiring deps
+    # (fastmcp/openai/httpx/twine for runtime; flask for scripts;
+    # mkdocs-git-revision-date-localized-plugin for docs) pin a patched
+    # version, so uv resolves to the lowest acceptable (vulnerable) one.
+    "idna>=3.15",             # VM-1667: idna.encode() bypass of CVE-2024-3651 fix
+    "python-dotenv>=1.2.2",   # VM-1667: set_key symlink-following arbitrary write
+    "requests>=2.33.0",       # VM-1667: insecure temp-file reuse in extract_zipped_paths
+    "pygments>=2.20.0",       # VM-1667: ReDoS in GUID regex (low)
+    "werkzeug>=3.1.6",        # VM-1667: safe_join() Windows special device names (via flask)
+    "GitPython>=3.1.50",      # VM-1667: RCE via core.hooksPath / path traversal (via docs plugin)
 ]
 
 [tool.hatch.build.targets.wheel]
