@@ -54,24 +54,27 @@ jobs:
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
-      run: twine upload --repository testpypi dist/*
+      run: twine upload --skip-existing --repository testpypi dist/*
 
     - name: Publish voice-mode-install to TestPyPI
       if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
-      run: twine upload --repository testpypi installer/dist/*
+      run: twine upload --skip-existing --repository testpypi installer/dist/*
     
     - name: Publish voice-mode to PyPI
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
       uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        skip-existing: true  # re-runs / backfills must not fail on an already-published version (VM-1661)
 
     - name: Publish voice-mode-install to PyPI
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         packages-dir: installer/dist/
+        skip-existing: true  # re-runs / backfills must not fail on an already-published version (VM-1661)
     
     # MCP Registry Publishing Steps
     - name: Wait for PyPI availability
