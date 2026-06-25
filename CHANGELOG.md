@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Control channel — "barge-in with a key": pause/resume/stop in-flight TTS from any local trigger (VM-1676)** — A side channel into the *running* VoiceMode server lets a Stream Deck button, a media key, a spoken keyword, or any local process **pause, resume, or stop** the utterance Cora is currently speaking — without going through the agent and without pressing ESC. Stopping this way makes `converse` return **normally** with a control marker (e.g. `[control: stop] switch-to-text`), so the assistant reads a clean tool result and just continues in text — no killed MCP server, no `/mcp` reconnect. It's the deterministic alternative to VAD barge-in: you get the value of cutting the assistant off when it's long-winded or off-topic, triggered by an explicit press rather than voice-activity guessing. The transport is a local-only Unix domain socket bound only while speaking; a new `voicemode control {pause|resume|stop} [--hint ...] [-m ...]` CLI drives it, and the JSON command surface is documented so any trigger can build on it. **Off by default** — opt in per server with `VOICEMODE_CONTROL_CHANNEL_ENABLED=true`. A `stop` lands under ~200 ms (the playback loop polls every ~85 ms audio chunk) and works on both Kokoro and mlx-audio. See [docs/reference/control-channel.md](docs/reference/control-channel.md).
+
 ## [8.10.1] - 2026-06-25
 
 ### Fixed
