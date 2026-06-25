@@ -27,8 +27,66 @@ from .config import (
     TTS_TRAILING_SILENCE,
     logger
 )
+from .control_channel import get_control_state
 from .utils import get_event_logger, update_latest_symlinks
 
+
+# VM-1676 control channel: how often a playback loop re-checks the control
+# state while holding on a pause. ~50ms keeps the resume reaction imperceptible
+# without busy-spinning the CPU. The per-chunk *stop* check itself is a single
+# cheap snapshot, so stop latency is bounded by one chunk (~85ms at 4096 B PCM
+# @ 24kHz) -- well under the ~200ms barge-in target.
+CONTROL_POLL_INTERVAL = 0.05
+
+
+async def _poll_control_channel() -> bool:
+    """Honour the process-wide control channel between audio chunks (VM-1676).
+
+    Called by every TTS streaming write loop just before it writes a chunk.
+
+    * Returns ``True`` if playback should **stop** now -- the caller must break
+      out of its write loop and tear the stream down (abort, don't drain).
+    * On **pause**, holds here until the channel is resumed or stopped, yielding
+      to the event loop via ``asyncio.sleep`` so we neither busy-spin the CPU
+      nor block other coroutines. Returns ``True`` if the pause ended in a stop.
+    * Returns ``False`` to continue normal playback.
+
+    Inert until something drives the control state (the socket listener, wired
+    in by later features): the singleton starts ``running``, so this is a no-op
+    on the default path.
+    """
+    control_state = get_control_state()
+    snap = control_state.snapshot()
+    if snap.is_stopped:
+        return True
+    if snap.is_paused:
+        logger.info("TTS playback paused via control channel")
+        while True:
+            await asyncio.sleep(CONTROL_POLL_INTERVAL)
+            snap = control_state.snapshot()
+            if snap.is_stopped:
+                return True
+            if not snap.is_paused:
+                logger.info("TTS playback resumed via control channel")
+                return False
+    return False
+
+
+def _abort_stream(stream) -> None:
+    """Tear down an output stream immediately on a control-channel stop.
+
+    Prefers ``abort()`` (PortAudio ``Pa_AbortStream`` -- discards buffered audio
+    for an instant cut) over ``stop()`` (which drains). Falls back to ``stop()``
+    if ``abort`` is unavailable, and never raises -- teardown must not mask the
+    stop.
+    """
+    try:
+        stream.abort()
+    except Exception:
+        try:
+            stream.stop()
+        except Exception:
+            logger.debug("Failed to abort/stop stream on control stop", exc_info=True)
 
 
 def _pydub_format(fmt: str) -> str:
@@ -51,6 +109,10 @@ class StreamMetrics:
     chunks_received: int = 0
     chunks_played: int = 0
     audio_path: Optional[str] = None  # Path to saved audio file
+    # VM-1676: True when playback was cut short by a control-channel stop
+    # (vs. finishing naturally or erroring). Lets converse return normally with
+    # a control hint instead of treating the short utterance as a full one.
+    control_stopped: bool = False
 
 
 class AudioStreamPlayer:
@@ -250,7 +312,8 @@ async def stream_pcm_audio(
     stream = None
     first_chunk_time = None
     save_buffer = io.BytesIO() if save_audio else None
-    
+    control_stopped = False
+
     try:
         # Setup sounddevice stream for PCM playback
         # PCM parameters: 16-bit, mono, 24kHz (standard for TTS)
@@ -291,6 +354,12 @@ async def stream_pcm_audio(
             # Stream chunks as they arrive
             async for chunk in response.iter_bytes(chunk_size=STREAM_CHUNK_SIZE):
                 if chunk:
+                    # VM-1676: honour an external pause/resume/stop before
+                    # writing each chunk so a barge-in cuts mid-utterance.
+                    if await _poll_control_channel():
+                        control_stopped = True
+                        break
+
                     # Track first chunk received
                     if first_chunk_time is None:
                         first_chunk_time = time.perf_counter()
@@ -320,10 +389,29 @@ async def stream_pcm_audio(
                     
                     if debug and chunk_count % 10 == 0:
                         logger.debug(f"Streamed {chunk_count} chunks, {bytes_received} bytes")
-        
+
+        # VM-1676: a control-channel stop cuts playback immediately -- abort
+        # (discard buffered audio) rather than drain, mark the metric so converse
+        # can return normally with the control hint, and skip the natural-finish
+        # bookkeeping/save below.
+        if control_stopped:
+            logger.info("TTS playback stopped via control channel")
+            _abort_stream(stream)
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.control_stopped = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"control_stopped": True, "chunks": chunk_count}
+                })
+            return True, metrics
+
         # Wait for playback to finish
         stream.stop()
-        
+
         end_time = time.perf_counter()
 
         # Log TTS playback end with metrics
@@ -418,6 +506,7 @@ async def stream_cartesia_pcm(
     save_buffer = io.BytesIO() if save_audio else None
     bytes_received = 0
     chunk_count = 0
+    control_stopped = False
     event_logger = get_event_logger()
 
     try:
@@ -437,6 +526,10 @@ async def stream_cartesia_pcm(
         ):
             if not chunk:
                 continue
+            # VM-1676: honour an external pause/resume/stop before each chunk.
+            if await _poll_control_channel():
+                control_stopped = True
+                break
             if first_chunk_time is None:
                 first_chunk_time = time.perf_counter()
                 logger.info(
@@ -452,6 +545,23 @@ async def stream_cartesia_pcm(
                 save_buffer.write(chunk)
             chunk_count += 1
             bytes_received += len(chunk)
+
+        # VM-1676: a control-channel stop aborts immediately and returns with the
+        # control_stopped marker set, skipping the natural-finish save below.
+        if control_stopped:
+            logger.info("Cartesia TTS playback stopped via control channel")
+            _abort_stream(stream)
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.control_stopped = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"control_stopped": True, "chunks": chunk_count, "provider": "cartesia"}
+                })
+            return True, metrics
 
         stream.stop()
         end_time = time.perf_counter()
@@ -598,7 +708,8 @@ async def stream_with_buffering(
     save_buffer = io.BytesIO() if save_audio else None
     audio_started = False
     stream = None
-    
+    control_stopped = False
+
     try:
         # Setup sounddevice stream
         stream = sd.OutputStream(
@@ -619,6 +730,12 @@ async def stream_with_buffering(
             # Stream chunks as they arrive
             async for chunk in response.iter_bytes(chunk_size=STREAM_CHUNK_SIZE):
                 if chunk:
+                    # VM-1676: honour an external pause/resume/stop before
+                    # buffering/playing each chunk.
+                    if await _poll_control_channel():
+                        control_stopped = True
+                        break
+
                     # Track first chunk for TTFA
                     if first_chunk_time is None:
                         first_chunk_time = time.perf_counter()
@@ -672,7 +789,18 @@ async def stream_with_buffering(
                         except Exception as e:
                             # Not enough valid data yet
                             buffer.seek(0, io.SEEK_END)
-        
+
+        # VM-1676: a control-channel stop skips decoding/playing the buffered
+        # remainder and returns with the marker set. The finally block tears the
+        # stream down; for this path little/nothing has reached the device yet
+        # (opus buffers the whole response before its single decode/write).
+        if control_stopped:
+            logger.info("Buffered TTS playback stopped via control channel")
+            metrics.control_stopped = True
+            metrics.generation_time = time.perf_counter() - start_time
+            metrics.playback_time = metrics.generation_time
+            return True, metrics
+
         # Process any remaining data
         if buffer.tell() > 0:
             buffer.seek(0)
