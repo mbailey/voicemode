@@ -82,12 +82,14 @@ jobs:
     
     - name: Install Go
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+      continue-on-error: true  # MCP-registry tail is best-effort — never fail a PyPI release (VM-1661)
       uses: actions/setup-go@v6
       with:
         go-version: 'stable'
 
     - name: Install MCP Publisher
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+      continue-on-error: true  # MCP-registry tail is best-effort — never fail a PyPI release (VM-1661)
       # actions/setup-go pins GOTOOLCHAIN=local, which blocks Go from fetching a
       # newer toolchain. The upstream registry's go.mod requires a newer Go than
       # the runner ships (broke v8.8.0: needed >= 1.26, runner had 1.23) — set
@@ -95,21 +97,33 @@ jobs:
       # self-healing across future upstream bumps (VM-1655).
       env:
         GOTOOLCHAIN: auto
+        # Pin the publisher to a known-good upstream release so its build layout /
+        # output path / schema can't move under us mid-release (VM-1661). Bump deliberately.
+        MCP_PUBLISHER_REF: v1.7.9
       run: |
-        # Build publisher from source as per documentation
-        git clone https://github.com/modelcontextprotocol/registry publisher-repo
+        # Build publisher from a PINNED upstream tag (not the moving default branch).
+        git clone --depth 1 --branch "$MCP_PUBLISHER_REF" \
+          https://github.com/modelcontextprotocol/registry publisher-repo
         cd publisher-repo
         make publisher
-        cp cmd/publisher/bin/mcp-publisher ../mcp-publisher
+        # Locate the built binary ROBUSTLY — upstream moved it between
+        # cmd/publisher/bin/ and repo-root bin/ (the v8.9.0 break). Find, don't assume.
+        bin_path="$(find . -type f -name mcp-publisher -path '*bin*' | head -1)"
+        if [ -z "$bin_path" ]; then echo "::error::mcp-publisher binary not found after build"; exit 1; fi
+        cp "$bin_path" ../mcp-publisher
         cd ..
         chmod +x mcp-publisher
     
     - name: Authenticate with MCP Registry (DNS)
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+      continue-on-error: true  # MCP-registry tail is best-effort — never fail a PyPI release (VM-1661)
       env:
         MCP_DNS_PRIVATE_KEY: ${{ secrets.MCP_DNS_PRIVATE_KEY }}
       run: |
-        ./mcp-publisher login dns -domain failmode.com -private-key $MCP_DNS_PRIVATE_KEY
+        # Namespace dev.voicemode/* is verified by a TXT record at the APEX of
+        # voicemode.dev: "v=MCPv1; k=ed25519; p=<pubkey>" (VM-1661). MCP_DNS_PRIVATE_KEY
+        # is the hex ed25519 seed matching that record.
+        ./mcp-publisher login dns -domain voicemode.dev -private-key $MCP_DNS_PRIVATE_KEY
     
     # Alternative: Use GitHub OIDC authentication (simpler, no secrets needed)
     # - name: Authenticate with MCP Registry (GitHub OIDC)
@@ -119,12 +133,16 @@ jobs:
     
     - name: Publish to MCP Registry
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+      continue-on-error: true  # MCP-registry tail is best-effort — never fail a PyPI release (VM-1661)
       run: |
         ./mcp-publisher publish
         echo "✅ Successfully published to MCP Registry"
     
     - name: Verify MCP Registry Publication
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+      continue-on-error: true  # MCP-registry tail is best-effort — never fail a PyPI release (VM-1661)
       run: |
         echo "Verifying publication..."
-        curl -s https://registry.modelcontextprotocol.io/servers/com.failmode/voicemode | jq '.'
+        # Use the v0 REST API (the old /servers/<name> path 404s). search returns
+        # our record once dev.voicemode/voicemode is live.
+        curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=voicemode&version=latest" | jq '.'
