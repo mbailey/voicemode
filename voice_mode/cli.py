@@ -2413,64 +2413,21 @@ def completions(shell, install):
         voicemode completions fish --install    # Install to ~/.config/fish/completions/
     """
     from pathlib import Path
-    
-    # Generate completion scripts based on shell type
-    if shell == 'bash':
-        completion_script = '''# bash completion for voicemode
-_voicemode_completion() {
-    local IFS=$'\\n'
-    local response
-    
-    response=$(env _VOICEMODE_COMPLETE=bash_complete COMP_WORDS="${COMP_WORDS[*]}" COMP_CWORD=$COMP_CWORD voicemode 2>/dev/null)
-    
-    for completion in $response; do
-        IFS=',' read type value <<< "$completion"
-        
-        if [[ $type == 'plain' ]]; then
-            COMPREPLY+=("$value")
-        elif [[ $type == 'file' ]]; then
-            COMPREPLY+=("$value")
-        elif [[ $type == 'dir' ]]; then
-            COMPREPLY+=("$value")
-        fi
-    done
-    
-    return 0
-}
+    from click.shell_completion import get_completion_class
 
-complete -o default -F _voicemode_completion voicemode
-'''
-    
-    elif shell == 'zsh':
-        completion_script = '''#compdef voicemode
-# zsh completion for voicemode
+    # Generate the completion script using Click's own machinery rather than
+    # hand-rolled templates. The previous inline scripts parsed the completion
+    # backend's output as comma-separated "type,value" pairs, but Click emits
+    # one item per group of newline-separated lines (type / value / help). That
+    # mismatch meant tab completion silently produced nothing. Delegating to
+    # Click guarantees the script always matches the installed Click version's
+    # completion protocol.
+    comp_cls = get_completion_class(shell)
+    if comp_cls is None:
+        raise click.ClickException(f"Shell completion is not supported for {shell!r}")
+    comp = comp_cls(voice_mode_main_cli, {}, 'voicemode', '_VOICEMODE_COMPLETE')
+    completion_script = comp.source()
 
-_voicemode() {
-    local -a response
-    response=(${(f)"$(env _VOICEMODE_COMPLETE=zsh_complete COMP_WORDS="${words[*]}" COMP_CWORD=$((CURRENT-1)) voicemode 2>/dev/null)"})
-    
-    for completion in $response; do
-        IFS=',' read type value <<< "$completion"
-        compadd -U -- "$value"
-    done
-}
-
-compdef _voicemode voicemode
-'''
-    
-    elif shell == 'fish':
-        completion_script = '''# fish completion for voicemode
-function __fish_voicemode_complete
-    set -l response (env _VOICEMODE_COMPLETE=fish_complete COMP_WORDS=(commandline -cp) COMP_CWORD=(commandline -t) voicemode 2>/dev/null)
-    
-    for completion in $response
-        echo $completion
-    end
-end
-
-complete -c voicemode -f -a '(__fish_voicemode_complete)'
-'''
-    
     if install:
         # Define installation locations for each shell
         locations = {
