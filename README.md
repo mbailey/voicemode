@@ -221,4 +221,4 @@ Full documentation: [voicemode.dev](https://voicemode.dev)
 MIT - A [Failmode](https://failmode.com) Project
 
 ---
-mcp-name: com.failmode/voicemode
+mcp-name: dev.voicemode/voicemode

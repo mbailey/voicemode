@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
-  "name": "com.failmode/voicemode",
+  "name": "dev.voicemode/voicemode",
   "description": "Natural voice conversations for AI assistants - STT/TTS via MCP",
   "status": "active",
   "repository": {
