@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.10.1] - 2026-06-25
+
 ### Fixed
 
 - **MCP Registry publishing repaired and made non-blocking; namespace rebranded to `dev.voicemode/voicemode` (VM-1661)** — The release pipeline had silently failed to publish to the official MCP registry for several releases (the upstream `mcp-publisher` build moved its binary output path), so VoiceMode was not listed in the registry at all. The publish step now locates the publisher binary robustly, pins it to a known-good upstream release (`v1.7.9`), and runs as a best-effort **non-blocking** tail — a publisher-tooling regression can no longer fail a PyPI release. The registry namespace is rebranded from `com.failmode/voicemode` to **`dev.voicemode/voicemode`** to match the project's primary domain (verified via a DNS record on `voicemode.dev`). The PyPI/TestPyPI publish steps also now skip already-published versions, so manual re-runs and registry backfills don't fail on a version that's already live. No effect on installs — PyPI is unchanged; this only affects the registry listing consumed by downstream MCP aggregators.
