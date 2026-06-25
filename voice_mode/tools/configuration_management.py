@@ -53,6 +53,10 @@ def parse_env_file(file_path: Path) -> Dict[str, str]:
                 if len(value) > 1 and value.endswith(quote_char):
                     # Single line quoted value - strip quotes
                     value = value[1:-1]
+                    if quote_char == "'":
+                        # Reverse POSIX single-quote escaping ('\'' -> ') so a
+                        # value written by _shell_single_quote round-trips.
+                        value = value.replace("'\\''", "'")
                 else:
                     # Multiline quoted value - collect lines until closing quote
                     value_parts = [value[1:]]  # Start after opening quote
@@ -76,19 +80,40 @@ def parse_env_file(file_path: Path) -> Dict[str, str]:
     return config
 
 
+# Characters that are safe to write to an env file WITHOUT quoting: none of
+# these are special to a POSIX shell on the right-hand side of an assignment,
+# so a value built only from them is inert even when the file is `source`d.
+# Anything outside this set (notably $ ` " ' space ( ) { } ~ ; & | < > * ? # \
+# and newline) forces safe single-quoting. This is an ALLOW-list on purpose:
+# the previous deny-list let $(...) and backticks through. See
+# GHSA-h97v-r3jw-cf6f.
+_SAFE_UNQUOTED_RE = re.compile(r'^[A-Za-z0-9_@%+=:,./-]*$')
+
+
+def _shell_single_quote(value: str) -> str:
+    """Wrap *value* in single quotes so it is inert when the file is sourced.
+
+    Single quotes suppress every form of POSIX-shell expansion: command
+    substitution (``$()`` and backticks), parameter expansion (``${...}``),
+    word splitting and globbing. An embedded single quote is emitted as the
+    standard ``'\\''`` sequence (close-quote, escaped-quote, reopen-quote), so
+    the result round-trips through ``parse_env_file`` and through ``source``.
+    """
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
 def _format_env_value(value: str) -> str:
     """Format a value for writing to an env file.
 
-    Quotes values that contain newlines, spaces, or special characters.
+    Security: the service start scripts historically ``source``d this file, so
+    a config value is a shell-execution sink unless it is quoted safely. We
+    write simple values verbatim (they contain only shell-inert characters) and
+    single-quote everything else. Double quotes are deliberately never used —
+    they do NOT stop command substitution. See GHSA-h97v-r3jw-cf6f.
     """
-    if '\n' in value:
-        # Multiline value - use double quotes
-        return f'"{value}\n"'
-    elif ' ' in value or '#' in value or '"' in value or "'" in value:
-        # Value needs quoting - escape any existing quotes
-        escaped = value.replace('"', '\\"')
-        return f'"{escaped}"'
-    return value
+    if _SAFE_UNQUOTED_RE.match(value):
+        return value
+    return _shell_single_quote(value)
 
 
 def write_env_file(file_path: Path, config: Dict[str, str], preserve_comments: bool = True):
@@ -258,10 +283,18 @@ async def update_config(key: str, value: str) -> str:
     Returns:
         Confirmation message with the updated configuration
     """
-    # Validate key format
-    if not re.match(r'^[A-Z_]+$', key):
-        return f"❌ Invalid key format: {key}. Keys must be uppercase with underscores only."
-    
+    # Validate key format (uppercase identifier; digits allowed after the
+    # first letter, e.g. VOICEMODE_PRONOUNCE_PERSONAL2).
+    if not re.match(r'^[A-Z][A-Z0-9_]*$', key):
+        return f"❌ Invalid key format: {key}. Keys must be uppercase letters, digits and underscores, starting with a letter."
+
+    # Defense in depth: reject control characters that have no place in an env
+    # value and could corrupt the file or smuggle a second assignment. Newlines
+    # are allowed (multiline values such as VOICEMODE_PRONOUNCE); the writer
+    # single-quotes the value so it stays inert when the file is sourced.
+    if any(ord(ch) < 32 and ch not in '\n\t' for ch in value) or '\x00' in value:
+        return f"❌ Invalid value for {key}: control characters are not allowed."
+
     # Use user config path, check for legacy if new doesn't exist
     config_path = USER_CONFIG_PATH
     if not config_path.exists() and LEGACY_CONFIG_PATH.exists():

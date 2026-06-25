@@ -14,10 +14,42 @@ mkdir -p "$LOG_DIR"
 # Log file for this script (separate from server logs)
 STARTUP_LOG="$LOG_DIR/startup.log"
 
-# Source voicemode configuration if it exists
+# >>> voicemode_load_env_file — safe replacement for `source` (GHSA-h97v-r3jw-cf6f) >>>
+# Load KEY=VALUE pairs from voicemode.env as INERT DATA. We must NOT `source`
+# the file: bash runs command substitution even inside double quotes, so a
+# value like VOICEMODE_VOICES='x$(rm -rf ~)' would execute as the service user
+# on every start. This reader only ever assigns; it never evaluates the value.
+voicemode_load_env_file() {
+    local file="$1" line key val
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Trim leading whitespace
+        line="${line#"${line%%[![:space:]]*}"}"
+        # Skip blank lines and comments
+        if [ -z "$line" ]; then continue; fi
+        case "$line" in '#'*) continue ;; esac
+        # Require KEY=VALUE with a valid shell-identifier key
+        case "$line" in [A-Za-z_]*=*) : ;; *) continue ;; esac
+        key="${line%%=*}"
+        case "$key" in *[!A-Za-z0-9_]*) continue ;; esac
+        val="${line#*=}"
+        # Strip ONE layer of surrounding quotes; contents are never expanded.
+        # (Multiline-quoted values are read by the Python config loader, not
+        # needed by this script — their continuation lines are skipped above.)
+        case "$val" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+            \'*\') val="${val#\'}"; val="${val%\'}" ;;
+        esac
+        export "$key=$val"
+    done < "$file"
+    return 0
+}
+# <<< voicemode_load_env_file <<<
+
+# Load voicemode configuration if it exists (without executing it)
 if [ -f "$VOICEMODE_DIR/voicemode.env" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Sourcing voicemode.env" >> "$STARTUP_LOG"
-    source "$VOICEMODE_DIR/voicemode.env"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loading voicemode.env" >> "$STARTUP_LOG"
+    voicemode_load_env_file "$VOICEMODE_DIR/voicemode.env"
 else
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Warning: voicemode.env not found, using defaults" >> "$STARTUP_LOG"
 fi
