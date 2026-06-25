@@ -1,8 +1,7 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "dev.voicemode/voicemode",
   "description": "Natural voice conversations for AI assistants - STT/TTS via MCP",
-  "status": "active",
   "repository": {
     "url": "https://github.com/mbailey/voicemode",
     "source": "github"
@@ -10,61 +9,61 @@
   "version": "8.10.0",
   "packages": [
     {
-      "registry_type": "pypi",
-      "registry_base_url": "https://pypi.org",
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
       "identifier": "voice-mode",
       "version": "8.10.0",
       "transport": {
         "type": "stdio"
       },
-      "environment_variables": [
+      "environmentVariables": [
         {
           "description": "OpenAI API key for cloud-based STT/TTS (optional - local services can be installed)",
-          "is_required": false,
+          "isRequired": false,
           "format": "string",
-          "is_secret": true,
+          "isSecret": true,
           "name": "OPENAI_API_KEY"
         },
         {
           "description": "Enable debug mode with detailed logging (true/false)",
-          "is_required": false,
+          "isRequired": false,
           "format": "string",
-          "is_secret": false,
+          "isSecret": false,
           "name": "VOICEMODE_DEBUG"
         },
         {
           "description": "Skip TTS and show text only for faster response (true/false)",
-          "is_required": false,
+          "isRequired": false,
           "format": "string",
-          "is_secret": false,
+          "isSecret": false,
           "name": "VOICEMODE_SKIP_TTS"
         },
         {
           "description": "Prefer local services over cloud when available (true/false, default: true)",
-          "is_required": false,
+          "isRequired": false,
           "format": "string",
-          "is_secret": false,
+          "isSecret": false,
           "name": "VOICEMODE_PREFER_LOCAL"
         },
         {
           "description": "Audio format: pcm, mp3, wav, flac, aac, opus (default: pcm)",
-          "is_required": false,
+          "isRequired": false,
           "format": "string",
-          "is_secret": false,
+          "isSecret": false,
           "name": "VOICEMODE_AUDIO_FORMAT"
         },
         {
           "description": "Whisper model: tiny, base, small, medium, large (default: base)",
-          "is_required": false,
+          "isRequired": false,
           "format": "string",
-          "is_secret": false,
+          "isSecret": false,
           "name": "VOICEMODE_WHISPER_MODEL"
         },
         {
           "description": "Disable silence detection for continuous recording (true/false)",
-          "is_required": false,
+          "isRequired": false,
           "format": "string",
-          "is_secret": false,
+          "isSecret": false,
           "name": "VOICEMODE_DISABLE_SILENCE_DETECTION"
         }
       ]
