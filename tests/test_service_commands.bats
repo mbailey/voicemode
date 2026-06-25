@@ -264,8 +264,8 @@ setup() {
         return 1
     fi
     
-    # Should contain fish completion function
-    if [[ "$output" != *"__fish_voicemode_complete"* ]]; then
+    # Should contain fish completion function (Click names it _voicemode_completion; see PR #483)
+    if [[ "$output" != *"_voicemode_completion"* ]]; then
         echo "Completions didn't generate fish function:"
         echo "$output"
         return 1
