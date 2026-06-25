@@ -150,6 +150,17 @@ Log levels: `debug`, `info`, `warning`, `error`, `critical`
 | `VOICEMODE_PREFER_LOCAL` | Prefer local services | `true` | `false` |
 | `VOICEMODE_AUTO_START_SERVICES` | Auto-start local services | `false` | `true` |
 
+### Control Channel
+
+See the [Control Channel reference](control-channel.md) for the command surface
+(`voicemode control pause|resume|stop`) and worked Stream Deck / media-key /
+keyword examples.
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `VOICEMODE_CONTROL_CHANNEL_ENABLED` | Bind the control socket while speaking (pause/resume/stop an in-flight utterance) | `false` | `true` |
+| `VOICEMODE_CONTROL_SOCKET` | Path to the control Unix domain socket | `~/.voicemode/control.sock` | `/tmp/vm-control.sock` |
+
 ### Serve Command
 
 | Variable | Description | Default | Example |

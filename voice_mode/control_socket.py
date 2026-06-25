@@ -28,6 +28,7 @@ daemon *handler* thread. ``ControlState`` is itself thread-safe, so concurrent
 handlers are fine and one slow/held client can never wedge the channel.
 """
 
+import json
 import logging
 import os
 import socket
@@ -337,3 +338,61 @@ def stop_control_listener() -> None:
     listener = _listener
     if listener is not None:
         listener.stop()
+
+
+# --- Client: send one command to the control socket -----------------------
+#
+# The other end of the transport. The ``voicemode control`` CLI, a Stream Deck
+# button, a media-key handler, or a spoken-keyword listener all funnel through
+# here -- a *second local process* driving an in-flight utterance, which is what
+# proves the channel is reusable (VM-1676 success criterion 2). Kept beside the
+# listener so both ends of the Unix-socket transport live together; the command
+# schema is still owned by control_channel.parse_command (used to validate
+# below before anything goes on the wire).
+
+
+def send_control_command(
+    command: str,
+    message: Optional[str] = None,
+    hint: Optional[str] = None,
+    socket_path: Optional[os.PathLike] = None,
+    timeout: float = 2.0,
+) -> None:
+    """Connect to the control socket and write one newline-delimited JSON command.
+
+    ``command`` must be ``pause`` / ``resume`` / ``stop``; ``message`` and
+    ``hint`` are carried for ``stop`` (they feed the normal ``converse`` return
+    string -- e.g. hint ``switch-to-text``). The payload is validated against the
+    same schema the listener enforces (:func:`parse_command`) *before* anything
+    is sent, so a bad command raises here rather than being silently dropped
+    server-side.
+
+    Raises:
+        ControlCommandError: the command / message / hint don't satisfy the schema.
+        FileNotFoundError: no socket at ``socket_path`` -- nothing is listening
+            (the server isn't speaking, or the control channel is disabled).
+        ConnectionRefusedError: a (stale) socket file exists but no server is
+            accepting on it.
+        OSError: any other socket failure (e.g. the connection/send times out).
+    """
+    payload = {"command": command}
+    if message is not None:
+        payload["message"] = message
+    if hint is not None:
+        payload["hint"] = hint
+    line = json.dumps(payload)
+
+    # Validate locally against the listener's own schema (single source of
+    # truth), so callers fail fast on a bad command instead of having it dropped.
+    parse_command(line)
+
+    path = (
+        Path(socket_path)
+        if socket_path is not None
+        else Path(config.CONTROL_SOCKET_PATH)
+    )
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(str(path))
+        client.sendall((line + "\n").encode("utf-8"))
+    logger.debug("sent control command %s to %s", command, path)

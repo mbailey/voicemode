@@ -1808,6 +1808,127 @@ def deps(component, yes, dry_run, verbose):
         click.echo(f"\n❌ Installation failed: {message}")
 
 
+# ============================================================================
+# Control Channel Command Group (VM-1676)
+# ============================================================================
+# `voicemode control {pause|resume|stop}` writes one JSON line to the running
+# server's control socket so an in-flight TTS utterance can be paused, resumed,
+# or cut WITHOUT going through the agent and WITHOUT pressing ESC. This is the
+# documented, reusable interface a Stream Deck button, media key, or spoken
+# keyword shells out to. The server must have
+# VOICEMODE_CONTROL_CHANNEL_ENABLED=true. See docs/reference/control-channel.md.
+
+
+def _control_command_options(f):
+    """Shared options for every `voicemode control` subcommand.
+
+    `--message` / `--hint` are accepted on all three (the JSON schema carries
+    them on any command for forward-compat) but only surface in the converse
+    return on `stop`. `--socket` overrides the default socket path.
+    """
+    f = click.option(
+        '--socket', 'socket_path', default=None, metavar='PATH',
+        help='Control socket path (default: $VOICEMODE_CONTROL_SOCKET or '
+             '~/.voicemode/control.sock).',
+    )(f)
+    f = click.option(
+        '--hint', default=None, metavar='TEXT',
+        help='Named hint surfaced in the converse return, e.g. switch-to-text '
+             '(most useful with stop).',
+    )(f)
+    f = click.option(
+        '--message', '-m', default=None, metavar='TEXT',
+        help='Free-text message for the agent, surfaced in the converse return '
+             '(most useful with stop).',
+    )(f)
+    f = click.help_option('-h', '--help')(f)
+    return f
+
+
+def _send_control_command(command, message, hint, socket_path):
+    """Send one control command to the socket and report the outcome.
+
+    Shared by the pause/resume/stop subcommands. Exits non-zero with a friendly
+    message when nothing is listening (the channel is only live while the server
+    is speaking, and only when enabled) or on any other socket error.
+    """
+    from voice_mode.control_socket import send_control_command
+    from voice_mode import config
+
+    path = socket_path or config.CONTROL_SOCKET_PATH
+    try:
+        send_control_command(command, message=message, hint=hint, socket_path=path)
+    except FileNotFoundError:
+        click.echo(
+            f"No control socket at {path}.\n"
+            "The control channel is only active while VoiceMode is speaking, and "
+            "requires VOICEMODE_CONTROL_CHANNEL_ENABLED=true on the server.",
+            err=True,
+        )
+        raise SystemExit(1)
+    except ConnectionRefusedError:
+        click.echo(
+            f"Control socket {path} exists but no server is accepting on it "
+            "(stale socket, or the server isn't speaking right now).",
+            err=True,
+        )
+        raise SystemExit(1)
+    except OSError as exc:
+        click.echo(f"Failed to send control command: {exc}", err=True)
+        raise SystemExit(1)
+    click.echo(f"Sent '{command}' to {path}")
+
+
+@voice_mode_main_cli.group()
+@click.help_option('-h', '--help')
+def control():
+    """Pause / resume / stop the utterance the server is currently speaking.
+
+    Writes one JSON command line to the control socket the running server listens
+    on while it speaks (default ~/.voicemode/control.sock). This is the reusable
+    interface a Stream Deck button, media key, or spoken keyword can shell out to
+    -- a second local process driving the in-flight utterance, without going
+    through the agent and without pressing ESC. A `stop` makes `converse` return
+    NORMALLY with a control marker, so the agent reads a clean tool result and
+    continues in text (no MCP teardown, no /mcp reconnect).
+
+    \b
+    The server must opt in:
+      export VOICEMODE_CONTROL_CHANNEL_ENABLED=true
+
+    \b
+    Examples:
+      voicemode control stop                                # cut the current utterance
+      voicemode control stop --hint switch-to-text -m "can't talk right now"
+      voicemode control pause                               # hold playback
+      voicemode control resume                              # resume after a pause
+
+    See: docs/reference/control-channel.md
+    """
+    pass
+
+
+@control.command('pause')
+@_control_command_options
+def control_pause(message, hint, socket_path):
+    """Pause the in-flight utterance (hold playback until resume or stop)."""
+    _send_control_command('pause', message, hint, socket_path)
+
+
+@control.command('resume')
+@_control_command_options
+def control_resume(message, hint, socket_path):
+    """Resume playback after a pause."""
+    _send_control_command('resume', message, hint, socket_path)
+
+
+@control.command('stop')
+@_control_command_options
+def control_stop(message, hint, socket_path):
+    """Stop the in-flight utterance cleanly; converse returns with the hint/message."""
+    _send_control_command('stop', message, hint, socket_path)
+
+
 # Diagnostics group
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help', help='Show this message and exit')
