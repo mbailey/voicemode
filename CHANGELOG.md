@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Hardened the control channel before it's recommended for use (VM-1688)** — Following an adversarial review, the (off-by-default) control channel gained real access control and input safety so enabling it can't turn a stray local process into a prompt-injection vector against an agent that holds shell/file tools. **Named intents replace free-form text**: a `stop`'s agent-facing sentence is chosen from a server-owned allowlist (`switch-to-text`/`brevity`/`quiet`); any caller `message` is logged on the server only and never surfaced to the model (F1). **Peer-credential authentication** (`SO_PEERCRED`/`LOCAL_PEERCRED`) rejects other users; the socket directory is created `0700` and bound under `umask(0o077)` — the real gate, since socket-file mode isn't enforced on macOS/BSD (F2/F3). **Input is bounded** (8 KiB line, 256-char message) against memory/context flooding (F5); a **never-resumed `pause` self-heals** after `VOICEMODE_CONTROL_PAUSE_TIMEOUT` (default 30 s) rather than wedging the audio lock (F4); stale-socket cleanup **refuses to unlink a non-socket it doesn't own** (F6); and handler threads / connection lifetime are capped (F7). The docs Security section was rewritten to the real threat model (F8).
 
+## [8.10.2] - 2026-06-26
+
+### Security
+
+- **Closed an OS command-injection sink in `voicemode config set` / `update_config` (GHSA-h97v-r3jw-cf6f, VM-1679)** — A configuration value written via the config tools was stored in `~/.voicemode/voicemode.env` without shell-escaping, and the Whisper and `serve` start scripts read that file with `source`. Because bash runs command substitution even inside double quotes, a value like `VOICEMODE_VOICES='af_sky$(…)'` would execute on the next service start or reboot, as the service user (CWE-78). This is **opt-in to reach** — the config tools are not in the default MCP tool set, so a stock install is not attacker-reachable — but it is fixed at two layers regardless: (1) the writer now emits **single-quoted, fully escaped** values (single quotes suppress all shell expansion) and rejects control characters, so any value is inert even when sourced; (2) the start scripts no longer `source` the env file — they parse `KEY=VALUE` pairs as inert data and never evaluate them. Existing env files are migrated to the safe quoting on the next `config set`. Reported responsibly via a private advisory; thank you to the reporter.
+
 ## [8.10.1] - 2026-06-25
 
 ### Fixed

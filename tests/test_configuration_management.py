@@ -1,6 +1,10 @@
 """Unit tests for configuration management functions."""
 import asyncio
 import os
+import re
+import shlex
+import shutil
+import subprocess
 import pytest
 import tempfile
 from pathlib import Path
@@ -10,6 +14,8 @@ from voice_mode.tools.configuration_management import (
     list_config_keys,
     write_env_file,
     parse_env_file,
+    _format_env_value,
+    _shell_single_quote,
 )
 
 
@@ -518,9 +524,12 @@ class TestMultilineValueHandling:
             # Should succeed
             assert "success" in result.lower() or "updated" in result.lower()
 
-            # Verify multiline value is preserved
+            # Verify multiline value is preserved. NOTE: update_config
+            # re-serializes every key, so a previously double-quoted value is
+            # rewritten with the safe single-quote format (GHSA-h97v-r3jw-cf6f).
+            # Assert on content + round-trip, not on the quote character.
             content = temp_file.read_text()
-            assert 'VOICEMODE_PRONOUNCE="' in content
+            assert "VOICEMODE_PRONOUNCE=" in content
             assert "TTS \\bJSON\\b jason" in content
 
             # Verify updated value
@@ -533,3 +542,147 @@ class TestMultilineValueHandling:
 
         finally:
             os.unlink(temp_path)
+
+
+# Payloads that MUST never execute when voicemode.env is sourced, and MUST
+# round-trip unchanged through write -> read. See GHSA-h97v-r3jw-cf6f.
+_INJECTION_PAYLOADS = [
+    "$(id)",                       # command substitution, no space (old verbatim branch)
+    "af_sky,nova$(touch /tmp/x)",  # substitution mixed into a list value
+    "`id`",                        # backtick command substitution
+    "a${IFS}b",                    # parameter expansion sidesteps the space check
+    'x"; touch /tmp/y; "',         # quote-break attempt against the old double-quoting
+    "it's a 'test'",               # embedded single quotes -> '\'' escaping
+    "TTS (?i)\\badcb\\b 'to do'",  # realistic pronounce value with quote + regex
+]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash required")
+class TestEnvValueShellSafety:
+    """Regression tests for OS command injection via voicemode.env.
+
+    GHSA-h97v-r3jw-cf6f: config values were written unescaped and the start
+    scripts `source`d the file, so $(...) / backticks executed on service
+    start. The fix single-quotes unsafe values (inert under `source`) and the
+    start scripts no longer `source` the file.
+    """
+
+    def test_simple_values_are_written_unquoted(self):
+        """Shell-inert values keep the clean KEY=value format (no churn)."""
+        for v in ["large-v2", "true", "9999", "en", "127.0.0.1",
+                  "http://127.0.0.1:2022/v1,https://api.openai.com/v1",
+                  "mlx-community/Kokoro-82M-bf16", ""]:
+            assert _format_env_value(v) == v, v
+
+    def test_unsafe_values_are_single_quoted(self):
+        """Anything with shell-active characters is single-quoted, never double."""
+        for v in _INJECTION_PAYLOADS:
+            formatted = _format_env_value(v)
+            assert formatted.startswith("'") and formatted.endswith("'"), formatted
+            # Double quotes must never be used -- they don't stop $() expansion.
+            assert not formatted.startswith('"'), formatted
+
+    def test_shell_single_quote_escapes_embedded_quote(self):
+        assert _shell_single_quote("it's") == "'it'\\''s'"
+        assert _shell_single_quote("plain") == "'plain'"
+
+    @pytest.mark.parametrize("payload", _INJECTION_PAYLOADS)
+    def test_payload_is_inert_when_sourced(self, payload, tmp_path):
+        """The PoC: write a payload, `source` the file, assert nothing ran."""
+        env_file = tmp_path / "voicemode.env"
+        sentinel = tmp_path / "PWNED"
+        # Embed a real command-substitution that would create the sentinel.
+        value = f"{payload}$(touch {sentinel})"
+        write_env_file(env_file, {"VOICEMODE_VOICES": value})
+
+        result = subprocess.run(
+            ["bash", "-c",
+             f'source {shlex.quote(str(env_file))}; printf %s "$VOICEMODE_VOICES"'],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert not sentinel.exists(), "command substitution executed during source!"
+        assert result.stdout == value, (result.stdout, value)
+
+    @pytest.mark.parametrize("payload", _INJECTION_PAYLOADS)
+    def test_value_roundtrips_through_parser(self, payload, tmp_path):
+        """write -> parse_env_file returns the exact original value."""
+        env_file = tmp_path / "voicemode.env"
+        write_env_file(env_file, {"K": payload})
+        assert parse_env_file(env_file)["K"] == payload
+
+
+# The safe env loader inlined into both start scripts (replacing `source`).
+_START_SCRIPTS = [
+    "start-whisper-server.sh",
+    "start-voicemode-serve.sh",
+]
+
+
+def _scripts_dir() -> Path:
+    return Path(__file__).resolve().parent.parent / "voice_mode" / "templates" / "scripts"
+
+
+def _extract_loader(script_path: Path) -> str:
+    text = script_path.read_text()
+    m = re.search(
+        r"(# >>> voicemode_load_env_file.*?# <<< voicemode_load_env_file <<<)",
+        text, re.DOTALL,
+    )
+    assert m, f"loader sentinel block not found in {script_path}"
+    return m.group(1)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash required")
+class TestStartScriptEnvLoader:
+    """The start scripts must load config without `source` (GHSA-h97v-r3jw-cf6f)."""
+
+    def test_scripts_do_not_source_env_file(self):
+        for name in _START_SCRIPTS:
+            text = (_scripts_dir() / name).read_text()
+            assert 'source "$VOICEMODE_DIR/voicemode.env"' not in text, name
+            assert "voicemode_load_env_file" in text, name
+
+    def test_loader_block_is_identical_across_scripts(self):
+        blocks = {n: _extract_loader(_scripts_dir() / n) for n in _START_SCRIPTS}
+        first = next(iter(blocks.values()))
+        for name, block in blocks.items():
+            assert block == first, f"loader in {name} diverged"
+
+    def test_loader_loads_scalars_and_neutralizes_injection(self, tmp_path):
+        loader = _extract_loader(_scripts_dir() / "start-whisper-server.sh")
+        loader_file = tmp_path / "loader.sh"
+        loader_file.write_text(loader + "\n")
+
+        sub = tmp_path / "PWNED_SUB"
+        btick = tmp_path / "PWNED_BTICK"
+        env_file = tmp_path / "voicemode.env"
+        # Use _format_env_value so the file matches what the writer produces.
+        evil_sub = _format_env_value(f"x$(touch {sub})")
+        evil_btick = _format_env_value(f"`touch {btick}`")
+        env_file.write_text(
+            "# comment\n"
+            "VOICEMODE_WHISPER_MODEL=large-v2\n"
+            "VOICEMODE_WHISPER_PORT=2022\n"
+            f"VOICEMODE_VOICES={evil_sub}\n"
+            f"VOICEMODE_EVIL={evil_btick}\n"
+            'VOICEMODE_STT_PROMPT="claude CLAUDE.md Cora"\n'
+            "VOICEMODE_SERVE_SECRET='s3cr3t_AB.+/='\n"
+        )
+        script = (
+            "set -o nounset -o pipefail -o errexit\n"
+            f"source {shlex.quote(str(loader_file))}\n"
+            f"voicemode_load_env_file {shlex.quote(str(env_file))}\n"
+            'printf "MODEL=%s\\n" "$VOICEMODE_WHISPER_MODEL"\n'
+            'printf "PORT=%s\\n" "$VOICEMODE_WHISPER_PORT"\n'
+            'printf "PROMPT=%s\\n" "$VOICEMODE_STT_PROMPT"\n'
+            'printf "SECRET=%s\\n" "$VOICEMODE_SERVE_SECRET"\n'
+        )
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert not sub.exists() and not btick.exists(), "injection executed in loader!"
+        assert "MODEL=large-v2" in result.stdout
+        assert "PORT=2022" in result.stdout
+        # Surrounding quotes are stripped, contents never expanded.
+        assert "PROMPT=claude CLAUDE.md Cora" in result.stdout
+        assert "SECRET=s3cr3t_AB.+/=" in result.stdout
