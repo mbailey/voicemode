@@ -662,6 +662,24 @@ CONTROL_SOCKET_PATH = expand_path(
     os.getenv("VOICEMODE_CONTROL_SOCKET", str(BASE_DIR / "control.sock"))
 )
 
+# Hardening (F4 / VM-1697): a `pause` holds the global audio lock while playback
+# waits, so a pause that is never resumed (a forgotten/buggy trigger, or a
+# malicious one) would wedge ALL voice ops for this server. Auto-resolve a pause
+# left hanging this many seconds. 0 disables the cap (not recommended).
+try:
+    CONTROL_PAUSE_TIMEOUT = float(os.getenv("VOICEMODE_CONTROL_PAUSE_TIMEOUT", "30"))
+except ValueError:
+    CONTROL_PAUSE_TIMEOUT = 30.0
+
+# What a timed-out pause resolves to: "stop" (cut the utterance, returns cleanly
+# with the pause-timeout intent -- safest, self-heals to a normal return) or
+# "resume" (carry on speaking). Anything else falls back to "stop".
+CONTROL_PAUSE_TIMEOUT_ACTION = os.getenv(
+    "VOICEMODE_CONTROL_PAUSE_TIMEOUT_ACTION", "stop"
+).strip().lower()
+if CONTROL_PAUSE_TIMEOUT_ACTION not in ("stop", "resume"):
+    CONTROL_PAUSE_TIMEOUT_ACTION = "stop"
+
 # ==================== SERVICE CONFIGURATION ====================
 
 # OpenAI configuration

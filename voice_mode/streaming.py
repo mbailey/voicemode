@@ -27,6 +27,7 @@ from .config import (
     TTS_TRAILING_SILENCE,
     logger
 )
+from . import config
 from .control_channel import get_control_state
 from .utils import get_event_logger, update_latest_symlinks
 
@@ -61,6 +62,11 @@ async def _poll_control_channel() -> bool:
         return True
     if snap.is_paused:
         logger.info("TTS playback paused via control channel")
+        # F4 (VM-1697): bound the pause. Holding here keeps the global audio lock,
+        # so a pause that is never resumed would wedge every later converse. After
+        # CONTROL_PAUSE_TIMEOUT seconds we self-heal: stop (clean return) or resume.
+        timeout = getattr(config, "CONTROL_PAUSE_TIMEOUT", 30.0) or 0.0
+        waited = 0.0
         while True:
             await asyncio.sleep(CONTROL_POLL_INTERVAL)
             snap = control_state.snapshot()
@@ -69,6 +75,18 @@ async def _poll_control_channel() -> bool:
             if not snap.is_paused:
                 logger.info("TTS playback resumed via control channel")
                 return False
+            waited += CONTROL_POLL_INTERVAL
+            if timeout and waited >= timeout:
+                action = getattr(config, "CONTROL_PAUSE_TIMEOUT_ACTION", "stop")
+                logger.warning(
+                    "control-channel pause exceeded %.0fs with no resume; auto-%s",
+                    timeout, action,
+                )
+                if action == "resume":
+                    control_state.request_resume()
+                    return False
+                control_state.request_stop(hint="pause-timeout")
+                return True
     return False
 
 
