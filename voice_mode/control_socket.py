@@ -32,12 +32,17 @@ import json
 import logging
 import os
 import socket
+import stat
+import struct
+import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional, Set
 
 from voice_mode import config
 from voice_mode.control_channel import (
+    MAX_LINE_BYTES,
     ControlCommandError,
     ControlState,
     get_control_state,
@@ -53,6 +58,41 @@ _POLL_TIMEOUT = 0.25
 
 # Max bytes read per recv. Control lines are tiny JSON; this is just a ceiling.
 _RECV_SIZE = 4096
+
+# Hardening caps (F7 / VM-1697): the channel only ever needs sub-second command
+# bursts, so bound concurrent handlers and each connection's total lifetime to
+# stop a local process exhausting threads/fds or holding connections open.
+_MAX_HANDLERS = 8
+_CONN_MAX_LIFETIME = 10.0
+
+
+def _peer_uid(conn: socket.socket) -> Optional[int]:
+    """Best-effort UID of the connected peer, or ``None`` if it can't be read.
+
+    F3 (VM-1694): the socket itself authenticates nobody, so we check the peer's
+    credentials on accept and reject anyone who isn't this same user. Uses
+    ``SO_PEERCRED`` on Linux and ``LOCAL_PEERCRED`` (struct xucred) on macOS/BSD.
+    Returns ``None`` when the platform/recv can't give us a UID -- the caller
+    fails *open* in that case (logged), since this is defence-in-depth on top of
+    the 0700 dir + off-by-default gate, not the sole guarantee.
+    """
+    try:
+        if sys.platform.startswith("linux"):
+            creds = conn.getsockopt(
+                socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+            )
+            _pid, uid, _gid = struct.unpack("3i", creds)
+            return uid
+        if sys.platform == "darwin" or "bsd" in sys.platform:
+            # struct xucred { u_int cr_version; uid_t cr_uid; ... }; uid at +4.
+            SOL_LOCAL = 0
+            LOCAL_PEERCRED = 0x001
+            xucred = conn.getsockopt(SOL_LOCAL, LOCAL_PEERCRED, 4 + 4 + 2 + 16 * 4)
+            _version, uid = struct.unpack("II", xucred[:8])
+            return uid
+    except OSError:
+        return None
+    return None
 
 
 class ControlSocketListener:
@@ -168,14 +208,26 @@ class ControlSocketListener:
     # --- internals -------------------------------------------------------
 
     def _bind(self) -> socket.socket:
-        """Create, bind, and listen on the Unix socket (unlink-then-bind)."""
+        """Create, bind, and listen on the Unix socket (unlink-then-bind).
+
+        F2 (VM-1694): on macOS/BSD a socket file's own ``0600`` is not reliably
+        enforced on ``connect()`` -- access is gated by the *directory*. So we
+        lock the parent dir to ``0700`` and ``umask(0o077)`` across the bind to
+        close the chmod-after-bind TOCTOU window. The real, portable enforcement
+        is the F3 peer-credential check on accept; these are defence in depth.
+        """
         path = self._socket_path
         path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(str(path.parent), 0o700)
+        except OSError:
+            logger.debug("could not chmod control socket dir %s", path.parent, exc_info=True)
         # Stale-socket recovery: a crashed server can leave the file behind,
-        # which would make bind() fail with EADDRINUSE. Remove it first.
+        # which would make bind() fail with EADDRINUSE. Remove it first (safely).
         self._unlink_socket()
 
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        old_umask = os.umask(0o077)  # socket is created owner-only, no race
         try:
             server.bind(str(path))
             server.listen(8)
@@ -183,9 +235,11 @@ class ControlSocketListener:
         except OSError:
             server.close()
             raise
+        finally:
+            os.umask(old_umask)
 
-        # Local-only side channel: restrict the socket file so only this user can
-        # connect (best effort -- not all platforms enforce socket-file perms).
+        # Belt-and-braces: restrict the socket file too (best effort -- not all
+        # platforms enforce socket-file perms; the dir + peer-cred check do).
         try:
             os.chmod(str(path), 0o600)
         except OSError:
@@ -194,14 +248,36 @@ class ControlSocketListener:
         return server
 
     def _unlink_socket(self) -> None:
+        """Remove the socket file -- but only if it's actually our own socket.
+
+        F6 (VM-1697): the old unconditional ``os.unlink`` would happily delete a
+        regular file, a symlink, or another user's node sitting at the path
+        (squatting / interception risk). ``lstat`` first (no symlink follow) and
+        refuse unless it's a socket owned by us.
+        """
+        path = str(self._socket_path)
         try:
-            os.unlink(str(self._socket_path))
+            st = os.lstat(path)
+        except FileNotFoundError:
+            return
+        except OSError:
+            logger.warning("could not stat control socket %s", path, exc_info=True)
+            return
+        if not stat.S_ISSOCK(st.st_mode):
+            logger.warning("refusing to unlink non-socket at control path %s", path)
+            return
+        if st.st_uid != os.getuid():
+            logger.warning(
+                "refusing to unlink control socket %s owned by uid %s (not %s)",
+                path, st.st_uid, os.getuid(),
+            )
+            return
+        try:
+            os.unlink(path)
         except FileNotFoundError:
             pass
         except OSError:
-            logger.warning(
-                "could not remove control socket %s", self._socket_path, exc_info=True
-            )
+            logger.warning("could not remove control socket %s", path, exc_info=True)
 
     def _serve(self) -> None:
         """Accept loop: hand each connection to a handler thread until stopped."""
@@ -221,6 +297,32 @@ class ControlSocketListener:
                     logger.warning("control listener accept failed", exc_info=True)
                     continue
 
+                # F3 (VM-1694): authenticate the peer -- only this same user may
+                # drive the channel. Reject a definite mismatch; fail open (with a
+                # debug note) only when the platform can't tell us the UID.
+                peer = _peer_uid(conn)
+                if peer is not None and peer != os.getuid():
+                    logger.warning(
+                        "control listener: rejecting connection from uid %s (not %s)",
+                        peer, os.getuid(),
+                    )
+                    self._close_quietly(conn)
+                    continue
+                if peer is None:
+                    logger.debug("control listener: peer UID unavailable; allowing (defence-in-depth)")
+
+                # F7 (VM-1697): cap concurrent handlers so a flood of connections
+                # can't exhaust threads. Drop the newest over the cap.
+                with self._handlers_lock:
+                    over_cap = len(self._handlers) >= _MAX_HANDLERS
+                if over_cap:
+                    logger.warning(
+                        "control listener: handler cap (%d) reached; dropping connection",
+                        _MAX_HANDLERS,
+                    )
+                    self._close_quietly(conn)
+                    continue
+
                 handler = threading.Thread(
                     target=self._handle_connection,
                     args=(conn,),
@@ -233,12 +335,26 @@ class ControlSocketListener:
         finally:
             logger.debug("control listener accept loop exiting (%s)", self._socket_path)
 
+    @staticmethod
+    def _close_quietly(conn: socket.socket) -> None:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
     def _handle_connection(self, conn: socket.socket) -> None:
         """Read newline-delimited JSON lines from one client and dispatch each."""
         try:
             conn.settimeout(_POLL_TIMEOUT)
+            deadline = time.monotonic() + _CONN_MAX_LIFETIME
             buffer = b""
             while not self._stop.is_set():
+                # F7 (VM-1697): bound total connection lifetime -- the channel
+                # only needs quick command bursts, so a client that lingers (or a
+                # slow-loris hold) is dropped rather than tying up a handler.
+                if time.monotonic() > deadline:
+                    logger.debug("control listener: connection exceeded max lifetime; closing")
+                    break
                 try:
                     chunk = conn.recv(_RECV_SIZE)
                 except socket.timeout:
@@ -246,21 +362,26 @@ class ControlSocketListener:
                 except OSError:
                     break
                 if not chunk:
-                    break  # client closed the connection (EOF)
+                    # client closed (EOF): tolerate a final newline-less line.
+                    if buffer.strip() and len(buffer) <= MAX_LINE_BYTES:
+                        self._dispatch(buffer)
+                    break
                 buffer += chunk
+                # F5 (VM-1694): cap the unparsed buffer so a connection that never
+                # sends a newline can't grow it without bound (memory exhaustion).
+                if len(buffer) > MAX_LINE_BYTES:
+                    logger.warning(
+                        "control listener: line exceeded %d bytes; dropping connection",
+                        MAX_LINE_BYTES,
+                    )
+                    break
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
                     self._dispatch(line)
-            # Tolerate a final line that wasn't newline-terminated before EOF.
-            if buffer.strip():
-                self._dispatch(buffer)
         except Exception:  # never let a bad client take down the handler
             logger.warning("control listener connection error", exc_info=True)
         finally:
-            try:
-                conn.close()
-            except OSError:
-                pass
+            self._close_quietly(conn)
             with self._handlers_lock:
                 self._handlers.discard(threading.current_thread())
 

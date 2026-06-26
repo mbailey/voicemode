@@ -288,18 +288,20 @@ class TestStaleSocketRecovery:
         finally:
             lis.stop()
 
-    def test_start_over_stale_regular_file(self, socket_path):
-        # An ordinary leftover file at the path is also cleared by unlink-then-bind.
+    def test_refuses_to_clobber_a_regular_file(self, socket_path):
+        # F6 (VM-1697): a non-socket squatting at the path must NOT be unlinked --
+        # only a socket we own is stale-recoverable. Bind fails; the file survives.
         socket_path.write_bytes(b"leftover")
         assert socket_path.exists()
 
         state = ControlState()
         lis = ControlSocketListener(socket_path=socket_path, control_state=state)
-        try:
+        with pytest.raises(OSError):
             lis.start()
-            assert lis.is_running
-        finally:
-            lis.stop()
+        assert not lis.is_running
+        # The regular file was left untouched, not silently deleted.
+        assert socket_path.read_bytes() == b"leftover"
+        lis.stop()  # safe no-op cleanup
 
 
 # --------------------------------------------------------------------------
