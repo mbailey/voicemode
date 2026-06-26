@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Hardened the control channel before it's recommended for use (VM-1688)** — Following an adversarial review, the (off-by-default) control channel gained real access control and input safety so enabling it can't turn a stray local process into a prompt-injection vector against an agent that holds shell/file tools. **Named intents replace free-form text**: a `stop`'s agent-facing sentence is chosen from a server-owned allowlist (`switch-to-text`/`brevity`/`quiet`); any caller `message` is logged on the server only and never surfaced to the model (F1). **Peer-credential authentication** (`SO_PEERCRED`/`LOCAL_PEERCRED`) rejects other users; the socket directory is created `0700` and bound under `umask(0o077)` — the real gate, since socket-file mode isn't enforced on macOS/BSD (F2/F3). **Input is bounded** (8 KiB line, 256-char message) against memory/context flooding (F5); a **never-resumed `pause` self-heals** after `VOICEMODE_CONTROL_PAUSE_TIMEOUT` (default 30 s) rather than wedging the audio lock (F4); stale-socket cleanup **refuses to unlink a non-socket it doesn't own** (F6); and handler threads / connection lifetime are capped (F7). The docs Security section was rewritten to the real threat model (F8).
 
+### Fixed
+
+- **`voicemode service install` now tells you *which* dependencies are missing (VM-1718, #303)** — When an install fails for missing build dependencies, the installer already worked out the specific packages and their install commands (e.g. `cmake (run: brew install cmake)`), but the CLI only printed the generic "Missing dependencies" and discarded the list. It now prints each missing package with its install command, so you can act on the failure without guessing.
+
 ## [8.10.2] - 2026-06-26
 
 ### Security

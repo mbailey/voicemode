@@ -584,6 +584,25 @@ def service_health(service_name):
         click.echo(f"❌ Health check failed: {e}")
 
 
+def _echo_missing_dependencies(result):
+    """Print the itemized missing-dependencies list from a failed install result.
+
+    Install tools return the specific missing packages (each already carrying its
+    own install command, e.g. "cmake (run: brew install cmake)") in a ``missing``
+    list. The failure messages only echo the generic ``error`` string, so without
+    this the user is told dependencies are missing but never which ones (GH-303).
+    No-ops when there is no ``missing`` list.
+    """
+    if not isinstance(result, dict):
+        return
+    missing = result.get('missing') or []
+    if not missing:
+        return
+    click.echo("   Missing:")
+    for dep in missing:
+        click.echo(f"     • {dep}")
+
+
 @service.command('install')
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
 @click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
@@ -615,6 +634,7 @@ def service_install(service_name, force):
                     click.echo(f"   Install path: {result['install_path']}")
             else:
                 click.echo(f"❌ Whisper installation failed: {result.get('error', 'Unknown error')}")
+                _echo_missing_dependencies(result)
         else:
             click.echo(result)
     elif service_name == 'kokoro':
@@ -627,6 +647,7 @@ def service_install(service_name, force):
                     click.echo(f"   Install path: {result['install_path']}")
             else:
                 click.echo(f"❌ Kokoro installation failed: {result.get('error', 'Unknown error')}")
+                _echo_missing_dependencies(result)
         else:
             click.echo(result)
     elif service_name == 'voicemode':
@@ -638,6 +659,7 @@ def service_install(service_name, force):
                 click.echo(f"   Start script: {result['start_script']}")
         else:
             click.echo(f"❌ VoiceMode installation failed: {result.get('error', 'Unknown error')}")
+            _echo_missing_dependencies(result)
     elif service_name == 'mlx-audio':
         from voice_mode.tools.mlx_audio.install import mlx_audio_install
         result = asyncio.run(mlx_audio_install(force_reinstall=force))
@@ -656,6 +678,7 @@ def service_install(service_name, force):
                                f"{patch.get('backup_path', '?')})")
             else:
                 click.echo(f"❌ mlx-audio installation failed: {result.get('error', 'Unknown error')}")
+                _echo_missing_dependencies(result)
         else:
             click.echo(result)
     else:
