@@ -194,9 +194,98 @@ If your Stream Deck plugin needs an absolute path, find it with `which voicemode
 
 ### Media keys
 
-Map a media key (or a Bluetooth headset's play/pause) to the CLI with whatever
-key-binding tool you use. For example with [`skhd`](https://github.com/koekeishiya/skhd)
-on macOS:
+The keyboard's transport keys (▶❙❙ / ⏭ / ⏮ — and a Bluetooth headset's
+play/pause) make a natural control surface. There are two ways to wire them,
+depending on how much you want VoiceMode to share the keys with your music.
+
+#### Hammerspoon — ownership-aware (recommended on macOS)
+
+macOS routes the media keys (NSSystemDefined events) straight to Music/Spotify,
+so to use them for VoiceMode you need an interceptor that wins *first* — but you
+almost certainly don't want VoiceMode stealing play/pause during normal
+listening. [Hammerspoon](https://www.hammerspoon.org/) handles both: its
+`hs.eventtap` can pass an event through to the media app *or* swallow it,
+**per-event**, based on whether a converse is live.
+
+The reusable config ships in the repo:
+[`scripts/hammerspoon/voicemode-media-keys.lua`](https://github.com/mbailey/voicemode/blob/master/scripts/hammerspoon/voicemode-media-keys.lua).
+
+**Ownership model — "polite spot-instance".** VoiceMode only grabs the media keys
+while a converse is *live*; otherwise every key passes straight through to your
+media app, unchanged:
+
+| Key | No converse live | Converse live (VoiceMode owns) |
+|-----|------------------|--------------------------------|
+| **Play/Pause** | toggles music (pass-through) | "pause everything" — pauses/resumes **both** VoiceMode *and* music |
+| **Next** | next track | **barge** — cuts the utterance (`control stop`); music does **not** skip |
+| **Previous** | previous track | replay last utterance — **stub** today (no-op + notice), pending VM-1685 |
+
+Play/Pause is always "do-both / pass-through" (one press quiets the room),
+because the two actions don't conflict. Next/Previous *do* conflict (barge vs
+skip-track), so they route to whichever side owns the keys for that event.
+
+**Manual override.** A menubar item (`VM⌨︎:auto`) and a hotkey
+(<kbd>⌘</kbd><kbd>⌥</kbd><kbd>⌃</kbd><kbd>M</kbd>) cycle ownership
+`auto → always-me → always-music`. `always-me` forces VoiceMode to own
+Next/Previous even when no converse is live; `always-music` forces pass-through
+even mid-utterance. (Play/Pause stays do-both in every mode.)
+
+**Setup:**
+
+1. **Enable the channel** (server side, once): `VOICEMODE_CONTROL_CHANNEL_ENABLED=true`
+   in `~/.voicemode/voicemode.env`. Without it the socket is never bound and the
+   config can never see a converse as "live".
+2. **Install Hammerspoon:** `brew install --cask hammerspoon`.
+3. **Load the config** from `~/.hammerspoon/init.lua` (point the path at your
+   checkout):
+
+    ```lua
+    -- ~/.hammerspoon/init.lua
+    -- Optional config (all keys have sane defaults):
+    -- _G.voicemodeMediaKeys = { voicemodePath = "/opt/homebrew/bin/voicemode" }
+    dofile(os.getenv("HOME") .. "/Code/voicemode/scripts/hammerspoon/voicemode-media-keys.lua")
+    ```
+
+    Then **Reload Config** from the Hammerspoon menubar (or run `hs.reload()`).
+4. **Grant Accessibility** — this is the load-bearing permission. System Settings
+   → **Privacy & Security → Accessibility** → enable **Hammerspoon**. The event
+   tap cannot see (or swallow) key events until you do; Hammerspoon prompts on
+   first run. Some setups also need **Input Monitoring**.
+
+The config resolves an absolute `voicemode` path at load (media-key handlers
+don't inherit your shell `PATH`) and shells out non-blocking, so a keypress is
+never delayed by the control command.
+
+> **Music/Spotify pre-emption gotcha.** Because Play/Pause is *passed through* to
+> the frontmost media app, that app toggles regardless of its own state. If music
+> is **paused** and you press Play to quiet a VoiceMode utterance, the music will
+> **start** (the key is a single toggle; pass-through can't know which direction
+> you meant). Next/Previous don't have this problem — when VoiceMode owns them the
+> event is fully *swallowed*, so the media app never skips. If a key still reaches
+> the media app when VoiceMode should own it, re-check that Accessibility is
+> granted and the menubar shows `VM⌨︎`.
+
+**Verify:**
+
+- The Hammerspoon Console logs `[voicemode-media-keys] started (...)` on load and
+  a line for each action (`barge`, `pause`, `resume`).
+- **No converse running:** media keys behave exactly as before — music only.
+- **Converse live** (start one, let VoiceMode speak): **Next** cuts it (barge),
+  **Play/Pause** pauses both, **Previous** shows the replay-not-yet stub.
+- Offline logic test (no Hammerspoon needed):
+  `luajit scripts/hammerspoon/test_voicemode_media_keys.lua`.
+
+> **Liveness signal.** "Is a converse live?" is answered by the presence of the
+> control socket `~/.voicemode/control.sock`, which the server binds for the whole
+> converse turn (speaking *and* listening). The config stats it on each key event
+> — cheap, no subprocess. A socket left stale by a server that crashed
+> mid-utterance is the only false-positive; it clears on the next converse.
+
+#### Simple, unconditional bindings (skhd / xbindkeys / Karabiner)
+
+If you want a key wired *straight* to one command (no ownership logic, no
+pass-through to music), bind it to the CLI with any key-binding tool. For example
+with [`skhd`](https://github.com/koekeishiya/skhd) on macOS:
 
 ```
 # ~/.skhdrc — F8 stops, F7 pauses, F9 resumes
@@ -206,7 +295,9 @@ on macOS:
 ```
 
 The same idea works with `xbindkeys` on Linux, Karabiner-Elements, or any tool
-that can bind a key to a shell command.
+that can bind a key to a shell command. Note these bind a *dedicated* key — they
+don't share the transport keys with your music the way the Hammerspoon recipe
+does.
 
 ### Spoken keyword
 
