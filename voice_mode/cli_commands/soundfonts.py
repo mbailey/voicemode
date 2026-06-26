@@ -16,6 +16,8 @@ from pathlib import Path
 
 import click
 
+from voice_mode.cli_commands.claude import is_voicemode_hook
+
 
 SENTINEL_FILE = Path.home() / '.voicemode' / 'soundfonts-disabled'
 VOICEMODE_ENV_FILE = Path.home() / '.voicemode' / 'voicemode.env'
@@ -56,20 +58,46 @@ def _get_env_var_state() -> tuple:
 
 
 def _hooks_installed() -> bool:
-    """Check if any VoiceMode hooks are installed in Claude Code settings."""
+    """Check if VoiceMode hooks are active in Claude Code.
+
+    Returns True if EITHER:
+
+    1. VoiceMode hooks are written into ``~/.claude/settings.json``. The command
+       is nested at ``hooks.<Event>[].hooks[].command`` (the matcher-level entry
+       has no ``command`` key), so detection reuses ``is_voicemode_hook()`` from
+       ``claude.py`` — the single source of truth for "is this a VoiceMode hook".
+       Checking the matcher level directly was the GH-313 bug: it always missed
+       correctly-installed hooks.
+    2. The VoiceMode plugin is enabled. Claude Code records enabled plugins in the
+       same ``settings.json`` under ``enabledPlugins`` as ``"<name>@<marketplace>":
+       bool``. Any enabled key matching the ``voicemode@`` prefix counts —
+       marketplace-agnostic, not a hardcoded ``@skillbox`` — because plugin hooks
+       live outside ``settings.json`` and are otherwise invisible here.
+    """
     import json as _json
     settings_file = Path.home() / '.claude' / 'settings.json'
     if not settings_file.exists():
         return False
     try:
         settings = _json.loads(settings_file.read_text())
+
+        # 1. Hooks written directly into settings.json (nested traversal).
         hooks = settings.get('hooks', {})
-        for event_entries in hooks.values():
-            for entry in event_entries:
-                # VoiceMode hooks reference voicemode-hook-receiver
-                cmd = entry.get('command', '') if isinstance(entry, dict) else ''
-                if 'voicemode' in cmd.lower():
+        if isinstance(hooks, dict):
+            for event_entries in hooks.values():
+                if not isinstance(event_entries, list):
+                    continue
+                for entry in event_entries:
+                    if isinstance(entry, dict) and is_voicemode_hook(entry):
+                        return True
+
+        # 2. Hooks provided by an enabled VoiceMode plugin.
+        enabled_plugins = settings.get('enabledPlugins', {})
+        if isinstance(enabled_plugins, dict):
+            for key, value in enabled_plugins.items():
+                if value is True and isinstance(key, str) and key.startswith('voicemode@'):
                     return True
+
         return False
     except Exception:
         return False
