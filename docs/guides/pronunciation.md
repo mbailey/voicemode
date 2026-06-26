@@ -99,7 +99,7 @@ TTS \b(\d+)\s*GB\b "$1 gigabytes" # Storage
 ```bash
 # Fix common Whisper misrecognitions
 STT "me tool" metool # Whisper hears this wrong
-STT "cora 7" "Cora 7" # Fix capitalization
+STT "github" "GitHub" # Fix capitalization
 STT "(tally|tahlee|tolly)" Tali # Multiple variations
 ```
 

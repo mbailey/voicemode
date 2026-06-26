@@ -70,7 +70,7 @@ and signal completion via [signaling method].
 **Recommended context to pass:**
 | Field | Purpose | Example |
 |-------|---------|---------|
-| Originator name | For verbal announcement | "Cora", "the assistant" |
+| Originator name | For verbal announcement | "the assistant", "the orchestrator" |
 | Session ID | For direct messaging (if available) | `session_abc123` |
 | Signaling method | How to notify completion | "exit", "write to /tmp/done" |
 
@@ -127,7 +127,7 @@ Use the originator's name (passed during handoff):
 
 ```python
 voicemode:converse(
-    "I've finished reviewing the task. Transferring you back to Cora.",
+    "I've finished reviewing the task. Transferring you back to the assistant.",
     wait_for_response=False
 )
 ```
@@ -195,8 +195,8 @@ spawn_agent(
     prompt="""The user wants to work on voice handoff documentation.
 
     HANDOFF CONTEXT:
-    - You were called by: Cora (the personal assistant)
-    - When finished: Announce "Transferring you back to Cora" then exit
+    - You were called by: the personal assistant
+    - When finished: Announce "Transferring you back to the assistant" then exit
 
     Load the voicemode skill with /voicemode:voicemode.
     Use converse to greet the user and ask which aspect of handoff docs they'd like to focus on.""",
@@ -227,12 +227,12 @@ voicemode:converse(
 ```python
 # Work complete - use originator name from handoff context
 voicemode:converse(
-    "I've updated the handoff documentation and committed the changes. Transferring you back to Cora.",
+    "I've updated the handoff documentation and committed the changes. Transferring you back to the assistant.",
     wait_for_response=False
 )
 
-# Exit cleanly - this signals Cora to resume
-# (Cora is waiting on process.wait())
+# Exit cleanly - this signals the assistant to resume
+# (the assistant is waiting on process.wait())
 ```
 
 ## Voice Configuration
