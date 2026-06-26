@@ -179,7 +179,7 @@ Stream Deck's *System → Open* / *Multi Action* runs a command on a key press.
 Point a button at the CLI:
 
 ```bash
-# "Text mode" button — cut Cora off and tell the agent to continue in text
+# "Text mode" button — cut the assistant off and tell the agent to continue in text
 voicemode control stop --hint switch-to-text
 ```
 
