@@ -232,6 +232,35 @@ M.cycleOwnership(); eq(M.ownership, "always-music", "cycle: always-me -> always-
 M.cycleOwnership(); eq(M.ownership, "auto", "cycle: always-music -> auto")
 
 -- ---------------------------------------------------------------------------
+-- 9. Hardware key aliases: FAST -> NEXT, REWIND -> PREVIOUS
+--    Logitech MX Keys Mini (and others) emit FAST/REWIND for the next/previous-
+--    track keys rather than NEXT/PREVIOUS -- verified live (VM-1724). They must
+--    route identically to NEXT/PREVIOUS.
+-- ---------------------------------------------------------------------------
+
+M.setOwnership("auto")
+
+-- Live: FAST barges exactly like NEXT (swallow + control stop).
+stubState.live = true
+resetCaptured()
+eq(M._onSystemDefined(event("FAST", PRESS)), true, "live: FAST swallowed (alias of NEXT)")
+eq(stubState.controlCommands[1], "stop", "live: FAST -> control stop (barge)")
+
+-- Live: REWIND is the replay stub exactly like PREVIOUS (swallow, no command).
+resetCaptured()
+eq(M._onSystemDefined(event("REWIND", PRESS)), true, "live: REWIND swallowed (alias of PREVIOUS)")
+eq(#stubState.controlCommands, 0, "live: REWIND is a stub -> no control command (VM-1685)")
+
+-- Dead: both aliases pass through to the media app, firing nothing.
+stubState.live = false
+resetCaptured()
+eq(M._onSystemDefined(event("FAST", PRESS)), false, "dead: FAST passes through")
+eq(M._onSystemDefined(event("REWIND", PRESS)), false, "dead: REWIND passes through")
+eq(#stubState.controlCommands, 0, "dead: FAST/REWIND fire no control command")
+
+M.setOwnership("auto")
+
+-- ---------------------------------------------------------------------------
 -- Report
 -- ---------------------------------------------------------------------------
 

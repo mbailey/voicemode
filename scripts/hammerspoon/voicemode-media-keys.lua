@@ -218,6 +218,14 @@ local function on_system_defined(event)
     if not t or not t.key then return false end
 
     local key = t.key
+    -- Some keyboards (e.g. Logitech MX Keys Mini) report the next/previous-track
+    -- keys as FAST/REWIND rather than NEXT/PREVIOUS (verified live, VM-1724).
+    -- Normalise them so the routing below is hardware-independent.
+    if key == "FAST" then
+        key = "NEXT"
+    elseif key == "REWIND" then
+        key = "PREVIOUS"
+    end
     if key ~= "PLAY" and key ~= "NEXT" and key ~= "PREVIOUS" then
         return false  -- volume / brightness / etc. — never ours
     end

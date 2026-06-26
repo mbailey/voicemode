@@ -265,6 +265,13 @@ never delayed by the control command.
 > the media app when VoiceMode should own it, re-check that Accessibility is
 > granted and the menubar shows `VM⌨︎`.
 
+> **Keyboard key names vary.** Some keyboards — notably the **Logitech MX Keys
+> Mini** — report the next/previous-track keys as `FAST`/`REWIND` rather than
+> `NEXT`/`PREVIOUS`. The config normalises both, so next-track barges and
+> previous-track replays regardless of which name your keyboard emits (verified
+> live on an MX Keys Mini, VM-1724). If a media key seems to do nothing, open the
+> Hammerspoon Console and check the `systemKey` name it reports.
+
 **Verify:**
 
 - The Hammerspoon Console logs `[voicemode-media-keys] started (...)` on load and
