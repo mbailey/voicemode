@@ -97,7 +97,7 @@ from voice_mode.utils import (
     update_latest_symlinks
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
-from voice_mode.control_channel import get_control_state
+from voice_mode.control_channel import get_control_state, intent_sentence
 from voice_mode.control_socket import start_control_listener, stop_control_listener
 
 logger = logging.getLogger("voicemode")
@@ -1315,14 +1315,23 @@ def _format_control_timing(timings: Dict) -> str:
 def _build_control_stop_result(snapshot, timings: Dict) -> str:
     """Build the NORMAL converse return string for a control-channel stop.
 
-    Shape: ``[control: stop] <hint> — <message> | Timing: ...``. ``hint`` and
-    ``message`` are whatever the stop command carried (e.g. hint ``switch-to-text``);
-    either or both may be absent, in which case a generic note is used. The
+    Shape: ``[control: stop] <server-owned sentence> | Timing: ...``.
+
+    SECURITY (F1 / VM-1691): the detail is a **server-authored** sentence chosen
+    by the stop command's named ``hint`` (validated against
+    ``control_channel.CONTROL_INTENTS`` at parse time). Caller-supplied free text
+    is NEVER surfaced -- a stop's free-form ``message`` is logged locally only, so
+    a local process can't inject instructions into the agent's tool-result. The
     leading ``[control: stop]`` marker lets the agent distinguish an intentional
     cut-short turn from a normal voice response.
     """
-    detail_bits = [bit for bit in (snapshot.hint, snapshot.message) if bit]
-    detail = " — ".join(detail_bits) if detail_bits else "playback stopped via control channel"
+    detail = intent_sentence(snapshot.hint) or "playback stopped via control channel"
+    if snapshot.message:
+        # Accepted for operator logs, deliberately kept out of the agent context.
+        logger.info(
+            "control stop carried a free-form message (not surfaced to agent): %r",
+            snapshot.message[:256],
+        )
     result = f"[control: stop] {detail}"
     timing_str = _format_control_timing(timings)
     if timing_str:

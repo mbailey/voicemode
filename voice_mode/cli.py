@@ -1822,24 +1822,27 @@ def deps(component, yes, dry_run, verbose):
 def _control_command_options(f):
     """Shared options for every `voicemode control` subcommand.
 
-    `--message` / `--hint` are accepted on all three (the JSON schema carries
-    them on any command for forward-compat) but only surface in the converse
-    return on `stop`. `--socket` overrides the default socket path.
+    `--hint` names a server-owned *intent* (allowlisted); on `stop` it selects
+    the canned sentence the agent sees. `--message` is accepted but, for security
+    (VM-1691), is logged on the server only and NEVER surfaced to the agent.
+    `--socket` overrides the default socket path.
     """
+    from voice_mode.control_channel import CONTROL_INTENTS
+    intents = ", ".join(sorted(CONTROL_INTENTS))
     f = click.option(
         '--socket', 'socket_path', default=None, metavar='PATH',
         help='Control socket path (default: $VOICEMODE_CONTROL_SOCKET or '
              '~/.voicemode/control.sock).',
     )(f)
     f = click.option(
-        '--hint', default=None, metavar='TEXT',
-        help='Named hint surfaced in the converse return, e.g. switch-to-text '
-             '(most useful with stop).',
+        '--hint', default=None, metavar='INTENT',
+        help=f'Named intent surfaced (as a fixed sentence) in the converse return '
+             f'on stop. One of: {intents}.',
     )(f)
     f = click.option(
         '--message', '-m', default=None, metavar='TEXT',
-        help='Free-text message for the agent, surfaced in the converse return '
-             '(most useful with stop).',
+        help='Free-text note for SERVER LOGS only — not shown to the agent '
+             '(security: VM-1691). Use --hint to influence the agent.',
     )(f)
     f = click.help_option('-h', '--help')(f)
     return f
@@ -1853,11 +1856,15 @@ def _send_control_command(command, message, hint, socket_path):
     is speaking, and only when enabled) or on any other socket error.
     """
     from voice_mode.control_socket import send_control_command
+    from voice_mode.control_channel import ControlCommandError
     from voice_mode import config
 
     path = socket_path or config.CONTROL_SOCKET_PATH
     try:
         send_control_command(command, message=message, hint=hint, socket_path=path)
+    except ControlCommandError as exc:
+        click.echo(f"Invalid control command: {exc}", err=True)
+        raise SystemExit(2)
     except FileNotFoundError:
         click.echo(
             f"No control socket at {path}.\n"
