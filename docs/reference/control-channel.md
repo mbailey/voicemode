@@ -23,10 +23,14 @@ export VOICEMODE_CONTROL_CHANNEL_ENABLED=true
 
 # 2. While VoiceMode is speaking, from any local shell:
 voicemode control stop                                  # cut the current utterance
-voicemode control stop --hint switch-to-text -m "can't talk right now"
+voicemode control stop --hint switch-to-text            # cut + tell the agent to go to text
 voicemode control pause                                 # hold playback
 voicemode control resume                                # resume after a pause
 ```
+
+> **What the agent sees is server-controlled.** `--hint` names an *intent* from a
+> fixed allowlist; the server owns the exact sentence the agent reads. Free-form
+> caller text is **never** surfaced to the agent — see [Security](#security).
 
 ## How it works
 
@@ -58,10 +62,13 @@ multiple agent instances.
 |----------|-------------|---------|
 | `VOICEMODE_CONTROL_CHANNEL_ENABLED` | Bind the control socket while speaking | `false` |
 | `VOICEMODE_CONTROL_SOCKET` | Path to the control Unix domain socket | `~/.voicemode/control.sock` |
+| `VOICEMODE_CONTROL_PAUSE_TIMEOUT` | Seconds before a never-resumed `pause` self-heals (0 disables) | `30` |
+| `VOICEMODE_CONTROL_PAUSE_TIMEOUT_ACTION` | What a timed-out pause does: `stop` or `resume` | `stop` |
 
 The channel is **off by default**: enabling it binds a Unix socket that any
-*local* process can drive, so it stays opt-in. When disabled, the listener is
-never started and the CLI has nothing to talk to.
+*same-user* local process (enforced by a peer-credential check) can drive, so it
+stays opt-in. When disabled, the listener is never started and the CLI has
+nothing to talk to. See [Security](#security) for the full model.
 
 ## Socket
 
@@ -69,7 +76,12 @@ never started and the CLI has nothing to talk to.
   same machine as the server).
 - **Path:** `~/.voicemode/control.sock` by default (override with
   `VOICEMODE_CONTROL_SOCKET`), beside the conch under `~/.voicemode/`.
-- **Permissions:** created `0600` (owner-only) — a local-only side channel.
+- **Permissions:** parent dir `0700` and socket bound under `umask(0o077)`; the
+  authoritative gate is the **peer-credential check** (same-UID only) on connect,
+  since socket-file mode isn't reliably enforced on macOS/BSD.
+- **Pause safety:** a `pause` that is never resumed auto-resolves after
+  `VOICEMODE_CONTROL_PAUSE_TIMEOUT` seconds (default 30) so it can't wedge the
+  audio subsystem.
 - **Lifecycle:** bound only while the server is speaking; unlinked on exit. A
   stale socket left by a crashed server is cleared with unlink-then-bind.
 
@@ -82,18 +94,28 @@ as you like down a single connection.
 {"command": "pause"}
 {"command": "resume"}
 {"command": "stop"}
-{"command": "stop", "message": "user can't talk right now", "hint": "switch-to-text"}
+{"command": "stop", "hint": "switch-to-text"}
 ```
 
 | Field | Type | Required | Applies to | Meaning |
 |-------|------|----------|------------|---------|
 | `command` | string | yes | all | One of `pause`, `resume`, `stop`. |
-| `message` | string | no | `stop` | Free-text note for the agent, surfaced in the converse return. |
-| `hint` | string | no | `stop` | Named hint (e.g. `switch-to-text`), surfaced in the converse return. |
+| `hint` | string | no | `stop` | A **named intent** from the allowlist (below). Selects the fixed, server-authored sentence surfaced in the converse return. An unknown hint is **rejected**. |
+| `message` | string | no | `stop` | Free-text note recorded in the **server log only**. It is **never** surfaced to the agent (security: prompt-injection, VM-1691). ≤256 chars. |
 
-`message` and `hint` are accepted on any command for forward-compatibility, but
-today they only surface on `stop`. Anything malformed (bad JSON, unknown command,
-non-string fields) is logged and ignored — a bad line never crashes the server.
+**Named intents** (the only values `hint` accepts — the server controls the
+words the model sees, not the caller):
+
+| Intent | Sentence the agent receives |
+|--------|------------------------------|
+| `switch-to-text` | user switched to text mode — continue in text, don't speak |
+| `brevity` | user asked you to be brief — keep replies short |
+| `quiet` | user asked you to stop talking for now |
+
+**Limits.** A control line is capped at 8 KiB and `message` at 256 chars; both
+are rejected over the cap. Anything malformed (bad JSON, unknown command, unknown
+hint, non-string or over-long fields) is logged and ignored — a bad line never
+crashes the server.
 
 > **`volume` is a documented stretch goal**, not implemented in v1. The schema
 > reserves `{"command": "volume", "level": 0..100}`; sending it today is rejected
@@ -105,17 +127,20 @@ non-string fields) is logged and ignored — a bad line never crashes the server
   `resume` or `stop`. No-op once stopped.
 - **`resume`** — resume playback after a `pause`. No-op once stopped.
 - **`stop`** — cut the in-flight utterance cleanly. Sticky and terminal until the
-  next utterance resets it; the first `stop`'s `message`/`hint` win. This is the
-  primary, load-bearing command.
+  next utterance resets it; the first `stop`'s `hint` wins. This is the primary,
+  load-bearing command.
 
 ### Stop behaviour
 
 A `stop` is **not** ESC. When it arrives, `converse` returns **normally**
-(success), with a control marker prepended to the result string:
+(success), with a control marker prepended to a **server-authored** sentence
+chosen by the `hint` intent (never the caller's free text):
 
 ```
-[control: stop] switch-to-text — user can't talk right now | Timing: ...
+[control: stop] user switched to text mode — continue in text, don't speak | Timing: ...
 ```
+
+With no `hint`, the detail is the generic `playback stopped via control channel`.
 
 The agent reads an ordinary tool result and just continues in text. There is no
 `asyncio.CancelledError`, no MCP server teardown, and no `/mcp` reconnect. A stop
@@ -135,8 +160,8 @@ voicemode control stop    [--message TEXT] [--hint TEXT] [--socket PATH]
 
 | Option | Description |
 |--------|-------------|
-| `--message`, `-m` | Free-text message for the agent (surfaces on `stop`). |
-| `--hint` | Named hint, e.g. `switch-to-text` (surfaces on `stop`). |
+| `--hint` | Named intent (`switch-to-text`, `brevity`, `quiet`); selects the server's sentence on `stop`. Unknown values are rejected. |
+| `--message`, `-m` | Free-text note for the **server log only** — not shown to the agent. |
 | `--socket` | Socket path override (default `$VOICEMODE_CONTROL_SOCKET` or `~/.voicemode/control.sock`). |
 
 Exit status is `0` on a successful send. If nothing is listening — the server
@@ -154,8 +179,8 @@ Stream Deck's *System → Open* / *Multi Action* runs a command on a key press.
 Point a button at the CLI:
 
 ```bash
-# "Text mode" button — cut Cora off and tell the agent why
-voicemode control stop --hint switch-to-text -m "user switched to text mode"
+# "Text mode" button — cut Cora off and tell the agent to continue in text
+voicemode control stop --hint switch-to-text
 ```
 
 ```bash
@@ -214,21 +239,48 @@ def control(command, **fields):
         s.connect(path)
         s.sendall((json.dumps({"command": command, **fields}) + "\n").encode())
 
-control("stop", hint="switch-to-text", message="user can't talk right now")
+control("stop", hint="switch-to-text")
 ```
 
-VoiceMode's own client (what the CLI calls) is
+`hint` must be one of the named intents (`switch-to-text`, `brevity`, `quiet`);
+an unknown hint is rejected. VoiceMode's own client (what the CLI calls) is
 `voice_mode.control_socket.send_control_command(command, message=None, hint=None,
-socket_path=None)`, if you are importing the package.
+socket_path=None)`, if you are importing the package — it validates against the
+same schema before anything goes on the wire.
 
 ## Security
 
-- **Local-only.** The channel is a Unix domain socket, not a network port. There
-  is no remote attack surface.
-- **Off by default.** It does nothing until `VOICEMODE_CONTROL_CHANNEL_ENABLED=true`.
-- **Owner-only.** The socket file is `0600`, so only your user can connect.
-- **Low blast radius.** The only commands are pause / resume / stop of the
-  current utterance — no code execution, no configuration changes.
+Enabling the channel lets **any local process that passes the access check
+influence the agent's current turn**. Treat that as the real model — the points
+below are honest about what is and isn't guaranteed (security review, VM-1688).
+
+- **Off by default — the strongest mitigation.** Nothing binds or listens until
+  `VOICEMODE_CONTROL_CHANNEL_ENABLED=true`. Leave it off unless you want it.
+- **Same-user only (enforced by a peer-credential check).** On every connection
+  the server checks the peer's UID (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on
+  macOS/BSD) and rejects anyone who isn't you. This — not the file mode — is the
+  real access control. Socket-file `0600` is **not** reliably enforced on
+  macOS/BSD (access is governed by the directory), so the parent dir is created
+  `0700` and the socket is bound under `umask(0o077)` as defence in depth.
+- **No free-form text reaches the agent.** A `stop`'s `hint` is a **named intent**
+  from a fixed allowlist; the server owns the exact sentence the model reads. A
+  free-form `message` is logged on the server only, never surfaced. This closes
+  the prompt-injection path (a local process can't put instructions into an agent
+  that holds shell/file tools). Input is length-capped (8 KiB line, 256-char
+  message) to bound cost and memory.
+- **Bounded blast radius — but not zero for an agentic client.** The only verbs
+  are pause / resume / stop; the channel itself runs no code and changes no
+  config. The realistic worst case is *influencing* an agent's turn via the
+  intent set, which is why intents are server-authored and the peer check gates
+  who can send them.
+- **"Local" is about the socket, not the system.** The socket has no network
+  surface. But the triggers this feature invites — media keys, Bluetooth
+  play/pause, a spoken-keyword/wake-word path — can extend the reach to *radio*
+  and *room audio*. If you wire those, anything that can drive them can drive the
+  channel; scope them accordingly.
+- **Stale-socket safety.** The listener refuses to unlink anything at the socket
+  path that isn't a socket it owns, so a squatted file can't be clobbered or used
+  to intercept commands.
 
 ## See also
 
