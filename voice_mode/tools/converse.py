@@ -5,6 +5,7 @@ import logging
 import os
 import time
 import traceback
+from contextlib import asynccontextmanager
 from typing import Optional, Literal, Tuple, Dict, Union
 from pathlib import Path
 from datetime import datetime
@@ -96,6 +97,8 @@ from voice_mode.utils import (
     update_latest_symlinks
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
+from voice_mode.control_channel import get_control_state, intent_sentence
+from voice_mode.control_socket import start_control_listener, stop_control_listener
 
 logger = logging.getLogger("voicemode")
 
@@ -1080,6 +1083,15 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                 logger.debug("Started continuous audio stream")
                 
                 while recording_duration < max_duration and not stop_recording:
+                    # VM-1676: honour a control-channel stop while listening, so a
+                    # stop that arrives mid-record returns cleanly (converse then
+                    # builds the normal control-marker result). Cheap snapshot;
+                    # inert by default -- the state is 'running' unless the channel
+                    # is enabled and a stop has actually fired.
+                    if get_control_state().snapshot().is_stopped:
+                        logger.info("🛑 Recording stopped via control channel")
+                        stop_recording = True
+                        break
                     try:
                         # Get audio chunk from queue with timeout
                         chunk = audio_queue.get(timeout=0.1)
@@ -1253,6 +1265,79 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         logger.info("Falling back to fixed duration recording")
         # For fallback, assume speech is present since we can't detect
         return (record_audio(max_duration), True)
+
+
+# ==================== CONTROL CHANNEL (VM-1676) ====================
+#
+# A control-channel `stop` makes converse return NORMALLY with a control marker
+# in the result string -- the agent reads an ordinary tool result and continues
+# (e.g. switches to text). This is deliberately NOT the asyncio.CancelledError /
+# ESC path, so the MCP server is never torn down and no `/mcp` reconnect is
+# needed. The listener + the control state are inert when the channel is
+# disabled (default), so all of this is a no-op on the normal path.
+
+@asynccontextmanager
+async def _control_listener_scope():
+    """Reset the control state and run the socket listener for one audio op.
+
+    Entered *inside* ``audio_operation_lock`` (see converse) so the listener's
+    start/stop stay serialized with every other audio operation -- only the
+    currently-speaking server owns the single well-known socket. The listener is
+    config-gated and bind failures are non-fatal, so when the channel is disabled
+    this is a cheap no-op wrapped around an inert control state. ``reset`` clears
+    any latched stop from a previous utterance so it can never leak across turns.
+
+    Yields the process-wide ``ControlState`` so the caller can poll its snapshot.
+    """
+    control_state = get_control_state()
+    control_state.reset()
+    start_control_listener()
+    try:
+        yield control_state
+    finally:
+        stop_control_listener()
+
+
+def _format_control_timing(timings: Dict) -> str:
+    """Format whatever timing fields exist so far into the usual ``k v.vs`` string."""
+    parts = []
+    if 'ttfa' in timings:
+        parts.append(f"ttfa {timings['ttfa']:.1f}s")
+    if 'tts_gen' in timings:
+        parts.append(f"gen {timings['tts_gen']:.1f}s")
+    if 'tts_play' in timings:
+        parts.append(f"play {timings['tts_play']:.1f}s")
+    if 'record' in timings:
+        parts.append(f"record {timings['record']:.1f}s")
+    return ", ".join(parts)
+
+
+def _build_control_stop_result(snapshot, timings: Dict) -> str:
+    """Build the NORMAL converse return string for a control-channel stop.
+
+    Shape: ``[control: stop] <server-owned sentence> | Timing: ...``.
+
+    SECURITY (F1 / VM-1691): the detail is a **server-authored** sentence chosen
+    by the stop command's named ``hint`` (validated against
+    ``control_channel.CONTROL_INTENTS`` at parse time). Caller-supplied free text
+    is NEVER surfaced -- a stop's free-form ``message`` is logged locally only, so
+    a local process can't inject instructions into the agent's tool-result. The
+    leading ``[control: stop]`` marker lets the agent distinguish an intentional
+    cut-short turn from a normal voice response.
+    """
+    detail = intent_sentence(snapshot.hint) or "playback stopped via control channel"
+    if snapshot.message:
+        # Accepted for operator logs, deliberately kept out of the agent context.
+        logger.info(
+            "control stop carried a free-form message (not surfaced to agent): %r",
+            snapshot.message[:256],
+        )
+    result = f"[control: stop] {detail}"
+    timing_str = _format_control_timing(timings)
+    if timing_str:
+        result += f" | Timing: {timing_str}"
+    return result
+
 
 @mcp.tool()
 async def converse(
@@ -1777,7 +1862,11 @@ consult the MCP resources listed above.
         transport = "local"
         timings = {}
         try:
-            async with audio_operation_lock:
+            # VM-1676: bring the control channel up around the audio op. The
+            # listener + reset live inside audio_operation_lock so start/stop are
+            # serialized with all other audio ops; ``control_state`` is the shared
+            # singleton the streaming loops + record loop poll for pause/stop.
+            async with audio_operation_lock, _control_listener_scope() as control_state:
                 # Speak the message
                 tts_start = time.perf_counter()
                 if should_skip_tts:
@@ -1883,6 +1972,17 @@ consult the MCP resources listed above.
                         result = "Error: Could not speak message. All TTS providers failed. Check that local services are running or set OPENAI_API_KEY for cloud fallback."
                     return result
 
+                # VM-1676: a control-channel stop during TTS playback ends the
+                # turn cleanly. Return NORMALLY with a control marker -- explicitly
+                # NOT the asyncio.CancelledError / ESC path, so there is no MCP
+                # teardown and no `/mcp` reconnect. Covers speak-only too (checked
+                # before the wait_for_response branch).
+                control_snapshot = control_state.snapshot()
+                if control_snapshot.is_stopped:
+                    logger.info("Converse stopped via control channel during TTS")
+                    success = True
+                    return _build_control_stop_result(control_snapshot, timings)
+
                 # If speak-only mode, return success after TTS
                 if not wait_for_response:
                     # Format timing info for speak-only mode
@@ -1956,7 +2056,16 @@ consult the MCP resources listed above.
                         "duration": timings['record'],
                         "samples": len(audio_data)
                     })
-                
+
+                # VM-1676: a control-channel stop that arrived while we were
+                # listening also ends the turn cleanly -- skip STT and return the
+                # control marker normally (again, NOT the ESC/CancelledError path).
+                control_snapshot = control_state.snapshot()
+                if control_snapshot.is_stopped:
+                    logger.info("Converse stopped via control channel during recording")
+                    success = True
+                    return _build_control_stop_result(control_snapshot, timings)
+
                 # Play "finished" feedback sound
                 await play_audio_feedback(
                     "finished",

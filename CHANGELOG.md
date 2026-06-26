@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Control channel — "barge-in with a key": pause/resume/stop in-flight TTS from any local trigger (VM-1676)** — A side channel into the *running* VoiceMode server lets a Stream Deck button, a media key, a spoken keyword, or any local process **pause, resume, or stop** the utterance the assistant is currently speaking — without going through the agent and without pressing ESC. Stopping this way makes `converse` return **normally** with a control marker (e.g. `[control: stop] user switched to text mode`), so the assistant reads a clean tool result and just continues in text — no killed MCP server, no `/mcp` reconnect. It's the deterministic alternative to VAD barge-in: you get the value of cutting the assistant off when it's long-winded or off-topic, triggered by an explicit press rather than voice-activity guessing. The transport is a local-only Unix domain socket bound only while speaking; a new `voicemode control {pause|resume|stop} [--hint <intent>]` CLI drives it, and the JSON command surface is documented so any trigger can build on it. To stop an external trigger injecting text into the agent, `--hint` is a **named intent** from a server-owned allowlist (`switch-to-text`, `brevity`, `quiet`) — the server controls the exact sentence the agent reads. **Off by default** — opt in per server with `VOICEMODE_CONTROL_CHANNEL_ENABLED=true`. A `stop` lands under ~200 ms (the playback loop polls every ~85 ms audio chunk) and works on both Kokoro and mlx-audio. See [docs/reference/control-channel.md](docs/reference/control-channel.md).
+
+### Security
+
+- **Hardened the control channel before it's recommended for use (VM-1688)** — Following an adversarial review, the (off-by-default) control channel gained real access control and input safety so enabling it can't turn a stray local process into a prompt-injection vector against an agent that holds shell/file tools. **Named intents replace free-form text**: a `stop`'s agent-facing sentence is chosen from a server-owned allowlist (`switch-to-text`/`brevity`/`quiet`); any caller `message` is logged on the server only and never surfaced to the model (F1). **Peer-credential authentication** (`SO_PEERCRED`/`LOCAL_PEERCRED`) rejects other users; the socket directory is created `0700` and bound under `umask(0o077)` — the real gate, since socket-file mode isn't enforced on macOS/BSD (F2/F3). **Input is bounded** (8 KiB line, 256-char message) against memory/context flooding (F5); a **never-resumed `pause` self-heals** after `VOICEMODE_CONTROL_PAUSE_TIMEOUT` (default 30 s) rather than wedging the audio lock (F4); stale-socket cleanup **refuses to unlink a non-socket it doesn't own** (F6); and handler threads / connection lifetime are capped (F7). The docs Security section was rewritten to the real threat model (F8).
+
 ## [8.10.2] - 2026-06-26
 
 ### Security

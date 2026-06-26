@@ -32,6 +32,39 @@ from .audio_player import NonBlockingAudioPlayer
 
 logger = logging.getLogger("voicemode")
 
+# VM-1676 control channel: poll cadence while waiting on the buffered (non-
+# streaming) player. ~50ms keeps the stop reaction well under the 200ms target
+# without busy-spinning.
+_CONTROL_POLL_INTERVAL = 0.05
+
+
+async def _wait_for_player_with_control(player: NonBlockingAudioPlayer) -> bool:
+    """Wait for a ``NonBlockingAudioPlayer`` to finish, honouring a control stop.
+
+    The buffered TTS path plays via the callback-based player rather than a
+    chunked write loop, so it can't poll between chunks. Instead we poll the
+    process-wide control state while the player drains and call
+    ``player.stop()`` if a control-channel **stop** arrives (VM-1676).
+
+    Returns ``True`` if playback was stopped via the control channel, ``False``
+    on natural completion. Pause is best-effort no-op here (a callback player
+    can't pause mid-buffer); only ``stop`` is honoured, matching the design.
+    Inert until something drives the control state -- the singleton starts
+    ``running``.
+    """
+    from .control_channel import get_control_state
+
+    control_state = get_control_state()
+    while not player.playback_complete.is_set():
+        if control_state.snapshot().is_stopped:
+            logger.info("Buffered TTS playback stopped via control channel")
+            player.stop()
+            return True
+        await asyncio.sleep(_CONTROL_POLL_INTERVAL)
+    # Natural completion -- finalize stream teardown and re-raise any error.
+    player.wait()
+    return False
+
 
 def get_audio_path(filename: str, base_dir: Path, timestamp: Optional[datetime] = None) -> Path:
     """Get full audio path with year/month structure for a given filename.
@@ -328,11 +361,19 @@ async def text_to_speech(
                 metrics['ttfa'] = stream_metrics.ttfa
                 metrics['generation'] = stream_metrics.generation_time
                 metrics['playback'] = stream_metrics.playback_time - stream_metrics.generation_time
-                
+
                 # Pass through audio path if it exists
                 if stream_metrics.audio_path:
                     metrics['audio_path'] = stream_metrics.audio_path
-                
+
+                # VM-1676: surface a control-channel stop so converse can return
+                # normally with the control hint instead of treating the cut-short
+                # utterance as a full one.
+                if stream_metrics.control_stopped:
+                    metrics['control_stopped'] = True
+                    logger.info("✓ TTS streaming stopped via control channel")
+                    return True, metrics
+
                 logger.info(f"✓ TTS streamed successfully - TTFA: {metrics['ttfa']:.3f}s")
                 
                 # Save debug files if needed (we'd need to capture the full audio)
@@ -480,8 +521,11 @@ async def text_to_speech(
                         # Use non-blocking audio player for concurrent playback support
                         player = NonBlockingAudioPlayer()
                         player.play(samples_with_buffer, audio.frame_rate, blocking=False)
-                        player.wait()
-                        
+                        # VM-1676: poll the control channel while the player drains
+                        # so a control-channel stop cuts buffered playback too.
+                        if await _wait_for_player_with_control(player):
+                            metrics['control_stopped'] = True
+
                         playback_end = time.perf_counter()
                         metrics['playback'] = playback_end - playback_start
 

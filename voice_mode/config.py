@@ -641,6 +641,45 @@ CONCH_MCP_WAIT_CAP = float(os.getenv("VOICEMODE_CONCH_MCP_WAIT_CAP", "25"))
 # When enabled, automatically switches tmux focus to the speaking agent's pane
 AUTO_FOCUS_PANE = env_bool("VOICEMODE_AUTO_FOCUS_PANE", False)
 
+# ==================== CONTROL CHANNEL CONFIGURATION ====================
+# VM-1676: a side control channel into the running server so an external trigger
+# (Stream Deck, media key, spoken keyword, or any local process) can
+# pause / resume / stop an in-flight TTS utterance WITHOUT going through the MCP
+# protocol stream and WITHOUT pressing ESC. The listener lives in
+# voice_mode/control_socket.py and drives the thread-safe state in
+# voice_mode/control_channel.py.
+
+# Enable the control-channel listener. OFF by default (the safe default): it
+# binds a Unix domain socket that any local process can drive, so it stays
+# opt-in until you want it. Turn on with VOICEMODE_CONTROL_CHANNEL_ENABLED=true.
+CONTROL_CHANNEL_ENABLED = env_bool("VOICEMODE_CONTROL_CHANNEL_ENABLED", False)
+
+# Path to the control-channel Unix domain socket. Local-only (no TCP port — the
+# triggers all run on the same machine); bound only while an audio operation is
+# active so only the currently-speaking server owns it. Lives alongside the
+# conch under ~/.voicemode by default.
+CONTROL_SOCKET_PATH = expand_path(
+    os.getenv("VOICEMODE_CONTROL_SOCKET", str(BASE_DIR / "control.sock"))
+)
+
+# Hardening (F4 / VM-1697): a `pause` holds the global audio lock while playback
+# waits, so a pause that is never resumed (a forgotten/buggy trigger, or a
+# malicious one) would wedge ALL voice ops for this server. Auto-resolve a pause
+# left hanging this many seconds. 0 disables the cap (not recommended).
+try:
+    CONTROL_PAUSE_TIMEOUT = float(os.getenv("VOICEMODE_CONTROL_PAUSE_TIMEOUT", "30"))
+except ValueError:
+    CONTROL_PAUSE_TIMEOUT = 30.0
+
+# What a timed-out pause resolves to: "stop" (cut the utterance, returns cleanly
+# with the pause-timeout intent -- safest, self-heals to a normal return) or
+# "resume" (carry on speaking). Anything else falls back to "stop".
+CONTROL_PAUSE_TIMEOUT_ACTION = os.getenv(
+    "VOICEMODE_CONTROL_PAUSE_TIMEOUT_ACTION", "stop"
+).strip().lower()
+if CONTROL_PAUSE_TIMEOUT_ACTION not in ("stop", "resume"):
+    CONTROL_PAUSE_TIMEOUT_ACTION = "stop"
+
 # ==================== SERVICE CONFIGURATION ====================
 
 # OpenAI configuration
