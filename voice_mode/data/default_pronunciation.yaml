@@ -192,30 +192,6 @@ tts_rules:
     private: false
 
 stt_rules:
-  # Common Whisper mishearings
-  - name: "metool_correction"
-    order: 10
-    pattern: '\bme tool\b'
-    replacement: 'metool'
-    enabled: true
-    description: "Correct Whisper hearing 'me tool' as two words"
-    private: false
-  
-  - name: "cora_seven"
-    order: 20
-    pattern: '\bcora 7\b'
-    replacement: 'Cora 7'
-    enabled: true
-    description: "Ensure proper capitalization of Cora 7"
-    private: false
-  
-  - name: "ai_cora"
-    order: 30
-    pattern: '\bAI cora\b'
-    replacement: 'ai-cora'
-    enabled: true
-    description: "GitHub username format"
-    private: false
   
   # Programming terms often misheard
   - name: "python_capital"

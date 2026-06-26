@@ -8,12 +8,12 @@ Lock file location: ~/.voicemode/conch
 
 Usage:
     # As context manager (recommended)
-    with Conch(agent_name="cora"):
+    with Conch(agent_name="claude"):
         # ... voice conversation logic ...
 
     # Manual acquire/release
     conch = Conch()
-    conch.acquire(agent_name="cora")
+    conch.acquire(agent_name="claude")
     try:
         # ... voice conversation logic ...
     finally:
@@ -140,7 +140,7 @@ class Conch:
         """Initialize Conch with optional agent name.
 
         Args:
-            agent_name: Name of the agent (e.g., "cora"). Used for debugging/logging.
+            agent_name: Name of the agent (e.g., "claude"). Used for debugging/logging.
             session_id: Optional caller-provided harness session ID (VM-1562).
                 Stored verbatim in the lock payload; null when not provided.
             project_path: Optional holder working directory (CID-62). Stored in
