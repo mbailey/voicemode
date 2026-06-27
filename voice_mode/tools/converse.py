@@ -2039,13 +2039,24 @@ consult the MCP resources listed above.
                         result = "Error: Could not speak message. All TTS providers failed. Check that local services are running or set OPENAI_API_KEY for cloud fallback."
                     return result
 
+                # VM-1739: skip_forward is a transport barge-in, NOT a stop. The
+                # playback polls already aborted the utterance (same instant-cut
+                # as stop); here we consume the transport edge -- reset the state
+                # back to running -- and fall through to the normal post-TTS path:
+                # the record/listen turn when wait_for_response, else the ordinary
+                # speak-only result. No [control: stop] marker; this advances the
+                # turn. Checked BEFORE is_stopped (they're mutually exclusive
+                # states); a racing stop would have dominated the latch upstream.
+                control_snapshot = control_state.snapshot()
+                if control_snapshot.is_skip_forward:
+                    logger.info("Converse skip-forward via control channel during TTS")
+                    control_state.reset()
                 # VM-1676: a control-channel stop during TTS playback ends the
                 # turn cleanly. Return NORMALLY with a control marker -- explicitly
                 # NOT the asyncio.CancelledError / ESC path, so there is no MCP
                 # teardown and no `/mcp` reconnect. Covers speak-only too (checked
                 # before the wait_for_response branch).
-                control_snapshot = control_state.snapshot()
-                if control_snapshot.is_stopped:
+                elif control_snapshot.is_stopped:
                     logger.info("Converse stopped via control channel during TTS")
                     success = True
                     return _build_control_stop_result(control_snapshot, timings)

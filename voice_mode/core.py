@@ -56,7 +56,10 @@ async def _wait_for_player_with_control(player: NonBlockingAudioPlayer) -> bool:
 
     control_state = get_control_state()
     while not player.playback_complete.is_set():
-        if control_state.snapshot().is_stopped:
+        # VM-1739: skip_forward aborts the buffered player exactly like stop;
+        # converse consumes the skip_forward edge and advances to record.
+        snap = control_state.snapshot()
+        if snap.is_stopped or snap.is_skip_forward:
             logger.info("Buffered TTS playback stopped via control channel")
             player.stop()
             return True

@@ -67,7 +67,9 @@ async def _poll_control_channel() -> bool:
     """
     control_state = get_control_state()
     snap = control_state.snapshot()
-    if snap.is_stopped:
+    # VM-1739: skip_forward aborts playback exactly like stop (same instant-cut).
+    # The divergence (advance to record vs. control marker) lives in converse.
+    if snap.is_stopped or snap.is_skip_forward:
         return True
     # VM-1685: a pending skip_back breaks playback so converse can abort the
     # in-flight utterance and replay cached audio. Left pending (peek) -- converse
@@ -84,7 +86,8 @@ async def _poll_control_channel() -> bool:
         while True:
             await asyncio.sleep(CONTROL_POLL_INTERVAL)
             snap = control_state.snapshot()
-            if snap.is_stopped:
+            # VM-1739: a skip_forward arriving during a pause-hold also aborts.
+            if snap.is_stopped or snap.is_skip_forward:
                 return True
             # VM-1685: "pause, then skip_back" -- a transport press while paused
             # breaks the hold so converse can replay the cached audio. Left

@@ -2,7 +2,7 @@
 
 The **control channel** is a side channel into the *running* VoiceMode server. It
 lets an external trigger — a Stream Deck button, a media key, a spoken keyword,
-or any local process — **pause, resume, stop, or skip back** through the
+or any local process — **pause, resume, stop, skip back, or skip-forward** the
 assistant's speech *without* going through the agent and *without* pressing ESC.
 
 The headline idea is **"barge-in with a key"**: the value of cutting the
@@ -13,10 +13,12 @@ marker, so the agent reads a clean tool result and continues in text — no MCP
 teardown, no `/mcp` reconnect.
 
 Two transport styles share the one socket. **Cassette transport** —
-pause / resume / stop — acts on the single in-flight utterance (VM-1676).
-**CD transport** — `skip_back` — replays *already-spoken* audio from a small
-history buffer: first press restarts the current/most-recent utterance, each
-further press steps to the one before (VM-1685). A `status` query reads back
+pause / resume / stop, plus `skip_forward` (a deterministic barge-in that cuts
+the current utterance and advances straight to your record turn) — acts on the
+single in-flight utterance (VM-1676, VM-1739). **CD transport** — `skip_back` —
+replays *already-spoken* audio from a small history buffer: first press restarts
+the current/most-recent utterance, each further press steps to the one before
+(VM-1685). A `status` query reads back
 what's playing and where you are in the buffer. Replaying cached audio never
 starts a new agent turn, so — like pause/resume/stop — it stays on the **safe**
 side of the danger line.
@@ -33,6 +35,7 @@ export VOICEMODE_CONTROL_CHANNEL_ENABLED=true
 # 2. While VoiceMode is speaking, from any local shell:
 voicemode control stop                                  # cut the current utterance
 voicemode control stop --hint switch-to-text            # cut + tell the agent to go to text
+voicemode control skip-forward                          # cut + advance to your record turn
 voicemode control pause                                 # hold playback
 voicemode control resume                                # resume after a pause
 voicemode control skip-back                             # replay the previous utterance (press again to step further back)
@@ -115,15 +118,16 @@ as you like down a single connection.
 {"command": "stop"}
 {"command": "stop", "hint": "switch-to-text"}
 {"command": "skip_back"}
+{"command": "skip_forward"}
 ```
 
 | Field | Type | Required | Applies to | Meaning |
 |-------|------|----------|------------|---------|
-| `command` | string | yes | all | One of `pause`, `resume`, `stop`, `skip_back`. |
+| `command` | string | yes | all | One of `pause`, `resume`, `stop`, `skip_forward`, `skip_back`. |
 | `hint` | string | no | `stop` | A **named intent** from the allowlist (below). Selects the fixed, server-authored sentence surfaced in the converse return. An unknown hint is **rejected**. |
 | `message` | string | no | `stop` | Free-text note recorded in the **server log only**. It is **never** surfaced to the agent (security: prompt-injection, VM-1691). ≤256 chars. |
 
-These four commands are **fire-and-forget**: the server applies them and writes
+These five commands are **fire-and-forget**: the server applies them and writes
 nothing back. There is one **request/response** verb — `status` — which is *not*
 a command (it mutates nothing) and returns one JSON line; see
 [The "now playing" status query](#the-now-playing-status-query).
@@ -160,6 +164,12 @@ crashes the server.
   request (it never latches like `stop`). Re-plays cached audio only — no new
   agent turn. Full semantics in
   [History buffer and CD-style skip-back](#history-buffer-and-cd-style-skip-back).
+- **`skip_forward`** — a deterministic **transport barge-in**: end the current
+  utterance immediately (same instant-cut as `stop`) and **advance straight to
+  your record/listen turn** — the same effect as speaking over the assistant, but
+  triggered by a key/button. Carries no `hint`/`message` (nothing is surfaced to
+  the agent). Sticky like `stop` but a *softer* terminal — a racing `stop` still
+  wins. See [Skip-forward behaviour](#skip-forward-behaviour).
 
 ### Stop behaviour
 
@@ -177,6 +187,25 @@ The agent reads an ordinary tool result and just continues in text. There is no
 `asyncio.CancelledError`, no MCP server teardown, and no `/mcp` reconnect. A stop
 that arrives while VoiceMode is *listening* (recording) returns cleanly the same
 way, skipping transcription.
+
+### Skip-forward behaviour
+
+`skip_forward` is the `>>|` half of a transport pair (with skip-back). Where
+`stop` *ends* the turn, `skip_forward` **advances** it: it cuts the current
+utterance and hands the turn straight to you.
+
+- **In a normal converse** (`wait_for_response=True`): playback aborts, then
+  `converse` plays the listening chime, records, transcribes, and returns your
+  response **as an ordinary `Voice response: ...` result** — there is **no**
+  `[control: stop]` marker. To the agent it looks exactly as if you'd let the
+  utterance finish and then answered.
+- **In speak-only** (`wait_for_response=False`): there's no record turn to
+  advance to, so `skip_forward` just ends the utterance and returns the normal
+  speak-only success string.
+
+It's the deterministic, key/button counterpart to voice barge-in (talking over
+the assistant): same outcome — cut it off and take your turn — without relying on
+voice-activity detection.
 
 ## History buffer and CD-style skip-back
 
@@ -263,7 +292,8 @@ correlation.
 
 `status` is **not** in `VALID_COMMANDS`: it mutates nothing, so it's a read-side
 query, kept cleanly separate from the command schema. The fire-and-forget path
-for pause/resume/stop/skip_back is untouched — those still write nothing back.
+for pause/resume/stop/skip_forward/skip_back is untouched — those still write
+nothing back.
 
 ```jsonc
 // → request
@@ -315,16 +345,19 @@ The CLI is the reference client — the "second local process" that proves the
 channel is reusable. It writes exactly one JSON line to the socket and exits.
 
 ```
-voicemode control pause      [--message TEXT] [--hint TEXT] [--socket PATH]
-voicemode control resume     [--message TEXT] [--hint TEXT] [--socket PATH]
-voicemode control stop       [--message TEXT] [--hint TEXT] [--socket PATH]
-voicemode control skip-back  [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control pause         [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control resume        [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control stop          [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control skip-back     [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control skip-forward  [--socket PATH]
 ```
 
-> **CLI verb is hyphenated, wire word is underscored.** `voicemode control
-> skip-back` sends `{"command":"skip_back"}` — the exact word the Stream Deck
-> `deck.py` and other triggers put on the wire. (`--hint` / `--message` are
-> accepted for surface symmetry but only `stop` acts on them.)
+> **CLI verbs are hyphenated, wire words are underscored.** `voicemode control
+> skip-back` sends `{"command":"skip_back"}` and `voicemode control skip-forward`
+> sends `{"command":"skip_forward"}` — the exact words the Stream Deck `deck.py`
+> and other triggers put on the wire. (`--hint` / `--message` are accepted on the
+> pause/resume/stop/skip-back verbs for surface symmetry but only `stop` acts on
+> them; `skip-forward` takes neither.)
 
 | Option | Description |
 |--------|-------------|
