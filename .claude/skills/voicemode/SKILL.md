@@ -197,6 +197,41 @@ voicemode service status whisper  # Specific service
 
 Shows service status including running state, ports, and health.
 
+## Reconnecting after a mid-session drop
+
+If voice drops mid-session (`-32000 Connection closed`) — or the server failed to
+register its tools at launch — the voicemode MCP *tools* vanish, so recovery
+can't be an MCP tool. Bash and tmux survive, so heal it in **one Bash call**:
+
+```bash
+voicemode reconnect
+```
+
+This runs the whole `/mcp` reconnect dance on your own pane (`$TMUX_PANE`): opens
+the menu, finds the voicemode server *by name* (not a fragile Down-count),
+navigates to it by reading the cursor, hits **Reconnect** only if it's failed,
+polls until it's connected, then prints the exact `ToolSearch` line to reload the
+converse schema. It fails loud rather than sending blind keystrokes if the screen
+isn't what it expects. **Must run inside tmux** (it drives the pane via tmux).
+
+After it prints `RESULT: reconnected`, run the `ToolSearch select:…` line it
+echoes to reload the tool schema, then resume conversing.
+
+```
+RESULT: reconnected            # exit 0  — was failed, now reconnected
+RESULT: already-connected      # exit 10 — nothing to do (benign no-op)
+                               # 11 not-found · 12 timeout · 13 not-in-tmux · 1 error
+```
+
+Useful flags: `--pane <id>` (drive another pane), `--server <substr>` (default
+`voicemode`), `--timeout <s>` (default 75), `--dry-run` (report, send no keys).
+
+**Fallback — drive `/mcp` by hand** (older Claude Code, or if `voicemode
+reconnect` ever fails loud on an unfamiliar menu): the step-by-step manual walk
+lives in `~/.slipbox/voice-self-reconnect.md` — open `/mcp`, read the list with
+`capture-pane`, navigate to voicemode, hit Reconnect, wait ~1 min, reload the
+schema.
+
 ## Installation
 
 ```bash
