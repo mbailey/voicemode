@@ -481,9 +481,10 @@ def send_control_command(
 ) -> None:
     """Connect to the control socket and write one newline-delimited JSON command.
 
-    ``command`` must be ``pause`` / ``resume`` / ``stop``; ``message`` and
-    ``hint`` are carried for ``stop`` (they feed the normal ``converse`` return
-    string -- e.g. hint ``switch-to-text``). The payload is validated against the
+    ``command`` must be ``pause`` / ``resume`` / ``stop`` / ``skip_forward``;
+    ``message`` and ``hint`` are carried for ``stop`` (they feed the normal
+    ``converse`` return string -- e.g. hint ``switch-to-text``). ``skip_forward``
+    carries neither. The payload is validated against the
     same schema the listener enforces (:func:`parse_command`) *before* anything
     is sent, so a bad command raises here rather than being silently dropped
     server-side.
