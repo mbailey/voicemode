@@ -67,6 +67,15 @@ COMMAND_SKIP_BACK = "skip_back"
 # dropped on the floor.
 VALID_COMMANDS = (COMMAND_PAUSE, COMMAND_RESUME, COMMAND_STOP, COMMAND_SKIP_BACK)
 
+# Read-side query (VM-1685, impl-nowplaying). Unlike the mutating commands in
+# ``VALID_COMMANDS``, ``status`` is a *request/response* query: the socket
+# listener answers it with one JSON line describing the current state + the
+# history-buffer "now playing" position, and mutates nothing. It is deliberately
+# kept OUT of ``VALID_COMMANDS`` / :func:`parse_command` (those validate the
+# fire-and-forget mutation path) and handled by the socket read-side instead, so
+# the mutation schema and the query schema stay cleanly separated.
+COMMAND_STATUS = "status"
+
 
 # --- Named control intents (F1 / VM-1691) --------------------------------
 #
