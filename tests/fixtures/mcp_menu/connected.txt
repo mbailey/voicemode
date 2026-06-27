@@ -1,0 +1,8 @@
+╭────────────────────────────────────────────────────────────────────────╮
+│ Manage MCP servers                                                       │
+│                                                                          │
+│ ❯ 1. voicemode                         ✔ connected · Enter to view       │
+│   2. taskmaster                        ✔ connected · Enter to view       │
+│                                                                          │
+│ Esc to exit                                                              │
+╰────────────────────────────────────────────────────────────────────────╯

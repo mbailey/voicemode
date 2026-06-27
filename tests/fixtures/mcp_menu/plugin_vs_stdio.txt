@@ -1,0 +1,9 @@
+╭────────────────────────────────────────────────────────────────────────╮
+│ Manage MCP servers                                                       │
+│                                                                          │
+│ ❯ 1. taskmaster                        ✔ connected · Enter to view       │
+│   2. voicemode                         ✔ connected · Enter to view       │
+│   3. plugin:voicemode:voicemode        ✘ failed · Enter to view          │
+│                                                                          │
+│ Esc to exit                                                              │
+╰────────────────────────────────────────────────────────────────────────╯

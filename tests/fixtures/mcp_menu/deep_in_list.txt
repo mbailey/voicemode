@@ -1,0 +1,13 @@
+╭────────────────────────────────────────────────────────────────────────╮
+│ Manage MCP servers                                                       │
+│                                                                          │
+│ ❯ 1. brave-search                      ✔ connected · Enter to view       │
+│   2. filesystem                        ✔ connected · Enter to view       │
+│   3. github                            ✔ connected · Enter to view       │
+│   4. taskmaster                        ✔ connected · Enter to view       │
+│   5. playwright                        ✔ connected · Enter to view       │
+│   6. voicemode                         ✘ failed · Enter to view          │
+│   7. fetch                             ✔ connected · Enter to view       │
+│                                                                          │
+│ Esc to exit                                                              │
+╰────────────────────────────────────────────────────────────────────────╯

@@ -1,0 +1,7 @@
+▐▛███▜▌   Claude Code v2.1.186
+▝▜█████▛▘
+  ▝▀▀▀▘
+
+> Try "edit cli.py to add a reconnect command"
+
+  ? for shortcuts
