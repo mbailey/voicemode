@@ -58,7 +58,9 @@ async def _poll_control_channel() -> bool:
     """
     control_state = get_control_state()
     snap = control_state.snapshot()
-    if snap.is_stopped:
+    # VM-1739: skip_forward aborts playback exactly like stop (same instant-cut).
+    # The divergence (advance to record vs. control marker) lives in converse.
+    if snap.is_stopped or snap.is_skip_forward:
         return True
     if snap.is_paused:
         logger.info("TTS playback paused via control channel")
@@ -70,7 +72,8 @@ async def _poll_control_channel() -> bool:
         while True:
             await asyncio.sleep(CONTROL_POLL_INTERVAL)
             snap = control_state.snapshot()
-            if snap.is_stopped:
+            # VM-1739: a skip_forward arriving during a pause-hold also aborts.
+            if snap.is_stopped or snap.is_skip_forward:
                 return True
             if not snap.is_paused:
                 logger.info("TTS playback resumed via control channel")

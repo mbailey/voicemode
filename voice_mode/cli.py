@@ -1930,6 +1930,7 @@ def control():
     Examples:
       voicemode control stop                                # cut the current utterance
       voicemode control stop --hint switch-to-text -m "can't talk right now"
+      voicemode control skip-forward                        # cut + advance to your record turn
       voicemode control pause                               # hold playback
       voicemode control resume                              # resume after a pause
 
@@ -1957,6 +1958,18 @@ def control_resume(message, hint, socket_path):
 def control_stop(message, hint, socket_path):
     """Stop the in-flight utterance cleanly; converse returns with the hint/message."""
     _send_control_command('stop', message, hint, socket_path)
+
+
+@control.command('skip-forward')
+@_control_command_options
+def control_skip_forward(message, hint, socket_path):
+    """Skip-forward: end the current utterance and advance to your record turn.
+
+    A deterministic transport barge-in (VM-1739) -- the same effect as speaking
+    over the assistant, but triggered by a key/button. Unlike `stop`, `converse`
+    does NOT return a control marker: it advances straight into listening.
+    """
+    _send_control_command('skip_forward', message, hint, socket_path)
 
 
 # Diagnostics group

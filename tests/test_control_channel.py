@@ -17,9 +17,11 @@ import pytest
 from voice_mode.control_channel import (
     COMMAND_PAUSE,
     COMMAND_RESUME,
+    COMMAND_SKIP_FORWARD,
     COMMAND_STOP,
     STATE_PAUSED,
     STATE_RUNNING,
+    STATE_SKIP_FORWARD,
     STATE_STOPPED,
     VALID_COMMANDS,
     ControlCommand,
@@ -355,6 +357,7 @@ class TestApplyTo:
                 COMMAND_PAUSE: STATE_PAUSED,
                 COMMAND_RESUME: STATE_RUNNING,  # resume from running is a no-op -> running
                 COMMAND_STOP: STATE_STOPPED,
+                COMMAND_SKIP_FORWARD: STATE_SKIP_FORWARD,
             }[command]
             assert state.snapshot().state == expected
 
@@ -380,3 +383,119 @@ class TestSnapshotAndSingleton:
         b = get_control_state()
         assert a is b
         assert isinstance(a, ControlState)
+
+
+# --------------------------------------------------------------------------
+# skip_forward -- the VM-1739 transport barge-in (4th state, sticky like stop)
+# --------------------------------------------------------------------------
+
+
+class TestSkipForwardState:
+    """request_skip_forward latches STATE_SKIP_FORWARD; snapshot surfaces it."""
+
+    def test_skip_forward_from_running(self):
+        state = ControlState()
+        assert state.request_skip_forward() is True
+        snap = state.snapshot()
+        assert snap.state == STATE_SKIP_FORWARD
+        assert snap.is_skip_forward
+        assert not snap.is_stopped and not snap.is_paused and not snap.is_running
+
+    def test_skip_forward_from_paused(self):
+        state = ControlState()
+        state.request_pause()
+        assert state.request_skip_forward() is True
+        assert state.snapshot().is_skip_forward
+
+    def test_reset_clears_skip_forward(self):
+        state = ControlState()
+        state.request_skip_forward()
+        state.reset()
+        snap = state.snapshot()
+        assert snap.state == STATE_RUNNING
+        assert not snap.is_skip_forward
+
+    def test_snapshot_property_independent_of_other_states(self):
+        assert ControlSnapshot(STATE_SKIP_FORWARD).is_skip_forward
+        assert not ControlSnapshot(STATE_STOPPED).is_skip_forward
+        assert not ControlSnapshot(STATE_RUNNING).is_skip_forward
+
+
+class TestSkipForwardStickiness:
+    """skip_forward is sticky; pause/resume are no-ops; a racing stop dominates."""
+
+    def test_pause_ignored_after_skip_forward(self):
+        state = ControlState()
+        state.request_skip_forward()
+        assert state.request_pause() is False
+        assert state.snapshot().is_skip_forward
+
+    def test_resume_ignored_after_skip_forward(self):
+        state = ControlState()
+        state.request_skip_forward()
+        assert state.request_resume() is False
+        assert state.snapshot().is_skip_forward
+
+    def test_stop_overrides_skip_forward(self):
+        # stop is the harder terminal -- a racing stop after skip_forward wins.
+        state = ControlState()
+        state.request_skip_forward()
+        assert state.request_stop(hint="switch-to-text") is True
+        snap = state.snapshot()
+        assert snap.state == STATE_STOPPED
+        assert snap.hint == "switch-to-text"
+
+    def test_skip_forward_ignored_after_stop(self):
+        # The reverse: once stopped, a later skip_forward is a no-op (stop wins).
+        state = ControlState()
+        state.request_stop()
+        assert state.request_skip_forward() is False
+        assert state.snapshot().is_stopped
+
+    def test_skip_forward_is_idempotent(self):
+        state = ControlState()
+        assert state.request_skip_forward() is True
+        assert state.request_skip_forward() is True
+        assert state.snapshot().is_skip_forward
+
+    def test_reset_allows_running_again_after_skip_forward(self):
+        state = ControlState()
+        state.request_skip_forward()
+        state.reset()
+        # pause works again because reset cleared the transport terminal.
+        assert state.request_pause() is True
+        assert state.snapshot().state == STATE_PAUSED
+
+
+class TestSkipForwardSchema:
+    """parse_command accepts skip_forward; apply_to dispatches to request_skip_forward."""
+
+    def test_skip_forward_in_valid_commands(self):
+        assert COMMAND_SKIP_FORWARD == "skip_forward"
+        assert COMMAND_SKIP_FORWARD in VALID_COMMANDS
+
+    def test_parse_skip_forward(self):
+        cmd = parse_command(json.dumps({"command": "skip_forward"}))
+        assert cmd.command == COMMAND_SKIP_FORWARD
+        assert cmd.message is None and cmd.hint is None
+
+    def test_apply_skip_forward_latches_state(self):
+        state = ControlState()
+        parse_command('{"command": "skip_forward"}').apply_to(state)
+        assert state.snapshot().is_skip_forward
+
+    def test_wait_while_paused_wakes_on_skip_forward(self):
+        # A paused playback waiter must wake (and abort) when skip_forward fires.
+        state = ControlState()
+        state.request_pause()
+        result = {}
+
+        def waiter():
+            result["snap"] = state.wait_while_paused(timeout=5.0)
+
+        t = threading.Thread(target=waiter)
+        t.start()
+        state.request_skip_forward()
+        t.join(timeout=5.0)
+        assert not t.is_alive(), "waiter did not wake on skip_forward"
+        assert result["snap"].is_skip_forward

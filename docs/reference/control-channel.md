@@ -2,8 +2,8 @@
 
 The **control channel** is a side channel into the *running* VoiceMode server. It
 lets an external trigger — a Stream Deck button, a media key, a spoken keyword,
-or any local process — **pause, resume, or stop** an in-flight TTS utterance
-*without* going through the agent and *without* pressing ESC.
+or any local process — **pause, resume, stop, or skip-forward** an in-flight TTS
+utterance *without* going through the agent and *without* pressing ESC.
 
 The headline idea is **"barge-in with a key"**: the value of cutting the
 assistant off when it's talking too long or off-topic, but **deterministically**
@@ -24,6 +24,7 @@ export VOICEMODE_CONTROL_CHANNEL_ENABLED=true
 # 2. While VoiceMode is speaking, from any local shell:
 voicemode control stop                                  # cut the current utterance
 voicemode control stop --hint switch-to-text            # cut + tell the agent to go to text
+voicemode control skip-forward                          # cut + advance to your record turn
 voicemode control pause                                 # hold playback
 voicemode control resume                                # resume after a pause
 ```
@@ -95,11 +96,12 @@ as you like down a single connection.
 {"command": "resume"}
 {"command": "stop"}
 {"command": "stop", "hint": "switch-to-text"}
+{"command": "skip_forward"}
 ```
 
 | Field | Type | Required | Applies to | Meaning |
 |-------|------|----------|------------|---------|
-| `command` | string | yes | all | One of `pause`, `resume`, `stop`. |
+| `command` | string | yes | all | One of `pause`, `resume`, `stop`, `skip_forward`. |
 | `hint` | string | no | `stop` | A **named intent** from the allowlist (below). Selects the fixed, server-authored sentence surfaced in the converse return. An unknown hint is **rejected**. |
 | `message` | string | no | `stop` | Free-text note recorded in the **server log only**. It is **never** surfaced to the agent (security: prompt-injection, VM-1691). ≤256 chars. |
 
@@ -129,6 +131,12 @@ crashes the server.
 - **`stop`** — cut the in-flight utterance cleanly. Sticky and terminal until the
   next utterance resets it; the first `stop`'s `hint` wins. This is the primary,
   load-bearing command.
+- **`skip_forward`** — a deterministic **transport barge-in**: end the current
+  utterance immediately (same instant-cut as `stop`) and **advance straight to
+  your record/listen turn** — the same effect as speaking over the assistant, but
+  triggered by a key/button. Carries no `hint`/`message` (nothing is surfaced to
+  the agent). Sticky like `stop` but a *softer* terminal — a racing `stop` still
+  wins. See [Skip-forward behaviour](#skip-forward-behaviour).
 
 ### Stop behaviour
 
@@ -147,16 +155,39 @@ The agent reads an ordinary tool result and just continues in text. There is no
 that arrives while VoiceMode is *listening* (recording) returns cleanly the same
 way, skipping transcription.
 
+### Skip-forward behaviour
+
+`skip_forward` is the `>>|` half of a transport pair (with skip-back). Where
+`stop` *ends* the turn, `skip_forward` **advances** it: it cuts the current
+utterance and hands the turn straight to you.
+
+- **In a normal converse** (`wait_for_response=True`): playback aborts, then
+  `converse` plays the listening chime, records, transcribes, and returns your
+  response **as an ordinary `Voice response: ...` result** — there is **no**
+  `[control: stop]` marker. To the agent it looks exactly as if you'd let the
+  utterance finish and then answered.
+- **In speak-only** (`wait_for_response=False`): there's no record turn to
+  advance to, so `skip_forward` just ends the utterance and returns the normal
+  speak-only success string.
+
+It's the deterministic, key/button counterpart to voice barge-in (talking over
+the assistant): same outcome — cut it off and take your turn — without relying on
+voice-activity detection.
+
 ## The `voicemode control` CLI
 
 The CLI is the reference client — the "second local process" that proves the
 channel is reusable. It writes exactly one JSON line to the socket and exits.
 
 ```
-voicemode control pause   [--message TEXT] [--hint TEXT] [--socket PATH]
-voicemode control resume  [--message TEXT] [--hint TEXT] [--socket PATH]
-voicemode control stop    [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control pause         [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control resume        [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control stop          [--message TEXT] [--hint TEXT] [--socket PATH]
+voicemode control skip-forward  [--socket PATH]
 ```
+
+> The CLI subcommand is hyphenated (`skip-forward`); it maps to the underscored
+> wire command `{"command": "skip_forward"}`.
 
 | Option | Description |
 |--------|-------------|

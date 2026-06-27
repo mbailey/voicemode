@@ -16,8 +16,8 @@ sit on top without playback ever caring:
   to *running* between utterances.
 
 * The newline-delimited JSON command schema -- ``parse_command`` turns one line
-  of ``{"command": "pause"|"resume"|"stop", "message"?, "hint"?}`` into a
-  validated ``ControlCommand``, raising ``ControlCommandError`` on anything
+  of ``{"command": "pause"|"resume"|"stop"|"skip_forward", "message"?, "hint"?}``
+  into a validated ``ControlCommand``, raising ``ControlCommandError`` on anything
   malformed or unknown so a bad line can be logged and ignored rather than
   crashing the server.
 
@@ -42,8 +42,13 @@ logger = logging.getLogger("voicemode.control_channel")
 STATE_RUNNING = "running"   # nothing requested -- normal playback
 STATE_PAUSED = "paused"     # hold playback until resume or stop
 STATE_STOPPED = "stopped"   # break playback; terminal until reset()
+# VM-1739 transport barge-in: end the current utterance now and advance to the
+# record/listen turn. Aborts playback exactly like STATE_STOPPED; the only
+# divergence is in converse (advance to record instead of a [control: stop]
+# marker). Sticky like stop, but a *softer* terminal -- a racing stop overrides.
+STATE_SKIP_FORWARD = "skip_forward"
 
-VALID_STATES = (STATE_RUNNING, STATE_PAUSED, STATE_STOPPED)
+VALID_STATES = (STATE_RUNNING, STATE_PAUSED, STATE_STOPPED, STATE_SKIP_FORWARD)
 
 
 # --- Command schema -------------------------------------------------------
@@ -51,12 +56,15 @@ VALID_STATES = (STATE_RUNNING, STATE_PAUSED, STATE_STOPPED)
 COMMAND_PAUSE = "pause"
 COMMAND_RESUME = "resume"
 COMMAND_STOP = "stop"
+# VM-1739: deterministic transport barge-in -- end the current utterance and
+# advance to the record/listen turn (the |<< >>| pair with VM-1685 skip_back).
+COMMAND_SKIP_FORWARD = "skip_forward"
 
 # The commands a control client may send over the channel. ``volume`` is a
 # documented stretch goal (VM-1676) -- intentionally NOT accepted in v1 so an
 # unimplemented command fails validation loudly rather than being silently
 # dropped on the floor.
-VALID_COMMANDS = (COMMAND_PAUSE, COMMAND_RESUME, COMMAND_STOP)
+VALID_COMMANDS = (COMMAND_PAUSE, COMMAND_RESUME, COMMAND_STOP, COMMAND_SKIP_FORWARD)
 
 
 # --- Named control intents (F1 / VM-1691) --------------------------------
@@ -134,6 +142,8 @@ class ControlCommand:
             state.request_resume()
         elif self.command == COMMAND_STOP:
             state.request_stop(message=self.message, hint=self.hint)
+        elif self.command == COMMAND_SKIP_FORWARD:
+            state.request_skip_forward()
         else:  # pragma: no cover -- parse_command guarantees a valid command
             raise ControlCommandError(f"unhandled command: {self.command!r}")
 
@@ -141,7 +151,8 @@ class ControlCommand:
 def parse_command(line: str) -> ControlCommand:
     """Parse one newline-delimited JSON control line into a ``ControlCommand``.
 
-    Schema: ``{"command": "pause"|"resume"|"stop", "message"?: str, "hint"?: str}``.
+    Schema: ``{"command": "pause"|"resume"|"stop"|"skip_forward",
+    "message"?: str, "hint"?: str}``.
     Surrounding whitespace (including the trailing newline) is tolerated.
 
     Raises ``ControlCommandError`` on anything that isn't a JSON object with a
@@ -228,6 +239,12 @@ class ControlSnapshot:
     def is_stopped(self) -> bool:
         return self.state == STATE_STOPPED
 
+    @property
+    def is_skip_forward(self) -> bool:
+        # VM-1739: latched skip-forward barge-in. Playback polls treat this
+        # exactly like ``is_stopped`` (abort now); only converse diverges.
+        return self.state == STATE_SKIP_FORWARD
+
 
 class ControlState:
     """Thread-safe pause / resume / stop state for a single TTS utterance.
@@ -260,20 +277,28 @@ class ControlState:
     # --- mutations (listener side) ---------------------------------------
 
     def request_pause(self) -> bool:
-        """Request a pause. Returns False (no-op) if already stopped."""
+        """Request a pause. Returns False (no-op) if already stopped/skip-forward.
+
+        A latched ``skip_forward`` is a sticky transport terminal (like ``stop``)
+        until ``reset()``: a late ``pause`` must not unlatch it (VM-1739).
+        """
         with self._cond:
-            if self._state == STATE_STOPPED:
-                logger.debug("pause ignored -- already stopped")
+            if self._state in (STATE_STOPPED, STATE_SKIP_FORWARD):
+                logger.debug("pause ignored -- already %s", self._state)
                 return False
             self._state = STATE_PAUSED
             self._cond.notify_all()
             return True
 
     def request_resume(self) -> bool:
-        """Resume from a pause. Returns False (no-op) if already stopped."""
+        """Resume from a pause. Returns False (no-op) if already stopped/skip-forward.
+
+        Like ``pause``, ignores a latched ``skip_forward`` so a late ``resume``
+        can't revive a barge-in'd utterance (VM-1739).
+        """
         with self._cond:
-            if self._state == STATE_STOPPED:
-                logger.debug("resume ignored -- already stopped")
+            if self._state in (STATE_STOPPED, STATE_SKIP_FORWARD):
+                logger.debug("resume ignored -- already %s", self._state)
                 return False
             self._state = STATE_RUNNING
             self._cond.notify_all()
@@ -294,6 +319,27 @@ class ControlState:
                 self._hint = hint
             else:
                 logger.debug("stop ignored -- already stopped (keeping first message/hint)")
+            self._cond.notify_all()
+            return True
+
+    def request_skip_forward(self) -> bool:
+        """Request a skip-forward barge-in (VM-1739): end the current utterance
+        now and advance to the record/listen turn.
+
+        Surfaced via ``ControlSnapshot.is_skip_forward`` and treated by the
+        playback polls exactly like ``stop`` (abort now, same instant-cut path).
+        Sticky/first-wins, but a **softer** terminal than ``stop``: a racing
+        ``stop`` after a ``skip_forward`` still wins (``request_stop`` overrides
+        any non-stopped state). No-op once stopped (returns False). Always wakes
+        any paused waiter so it aborts. ``reset()`` clears it back to running.
+        """
+        with self._cond:
+            if self._state == STATE_STOPPED:
+                # stop is the harder terminal -- it dominates a later skip_forward.
+                logger.debug("skip_forward ignored -- already stopped")
+                self._cond.notify_all()
+                return False
+            self._state = STATE_SKIP_FORWARD
             self._cond.notify_all()
             return True
 

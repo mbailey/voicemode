@@ -30,6 +30,7 @@ from voice_mode.cli import voice_mode_main_cli
 from voice_mode.control_channel import (
     STATE_PAUSED,
     STATE_RUNNING,
+    STATE_SKIP_FORWARD,
     STATE_STOPPED,
     ControlCommandError,
     ControlState,
@@ -98,6 +99,12 @@ class TestSendControlCommand:
         send_control_command("stop", socket_path=listener.socket_path)
         assert wait_for(lambda: listener.test_state.snapshot().is_stopped)
 
+    def test_skip_forward(self, listener):
+        # VM-1739: skip_forward latches the transport-barge-in state on the listener.
+        send_control_command("skip_forward", socket_path=listener.socket_path)
+        assert wait_for(lambda: listener.test_state.snapshot().is_skip_forward)
+        assert listener.test_state.snapshot().state == STATE_SKIP_FORWARD
+
     def test_stop_with_message_and_hint(self, listener):
         send_control_command(
             "stop",
@@ -148,6 +155,13 @@ class TestControlCLI:
         assert result.exit_code == 0, result.output
         assert wait_for(lambda: listener.test_state.snapshot().is_stopped)
 
+    def test_skip_forward(self, listener):
+        # The hyphenated subcommand maps to the underscored wire command.
+        result = run_control("skip-forward", "--socket", str(listener.socket_path))
+        assert result.exit_code == 0, result.output
+        assert "Sent 'skip_forward'" in result.output
+        assert wait_for(lambda: listener.test_state.snapshot().is_skip_forward)
+
     def test_stop_with_message_and_hint(self, listener):
         result = run_control(
             "stop",
@@ -191,5 +205,5 @@ class TestControlCLI:
     def test_help_lists_subcommands(self):
         result = run_control("--help")
         assert result.exit_code == 0
-        for verb in ("pause", "resume", "stop"):
+        for verb in ("pause", "resume", "stop", "skip-forward"):
             assert verb in result.output
