@@ -374,6 +374,13 @@ async def text_to_speech(
                     logger.info("✓ TTS streaming stopped via control channel")
                     return True, metrics
 
+                # VM-1685: surface a skip_back transport interrupt so converse can
+                # hand off to the replay loop instead of proceeding to listen.
+                if stream_metrics.transport_interrupted:
+                    metrics['transport_interrupted'] = True
+                    logger.info("✓ TTS streaming interrupted by transport request (skip_back)")
+                    return True, metrics
+
                 logger.info(f"✓ TTS streamed successfully - TTFA: {metrics['ttfa']:.3f}s")
                 
                 # Save debug files if needed (we'd need to capture the full audio)

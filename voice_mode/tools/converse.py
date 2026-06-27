@@ -97,8 +97,9 @@ from voice_mode.utils import (
     update_latest_symlinks
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
-from voice_mode.control_channel import get_control_state, intent_sentence
+from voice_mode.control_channel import get_control_state, intent_sentence, COMMAND_SKIP_BACK
 from voice_mode.control_socket import start_control_listener, stop_control_listener
+from voice_mode.history_buffer import get_history_buffer
 
 logger = logging.getLogger("voicemode")
 
@@ -1088,9 +1089,17 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     # builds the normal control-marker result). Cheap snapshot;
                     # inert by default -- the state is 'running' unless the channel
                     # is enabled and a stop has actually fired.
-                    if get_control_state().snapshot().is_stopped:
+                    snap = get_control_state().snapshot()
+                    if snap.is_stopped:
                         logger.info("🛑 Recording stopped via control channel")
                         stop_recording = True
+                        break
+                    # VM-1685: a skip_back pressed while listening ends this
+                    # recording early (peek only -- converse consumes the request,
+                    # replays the cached audio, then re-listens). Without this we
+                    # would wait for silence/timeout before the replay.
+                    if snap.pending_transport == COMMAND_SKIP_BACK:
+                        logger.info("⏮  Recording ended early by skip_back -- handing off to replay")
                         break
                     try:
                         # Get audio chunk from queue with timeout
@@ -1337,6 +1346,64 @@ def _build_control_stop_result(snapshot, timings: Dict) -> str:
     if timing_str:
         result += f" | Timing: {timing_str}"
     return result
+
+
+async def _drain_skip_back(control_state, replay_cursor: int) -> int:
+    """Consume pending skip_back presses, replaying cached audio (VM-1685, CD cursor).
+
+    Drains every queued ``skip_back`` transport request, re-playing the targeted
+    history-buffer entry through the normal playback path, and returns the
+    updated cursor. CD-player semantics over the buffer of *completed*
+    utterances:
+
+    * ``replay_cursor`` is how many entries back from the newest we are. Each
+      press steps one further back (``get(-cursor)``), clamped to the buffer
+      depth -- pressing past the oldest entry just re-plays the oldest (a CD
+      stays on track 1).
+    * The first press after a fresh utterance (cursor 0 -> 1) re-plays the
+      most-recent completed utterance -- "the bit from just before" / restart the
+      current one once it has finished.
+
+    Replay is **playback-layer only**: ``play_cached_utterance`` never invokes
+    STT or the model, so skip_back can never start a new agent turn. It
+    **composes with pause**: a press while paused lifts the hold so the replay is
+    audible (a sticky stop is never cleared). A further press *during* a replay
+    cuts it and is consumed on the next loop, so rapid presses step back quickly.
+    """
+    from voice_mode.streaming import play_cached_utterance, REPLAY_STOPPED
+
+    buffer = get_history_buffer()
+    while True:
+        request = control_state.take_transport_request()
+        if request != COMMAND_SKIP_BACK:
+            # Nothing pending (or an unknown/forward request we don't handle here).
+            return replay_cursor
+
+        depth = len(buffer)
+        if depth == 0:
+            logger.info("skip_back ignored -- history buffer empty")
+            continue
+
+        # A skip_back while paused means "let me hear it" -- lift the hold so the
+        # replay actually plays. Never touch a sticky stop.
+        if control_state.snapshot().is_paused:
+            control_state.request_resume()
+
+        replay_cursor = min(replay_cursor + 1, depth)
+        record = buffer.get(-replay_cursor)
+        if record is None:  # pragma: no cover -- clamp above keeps it in range
+            continue
+
+        logger.info(
+            "skip_back: replaying history entry -%d/%d (%.1fs)",
+            replay_cursor, depth, record.duration,
+        )
+        reason = await play_cached_utterance(record, control_state)
+        if reason == REPLAY_STOPPED:
+            # A stop during the replay ends the turn; let converse's stop check
+            # build the control-stop result.
+            return replay_cursor
+        # On a transport interrupt (a further press) the loop consumes it next.
 
 
 @mcp.tool()
@@ -2023,48 +2090,74 @@ consult the MCP resources listed above.
                     logger.info(f"Speak-only result: {result}")
                     return result
 
-                # Brief pause before listening
-                await asyncio.sleep(0.5)
-                
-                # Play "listening" feedback sound
-                await play_audio_feedback(
-                    "listening",
-                    openai_clients,
-                    chime_enabled,
-                    "whisper",
-                    chime_leading_silence=chime_leading_silence,
-                    chime_trailing_silence=chime_trailing_silence
-                )
-                
-                # Record response
-                logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+                # VM-1685: CD-style skip-back replay + listen loop. Any pending
+                # skip_back (from a mid-TTS abort, a "pause then skip_back", or a
+                # press while listening) is drained first by re-playing cached
+                # audio, then we listen. A press *during* recording loops us back
+                # to replay again. The cursor persists across the whole turn so
+                # successive presses step further back through the history buffer.
+                replay_cursor = 0
+                while True:
+                    # Replay any queued skip_back(s) before listening.
+                    replay_cursor = await _drain_skip_back(control_state, replay_cursor)
 
-                # Log recording start
-                if event_logger:
-                    event_logger.log_event(event_logger.RECORDING_START)
+                    # A stop (possibly during a replay) ends the turn cleanly.
+                    control_snapshot = control_state.snapshot()
+                    if control_snapshot.is_stopped:
+                        logger.info("Converse stopped via control channel during skip-back replay")
+                        success = True
+                        return _build_control_stop_result(control_snapshot, timings)
 
-                record_start = time.perf_counter()
-                logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                    None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                )
-                timings['record'] = time.perf_counter() - record_start
-                
-                # Log recording end
-                if event_logger:
-                    event_logger.log_event(event_logger.RECORDING_END, {
-                        "duration": timings['record'],
-                        "samples": len(audio_data)
-                    })
+                    # Brief pause before listening
+                    await asyncio.sleep(0.5)
 
-                # VM-1676: a control-channel stop that arrived while we were
-                # listening also ends the turn cleanly -- skip STT and return the
-                # control marker normally (again, NOT the ESC/CancelledError path).
-                control_snapshot = control_state.snapshot()
-                if control_snapshot.is_stopped:
-                    logger.info("Converse stopped via control channel during recording")
-                    success = True
-                    return _build_control_stop_result(control_snapshot, timings)
+                    # Play "listening" feedback sound
+                    await play_audio_feedback(
+                        "listening",
+                        openai_clients,
+                        chime_enabled,
+                        "whisper",
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence
+                    )
+
+                    # Record response
+                    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+
+                    # Log recording start
+                    if event_logger:
+                        event_logger.log_event(event_logger.RECORDING_START)
+
+                    record_start = time.perf_counter()
+                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
+                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                    )
+                    timings['record'] = time.perf_counter() - record_start
+
+                    # Log recording end
+                    if event_logger:
+                        event_logger.log_event(event_logger.RECORDING_END, {
+                            "duration": timings['record'],
+                            "samples": len(audio_data)
+                        })
+
+                    # VM-1676: a control-channel stop that arrived while we were
+                    # listening also ends the turn cleanly -- skip STT and return the
+                    # control marker normally (again, NOT the ESC/CancelledError path).
+                    control_snapshot = control_state.snapshot()
+                    if control_snapshot.is_stopped:
+                        logger.info("Converse stopped via control channel during recording")
+                        success = True
+                        return _build_control_stop_result(control_snapshot, timings)
+
+                    # VM-1685: a skip_back pressed while listening -> replay the
+                    # cached audio, then listen again. Otherwise this recording is
+                    # the user's real response; proceed to STT.
+                    if control_state.pending_transport == COMMAND_SKIP_BACK:
+                        logger.info("skip_back received during recording -- replaying then re-listening")
+                        continue
+                    break
 
                 # Play "finished" feedback sound
                 await play_audio_feedback(
