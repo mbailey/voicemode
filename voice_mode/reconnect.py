@@ -137,6 +137,13 @@ def detect_state(row_text: str) -> str:
 _BORDER = "│║╮╭╯╰─━┌┐└┘╔╗╚╝═▌▐|"
 # Selection markers Claude Code puts before the active row.
 _MARKERS = "❯>›▶▸→*•·"
+# The active-row CURSOR specifically. Narrower than _MARKERS on purpose: the
+# live /mcp list also renders *content* markers that are NOT the cursor --
+# action rows like ``→ Show unused connectors`` and ``·`` separators -- so
+# cursor detection (which row is selected RIGHT NOW) must not mistake them for
+# the selection. This precision is what makes cursor-driven navigation correct
+# (VM-1727 impl-002).
+_CURSOR = "❯>›▶▸"
 
 _NUM_RE = re.compile(r"^(\d+)[.)]\s+(.*)$")
 
@@ -145,9 +152,13 @@ _NUM_RE = re.compile(r"^(\d+)[.)]\s+(.*)$")
 class ServerRow:
     """One parsed entry from the ``/mcp`` server-list screen.
 
-    ``index`` is the 0-based position among server rows -- i.e. the number of
-    ``Down`` presses to reach it from the top (the menu opens with the first
-    row selected). ``number`` is the 1-based number the menu prints, if any.
+    ``index`` is the 0-based position among *parsed server rows*. It is **not**
+    the number of ``Down`` presses to reach the row: the live ``/mcp`` list
+    interleaves group labels, disabled built-ins, and action rows (e.g.
+    ``→ Show unused connectors``) that the parser skips, so the cursor needs
+    *more* Downs than this index implies. Navigation is therefore cursor-driven
+    (:func:`_navigate_to_row`), never index-driven (VM-1727 impl-002).
+    ``number`` is the 1-based number the menu prints, if any.
     """
 
     name: str
@@ -240,6 +251,46 @@ def find_voicemode_row(
     if not matches:
         return None
     return min(matches, key=lambda r: _ACTION_PRIORITY.get(r.state, 3))
+
+
+# ---------------------------------------------------------------------------
+# Cursor (selected-row) detection -- the basis of cursor-driven navigation
+# ---------------------------------------------------------------------------
+
+def marked_row(text: str) -> Optional[str]:
+    """Return the text of the cursor-marked (``❯``) row in a captured menu.
+
+    Strips borders and the leading cursor glyph; returns the remaining row text,
+    or ``None`` if no row is currently selected. Uses the narrow :data:`_CURSOR`
+    set (not :data:`_MARKERS`) so an action row such as ``→ Show unused
+    connectors`` is never mistaken for the selection.
+    """
+    for line in text.splitlines():
+        s = line.strip().strip(_BORDER).strip()
+        if not s:
+            continue
+        if s[0] in _CURSOR:
+            return s[1:].lstrip()
+    return None
+
+
+def marked_row_name(text: str) -> Optional[str]:
+    """The server *name* of the cursor-marked row, parsed like :func:`parse_mcp_menu`.
+
+    Lets navigation ask "is the cursor on the row I want?" by comparing names --
+    more precise than a substring test, so a connected ``voicemode`` row is not
+    confused with a failed ``plugin:voicemode:voicemode`` row. ``None`` when no
+    row is selected (or the selected line has no name token).
+    """
+    body = marked_row(text)
+    if body is None:
+        return None
+    m = _NUM_RE.match(body)
+    if m:
+        body = m.group(2).strip()
+    if not body:
+        return None
+    return body.split()[0]
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +405,44 @@ def _close_menu(runner: TmuxRunner, *, settle: float, tries: int = 3) -> None:
             return
 
 
+def _navigate_to_row(
+    runner: TmuxRunner,
+    target_name: str,
+    initial_capture: str,
+    *,
+    settle: float,
+    emit: Callable[[str], None] = _noop_emit,
+) -> bool:
+    """Move the ``/mcp`` cursor onto the row named ``target_name``, by the cursor.
+
+    **Cursor-driven, never count-driven.** The live ``/mcp`` list interleaves
+    group labels, disabled built-ins, and action rows (``→ Show unused
+    connectors``) that the parser skips, so a *parsed* row index is NOT the
+    number of ``Down`` presses needed (the VM-1727 impl-002 defect: parsed index
+    3, cursor needed 5). Instead we press ``Down``, re-capture, and check whether
+    the ``❯``-marked row IS the target -- repeating until it is. The rendered
+    cursor is ground truth, so this is robust to any row interleaving.
+
+    Bounded by the visible line count (plus slack for a full wrap-around if
+    ``Down`` cycles at the bottom): returns ``True`` once the cursor sits on
+    ``target_name``, ``False`` if it never lands there within that bound (the
+    caller then fails loud rather than pressing Enter on the wrong row).
+    """
+    current = initial_capture
+    # Generous upper bound: every visible line + slack. A real list has far
+    # fewer navigable rows than lines, so this guarantees at least one full
+    # cycle even if Down wraps -- without ever looping forever.
+    max_steps = current.count("\n") + 8
+    for _ in range(max_steps):
+        if marked_row_name(current) == target_name:
+            return True
+        runner.send_keys("Down")
+        runner.sleep(settle)
+        current = runner.capture()
+    # One last check after the final Down.
+    return marked_row_name(current) == target_name
+
+
 def reconnect(
     *,
     pane: Optional[str] = None,
@@ -445,9 +534,18 @@ def reconnect(
     # 3. Failed/connecting -> drive Reconnect. For 'connecting' the server is
     #    already (re)connecting, so skip straight to polling without re-pressing.
     if row.state == "failed":
-        emit(f"🔌 '{row.name}' is failed (row {row.index + 1}); navigating to Reconnect…")
-        for _ in range(row.index):
-            runner.send_keys("Down")
+        emit(f"🔌 '{row.name}' is failed; moving the cursor onto it…")
+        # Navigate by reading the cursor, not by counting parsed rows -- the list
+        # has navigable rows the parser skips, so a parsed index under-counts the
+        # Downs needed (VM-1727 impl-002).
+        if not _navigate_to_row(runner, row.name, text, settle=settle, emit=emit):
+            _close_menu(runner, settle=settle)
+            return ReconnectResult(
+                ExitCode.ERROR, "error",
+                f"❌ Could not move the /mcp cursor onto '{row.name}'. It is in the "
+                f"list but the cursor never landed on it — aborting rather than "
+                f"pressing Enter on the wrong row.",
+            )
         runner.send_keys("Enter")            # open the server submenu
         runner.sleep(settle)
 
