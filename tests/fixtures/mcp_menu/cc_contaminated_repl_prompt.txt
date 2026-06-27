@@ -1,0 +1,26 @@
+m5:~❯ claude
+  ⏺ Voicemode dropped (-32000). I'll reconnect it for you now.
+❯ /mcp
+  ⎿ (no content)
+❯ /mcp
+  ⎿ Running voicemode reconnect…
+❯ /mcp
+❯ /mcp
+❯ /mcp
+❯ /mcp
+
+  Manage MCP servers
+  6 servers
+
+    claude.ai
+  ❯ claude.ai Google Calendar · ✔ connected · 8 tools
+    claude.ai Notion · ✔ connected · 18 tools
+    → Show unused connectors (1)
+    Built-in MCPs (always available)
+    computer-use · ◯ disabled
+    plugin:taskmaster:taskmaster · ✔ connected · 13 tools
+    plugin:voicemode:voicemode · ✘ failed
+
+  ※ Run claude --debug to see error logs
+  https://code.claude.com/docs/en/mcp for help
+ ↑/↓ to navigate · Enter to confirm · Esc to cancel

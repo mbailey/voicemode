@@ -2043,6 +2043,12 @@ voice_mode_main_cli.add_command(autofocus_cmd.autofocus)
 # Add conch management commands
 voice_mode_main_cli.add_command(conch_cmd.conch)
 
+# Add the /mcp self-reconnect command (VM-1727). Lives in a top-level,
+# MCP-independent module so it imports and runs when the voicemode server is
+# down -- the exact moment the agent needs it.
+from voice_mode.reconnect import reconnect_command as reconnect_cmd
+voice_mode_main_cli.add_command(reconnect_cmd)
+
 # Note: We'll add these commands after the groups are defined
 # audio group will get transcribe and play commands
 

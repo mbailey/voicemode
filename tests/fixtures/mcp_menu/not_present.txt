@@ -1,0 +1,8 @@
+╭────────────────────────────────────────────────────────────────────────╮
+│ Manage MCP servers                                                       │
+│                                                                          │
+│ ❯ 1. taskmaster                        ✔ connected · Enter to view       │
+│   2. playwright                        ✔ connected · Enter to view       │
+│                                                                          │
+│ Esc to exit                                                              │
+╰────────────────────────────────────────────────────────────────────────╯
