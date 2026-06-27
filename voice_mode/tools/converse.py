@@ -1353,16 +1353,17 @@ async def _drain_skip_back(control_state, replay_cursor: int) -> int:
 
     Drains every queued ``skip_back`` transport request, re-playing the targeted
     history-buffer entry through the normal playback path, and returns the
-    updated cursor. CD-player semantics over the buffer of *completed*
-    utterances:
+    updated cursor. CD-player semantics over the history buffer:
 
     * ``replay_cursor`` is how many entries back from the newest we are. Each
       press steps one further back (``get(-cursor)``), clamped to the buffer
       depth -- pressing past the oldest entry just re-plays the oldest (a CD
       stays on track 1).
-    * The first press after a fresh utterance (cursor 0 -> 1) re-plays the
-      most-recent completed utterance -- "the bit from just before" / restart the
-      current one once it has finished.
+    * The first press (cursor 0 -> 1) re-plays the newest entry. Since
+      impl-drain-restart drains an interrupted utterance fully into the buffer
+      before handing off here, that newest entry is the **current** utterance --
+      so a mid-playback skip_back **restarts the current utterance from its
+      start** (true CD behaviour), and each further press steps one entry back.
 
     Replay is **playback-layer only**: ``play_cached_utterance`` never invokes
     STT or the model, so skip_back can never start a new agent turn. It
@@ -2102,11 +2103,14 @@ consult the MCP resources listed above.
                     return result
 
                 # VM-1685: CD-style skip-back replay + listen loop. Any pending
-                # skip_back (from a mid-TTS abort, a "pause then skip_back", or a
-                # press while listening) is drained first by re-playing cached
-                # audio, then we listen. A press *during* recording loops us back
-                # to replay again. The cursor persists across the whole turn so
-                # successive presses step further back through the history buffer.
+                # skip_back (from a mid-TTS drain-to-buffer, a "pause then
+                # skip_back", or a press while listening) is drained first by
+                # re-playing cached audio, then we listen. Because the in-flight
+                # utterance was drained into the buffer in full (impl-drain-restart),
+                # the first press restarts the CURRENT utterance from its start. A
+                # press *during* recording loops us back to replay again. The cursor
+                # persists across the whole turn so successive presses step further
+                # back through the history buffer.
                 replay_cursor = 0
                 while True:
                     # Replay any queued skip_back(s) before listening.

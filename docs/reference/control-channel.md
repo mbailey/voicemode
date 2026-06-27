@@ -225,10 +225,13 @@ and no second TTS call), the **text**, and a little metadata
   playback path as each utterance plays, so skip-back works even when you aren't
   writing audio files to disk. (`SAVE_AUDIO` still controls the on-disk copy;
   it's independent of this in-memory buffer.)
-- **Completed utterances only.** A record is added when an utterance finishes
-  naturally. An utterance cut short by `stop` (or aborted by a `skip_back` mid-
-  playback) is **not** captured — the buffer holds whole renders, so a replay is
-  never a truncated fragment.
+- **Full utterances only — never a truncated fragment.** A record is added once
+  the server has the *whole* utterance. On a `pause` or a `skip_back` *during*
+  playback the server stops playing but keeps **draining** the rest of the
+  utterance from the provider into the buffer (it decouples receiving from
+  playing), so the complete utterance is captured even though you interrupted it.
+  Only a hard `stop` or `skip_forward` discards the in-flight audio without
+  capturing — those end/skip the utterance outright.
 - **Bounded.** It's a `deque(maxlen=N)`; appending past N evicts the oldest, so
   memory stays capped. N is `VOICEMODE_HISTORY_BUFFER_SIZE` (default **8**, min 1).
   Raw PCM is large — at the 24 kHz mono 16-bit default, audio costs ~48 KB/s, so
@@ -251,23 +254,25 @@ CD player:
   buffer, further presses just keep replaying it (a CD stays on track 1; it
   doesn't wrap or error).
 
-> **Mid-playback nuance (worth knowing).** If you press `skip_back` *while* an
-> utterance is still streaming, the server aborts that in-flight stream
-> immediately (a responsive barge-in) and replays the most-recent **completed**
-> utterance — *not* a from-the-top restart of the one that was mid-flight. That
-> utterance isn't in the buffer until it finishes (and replaying a half-spoken
-> fragment would drop the part you hadn't heard yet), so "replay the previous
-> completed utterance" is the consistent rule. In practice that matches the
-> intent — *replay the bit from just before* — but it's a deliberate divergence
-> from a literal "restart the current utterance from its start" for the
-> mid-stream case.
+> **Mid-playback restart (true CD behaviour).** If you press `skip_back` *while*
+> an utterance is still streaming, the server **silences the device immediately**
+> (a responsive barge-in) but keeps **draining the rest of that utterance into the
+> buffer** in the background, then restarts it **from its start**. You don't lose
+> the part you hadn't heard yet — the full utterance is captured first, so the
+> first press genuinely restarts the *current* one (and each further press steps
+> back through the buffer). This is the decoupled receive/playback model: the
+> normal, uninterrupted path still plays as audio arrives (time-to-first-audio is
+> unchanged); only an interrupt switches it to drain-then-replay.
 
 ### Composing with pause, and stop's precedence
 
-- **Composes with `pause`.** Pause the assistant, then `skip_back` to re-hear the
-  bit from just before: the replay lifts the hold and plays the cached audio from
-  its start — it does **not** un-pause forward into the *next* utterance. Pausing
-  *during* a replay holds the replay, like any other playback.
+- **Composes with `pause`.** A `pause` mid-utterance also drains the remainder
+  into the buffer (freeing the provider connection), so **resume plays the
+  buffered remainder** rather than re-pulling the provider. Pause the assistant,
+  then `skip_back` to re-hear the bit from just before: the replay lifts the hold
+  and plays the cached audio from its start — it does **not** un-pause forward
+  into the *next* utterance. Pausing *during* a replay holds the replay, like any
+  other playback.
 - **`stop` wins.** If a `stop` and a `skip_back` are both pending, `stop` takes
   precedence — a late `skip_back` can't revive an utterance you just cut into a
   replay. The transport request is non-sticky and one-shot (consumed when read,

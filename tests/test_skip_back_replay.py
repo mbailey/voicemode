@@ -35,6 +35,7 @@ from voice_mode.streaming import (
     play_cached_utterance,
     stream_cartesia_pcm,
     stream_pcm_audio,
+    stream_with_buffering,
 )
 from voice_mode.control_channel import COMMAND_SKIP_BACK, get_control_state
 from voice_mode.history_buffer import UtteranceRecord, get_history_buffer
@@ -250,7 +251,10 @@ class TestPlayCachedUtterance:
 # --------------------------------------------------------------------------
 
 class TestStreamTransportInterrupt:
-    async def test_pcm_skip_back_flags_transport_not_stop(self):
+    async def test_pcm_skip_back_stops_playing_but_drains_full(self):
+        """impl-drain-restart: a mid-playback skip_back stops playing (barge-in)
+        but keeps DRAINING the rest of the utterance into the buffer, so the full
+        utterance is captured and converse can restart the CURRENT one."""
         chunks = _pcm_chunks(6)
 
         def on_chunk(i):
@@ -259,6 +263,7 @@ class TestStreamTransportInterrupt:
 
         client, resp = _make_openai_client(chunks, on_chunk)
         mock_stream = _make_mock_stream()
+        buf = get_history_buffer()
 
         with patch.object(streaming.sd, "OutputStream", return_value=mock_stream):
             success, metrics = await stream_pcm_audio(
@@ -268,27 +273,36 @@ class TestStreamTransportInterrupt:
         assert success is True
         assert metrics.transport_interrupted is True
         assert metrics.control_stopped is False     # a transport press is NOT a stop
-        assert mock_stream.write.call_count == 2     # broke within one chunk
-        assert resp.consumed == [0, 1, 2]
-        mock_stream.abort.assert_called_once()       # aborted, not drained
+        assert mock_stream.write.call_count == 2     # stopped PLAYING within one chunk
+        assert resp.consumed == [0, 1, 2, 3, 4, 5]   # ...but DRAINED the whole stream
+        mock_stream.abort.assert_called_once()       # device silenced (barge-in)
+        # The FULL utterance was captured (every chunk), so press#1 restarts current.
+        assert len(buf) == 1
+        assert buf.latest().pcm_bytes == b"".join(chunks)
 
-    async def test_pcm_skip_back_does_not_capture_partial(self):
-        """The aborted in-flight utterance must NOT enter the history buffer."""
+    async def test_pcm_skip_back_captures_full_utterance(self):
+        """The drained in-flight utterance enters the history buffer in full."""
         buf = get_history_buffer()
+        chunks = _pcm_chunks(5)
 
         def on_chunk(i):
             if i == 1:
                 get_control_state().request_skip_back()
 
-        client, resp = _make_openai_client(_pcm_chunks(5), on_chunk)
+        client, resp = _make_openai_client(chunks, on_chunk)
         mock_stream = _make_mock_stream()
         with patch.object(streaming.sd, "OutputStream", return_value=mock_stream):
-            await stream_pcm_audio(text="partial", openai_client=client, request_params={})
+            await stream_pcm_audio(text="full", openai_client=client, request_params={})
 
-        assert len(buf) == 0       # nothing captured -- replay targets completed entries only
+        # Captured the COMPLETE utterance (drain, not abort) -- restart-current.
+        assert len(buf) == 1
+        assert buf.latest().text == "full"
+        assert buf.latest().pcm_bytes == b"".join(chunks)
 
-    async def test_pcm_pause_then_skip_back_breaks_and_aborts(self):
-        """'pause, then skip_back' breaks the pause-hold inside the write loop."""
+    async def test_pcm_pause_then_skip_back_drains_then_replays(self):
+        """'pause, then skip_back': the pause drains the rest to the buffer (the
+        full utterance is captured) and holds for resume; a skip_back during the
+        hold hands off to the replay loop (restart current)."""
         chunks = _pcm_chunks(4)
 
         def on_chunk(i):
@@ -297,13 +311,14 @@ class TestStreamTransportInterrupt:
 
         client, resp = _make_openai_client(chunks, on_chunk)
         mock_stream = _make_mock_stream()
+        buf = get_history_buffer()
 
         with patch.object(streaming.sd, "OutputStream", return_value=mock_stream):
             task = asyncio.create_task(
                 stream_pcm_audio(text="hi", openai_client=client, request_params={})
             )
             await asyncio.sleep(0.1)
-            assert not task.done()                  # held at the pause
+            assert not task.done()                  # drained, now held for resume
 
             get_control_state().request_skip_back()
             success, metrics = await asyncio.wait_for(task, timeout=2.0)
@@ -311,7 +326,11 @@ class TestStreamTransportInterrupt:
         assert success is True
         assert metrics.transport_interrupted is True
         assert metrics.control_stopped is False
-        mock_stream.abort.assert_called_once()
+        assert resp.consumed == [0, 1, 2, 3]        # the whole stream was drained
+        mock_stream.abort.assert_called_once()      # silenced when skip_back arrived
+        # The full utterance was captured during the pause drain.
+        assert len(buf) == 1
+        assert buf.latest().pcm_bytes == b"".join(chunks)
 
     async def test_stop_wins_over_pending_skip_back(self):
         """A stop latched alongside a stale skip_back is handled as a stop."""
@@ -333,7 +352,7 @@ class TestStreamTransportInterrupt:
         assert metrics.transport_interrupted is False
         mock_stream.abort.assert_called_once()
 
-    async def test_cartesia_skip_back_flags_transport(self):
+    async def test_cartesia_skip_back_drains_and_captures_full(self):
         chunks = _pcm_chunks(6)
         consumed = []
 
@@ -346,6 +365,7 @@ class TestStreamTransportInterrupt:
                 await asyncio.sleep(0)
 
         mock_stream = _make_mock_stream()
+        buf = get_history_buffer()
         with patch("voice_mode.cartesia_tts.stream", new=fake_stream), \
              patch.object(streaming.sd, "OutputStream", return_value=mock_stream):
             success, metrics = await stream_cartesia_pcm(text="hi", voice_id="v")
@@ -353,8 +373,70 @@ class TestStreamTransportInterrupt:
         assert success is True
         assert metrics.transport_interrupted is True
         assert metrics.control_stopped is False
-        assert mock_stream.write.call_count == 2
+        assert mock_stream.write.call_count == 2    # stopped playing within one chunk
+        assert consumed == [0, 1, 2, 3, 4, 5]        # ...but drained the whole stream
         mock_stream.abort.assert_called_once()
+        assert len(buf) == 1                          # full utterance captured
+        assert buf.latest().pcm_bytes == b"".join(chunks)
+
+    async def test_pcm_pause_drains_frees_provider_then_resumes_remainder(self):
+        """impl-drain-restart: a pause mid-stream drains the rest to the buffer
+        (freeing the provider) and, on resume, plays the buffered remainder
+        through the same stream -- no re-pull, and the full utterance is captured."""
+        chunks = _pcm_chunks(5)
+
+        def on_chunk(i):
+            if i == 2:
+                get_control_state().request_pause()
+
+        client, resp = _make_openai_client(chunks, on_chunk)
+        mock_stream = _make_mock_stream()
+        buf = get_history_buffer()
+
+        with patch.object(streaming.sd, "OutputStream", return_value=mock_stream):
+            task = asyncio.create_task(
+                stream_pcm_audio(text="resume me", openai_client=client, request_params={})
+            )
+            await asyncio.sleep(0.1)
+            # Provider already fully drained while paused; only chunks 0,1 played.
+            assert not task.done()
+            assert resp.consumed == [0, 1, 2, 3, 4]
+            assert mock_stream.write.call_count == 2
+
+            get_control_state().request_resume()
+            success, metrics = await asyncio.wait_for(task, timeout=2.0)
+
+        assert success is True
+        assert metrics.control_stopped is False
+        assert metrics.transport_interrupted is False
+        # Remainder (chunks 2,3,4) played after resume -> all five written total.
+        assert mock_stream.write.call_count == 5
+        mock_stream.stop.assert_called_once()         # drained to the end, not aborted
+        mock_stream.abort.assert_not_called()
+        assert len(buf) == 1 and buf.latest().pcm_bytes == b"".join(chunks)
+
+    async def test_pcm_normal_path_plays_as_it_receives(self):
+        """TTFA guard: the uninterrupted path still writes each chunk as it
+        arrives (play-as-you-receive), never buffer-all-then-play."""
+        chunks = _pcm_chunks(5)
+        writes_when_consumed = []
+
+        mock_stream = _make_mock_stream()
+
+        def on_chunk(i):
+            # When chunk i is pulled, chunks 0..i-1 must already be written.
+            writes_when_consumed.append(mock_stream.write.call_count)
+
+        client, resp = _make_openai_client(chunks, on_chunk)
+        with patch.object(streaming.sd, "OutputStream", return_value=mock_stream):
+            success, metrics = await stream_pcm_audio(
+                text="stream", openai_client=client, request_params={}
+            )
+
+        assert success is True
+        assert writes_when_consumed == [0, 1, 2, 3, 4]   # strictly incremental
+        assert mock_stream.write.call_count == 5
+        mock_stream.abort.assert_not_called()
 
     async def test_natural_completion_still_captures(self):
         """Regression: a normal finish still records into the history buffer."""
@@ -369,6 +451,85 @@ class TestStreamTransportInterrupt:
         assert success is True
         assert metrics.transport_interrupted is False
         assert len(buf) == 1 and buf.latest().text == "done"
+
+    async def test_buffered_skip_back_drains_decodes_and_captures(self):
+        """The opus/mp3 fallback also drains + decodes the FULL utterance on a
+        skip_back (so restart-current works), without playing the remainder."""
+        chunks = _pcm_chunks(4)
+
+        def on_chunk(i):
+            if i == 1:
+                get_control_state().request_skip_back()
+
+        client, resp = _make_openai_client(chunks, on_chunk)
+        mock_stream = _make_mock_stream()
+        buf = get_history_buffer()
+
+        fake_audio = MagicMock()
+        fake_audio.frame_rate = 24000
+        fake_audio.sample_width = 2
+        fake_audio.get_array_of_samples.return_value = [1, 2, 3, 4]
+
+        with patch.object(streaming.sd, "OutputStream", return_value=mock_stream), \
+             patch.object(streaming, "AudioSegment") as mock_seg:
+            mock_seg.from_file.return_value = fake_audio
+            success, metrics = await stream_with_buffering(
+                text="buffered",
+                openai_client=client,
+                request_params={"response_format": "opus"},
+            )
+
+        assert success is True
+        assert metrics.transport_interrupted is True
+        assert metrics.control_stopped is False
+        assert resp.consumed == [0, 1, 2, 3]          # whole stream drained
+        mock_stream.write.assert_not_called()         # remainder decoded, not played
+        mock_stream.abort.assert_called_once()        # device silenced (barge-in)
+        assert len(buf) == 1 and buf.latest().text == "buffered"   # full utterance captured
+
+
+# --------------------------------------------------------------------------
+# Restart-current end-to-end: a drained utterance becomes the replay anchor
+# --------------------------------------------------------------------------
+
+class TestRestartCurrent:
+    async def test_mid_playback_skip_back_restarts_current_utterance(self):
+        """The headline fix: a mid-playback skip_back drains the CURRENT utterance
+        into the buffer, then converse._drain_skip_back replays that very
+        utterance (cursor 0 -> 1 -> newest) -- restart current, not the previous."""
+        from voice_mode.tools.converse import _drain_skip_back
+
+        chunks = _pcm_chunks(6)
+
+        def on_chunk(i):
+            if i == 3:
+                get_control_state().request_skip_back()
+
+        client, resp = _make_openai_client(chunks, on_chunk)
+        mock_stream = _make_mock_stream()
+        buf = get_history_buffer()
+        buf.append(text="previous", pcm_bytes=b"\x09\x00", sample_rate=24000, channels=1)
+
+        # 1) Stream the CURRENT utterance; the mid-playback skip_back drains it in full.
+        with patch.object(streaming.sd, "OutputStream", return_value=mock_stream):
+            success, metrics = await stream_pcm_audio(
+                text="current", openai_client=client, request_params={}
+            )
+        assert metrics.transport_interrupted is True
+        assert buf.latest().text == "current"          # current is now the newest entry
+
+        # 2) converse drains the pending skip_back -> replays the newest = current.
+        played = []
+
+        async def fake_play(record, control_state=None):
+            played.append(record.text)
+            return REPLAY_COMPLETED
+
+        with patch("voice_mode.streaming.play_cached_utterance", new=fake_play):
+            cursor = await _drain_skip_back(get_control_state(), 0)
+
+        assert played == ["current"]                   # restart CURRENT (not "previous")
+        assert cursor == 1
 
 
 # --------------------------------------------------------------------------

@@ -256,6 +256,45 @@ async def play_cached_utterance(record, control_state=None) -> str:
                 logger.debug("Failed to close replay stream", exc_info=True)
 
 
+async def _hold_and_play_remainder(stream, remainder_chunks, control_state) -> str:
+    """Resume a paused utterance from its drained-to-buffer remainder (VM-1685).
+
+    impl-drain-restart decouples receiving from playing: when a **pause** arrives
+    mid-stream, the receive loop stops feeding the device but keeps draining the
+    rest of the utterance into the capture buffer (freeing the provider). This
+    plays that buffered remainder back through the **same** still-open output
+    stream once the channel resumes -- so resume plays local audio instead of
+    re-pulling the provider.
+
+    Holds while paused via :func:`_poll_control_channel` (same hold/timeout
+    semantics as live playback), then writes the un-played 16-bit PCM chunks back
+    verbatim (same granularity the live loop used), honouring the control channel
+    between chunks. Returns one of ``REPLAY_COMPLETED`` / ``REPLAY_STOPPED`` /
+    ``REPLAY_TRANSPORT`` -- a stop ends the turn, a further skip_back hands off to
+    the replay loop (which restarts the now fully-captured current utterance).
+    """
+    # Even with nothing left to play (pause landed on the final chunk), honour the
+    # hold so a resume/stop/skip_back still resolves cleanly.
+    if not remainder_chunks:
+        if await _poll_control_channel():
+            return REPLAY_STOPPED if control_state.snapshot().is_stopped else REPLAY_TRANSPORT
+        return REPLAY_COMPLETED
+
+    for chunk in remainder_chunks:
+        # First iteration holds until resume; later iterations honour a re-pause /
+        # stop / a further skip_back exactly like the live loop.
+        if await _poll_control_channel():
+            reason = (
+                REPLAY_STOPPED
+                if control_state.snapshot().is_stopped
+                else REPLAY_TRANSPORT
+            )
+            logger.info("paused-utterance remainder interrupted (%s)", reason)
+            return reason
+        stream.write(np.frombuffer(chunk, dtype=np.int16))
+    return REPLAY_COMPLETED
+
+
 def _pydub_format(fmt: str) -> str:
     """Map TTS response_format to the container format pydub/ffmpeg expects.
 
@@ -490,20 +529,28 @@ async def stream_pcm_audio(
     audio_buffer = io.BytesIO()
     control_stopped = False
     transport_interrupted = False
+    # VM-1685 (impl-drain-restart): when an interrupt we can recover from arrives
+    # mid-stream -- a skip_back ("transport") or a "pause" -- we stop playing but
+    # keep draining the rest of the utterance into audio_buffer so the FULL
+    # utterance is captured. drain_reason records which; remainder_chunks collects
+    # the un-played chunks so a paused stream can resume from the buffer.
+    drain_reason = None
+    remainder_chunks = []
+    captured = False
 
     try:
         # Setup sounddevice stream for PCM playback
         # PCM parameters: 16-bit, mono, 24kHz (standard for TTS)
         audio_started = False
         audio_start_time = None
-        
+
         def audio_callback(outdata, frames, time_info, status):
             """Callback to track when audio actually starts playing."""
             nonlocal audio_started, audio_start_time
             if not audio_started and frames > 0:
                 audio_started = True
                 audio_start_time = time.perf_counter()
-        
+
         stream = sd.OutputStream(
             samplerate=SAMPLE_RATE,  # Standard TTS sample rate (24kHz)
             channels=1,
@@ -511,6 +558,16 @@ async def stream_pcm_audio(
             # Note: Can't use callback and write() together
         )
         stream.start()
+
+        aborted = False
+
+        def _abort_once():
+            # Tear the device down exactly once regardless of how many control
+            # branches fire (keeps the mock-asserted single abort honest).
+            nonlocal aborted
+            if not aborted:
+                _abort_stream(stream)
+                aborted = True
         
         # Log TTS playback start when we start the stream
         event_logger = get_event_logger()
@@ -528,60 +585,97 @@ async def stream_pcm_audio(
             chunk_count = 0
             bytes_received = 0
             
+            playing = True
+
             # Stream chunks as they arrive
             async for chunk in response.iter_bytes(chunk_size=STREAM_CHUNK_SIZE):
-                if chunk:
-                    # VM-1676: honour an external pause/resume/stop before
-                    # writing each chunk so a barge-in cuts mid-utterance.
-                    # VM-1685: a pending skip_back also breaks here -- aborted as a
-                    # transport interrupt (not a stop) so converse can replay.
-                    if await _poll_control_channel():
-                        # A stop wins over any (possibly stale) transport request,
-                        # so a late skip_back can't hijack a cancelled utterance
-                        # into a replay.
-                        if get_control_state().snapshot().is_stopped:
-                            control_stopped = True
-                        else:
-                            transport_interrupted = True
+                if not chunk:
+                    continue
+                if playing:
+                    # VM-1676/VM-1739: a stop or skip_forward cuts immediately --
+                    # abort the device and discard the rest of the stream.
+                    # VM-1685 (impl-drain-restart): a skip_back or a pause instead
+                    # STOPS PLAYING but keeps DRAINING the stream into the capture
+                    # buffer, so the full utterance is captured (skip_back can then
+                    # restart the CURRENT utterance; pause resumes from the buffer).
+                    snap = get_control_state().snapshot()
+                    if snap.is_stopped:
+                        control_stopped = True
+                        _abort_once()
                         break
+                    if snap.is_skip_forward:
+                        transport_interrupted = True
+                        _abort_once()
+                        break
+                    if snap.pending_transport:
+                        # skip_back: barge-in now (silence the device), then keep
+                        # draining the remainder so converse replays the full
+                        # current utterance from its start.
+                        transport_interrupted = True
+                        drain_reason = "transport"
+                        playing = False
+                        _abort_once()
+                    elif snap.is_paused:
+                        # pause: stop feeding the device (it drains what's buffered
+                        # and goes quiet) but keep pulling the rest into the buffer
+                        # to free the provider; resume plays the remainder.
+                        drain_reason = "pause"
+                        playing = False
 
-                    # Track first chunk received
-                    if first_chunk_time is None:
-                        first_chunk_time = time.perf_counter()
-                        chunk_receive_time = first_chunk_time - start_time
-                        logger.info(f"First audio chunk received after {chunk_receive_time:.3f}s")
-                        
-                        # Log TTS first audio event
-                        event_logger = get_event_logger()
-                        if event_logger:
-                            event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
-                    
-                    # Convert bytes to numpy array for sounddevice
-                    # PCM data is already in the right format
+                # Track first chunk received (TTFA is receipt-based, independent of
+                # whether playback is currently suppressed).
+                if first_chunk_time is None:
+                    first_chunk_time = time.perf_counter()
+                    chunk_receive_time = first_chunk_time - start_time
+                    logger.info(f"First audio chunk received after {chunk_receive_time:.3f}s")
+
+                    # Log TTS first audio event
+                    event_logger = get_event_logger()
+                    if event_logger:
+                        event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
+
+                # Accumulate for the history buffer (and on-disk save) REGARDLESS of
+                # playback suppression -- this is what makes the full utterance
+                # available for skip-back replay / a pause resume.
+                audio_buffer.write(chunk)
+
+                # Play the chunk immediately, unless an interrupt suppressed playback.
+                if playing:
                     audio_array = np.frombuffer(chunk, dtype=np.int16)
-                    
-                    # Play the chunk immediately
                     stream.write(audio_array)
+                    metrics.chunks_played = chunk_count + 1
+                else:
+                    # Suppressed by a pause: keep the un-played chunk to replay
+                    # verbatim from the buffer on resume (skip_back discards this).
+                    remainder_chunks.append(chunk)
 
-                    # Accumulate for the history buffer (and on-disk save).
-                    audio_buffer.write(chunk)
+                chunk_count += 1
+                bytes_received += len(chunk)
+                metrics.chunks_received = chunk_count
 
-                    chunk_count += 1
-                    bytes_received += len(chunk)
-                    metrics.chunks_received = chunk_count
-                    metrics.chunks_played = chunk_count
-                    
-                    if debug and chunk_count % 10 == 0:
-                        logger.debug(f"Streamed {chunk_count} chunks, {bytes_received} bytes")
+                if debug and chunk_count % 10 == 0:
+                    logger.debug(f"Streamed {chunk_count} chunks, {bytes_received} bytes")
 
-        # VM-1685: a skip_back press aborts the in-flight utterance the same way
-        # (instant cut), but flags a transport interrupt rather than a stop and
-        # is deliberately NOT captured into the history buffer -- converse hands
-        # control to the skip-back replay loop, which re-plays a *completed*
-        # entry. The pending request is left for converse to consume.
-        if transport_interrupted:
-            logger.info("TTS playback interrupted by transport request (skip_back)")
-            _abort_stream(stream)
+        # VM-1676/VM-1739: stop / skip_forward broke out of the loop having already
+        # aborted the device -- discard (do NOT capture) and return with the
+        # appropriate metric so converse handles it. control_stopped ends the turn;
+        # a skip_forward (transport_interrupted with no drain) advances to record.
+        if control_stopped:
+            logger.info("TTS playback stopped via control channel")
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.control_stopped = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"control_stopped": True, "chunks": chunk_count}
+                })
+            return True, metrics
+
+        if transport_interrupted and drain_reason is None:
+            logger.info("TTS playback interrupted by skip_forward (advancing to record)")
             metrics.chunks_received = chunk_count
             metrics.chunks_played = chunk_count
             metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0
@@ -594,13 +688,36 @@ async def stream_pcm_audio(
                 })
             return True, metrics
 
-        # VM-1676: a control-channel stop cuts playback immediately -- abort
-        # (discard buffered audio) rather than drain, mark the metric so converse
-        # can return normally with the control hint, and skip the natural-finish
-        # bookkeeping/save below.
+        # From here the stream drained to completion: a natural finish, or a
+        # recoverable interrupt (skip_back / pause) whose remainder we drained into
+        # audio_buffer. The FULL utterance is captured for replay regardless.
+        full_pcm = audio_buffer.getvalue()
+
+        if drain_reason == "pause":
+            # Capture the complete utterance now, then hold for resume and play the
+            # buffered remainder through the same still-open stream.
+            _capture_utterance(
+                text=text,
+                pcm_bytes=full_pcm,
+                sample_rate=SAMPLE_RATE,
+                channels=1,
+                voice=request_params.get("voice"),
+                conversation_id=conversation_id,
+            )
+            captured = True
+            outcome = await _hold_and_play_remainder(
+                stream, remainder_chunks, get_control_state()
+            )
+            if outcome == REPLAY_STOPPED:
+                control_stopped = True
+            elif outcome == REPLAY_TRANSPORT:
+                transport_interrupted = True
+                drain_reason = "transport"
+            # REPLAY_COMPLETED -> fall through to the normal finish below.
+
         if control_stopped:
-            logger.info("TTS playback stopped via control channel")
-            _abort_stream(stream)
+            logger.info("TTS playback stopped via control channel (after pause-drain)")
+            _abort_once()
             metrics.chunks_received = chunk_count
             metrics.chunks_played = chunk_count
             metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0
@@ -610,6 +727,33 @@ async def stream_pcm_audio(
             if event_logger:
                 event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
                     "metrics": {"control_stopped": True, "chunks": chunk_count}
+                })
+            return True, metrics
+
+        if drain_reason == "transport":
+            # skip_back: the device is already silenced; the full utterance is
+            # captured. Hand off to converse's replay loop (restart current).
+            logger.info("TTS playback interrupted by transport request (skip_back) -- full utterance captured")
+            _abort_once()
+            if not captured:
+                _capture_utterance(
+                    text=text,
+                    pcm_bytes=full_pcm,
+                    sample_rate=SAMPLE_RATE,
+                    channels=1,
+                    voice=request_params.get("voice"),
+                    conversation_id=conversation_id,
+                )
+                captured = True
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.transport_interrupted = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"transport_interrupted": True, "chunks": chunk_count}
                 })
             return True, metrics
 
@@ -649,15 +793,17 @@ async def stream_pcm_audio(
                    f"Chunks: {metrics.chunks_received}")
 
         # VM-1685: capture the rendered utterance for skip-back replay. Raw PCM
-        # is already in audio_buffer; this runs regardless of SAVE_AUDIO.
-        _capture_utterance(
-            text=text,
-            pcm_bytes=audio_buffer.getvalue(),
-            sample_rate=SAMPLE_RATE,
-            channels=1,
-            voice=request_params.get("voice"),
-            conversation_id=conversation_id,
-        )
+        # is already in audio_buffer; this runs regardless of SAVE_AUDIO. Skipped
+        # if a pause-drain already captured the full utterance above.
+        if not captured:
+            _capture_utterance(
+                text=text,
+                pcm_bytes=full_pcm,
+                sample_rate=SAMPLE_RATE,
+                channels=1,
+                voice=request_params.get("voice"),
+                conversation_id=conversation_id,
+            )
 
         # Save audio if enabled
         if save_audio and audio_dir:
@@ -725,17 +871,30 @@ async def stream_cartesia_pcm(
     chunk_count = 0
     control_stopped = False
     transport_interrupted = False
+    # VM-1685 (impl-drain-restart): drain-on-interrupt state (see stream_pcm_audio).
+    drain_reason = None
+    remainder_chunks = []
+    captured = False
     event_logger = get_event_logger()
 
     try:
         stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16")
         stream.start()
 
+        aborted = False
+
+        def _abort_once():
+            nonlocal aborted
+            if not aborted:
+                _abort_stream(stream)
+                aborted = True
+
         if event_logger:
             event_logger.log_event(event_logger.TTS_PLAYBACK_START)
 
         logger.info("Starting Cartesia SSE streaming")
 
+        playing = True
         async for chunk in cartesia_tts.stream(
             text=text,
             voice_id=voice_id,
@@ -744,15 +903,28 @@ async def stream_cartesia_pcm(
         ):
             if not chunk:
                 continue
-            # VM-1676: honour an external pause/resume/stop before each chunk.
-            # VM-1685: a pending skip_back breaks here as a transport interrupt.
-            if await _poll_control_channel():
-                # A stop wins over any (possibly stale) transport request.
-                if get_control_state().snapshot().is_stopped:
+            if playing:
+                # VM-1676/VM-1739: stop / skip_forward cut immediately + discard.
+                # VM-1685: skip_back / pause stop playing but keep DRAINING into the
+                # buffer so the full utterance is captured (see stream_pcm_audio).
+                snap = get_control_state().snapshot()
+                if snap.is_stopped:
                     control_stopped = True
-                else:
+                    _abort_once()
+                    break
+                if snap.is_skip_forward:
                     transport_interrupted = True
-                break
+                    _abort_once()
+                    break
+                if snap.pending_transport:
+                    transport_interrupted = True
+                    drain_reason = "transport"
+                    playing = False
+                    _abort_once()
+                elif snap.is_paused:
+                    drain_reason = "pause"
+                    playing = False
+
             if first_chunk_time is None:
                 first_chunk_time = time.perf_counter()
                 logger.info(
@@ -761,18 +933,33 @@ async def stream_cartesia_pcm(
                 if event_logger:
                     event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
 
-            audio_array = np.frombuffer(chunk, dtype=np.int16)
-            stream.write(audio_array)
-
             audio_buffer.write(chunk)
+            if playing:
+                audio_array = np.frombuffer(chunk, dtype=np.int16)
+                stream.write(audio_array)
+            else:
+                remainder_chunks.append(chunk)
+
             chunk_count += 1
             bytes_received += len(chunk)
 
-        # VM-1685: a skip_back press aborts the in-flight utterance and hands off
-        # to the replay loop (transport interrupt, not a stop); not captured.
-        if transport_interrupted:
-            logger.info("Cartesia TTS playback interrupted by transport request (skip_back)")
-            _abort_stream(stream)
+        # VM-1676/VM-1739: stop / skip_forward already aborted + discard.
+        if control_stopped:
+            logger.info("Cartesia TTS playback stopped via control channel")
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.control_stopped = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"control_stopped": True, "chunks": chunk_count, "provider": "cartesia"}
+                })
+            return True, metrics
+
+        if transport_interrupted and drain_reason is None:
+            logger.info("Cartesia TTS playback interrupted by skip_forward (advancing to record)")
             metrics.chunks_received = chunk_count
             metrics.chunks_played = chunk_count
             metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
@@ -785,11 +972,31 @@ async def stream_cartesia_pcm(
                 })
             return True, metrics
 
-        # VM-1676: a control-channel stop aborts immediately and returns with the
-        # control_stopped marker set, skipping the natural-finish save below.
+        # Stream drained to completion (natural or a recoverable skip_back / pause).
+        full_pcm = audio_buffer.getvalue()
+
+        if drain_reason == "pause":
+            _capture_utterance(
+                text=text,
+                pcm_bytes=full_pcm,
+                sample_rate=sample_rate,
+                channels=1,
+                voice=voice_id,
+                conversation_id=conversation_id,
+            )
+            captured = True
+            outcome = await _hold_and_play_remainder(
+                stream, remainder_chunks, get_control_state()
+            )
+            if outcome == REPLAY_STOPPED:
+                control_stopped = True
+            elif outcome == REPLAY_TRANSPORT:
+                transport_interrupted = True
+                drain_reason = "transport"
+
         if control_stopped:
-            logger.info("Cartesia TTS playback stopped via control channel")
-            _abort_stream(stream)
+            logger.info("Cartesia TTS playback stopped via control channel (after pause-drain)")
+            _abort_once()
             metrics.chunks_received = chunk_count
             metrics.chunks_played = chunk_count
             metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
@@ -799,6 +1006,31 @@ async def stream_cartesia_pcm(
             if event_logger:
                 event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
                     "metrics": {"control_stopped": True, "chunks": chunk_count, "provider": "cartesia"}
+                })
+            return True, metrics
+
+        if drain_reason == "transport":
+            logger.info("Cartesia TTS interrupted by transport request (skip_back) -- full utterance captured")
+            _abort_once()
+            if not captured:
+                _capture_utterance(
+                    text=text,
+                    pcm_bytes=full_pcm,
+                    sample_rate=sample_rate,
+                    channels=1,
+                    voice=voice_id,
+                    conversation_id=conversation_id,
+                )
+                captured = True
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.transport_interrupted = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"transport_interrupted": True, "chunks": chunk_count, "provider": "cartesia"}
                 })
             return True, metrics
 
@@ -835,15 +1067,17 @@ async def stream_cartesia_pcm(
         )
 
         # VM-1685: capture the rendered utterance for skip-back replay (raw PCM
-        # already accumulated above), regardless of SAVE_AUDIO.
-        _capture_utterance(
-            text=text,
-            pcm_bytes=audio_buffer.getvalue(),
-            sample_rate=sample_rate,
-            channels=1,
-            voice=voice_id,
-            conversation_id=conversation_id,
-        )
+        # already accumulated above), regardless of SAVE_AUDIO. Skipped if a
+        # pause-drain already captured the full utterance.
+        if not captured:
+            _capture_utterance(
+                text=text,
+                pcm_bytes=full_pcm,
+                sample_rate=sample_rate,
+                channels=1,
+                voice=voice_id,
+                conversation_id=conversation_id,
+            )
 
         if save_audio and audio_dir and bytes_received > 0:
             try:
@@ -965,6 +1199,13 @@ async def stream_with_buffering(
     stream = None
     control_stopped = False
     transport_interrupted = False
+    # VM-1685 (impl-drain-restart): on skip_back this fallback keeps draining +
+    # decoding the rest of the response so the FULL utterance is captured (so a
+    # mid-playback skip_back restarts the CURRENT utterance). It does NOT play the
+    # remainder (barge-in). Pause keeps the existing hold-in-loop behaviour here:
+    # this path buffers-then-plays (opus decodes once at the end), so there is no
+    # well-defined "remainder" to resume into and no provider backpressure to free.
+    drain_reason = None
 
     try:
         # Setup sounddevice stream
@@ -983,42 +1224,50 @@ async def stream_with_buffering(
         ) as response:
             first_chunk_time = None
             
+            playing = True
+
             # Stream chunks as they arrive
             async for chunk in response.iter_bytes(chunk_size=STREAM_CHUNK_SIZE):
                 if chunk:
-                    # VM-1676: honour an external pause/resume/stop before
-                    # buffering/playing each chunk.
-                    # VM-1685: a pending skip_back breaks here as a transport
-                    # interrupt so converse can replay cached audio.
-                    if await _poll_control_channel():
-                        # A stop wins over any (possibly stale) transport request,
-                        # so a late skip_back can't hijack a cancelled utterance
-                        # into a replay.
-                        if get_control_state().snapshot().is_stopped:
-                            control_stopped = True
-                        else:
+                    if playing:
+                        # VM-1676: honour an external pause/resume/stop before
+                        # buffering/playing each chunk (pause holds in the poll).
+                        if await _poll_control_channel():
+                            # VM-1676/VM-1739: a stop or skip_forward cuts + discards.
+                            snap = get_control_state().snapshot()
+                            if snap.is_stopped:
+                                control_stopped = True
+                                break
+                            if snap.is_skip_forward:
+                                transport_interrupted = True
+                                break
+                            # VM-1685: skip_back -- stop playing but keep draining +
+                            # decoding the rest so the full utterance is captured.
                             transport_interrupted = True
-                        break
+                            drain_reason = "transport"
+                            playing = False
+                            _abort_stream(stream)
 
                     # Track first chunk for TTFA
                     if first_chunk_time is None:
                         first_chunk_time = time.perf_counter()
                         metrics.ttfa = first_chunk_time - start_time
                         logger.info(f"First chunk received - TTFA: {metrics.ttfa:.3f}s")
-                    
+
                     buffer.write(chunk)
                     metrics.chunks_received += 1
-                    
+
                     # Also accumulate in save buffer if saving is enabled
                     if save_buffer:
                         save_buffer.write(chunk)
-                    
+
                     # Try to decode when we have enough data (e.g., 32KB).
                     # Skip for Opus/Ogg: the container has codec-setup pages only at the
                     # start, so resetting the buffer after a partial decode leaves the
                     # remaining bytes unparseable. For Opus we buffer the full response
                     # and decode once below (matches the docstring's stated intent).
-                    if (buffer.tell() > 32768
+                    if (playing
+                            and buffer.tell() > 32768
                             and not audio_started
                             and format != "opus"):
                         buffer.seek(0)
@@ -1055,20 +1304,16 @@ async def stream_with_buffering(
                             # Not enough valid data yet
                             buffer.seek(0, io.SEEK_END)
 
-        # VM-1685: a skip_back press skips the buffered remainder and hands off to
-        # the replay loop (transport interrupt, not a stop); not captured. The
-        # finally block tears the stream down.
-        if transport_interrupted:
-            logger.info("Buffered TTS playback interrupted by transport request (skip_back)")
+        # VM-1676/VM-1739: a stop / skip_forward broke out -- discard, no capture.
+        # (A skip_back instead sets drain_reason and falls through to decode +
+        # capture the full utterance below, then return as a transport interrupt.)
+        if transport_interrupted and drain_reason is None:
+            logger.info("Buffered TTS playback interrupted by skip_forward (advancing to record)")
             metrics.transport_interrupted = True
             metrics.generation_time = time.perf_counter() - start_time
             metrics.playback_time = metrics.generation_time
             return True, metrics
 
-        # VM-1676: a control-channel stop skips decoding/playing the buffered
-        # remainder and returns with the marker set. The finally block tears the
-        # stream down; for this path little/nothing has reached the device yet
-        # (opus buffers the whole response before its single decode/write).
         if control_stopped:
             logger.info("Buffered TTS playback stopped via control channel")
             metrics.control_stopped = True
@@ -1076,7 +1321,10 @@ async def stream_with_buffering(
             metrics.playback_time = metrics.generation_time
             return True, metrics
 
-        # Process any remaining data
+        # Decode any remaining buffered data. On a skip_back drain we decode (to
+        # capture the FULL utterance) but do NOT play it (the device is already
+        # silenced -- barge-in); otherwise this is the normal final decode + play.
+        play_final = drain_reason != "transport"
         if buffer.tell() > 0:
             buffer.seek(0)
             try:
@@ -1101,33 +1349,36 @@ async def stream_with_buffering(
                 # with silence makes the fix robust regardless of how the device
                 # chain buffers — even if the tail is truncated, only silence
                 # is lost.
-                if TTS_TRAILING_SILENCE > 0:
+                if play_final and TTS_TRAILING_SILENCE > 0:
                     pad = np.zeros(int(sample_rate * TTS_TRAILING_SILENCE), dtype=np.float32)
                     samples = np.concatenate([samples, pad])
 
                 if not audio_started:
                     metrics.ttfa = time.perf_counter() - start_time
 
-                stream.write(samples)
-                metrics.chunks_played += len(samples) // 1024
+                if play_final:
+                    stream.write(samples)
+                    metrics.chunks_played += len(samples) // 1024
                 pcm_parts.append(_float_samples_to_pcm16(samples))
 
-                # Belt-and-braces drain in addition to the silence padding above.
-                # Sleep for the reported output latency plus a small safety margin
-                # so that even if a future change removes the silence pad, the
-                # tail still plays through on systems where stream.stop() drains
-                # correctly.
-                drain_secs = (stream.latency or 0.0) + 0.3
-                await asyncio.sleep(drain_secs)
+                if play_final:
+                    # Belt-and-braces drain in addition to the silence padding above.
+                    # Sleep for the reported output latency plus a small safety margin
+                    # so that even if a future change removes the silence pad, the
+                    # tail still plays through on systems where stream.stop() drains
+                    # correctly.
+                    drain_secs = (stream.latency or 0.0) + 0.3
+                    await asyncio.sleep(drain_secs)
 
             except Exception as e:
                 logger.error(f"Failed to decode final buffer: {e}")
-        
+
         metrics.generation_time = time.perf_counter() - start_time
         metrics.playback_time = metrics.generation_time  # Approximate
 
         # VM-1685: capture the rendered utterance (decoded PCM) for skip-back
-        # replay, regardless of SAVE_AUDIO.
+        # replay, regardless of SAVE_AUDIO. On a skip_back drain this is the full
+        # utterance, so converse replays the CURRENT one from its start.
         _capture_utterance(
             text=text,
             pcm_bytes=b"".join(pcm_parts),
@@ -1136,6 +1387,13 @@ async def stream_with_buffering(
             voice=request_params.get("voice"),
             conversation_id=conversation_id,
         )
+
+        # VM-1685: skip_back drain captured the full utterance -- hand off to the
+        # replay loop (restart current) instead of finishing normally.
+        if drain_reason == "transport":
+            logger.info("Buffered TTS interrupted by transport request (skip_back) -- full utterance captured")
+            metrics.transport_interrupted = True
+            return True, metrics
 
         # Save audio if enabled
         if save_audio and save_buffer and audio_dir:
