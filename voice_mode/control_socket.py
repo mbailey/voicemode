@@ -14,6 +14,13 @@ The parse/validate lives in :mod:`voice_mode.control_channel`, so an HTTP (or an
 other) listener could replace this file later without touching playback or the
 state machine.
 
+Most commands are **fire-and-forget** (pause / resume / stop / skip_back: apply
+and write nothing back). The one exception is the **read-side now-playing query**
+(VM-1685): a ``{"command":"status"}`` line is answered with a single JSON line
+describing the current control state and the history-buffer position
+(request/response, modelled on MPV's JSON IPC). The mutation path is untouched by
+it -- ``status`` is detected before :func:`parse_command` and never mutates state.
+
 Lifecycle (VM-1676 design): bind only while an audio operation is active, and
 unlink + close on exit, so only the currently-speaking server owns the single
 well-known socket (the conch already serializes who-is-talking across processes).
@@ -38,16 +45,18 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Set
+from typing import Any, Optional, Set
 
 from voice_mode import config
 from voice_mode.control_channel import (
+    COMMAND_STATUS,
     MAX_LINE_BYTES,
     ControlCommandError,
     ControlState,
     get_control_state,
     parse_command,
 )
+from voice_mode.history_buffer import HistoryBuffer, get_history_buffer
 
 logger = logging.getLogger("voicemode.control_socket")
 
@@ -58,6 +67,12 @@ _POLL_TIMEOUT = 0.25
 
 # Max bytes read per recv. Control lines are tiny JSON; this is just a ceiling.
 _RECV_SIZE = 4096
+
+# Ceiling for a status response the client will read back (VM-1685). The payload
+# carries the most-recent utterance's *text*, so it is generously sized for a long
+# utterance while still bounding an unexpected runaway server. Bytes beyond this
+# (before a newline) make :func:`query_status` give up rather than read forever.
+_MAX_RESPONSE_BYTES = 65536
 
 # Hardening caps (F7 / VM-1697): the channel only ever needs sub-second command
 # bursts, so bound concurrent handlers and each connection's total lifetime to
@@ -95,6 +110,72 @@ def _peer_uid(conn: socket.socket) -> Optional[int]:
     return None
 
 
+def build_status_payload(
+    control_state: ControlState,
+    history: HistoryBuffer,
+    request_id: Any = None,
+) -> dict:
+    """Build the now-playing status response (VM-1685, impl-nowplaying).
+
+    A pure, socket-free read over the control state + history buffer, so it is
+    unit-testable on its own. Returns the dict the socket read-side serialises to
+    one JSON line in answer to a ``{"command":"status"}`` query.
+
+    Shape (modelled on MPV's JSON IPC -- an explicit ``ok`` success flag and an
+    echoed ``request_id`` for correlation; ``ok``/``action`` mirror this repo's
+    own ``conch`` status convention)::
+
+        {
+          "ok": true,
+          "action": "status",
+          "request_id": <echoed value or null>,
+          "state": "running"|"paused"|"stopped",
+          "pending_transport": "skip_back"|null,
+          "buffer": {"depth": <int>, "capacity": <int>},
+          "now_playing": {                 # null when the buffer is empty
+            "index": <int>,               # position in the buffer (0 = oldest)
+            "text": <str>,
+            "duration": <float seconds>,
+            "sample_rate": <int>,
+            "channels": <int>,
+            "timestamp": <float epoch seconds>,
+            "voice": <str|null>
+          }
+        }
+
+    ``now_playing`` is the most-recently-*rendered* utterance (the newest buffer
+    entry) -- the one a first ``skip_back`` press replays ("the bit from just
+    before"). The history buffer captures an utterance only once it completes, so
+    during active playback this is the previous completed utterance, not the live
+    in-flight stream; ``state`` reflects the live transport. ``index`` /
+    ``buffer`` give the transport position a skip-back cursor walks back through.
+    """
+    snap = control_state.snapshot()
+    records = history.snapshot()
+    depth = len(records)
+    latest = records[-1] if records else None
+    now_playing = None
+    if latest is not None:
+        now_playing = {
+            "index": depth - 1,
+            "text": latest.text,
+            "duration": round(latest.duration, 3),
+            "sample_rate": latest.sample_rate,
+            "channels": latest.channels,
+            "timestamp": latest.timestamp,
+            "voice": latest.voice,
+        }
+    return {
+        "ok": True,
+        "action": "status",
+        "request_id": request_id,
+        "state": snap.state,
+        "pending_transport": snap.pending_transport,
+        "buffer": {"depth": depth, "capacity": history.maxlen},
+        "now_playing": now_playing,
+    }
+
+
 class ControlSocketListener:
     """A Unix-domain-socket server that drives a :class:`ControlState`.
 
@@ -116,6 +197,7 @@ class ControlSocketListener:
         self,
         socket_path: Optional[os.PathLike] = None,
         control_state: Optional[ControlState] = None,
+        history_buffer: Optional[HistoryBuffer] = None,
     ) -> None:
         self._socket_path = (
             Path(socket_path)
@@ -123,6 +205,12 @@ class ControlSocketListener:
             else Path(config.CONTROL_SOCKET_PATH)
         )
         self._state = control_state if control_state is not None else get_control_state()
+        # Read-side source for the now-playing status query (VM-1685). Defaults to
+        # the process-wide singleton the playback loop captures into; injectable so
+        # tests can drive a known buffer.
+        self._history = (
+            history_buffer if history_buffer is not None else get_history_buffer()
+        )
 
         self._server: Optional[socket.socket] = None
         self._accept_thread: Optional[threading.Thread] = None
@@ -364,7 +452,7 @@ class ControlSocketListener:
                 if not chunk:
                     # client closed (EOF): tolerate a final newline-less line.
                     if buffer.strip() and len(buffer) <= MAX_LINE_BYTES:
-                        self._dispatch(buffer)
+                        self._dispatch(buffer, conn)
                     break
                 buffer += chunk
                 # F5 (VM-1694): cap the unparsed buffer so a connection that never
@@ -377,7 +465,7 @@ class ControlSocketListener:
                     break
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
-                    self._dispatch(line)
+                    self._dispatch(line, conn)
         except Exception:  # never let a bad client take down the handler
             logger.warning("control listener connection error", exc_info=True)
         finally:
@@ -385,8 +473,8 @@ class ControlSocketListener:
             with self._handlers_lock:
                 self._handlers.discard(threading.current_thread())
 
-    def _dispatch(self, raw: bytes) -> None:
-        """Parse one raw line and apply it to the control state.
+    def _dispatch(self, raw: bytes, conn: socket.socket) -> None:
+        """Parse one raw line and either answer it (status) or apply it (command).
 
         Malformed / unknown input is logged and ignored -- a bad line must never
         crash the listener or the server.
@@ -398,6 +486,11 @@ class ControlSocketListener:
             return
         if not text.strip():
             return
+        # Read-side first (VM-1685): a {"command":"status"} query gets a JSON line
+        # written back. Detected before parse_command -- which only knows the
+        # mutating schema -- so the fire-and-forget command path stays untouched.
+        if self._answer_if_status_query(text, conn):
+            return
         try:
             command = parse_command(text)
         except ControlCommandError as exc:
@@ -408,6 +501,40 @@ class ControlSocketListener:
             logger.info("control command applied: %s", command.command)
         except Exception:  # defensive -- apply_to shouldn't raise for valid commands
             logger.warning("control listener: failed to apply command", exc_info=True)
+
+    def _answer_if_status_query(self, text: str, conn: socket.socket) -> bool:
+        """If ``text`` is a status query, answer it and return True; else False.
+
+        A light peek that leaves the fire-and-forget command path (parse_command
+        + apply_to) untouched: only a JSON object whose ``command`` is ``status``
+        is treated as a read-side query. Anything else -- including malformed JSON
+        -- is handed back to the normal dispatch so its existing
+        validation/logging applies unchanged.
+        """
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return False
+        if not isinstance(payload, dict) or payload.get("command") != COMMAND_STATUS:
+            return False
+        self._write_status(conn, payload.get("request_id"))
+        return True
+
+    def _write_status(self, conn: socket.socket, request_id: Any = None) -> None:
+        """Write one newline-delimited JSON status line back to ``conn``.
+
+        The now-playing read-side (VM-1685): unlike the fire-and-forget command
+        path, a ``status`` query gets a response on the same connection. A write
+        failure (client already gone) is logged and swallowed -- answering a query
+        must never crash the handler any more than a bad command does.
+        """
+        payload = build_status_payload(self._state, self._history, request_id)
+        try:
+            conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+        except OSError:
+            logger.debug(
+                "control listener: failed to write status response", exc_info=True
+            )
 
 
 # --- Process-wide listener + config-gated seam ----------------------------
@@ -481,13 +608,13 @@ def send_control_command(
 ) -> None:
     """Connect to the control socket and write one newline-delimited JSON command.
 
-    ``command`` must be ``pause`` / ``resume`` / ``stop`` / ``skip_forward``;
-    ``message`` and ``hint`` are carried for ``stop`` (they feed the normal
-    ``converse`` return string -- e.g. hint ``switch-to-text``). ``skip_forward``
-    carries neither. The payload is validated against the
-    same schema the listener enforces (:func:`parse_command`) *before* anything
-    is sent, so a bad command raises here rather than being silently dropped
-    server-side.
+    ``command`` must be ``pause`` / ``resume`` / ``stop`` / ``skip_forward`` /
+    ``skip_back``; ``message`` and ``hint`` are carried for ``stop`` (they feed
+    the normal ``converse`` return string -- e.g. hint ``switch-to-text``).
+    ``skip_forward`` / ``skip_back`` carry neither. The payload is validated
+    against the same schema the listener enforces (:func:`parse_command`)
+    *before* anything is sent, so a bad command raises here rather than being
+    silently dropped server-side.
 
     Raises:
         ControlCommandError: the command / message / hint don't satisfy the schema.
@@ -518,3 +645,55 @@ def send_control_command(
         client.connect(str(path))
         client.sendall((line + "\n").encode("utf-8"))
     logger.debug("sent control command %s to %s", command, path)
+
+
+def query_status(
+    socket_path: Optional[os.PathLike] = None,
+    timeout: float = 2.0,
+    request_id: Any = None,
+) -> dict:
+    """Query the control socket's now-playing status (read-side request/response).
+
+    The read-side counterpart to :func:`send_control_command` (VM-1685): connect,
+    send one ``{"command":"status"}`` line, and return the parsed JSON response --
+    the current control state, the history-buffer depth/capacity, and the
+    most-recently-rendered utterance (see :func:`build_status_payload` for the
+    shape). ``request_id``, if given, is echoed back for correlation (MPV-style).
+
+    Both ends of the transport live together here, so a Stream Deck "now playing"
+    display, a CLI verb, or VM-1739 can reuse this without re-implementing the
+    framing.
+
+    Raises:
+        FileNotFoundError: no socket at ``socket_path`` -- nothing is listening
+            (the server isn't speaking, or the control channel is disabled).
+        ConnectionRefusedError: a (stale) socket file exists but no server is
+            accepting on it.
+        OSError: any other socket failure (e.g. the connect/recv times out, or
+            the response exceeds the read ceiling without a newline).
+        ValueError: the server's response was not valid JSON.
+    """
+    line = json.dumps({"command": COMMAND_STATUS, "request_id": request_id})
+
+    path = (
+        Path(socket_path)
+        if socket_path is not None
+        else Path(config.CONTROL_SOCKET_PATH)
+    )
+    buf = b""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(timeout)
+        client.connect(str(path))
+        client.sendall((line + "\n").encode("utf-8"))
+        # Read until the first newline -- the response is exactly one JSON line.
+        while b"\n" not in buf:
+            data = client.recv(_RECV_SIZE)
+            if not data:
+                break  # server closed before sending a full line
+            buf += data
+            if len(buf) > _MAX_RESPONSE_BYTES:
+                raise OSError(
+                    f"control status response exceeded {_MAX_RESPONSE_BYTES} bytes"
+                )
+    response = buf.split(b"\n", 1)[0]
+    return json.loads(response.decode("utf-8"))

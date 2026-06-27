@@ -10,13 +10,15 @@ pieces, kept transport-agnostic so a socket listener (or an HTTP one later) can
 sit on top without playback ever caring:
 
 * ``ControlState`` -- a thread-safe object. One side (a listener thread) calls
-  ``request_pause`` / ``request_resume`` / ``request_stop``; the other side (the
-  TTS playback coroutine) polls ``snapshot`` each chunk and uses
-  ``wait_while_paused`` to hold without busy-spinning. ``reset`` clears it back
-  to *running* between utterances.
+  ``request_pause`` / ``request_resume`` / ``request_stop`` (play/hold/cut) or
+  ``request_skip_back`` (a non-sticky transport request, VM-1685); the other side
+  (the TTS playback coroutine) polls ``snapshot`` each chunk, uses
+  ``wait_while_paused`` to hold without busy-spinning, and reads-and-clears any
+  transport request with ``take_transport_request``. ``reset`` clears it back to
+  *running* between utterances.
 
 * The newline-delimited JSON command schema -- ``parse_command`` turns one line
-  of ``{"command": "pause"|"resume"|"stop"|"skip_forward", "message"?, "hint"?}``
+  of ``{"command": "pause"|"resume"|"stop"|"skip_forward"|"skip_back", "message"?, "hint"?}``
   into a validated ``ControlCommand``, raising ``ControlCommandError`` on anything
   malformed or unknown so a bad line can be logged and ignored rather than
   crashing the server.
@@ -60,11 +62,27 @@ COMMAND_STOP = "stop"
 # advance to the record/listen turn (the |<< >>| pair with VM-1685 skip_back).
 COMMAND_SKIP_FORWARD = "skip_forward"
 
+# Transport commands (VM-1685). Unlike pause/resume/stop -- which act on the
+# *current* utterance's play/hold/cut state -- a transport command is a one-shot
+# "move through the history buffer" request: ``skip_back`` replays a previously
+# rendered utterance (CD-style). VM-1739 adds ``skip_forward`` the same way (a
+# parallel entry here + a parallel ``request_skip_forward`` on ControlState).
+COMMAND_SKIP_BACK = "skip_back"
+
 # The commands a control client may send over the channel. ``volume`` is a
-# documented stretch goal (VM-1676) -- intentionally NOT accepted in v1 so an
+# documented stretch goal (VM-1676) -- intentionally NOT accepted so an
 # unimplemented command fails validation loudly rather than being silently
 # dropped on the floor.
-VALID_COMMANDS = (COMMAND_PAUSE, COMMAND_RESUME, COMMAND_STOP, COMMAND_SKIP_FORWARD)
+VALID_COMMANDS = (COMMAND_PAUSE, COMMAND_RESUME, COMMAND_STOP, COMMAND_SKIP_FORWARD, COMMAND_SKIP_BACK)
+
+# Read-side query (VM-1685, impl-nowplaying). Unlike the mutating commands in
+# ``VALID_COMMANDS``, ``status`` is a *request/response* query: the socket
+# listener answers it with one JSON line describing the current state + the
+# history-buffer "now playing" position, and mutates nothing. It is deliberately
+# kept OUT of ``VALID_COMMANDS`` / :func:`parse_command` (those validate the
+# fire-and-forget mutation path) and handled by the socket read-side instead, so
+# the mutation schema and the query schema stay cleanly separated.
+COMMAND_STATUS = "status"
 
 
 # --- Named control intents (F1 / VM-1691) --------------------------------
@@ -142,6 +160,8 @@ class ControlCommand:
             state.request_resume()
         elif self.command == COMMAND_STOP:
             state.request_stop(message=self.message, hint=self.hint)
+        elif self.command == COMMAND_SKIP_BACK:
+            state.request_skip_back()
         elif self.command == COMMAND_SKIP_FORWARD:
             state.request_skip_forward()
         else:  # pragma: no cover -- parse_command guarantees a valid command
@@ -151,7 +171,7 @@ class ControlCommand:
 def parse_command(line: str) -> ControlCommand:
     """Parse one newline-delimited JSON control line into a ``ControlCommand``.
 
-    Schema: ``{"command": "pause"|"resume"|"stop"|"skip_forward",
+    Schema: ``{"command": "pause"|"resume"|"stop"|"skip_forward"|"skip_back",
     "message"?: str, "hint"?: str}``.
     Surrounding whitespace (including the trailing newline) is tolerated.
 
@@ -220,12 +240,17 @@ class ControlSnapshot:
     """An immutable point-in-time view of a ``ControlState``.
 
     Returned by ``ControlState.snapshot()`` so the polling coroutine reads a
-    consistent ``(state, message, hint)`` triple without holding the lock.
+    consistent ``(state, message, hint, pending_transport)`` view without holding
+    the lock. ``pending_transport`` (VM-1685) is the non-sticky transport request
+    -- e.g. ``skip_back`` -- separate from the play/hold/cut ``state``; it is a
+    *peek* here (``snapshot`` never clears it). The playback loop consumes it via
+    the destructive ``ControlState.take_transport_request()``.
     """
 
     state: str
     message: Optional[str] = None
     hint: Optional[str] = None
+    pending_transport: Optional[str] = None
 
     @property
     def is_running(self) -> bool:
@@ -264,6 +289,15 @@ class ControlState:
     late command can't revive a cancelled utterance, and a second ``stop`` won't
     overwrite the latched ``message`` / ``hint`` (first stop wins). ``reset`` is
     the only way back to *running*.
+
+    Separately, a **non-sticky transport request** slot (VM-1685) carries a
+    one-shot ``skip_back`` (later also VM-1739's ``skip_forward``) for the
+    history-buffer replay. It is deliberately kept *orthogonal* to the
+    play/hold/cut state machine: ``request_skip_back`` records a request whatever
+    the current state (it never collides with -- nor clears -- the sticky ``stop``
+    latch), and the playback loop consumes it with the read-and-clear
+    ``take_transport_request``. ``reset`` drops any unconsumed request so it never
+    leaks into the next utterance.
     """
 
     def __init__(self) -> None:
@@ -273,6 +307,10 @@ class ControlState:
         self._state = STATE_RUNNING
         self._message: Optional[str] = None
         self._hint: Optional[str] = None
+        # Non-sticky one-shot transport request (skip_back / VM-1739 skip_forward),
+        # separate from the play/hold/cut state above. Set by request_skip_back,
+        # cleared on read by take_transport_request (or by reset).
+        self._pending_transport: Optional[str] = None
 
     # --- mutations (listener side) ---------------------------------------
 
@@ -322,6 +360,34 @@ class ControlState:
             self._cond.notify_all()
             return True
 
+    def request_skip_back(self) -> bool:
+        """Record a one-shot ``skip_back`` transport request. Always returns True.
+
+        Non-sticky and orthogonal to ``stop``: it records the request regardless
+        of the current play/hold/cut state and never touches the sticky ``stop``
+        latch (so a transport press can't revive -- or be swallowed by -- a
+        stopped utterance). The playback loop reads-and-clears it via
+        ``take_transport_request``; an unconsumed request is dropped by ``reset``.
+        VM-1739's ``request_skip_forward`` is the parallel transport method, but
+        it uses the sticky ``_state`` terminal (it ends the turn and advances to
+        record) rather than this non-sticky slot (``skip_back`` replays *within*
+        the turn). The two coexist: ``_pending_transport`` and ``_state`` are
+        independent (the |<< >>| pair).
+        """
+        return self._request_transport(COMMAND_SKIP_BACK)
+
+    def _request_transport(self, command: str) -> bool:
+        """Shared implementation for the transport-request methods.
+
+        Overwrites any unconsumed request with the latest (coalescing semantics:
+        the playback loop polls far faster than a human presses, so the last press
+        wins). Notifies waiters so a poller blocked elsewhere can wake and look.
+        """
+        with self._cond:
+            self._pending_transport = command
+            self._cond.notify_all()
+            return True
+
     def request_skip_forward(self) -> bool:
         """Request a skip-forward barge-in (VM-1739): end the current utterance
         now and advance to the record/listen turn.
@@ -344,7 +410,7 @@ class ControlState:
             return True
 
     def reset(self) -> None:
-        """Clear back to *running* and drop any latched message / hint.
+        """Clear back to *running*; drop any latched message / hint / transport request.
 
         Called at the start of each utterance so stale state from a previous
         utterance never leaks in.
@@ -353,6 +419,7 @@ class ControlState:
             self._state = STATE_RUNNING
             self._message = None
             self._hint = None
+            self._pending_transport = None
             self._cond.notify_all()
 
     # --- reads (playback side) -------------------------------------------
@@ -363,10 +430,38 @@ class ControlState:
         with self._cond:
             return self._state
 
-    def snapshot(self) -> ControlSnapshot:
-        """Return a consistent ``(state, message, hint)`` view. Cheap; poll per chunk."""
+    @property
+    def pending_transport(self) -> Optional[str]:
+        """Peek at the pending transport request (``skip_back`` / None) without clearing it.
+
+        Non-destructive -- for the now-playing read-side. The playback loop should
+        use ``take_transport_request`` so a request is consumed exactly once.
+        """
         with self._cond:
-            return ControlSnapshot(self._state, self._message, self._hint)
+            return self._pending_transport
+
+    def take_transport_request(self) -> Optional[str]:
+        """Atomically read **and clear** the pending transport request.
+
+        Returns the request word (e.g. ``skip_back``) and resets the slot to None,
+        so a single press is acted on exactly once. Returns None when nothing is
+        pending. This is how the playback loop polls for transport presses.
+        """
+        with self._cond:
+            pending = self._pending_transport
+            self._pending_transport = None
+            return pending
+
+    def snapshot(self) -> ControlSnapshot:
+        """Return a consistent ``(state, message, hint, pending_transport)`` view.
+
+        Cheap; poll per chunk. ``pending_transport`` is a peek (not cleared) --
+        consume it with ``take_transport_request``.
+        """
+        with self._cond:
+            return ControlSnapshot(
+                self._state, self._message, self._hint, self._pending_transport
+            )
 
     def wait_while_paused(self, timeout: Optional[float] = None) -> ControlSnapshot:
         """Block while paused, returning as soon as resumed or stopped.
@@ -382,7 +477,9 @@ class ControlState:
                 self._cond.wait_for(
                     lambda: self._state != STATE_PAUSED, timeout=timeout
                 )
-            return ControlSnapshot(self._state, self._message, self._hint)
+            return ControlSnapshot(
+                self._state, self._message, self._hint, self._pending_transport
+            )
 
 
 # --- Process-wide singleton ----------------------------------------------
