@@ -540,7 +540,9 @@ def reconnect(
     The dance mirrors the slipbox recipe: open the menu, parse it, and act on
     the voicemode row's *state* read from the list -- if connected, bail as a
     no-op; if failed, navigate in, assert Reconnect is the first action, hit it,
-    then poll the list until it reads connected (bounded by ``timeout``).
+    then poll until it reads connected (bounded by ``timeout``). On CC v2.1.186
+    hitting Reconnect *closes* the whole ``/mcp`` dialog, so each poll re-opens
+    ``/mcp`` and re-parses the authoritative server list (VM-1727 impl-004).
     """
     emit = emit or _noop_emit
 
@@ -635,16 +637,32 @@ def reconnect(
 
         runner.send_keys("Enter")            # hit Reconnect (item 1)
         runner.sleep(settle)
-        runner.send_keys("Escape")           # back to the live-updating server list
-        runner.sleep(settle)
     else:  # connecting
         emit(f"⏳ '{row.name}' is already reconnecting; waiting for it to settle…")
 
-    # 4. Poll the server list until voicemode reads connected (or we time out).
+    # Normalise to a closed menu before polling. On CC v2.1.186 hitting Reconnect
+    # CLOSES the whole /mcp dialog (it does NOT stay an open, live-updating list
+    # -- the original code's wrong assumption, surfaced live as VM-1727 verify-001
+    # finding #3); for the 'connecting' branch the list opened in step 1 is still
+    # up. Either way, close it now so every poll re-opens a fresh, authoritative
+    # list. This replaces the old stray `Escape` (which, post-close, just cleared
+    # the empty REPL prompt with a misleading "back to the live list" comment).
+    _close_menu(runner, settle=settle)
+
+    # 4. Poll until voicemode reads connected (or we time out). Because Reconnect
+    #    closed the dialog, RE-OPEN /mcp each poll and re-parse the live server
+    #    list -- reusing the proven parser (the already-connected no-op path reads
+    #    'connected' from a freshly-opened menu correctly). Re-open-and-parse is
+    #    immune to the stale '⎿ Reconnected to <server>.' transcript line a
+    #    confirmation-scraping signal would have to baseline against (the same
+    #    scrollback-contamination class impl-003 handled for the '❯' cursor glyph):
+    #    success is read ONLY from the freshly-parsed live state, never scrollback.
     emit(f"⏳ Waiting up to {timeout:.0f}s for '{row.name}' to connect…")
     deadline = runner.now() + timeout
     while runner.now() < deadline:
         runner.sleep(poll_interval)
+        runner.send_keys("/mcp", "Enter")    # re-open the list Reconnect closed
+        runner.sleep(settle)
         current = find_voicemode_row(parse_mcp_menu(runner.capture()), server_match)
         if current is not None and current.state == "connected":
             _close_menu(runner, settle=settle)
@@ -653,6 +671,7 @@ def reconnect(
                 f"✅ Reconnected '{row.name}'.",
                 reload_line=reload_line,
             )
+        _close_menu(runner, settle=settle)   # clear the REPL before the next re-open
 
     _close_menu(runner, settle=settle)
     return ReconnectResult(

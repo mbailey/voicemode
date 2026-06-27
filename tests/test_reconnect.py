@@ -169,6 +169,37 @@ class TestParseMcpMenu:
         assert vm.name == "plugin:voicemode:voicemode"
         assert vm.state == "failed"
 
+    def test_post_reconnect_closed_screen_has_no_server_rows(self):
+        # The real post-Reconnect screen (VM-1727 verify-001 finding #3): the /mcp
+        # dialog has CLOSED and only the REPL transcript remains -- stale `❯ /mcp`
+        # echoes + a `⎿ Reconnected to plugin:voicemode:voicemode.` confirmation.
+        # It is NOT a menu: no server row parses out (the confirmation line is not
+        # a server), so find_voicemode_row is None and looks_like_mcp_menu is
+        # False. This is exactly why the old "poll the still-open list" code timed
+        # out -- impl-004 re-opens /mcp to get an authoritative list instead.
+        text = load("cc_post_reconnect_closed")
+        rows = parse_mcp_menu(text)
+        assert rows == []
+        assert find_voicemode_row(rows) is None
+        assert looks_like_mcp_menu(text) is False
+
+    def test_stale_reconnected_line_is_not_read_as_connected(self):
+        # A `⎿ Reconnected to voicemode.` line persists in scrollback from a prior
+        # run, ABOVE a live menu where voicemode is STILL failed. The confirmation
+        # carries the word "reconnected"/"connected" but is not a server row, so
+        # the only voicemode the parser finds is the live FAILED one -- the driver
+        # won't short-circuit to success on the stale line (impl-004).
+        text = (
+            "❯ /mcp\n"
+            "  ⎿  Reconnected to voicemode.\n\n"
+            "  Manage MCP servers\n"
+            "  ❯ voicemode · ✘ failed\n"
+            " ↑/↓ to navigate · Enter to confirm · Esc to cancel\n"
+        )
+        rows = parse_mcp_menu(text)
+        assert [r.name for r in rows] == ["voicemode"]
+        assert find_voicemode_row(rows).state == "failed"
+
 
 @pytest.mark.unit
 class TestDetectState:
@@ -486,6 +517,80 @@ class ContaminatedCursorMenu(CursorMenu):
         return _REPL_SCROLLBACK + screen
 
 
+# The post-Reconnect CLOSED screen on CC v2.1.186: the /mcp dialog is gone and
+# the REPL shows a `⎿ Reconnected to <server>.` confirmation among stale
+# `❯ /mcp` / `⎿ MCP dialog dismissed` echoes (VM-1727 verify-001 finding #3, raw
+# capture log/verify-001-raw-capture-post-reconnect.txt). It is NOT a menu --
+# parse_mcp_menu finds no server row here, which is exactly why the old "poll the
+# still-open list" code timed out. Note the confirmation sits ABOVE a newer
+# `MCP dialog dismissed` echo: a naive substring scan would false-positive on it
+# (the stale-confirmation trap), so success is read by re-opening /mcp, never the
+# transcript.
+_POST_RECONNECT_CLOSED = (
+    "❯ /mcp\n"
+    "  ⎿  MCP dialog dismissed\n\n"
+    "❯ /mcp\n"
+    "  ⎿  Reconnected to plugin:voicemode:voicemode.\n\n"
+    "❯ /mcp\n"
+    "  ⎿  MCP dialog dismissed\n\n"
+    "❯ \n"
+)
+
+# A stale `Reconnected to voicemode.` line lingering in scrollback from a PRIOR
+# run, ABOVE the live menu. Carries the word "reconnected"/"connected" but is not
+# a server row, so it must never short-circuit detection to success.
+_STALE_CONFIRMATION = "❯ /mcp\n  ⎿  Reconnected to voicemode.\n\n"
+
+
+class ClosingCursorMenu(CursorMenu):
+    """A :class:`CursorMenu` that models CC v2.1.186's post-Reconnect behaviour.
+
+    Where the base :class:`CursorMenu` leaves the list open and live-updating
+    after Reconnect (the original code's assumption), here hitting Reconnect --
+    and any ``Escape`` -- CLOSES the whole ``/mcp`` dialog: ``capture`` then
+    returns :data:`_POST_RECONNECT_CLOSED` (the REPL with a ``⎿ Reconnected to
+    …`` confirmation, NOT a server list) until ``/mcp`` re-opens it. This is the
+    exact screen that made the old poll loop read a closed menu and false-time-out
+    (VM-1727 verify-001 finding #3 / impl-004). The server reads ``connected``
+    once ``connect_after`` re-opens have re-rendered the list (inherited
+    poll-counting), so re-open-and-parse is what surfaces success.
+
+    ``stale_confirmation=True`` additionally prepends :data:`_STALE_CONFIRMATION`
+    -- a confirmation line from a *prior* run -- to every open-list render, to
+    prove a stale line does not short-circuit before Reconnect is pressed.
+    """
+
+    def __init__(self, *args, stale_confirmation=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stale_confirmation = stale_confirmation
+
+    def send_keys(self, *keys):
+        k = tuple(keys)
+        if k == ("Enter",) and self.in_submenu:
+            self.sent.append(k)
+            self.reconnect_pressed = True      # Reconnect...
+            self.in_submenu = False
+            self.opened = False                # ...closes the entire dialog
+            return
+        if k == ("Escape",):
+            self.sent.append(k)
+            self.in_submenu = False
+            self.opened = False                # Esc closes the menu too
+            return
+        super().send_keys(*keys)
+
+    def capture(self):
+        # Once Reconnect has fired and the dialog is closed, the screen is the
+        # REPL transcript (confirmation + echoes), never a server list. Re-opening
+        # /mcp restores the authoritative list.
+        if self.reconnect_pressed and not self.opened:
+            return _POST_RECONNECT_CLOSED
+        screen = super().capture()
+        if self.stale_confirmation and screen:
+            screen = _STALE_CONFIRMATION + screen
+        return screen
+
+
 @pytest.fixture
 def in_tmux():
     with patch.dict("os.environ", {"TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%5"}):
@@ -599,6 +704,55 @@ class TestReconnectDriver:
         result = reconnect(pane="%5", runner=runner, settle=0, timeout=10, poll_interval=2)
         assert result.exit_code == ExitCode.TIMEOUT
         assert result.outcome == "timeout"
+
+    def test_post_reconnect_menu_closes_still_reconnects(self, in_tmux):
+        # THE impl-004 regression test. On CC v2.1.186 hitting Reconnect CLOSES the
+        # /mcp dialog (it is not an open, live-updating list), leaving only a
+        # `⎿ Reconnected to …` confirmation in the REPL transcript. The old poll
+        # loop re-captured that CLOSED screen, parsed no voicemode row, and ran the
+        # full 75s to a FALSE timeout -- even though voicemode had reconnected in
+        # ~1s (VM-1727 verify-001 finding #3). The fix RE-OPENS /mcp each poll and
+        # re-parses the authoritative list, so the scenario now yields RECONNECTED.
+        runner = ClosingCursorMenu(SIMPLE_LAYOUT, connect_after=1)
+        result = reconnect(pane="%5", runner=runner, settle=0, poll_interval=1, timeout=30)
+        assert result.exit_code == ExitCode.RECONNECTED
+        assert result.outcome == "reconnected"
+        assert runner.reconnect_pressed             # Reconnect was actually fired
+        assert runner.enters() == 2                 # submenu-enter + Reconnect
+        # Polling re-opened /mcp after the dialog closed (not just one initial open).
+        assert sum(1 for c in runner.sent if c == ("/mcp", "Enter")) >= 2
+        assert result.reload_line == "ToolSearch select:mcp__voicemode__converse"
+
+    def test_post_reconnect_real_layout_reconnects(self, in_tmux):
+        # Same close-on-Reconnect behaviour over the real CC v2.1.186 layout
+        # (voicemode deep in an interleaved list): cursor-nav (impl-002) +
+        # re-open-and-poll (impl-004) compose to RECONNECTED, not TIMEOUT.
+        runner = ClosingCursorMenu(REAL_LAYOUT, connect_after=1)
+        result = reconnect(pane="%5", runner=runner, settle=0, poll_interval=1, timeout=30)
+        assert result.exit_code == ExitCode.RECONNECTED
+        assert runner.downs() == 5                  # navigated by cursor
+        assert result.reload_line == "ToolSearch select:mcp__plugin_voicemode_voicemode__converse"
+
+    def test_stale_confirmation_does_not_short_circuit(self, in_tmux):
+        # A `⎿ Reconnected to voicemode.` line lingers in scrollback from a PRIOR
+        # run while voicemode is currently FAILED. Success must be judged from the
+        # live menu state (re-open-and-parse), never that stale line: the driver
+        # must run the full navigate -> Reconnect dance, not report success early.
+        runner = ClosingCursorMenu(SIMPLE_LAYOUT, connect_after=1, stale_confirmation=True)
+        result = reconnect(pane="%5", runner=runner, settle=0, poll_interval=1, timeout=30)
+        assert runner.reconnect_pressed             # Reconnect WAS pressed (no short-circuit)
+        assert runner.enters() == 2
+        assert result.exit_code == ExitCode.RECONNECTED
+
+    def test_post_reconnect_timeout_when_never_connects(self, in_tmux):
+        # The genuine-timeout path under the close-on-Reconnect model: Reconnect
+        # fires and the dialog closes, but re-opening /mcp keeps reading 'failed'
+        # (server never comes back). Must still report TIMEOUT, not hang.
+        runner = ClosingCursorMenu(SIMPLE_LAYOUT, connect_after=10 ** 6)
+        result = reconnect(pane="%5", runner=runner, settle=0, timeout=10, poll_interval=2)
+        assert result.exit_code == ExitCode.TIMEOUT
+        assert result.outcome == "timeout"
+        assert runner.reconnect_pressed             # it did try, then waited out the bound
 
     def test_dry_run_sends_no_keys(self, in_tmux):
         runner = FakeRunner([load("failed")])
