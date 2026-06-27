@@ -11,10 +11,12 @@
 ---   VoiceMode only grabs the media keys when a converse is *live*; otherwise every
 ---   key passes straight through to the active media app, unchanged.
 ---
----   • Play/Pause = "pause everything." One press quiets the room: it pauses
----     VoiceMode (if it is speaking) AND lets the event through so the media app
----     toggles too. Press again to resume. Coherent whether or not a converse is
----     live. (do-both / pass-through)
+---   • Play/Pause = pause/resume VoiceMode when a converse is live. By DEFAULT
+---     (pauseEverything=false) the key is SWALLOWED, so only VoiceMode pauses and
+---     the media app is left untouched (no surprise un-pausing). Set
+---     pauseEverything=true for the original "pause everything": also pass the key
+---     through so the media app toggles too. When no converse is live the key
+---     always passes straight through to the media app. (See pauseEverything below.)
 ---   • Next / Previous route to the *active owner* (they can't be both — barge vs
 ---     music-skip conflict):
 ---       – converse live (or override=always-me) → VoiceMode owns:
