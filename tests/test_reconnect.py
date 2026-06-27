@@ -40,6 +40,24 @@ def load(name: str) -> str:
     return (FIXTURES / f"{name}.txt").read_text()
 
 
+# Stale Claude Code REPL scrollback that sits ABOVE a live /mcp menu in a real
+# capture: a shell-prompt echo plus several `❯ /mcp` input echoes. The `❯` here
+# is the SAME glyph as the menu cursor -- the exact contamination from VM-1727
+# verify-001 live finding #2. Prepended to a menu/submenu capture, it must NOT
+# fool cursor / marked-row detection once menu-region scoping is in place.
+_REPL_SCROLLBACK = (
+    "m5:~❯ claude\n"
+    "  ⏺ Voicemode dropped; reconnecting…\n"
+    "❯ /mcp\n"
+    "❯ /mcp\n"
+    "❯ /mcp\n"
+    "❯ /mcp\n"
+    "❯ /mcp\n"
+    "❯ /mcp\n"
+    "\n"
+)
+
+
 # ---------------------------------------------------------------------------
 # Pure menu parser
 # ---------------------------------------------------------------------------
@@ -121,6 +139,36 @@ class TestParseMcpMenu:
         assert "computer-use" not in names         # `◯ disabled` -> skipped
         assert not any("show unused" in n.lower() for n in names)  # action row -> skipped
 
+    def test_debug_hint_footer_is_not_a_server_row(self):
+        # The `※ Run claude --debug to see error logs` hint contains the WORD
+        # "error" but is not a server -- it has no name token and no status
+        # glyph. Parsing it as a failed server (name `※`) was defect #2 from
+        # live verify-001; require a real name + status-in-position (impl-003).
+        text = (
+            "  Manage MCP servers\n"
+            "  ❯ voicemode · ✘ failed\n"
+            "\n"
+            "  ※ Run claude --debug to see error logs\n"
+            " ↑/↓ to navigate · Enter to confirm · Esc to cancel\n"
+        )
+        rows = parse_mcp_menu(text)
+        assert [r.name for r in rows] == ["voicemode"]
+        assert all(r.name != "※" for r in rows)
+
+    def test_contaminated_capture_parses_only_real_servers(self):
+        # The real contaminated capture: stale `❯ /mcp` prompt echoes above the
+        # menu + the `※ debug` footer + voicemode failed last. Neither the prompt
+        # echoes (`/mcp`) nor the hint (`※`) may be parsed as servers; voicemode
+        # is still found by text and read as failed.
+        rows = parse_mcp_menu(load("cc_contaminated_repl_prompt"))
+        names = [r.name for r in rows]
+        assert "/mcp" not in names
+        assert "※" not in names
+        vm = find_voicemode_row(rows)
+        assert vm is not None
+        assert vm.name == "plugin:voicemode:voicemode"
+        assert vm.state == "failed"
+
 
 @pytest.mark.unit
 class TestDetectState:
@@ -194,6 +242,18 @@ class TestMarkedRow:
     def test_name_strips_number_prefix(self):
         assert marked_row_name("❯ 6. voicemode ✘ failed\n") == "voicemode"
 
+    def test_repl_prompt_echoes_above_menu_are_not_the_cursor(self):
+        # THE impl-003 bug: a real capture has stale `❯ /mcp` REPL-prompt echoes
+        # ABOVE the menu, sharing the cursor glyph. marked_row scanned top-to-
+        # bottom and returned '/mcp' forever, so navigation never landed on
+        # voicemode. Menu-region scoping must return the real menu cursor.
+        text = load("cc_contaminated_repl_prompt")
+        row = marked_row(text)
+        assert row is not None
+        assert "/mcp" not in row                 # not a prompt echo
+        assert row.startswith("claude.ai")       # the real menu cursor
+        assert marked_row_name(text) == "claude.ai"
+
 
 @pytest.mark.unit
 class TestSubmenuReconnectFirst:
@@ -203,6 +263,13 @@ class TestSubmenuReconnectFirst:
     def test_false_when_view_tools_first(self):
         # Connected server: item 1 is View tools -> must NOT blindly Enter.
         assert submenu_reconnect_first(load("submenu_connected")) is False
+
+    def test_repl_echoes_above_submenu_are_ignored(self):
+        # Stale `❯ /mcp` prompt echoes above a server submenu must not be read as
+        # the selected action; menu-region scoping finds the real `❯ 1. Reconnect`
+        # (and still returns False when View tools is selected). VM-1727 impl-003.
+        assert submenu_reconnect_first(_REPL_SCROLLBACK + load("submenu_failed")) is True
+        assert submenu_reconnect_first(_REPL_SCROLLBACK + load("submenu_connected")) is False
 
 
 @pytest.mark.unit
@@ -404,6 +471,21 @@ SIMPLE_LAYOUT = [
 ]
 
 
+class ContaminatedCursorMenu(CursorMenu):
+    """A :class:`CursorMenu` whose every capture carries stale ``❯ /mcp``
+    REPL-prompt echoes ABOVE the menu -- the exact live-pane contamination from
+    VM-1727 verify-001 finding #2. The echoes share the menu cursor's ``❯``
+    glyph, so only menu-region-scoped detection lands on the real cursor; the
+    pre-impl-003 code read '/mcp' every step and never reconnected.
+    """
+
+    def capture(self):
+        screen = super().capture()
+        if not screen:
+            return screen
+        return _REPL_SCROLLBACK + screen
+
+
 @pytest.fixture
 def in_tmux():
     with patch.dict("os.environ", {"TMUX": "/tmp/tmux-501/default,1,0", "TMUX_PANE": "%5"}):
@@ -464,6 +546,19 @@ class TestReconnectDriver:
         result = reconnect(pane="%5", runner=runner, settle=0, poll_interval=1, timeout=30)
         assert result.exit_code == ExitCode.RECONNECTED
         assert runner.downs() == 5            # by cursor -- NOT the parsed index (3)
+        assert runner.enters() == 2           # submenu-enter + Reconnect
+        assert result.reload_line == "ToolSearch select:mcp__plugin_voicemode_voicemode__converse"
+
+    def test_repl_prompt_echoes_dont_break_navigation(self, in_tmux):
+        # THE impl-003 regression. With stale `❯ /mcp` prompt echoes above the
+        # menu (the live-pane contamination), the pre-fix cursor detection read
+        # '/mcp' at every step -- "cycling through the options without stopping"
+        # -- and failed loud without reconnecting. Menu-region scoping must
+        # ignore the echoes and drive the real cursor 5 Downs onto voicemode.
+        runner = ContaminatedCursorMenu(REAL_LAYOUT, connect_after=1)
+        result = reconnect(pane="%5", runner=runner, settle=0, poll_interval=1, timeout=30)
+        assert result.exit_code == ExitCode.RECONNECTED
+        assert runner.downs() == 5            # by the real cursor, not the echoes
         assert runner.enters() == 2           # submenu-enter + Reconnect
         assert result.reload_line == "ToolSearch select:mcp__plugin_voicemode_voicemode__converse"
 

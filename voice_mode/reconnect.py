@@ -147,6 +147,21 @@ _CURSOR = "❯>›▶▸"
 
 _NUM_RE = re.compile(r"^(\d+)[.)]\s+(.*)$")
 
+# A server NAME as the /mcp menu renders it: an identifier-like first token --
+# alphanumeric/underscore start, then word chars / : . / @ -. This deliberately
+# rejects decoration and prose first tokens (the debug-hint footer ``※ Run
+# claude --debug …``, the ``↑/↓ to navigate …`` footer, group bullets), so a
+# non-server line is never mis-parsed as a server row (VM-1727 impl-003 / live
+# finding #2).
+_NAME_RE = re.compile(r"^[A-Za-z0-9_][\w:./@-]*$")
+
+# Status GLYPHS Claude Code renders in a server row's status column. Requiring
+# one (or a list number) to accept an UN-numbered row keeps hint/footer prose
+# out of the server list: a line like ``※ … to see error logs`` carries the
+# *word* "error" but no status glyph, so it is not a server row. ``◯`` (disabled)
+# is deliberately excluded -- a disabled built-in is not a reconnectable server.
+_STATUS_GLYPHS = "✔✓●✘✗❌✖⚠"
+
 
 @dataclass
 class ServerRow:
@@ -176,19 +191,38 @@ def _clean_line(line: str) -> str:
     return s
 
 
-def _has_status_token(text: str) -> bool:
-    """True if the text carries any recognised connection-status glyph/word."""
-    return detect_state(text) != "unknown"
+def _has_status_glyph(text: str) -> bool:
+    """True if a real status *glyph* sits in the row, vs. a status word in prose.
+
+    Recognises the connected/failed/auth marks in :data:`_STATUS_GLYPHS` plus any
+    braille spinner frame (``connecting`` / ``reconnecting`` animate through
+    U+2800–U+28FF). A footer/hint line that merely *contains* a status word --
+    ``※ Run claude --debug to see error logs`` -- has none of these, so it is
+    correctly rejected as a server row (VM-1727 impl-003). Numbered list items
+    don't need a glyph; they are explicit menu rows.
+    """
+    if any(g in text for g in _STATUS_GLYPHS):
+        return True
+    # Braille spinner frames (connecting/reconnecting) live in U+2800–U+28FF.
+    return any(chr(0x2800) <= ch <= chr(0x28FF) for ch in text)
 
 
 def parse_mcp_menu(text: str) -> List[ServerRow]:
     """Parse captured ``/mcp`` server-list text into :class:`ServerRow` entries.
 
-    A line is treated as a server row if, once borders and the selection marker
-    are stripped, it is a numbered list item (``N. name ...``) or it carries a
-    recognised status token. Header and footer lines (``Manage MCP servers``,
-    ``Esc to exit`` ...) carry neither and are skipped. Server names are
-    identifier-like (no spaces), so the name is the first whitespace token.
+    Once borders and the selection marker are stripped, a line is a server row
+    only when **both** hold:
+
+    * its first token is an identifier-like server name (:data:`_NAME_RE`) -- so
+      decoration/prose first tokens (``※``, ``→``, ``↑/↓``) are rejected; and
+    * it is a numbered list item (``N. name ...``) **or**, on an un-numbered
+      menu, it carries a status *glyph* in the status column
+      (:func:`_has_status_glyph`).
+
+    Header, footer, and hint lines (``Manage MCP servers``, ``Esc to exit``, the
+    debug-hint ``※ Run claude --debug to see error logs``) fail one of these and
+    are skipped -- crucially, a bare ``error``/``connected`` *word* buried in a
+    prose footer is not enough to be classified as a server (VM-1727 impl-003).
     """
     rows: List[ServerRow] = []
     for line in text.splitlines():
@@ -202,16 +236,18 @@ def parse_mcp_menu(text: str) -> List[ServerRow]:
         if m:
             number = int(m.group(1))
             body = m.group(2).strip()
-
-        # Numbered lines are server rows; un-numbered lines qualify only if they
-        # carry a status token (keeps the parser working on un-numbered menus
-        # without swallowing prose footers).
-        if number is None and not _has_status_token(body):
-            continue
         if not body:
             continue
 
         name = body.split()[0]
+        # A server row needs a real identifier-like name; un-numbered rows
+        # additionally need a status glyph in position. This keeps prose
+        # footer/hint lines (e.g. ``※ … to see error logs``) out of the list.
+        if not _NAME_RE.match(name):
+            continue
+        if number is None and not _has_status_glyph(body):
+            continue
+
         rows.append(ServerRow(
             name=name,
             state=detect_state(body),
@@ -257,15 +293,53 @@ def find_voicemode_row(
 # Cursor (selected-row) detection -- the basis of cursor-driven navigation
 # ---------------------------------------------------------------------------
 
+# The active /mcp menu is drawn at the BOTTOM of the captured pane; terminal
+# scrollback sits ABOVE it -- including stale ``❯ /mcp`` REPL-prompt echoes whose
+# ``❯`` is the SAME glyph as the menu's selection cursor. Cursor/marked detection
+# must therefore look ONLY inside the live menu block, or it locks onto a prompt
+# echo and never finds the real cursor (VM-1727 impl-003 / live finding #2). The
+# block is bounded BELOW by its footer and ABOVE by its header.
+_MENU_FOOTER_TOKENS = ("esc to", "to navigate", "for help")
+_MENU_HEADER_TOKENS = ("manage mcp", "status:")
+
+
+def _menu_region(text: str) -> List[str]:
+    """The raw lines of the active (bottom-most) modal ``/mcp`` menu block.
+
+    Trims terminal scrollback so a stale ``❯ /mcp`` prompt echo above the menu is
+    never mistaken for the menu cursor. The block ends at the LAST footer line
+    (``… to navigate`` / ``Esc to …`` / ``… for help``) and starts at the nearest
+    preceding header -- ``Manage MCP servers`` for the server list, or
+    ``Status:`` for a server submenu. Falls back to the whole capture when
+    neither delimiter is present (keeps bare-string callers / unit fixtures
+    working).
+    """
+    lines = text.splitlines()
+    if not lines:
+        return lines
+    end = len(lines) - 1
+    for i, line in enumerate(lines):
+        if any(tok in line.lower() for tok in _MENU_FOOTER_TOKENS):
+            end = i
+    start = 0
+    for i in range(end, -1, -1):
+        if any(tok in lines[i].lower() for tok in _MENU_HEADER_TOKENS):
+            start = i
+            break
+    return lines[start:end + 1]
+
+
 def marked_row(text: str) -> Optional[str]:
     """Return the text of the cursor-marked (``❯``) row in a captured menu.
 
     Strips borders and the leading cursor glyph; returns the remaining row text,
-    or ``None`` if no row is currently selected. Uses the narrow :data:`_CURSOR`
-    set (not :data:`_MARKERS`) so an action row such as ``→ Show unused
-    connectors`` is never mistaken for the selection.
+    or ``None`` if no row is currently selected. Searches only the active
+    :func:`_menu_region`, so a stale ``❯ /mcp`` REPL-prompt echo in scrollback
+    above the menu is not mistaken for the cursor (VM-1727 impl-003). Uses the
+    narrow :data:`_CURSOR` set (not :data:`_MARKERS`) so an action row such as
+    ``→ Show unused connectors`` is never mistaken for the selection either.
     """
-    for line in text.splitlines():
+    for line in _menu_region(text):
         s = line.strip().strip(_BORDER).strip()
         if not s:
             continue
@@ -304,11 +378,13 @@ def submenu_reconnect_first(text: str) -> bool:
     Enter triggers it. When connected, item 1 is *View tools* instead -- this
     returns False so the driver bails rather than blindly hitting Enter and
     opening the tools list. We check the marked (``❯``) line first, then fall
-    back to the first numbered action line.
+    back to the first numbered action line. Like :func:`marked_row`, this scans
+    only the active :func:`_menu_region`, so a stale ``❯ /mcp`` REPL-prompt echo
+    in scrollback isn't read as the selected action (VM-1727 impl-003).
     """
     marked: Optional[str] = None
     first_numbered: Optional[str] = None
-    for line in text.splitlines():
+    for line in _menu_region(text):
         cleaned = line.strip().strip(_BORDER).strip()
         if not cleaned:
             continue
