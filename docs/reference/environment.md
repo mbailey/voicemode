@@ -153,13 +153,14 @@ Log levels: `debug`, `info`, `warning`, `error`, `critical`
 ### Control Channel
 
 See the [Control Channel reference](control-channel.md) for the command surface
-(`voicemode control pause|resume|stop`) and worked Stream Deck / media-key /
-keyword examples.
+(`voicemode control pause|resume|stop|skip-back`) and worked Stream Deck /
+media-key / keyword examples.
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
-| `VOICEMODE_CONTROL_CHANNEL_ENABLED` | Bind the control socket while speaking (pause/resume/stop an in-flight utterance) | `false` | `true` |
+| `VOICEMODE_CONTROL_CHANNEL_ENABLED` | Bind the control socket while speaking (pause/resume/stop/skip-back an utterance) | `false` | `true` |
 | `VOICEMODE_CONTROL_SOCKET` | Path to the control Unix domain socket | `~/.voicemode/control.sock` | `/tmp/vm-control.sock` |
+| `VOICEMODE_HISTORY_BUFFER_SIZE` | How many recent utterances `skip_back` can replay (history ring-buffer depth, ≥1) | `8` | `16` |
 
 ### Serve Command
 
