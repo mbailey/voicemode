@@ -29,6 +29,7 @@ from .config import (
 )
 from . import config
 from .control_channel import get_control_state
+from .history_buffer import get_history_buffer
 from .utils import get_event_logger, update_latest_symlinks
 
 
@@ -88,6 +89,52 @@ async def _poll_control_channel() -> bool:
                 control_state.request_stop(hint="pause-timeout")
                 return True
     return False
+
+
+def _float_samples_to_pcm16(samples: np.ndarray) -> bytes:
+    """Convert normalized float32 samples ([-1, 1)) back to 16-bit PCM bytes.
+
+    The buffered (non-PCM) playback path decodes to float32 normalized by
+    ``/ 32768.0``; the history buffer stores raw 16-bit PCM, so reverse that
+    here, clipping to the int16 range to be safe.
+    """
+    scaled = np.clip(np.round(samples * 32768.0), -32768, 32767)
+    return scaled.astype(np.int16).tobytes()
+
+
+def _capture_utterance(
+    text: str,
+    pcm_bytes: bytes,
+    sample_rate: int,
+    channels: int = 1,
+    voice: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+) -> None:
+    """Append a rendered utterance to the process-wide history buffer (VM-1685).
+
+    Called by each TTS playback loop after it finishes streaming an utterance,
+    so skip-back can later re-play the cached audio. ``pcm_bytes`` is raw 16-bit
+    PCM at ``sample_rate`` -- exactly what these loops already write to the
+    output stream.
+
+    Captures **regardless of SAVE_AUDIO**: the playback loops accumulate the PCM
+    for this buffer whether or not the audio is also being saved to disk. Empty
+    audio (nothing reached the device) is skipped. Capture must never break
+    playback, so any failure here is logged and swallowed.
+    """
+    if not pcm_bytes:
+        return
+    try:
+        get_history_buffer().append(
+            text=text,
+            pcm_bytes=pcm_bytes,
+            sample_rate=sample_rate,
+            channels=channels,
+            voice=voice,
+            conversation_id=conversation_id,
+        )
+    except Exception:
+        logger.debug("Failed to capture utterance into history buffer", exc_info=True)
 
 
 def _abort_stream(stream) -> None:
@@ -329,7 +376,10 @@ async def stream_pcm_audio(
     start_time = time.perf_counter()
     stream = None
     first_chunk_time = None
-    save_buffer = io.BytesIO() if save_audio else None
+    # VM-1685: always accumulate the rendered PCM so it can feed the history
+    # buffer even when SAVE_AUDIO is off. The on-disk save below reads from the
+    # same buffer when saving is enabled.
+    audio_buffer = io.BytesIO()
     control_stopped = False
 
     try:
@@ -395,11 +445,10 @@ async def stream_pcm_audio(
                     
                     # Play the chunk immediately
                     stream.write(audio_array)
-                    
-                    # Save chunk if enabled
-                    if save_buffer:
-                        save_buffer.write(chunk)
-                    
+
+                    # Accumulate for the history buffer (and on-disk save).
+                    audio_buffer.write(chunk)
+
                     chunk_count += 1
                     bytes_received += len(chunk)
                     metrics.chunks_received = chunk_count
@@ -461,13 +510,24 @@ async def stream_pcm_audio(
         logger.info(f"Streaming complete - TTFA: {metrics.ttfa:.3f}s, "
                    f"Total: {metrics.playback_time:.3f}s, "
                    f"Chunks: {metrics.chunks_received}")
-        
+
+        # VM-1685: capture the rendered utterance for skip-back replay. Raw PCM
+        # is already in audio_buffer; this runs regardless of SAVE_AUDIO.
+        _capture_utterance(
+            text=text,
+            pcm_bytes=audio_buffer.getvalue(),
+            sample_rate=SAMPLE_RATE,
+            channels=1,
+            voice=request_params.get("voice"),
+            conversation_id=conversation_id,
+        )
+
         # Save audio if enabled
-        if save_audio and save_buffer and audio_dir:
+        if save_audio and audio_dir:
             try:
                 from .core import save_debug_file
-                save_buffer.seek(0)
-                audio_data = save_buffer.read()
+                audio_buffer.seek(0)
+                audio_data = audio_buffer.read()
                 # PCM format needs special handling - save as WAV
                 if audio_data:
                     # For PCM, we need to save as WAV with proper headers
@@ -521,7 +581,9 @@ async def stream_cartesia_pcm(
     start_time = time.perf_counter()
     stream = None
     first_chunk_time = None
-    save_buffer = io.BytesIO() if save_audio else None
+    # VM-1685: always accumulate the rendered PCM for the history buffer (used
+    # whether or not SAVE_AUDIO is on); the on-disk save reads from it too.
+    audio_buffer = io.BytesIO()
     bytes_received = 0
     chunk_count = 0
     control_stopped = False
@@ -559,8 +621,7 @@ async def stream_cartesia_pcm(
             audio_array = np.frombuffer(chunk, dtype=np.int16)
             stream.write(audio_array)
 
-            if save_buffer:
-                save_buffer.write(chunk)
+            audio_buffer.write(chunk)
             chunk_count += 1
             bytes_received += len(chunk)
 
@@ -613,15 +674,26 @@ async def stream_cartesia_pcm(
             f"Total: {metrics.playback_time:.3f}s, Chunks: {chunk_count}"
         )
 
-        if save_audio and save_buffer and audio_dir and bytes_received > 0:
+        # VM-1685: capture the rendered utterance for skip-back replay (raw PCM
+        # already accumulated above), regardless of SAVE_AUDIO.
+        _capture_utterance(
+            text=text,
+            pcm_bytes=audio_buffer.getvalue(),
+            sample_rate=sample_rate,
+            channels=1,
+            voice=voice_id,
+            conversation_id=conversation_id,
+        )
+
+        if save_audio and audio_dir and bytes_received > 0:
             try:
                 from .core import save_debug_file
                 import wave
                 import tempfile
                 import os
 
-                save_buffer.seek(0)
-                pcm_data = save_buffer.read()
+                audio_buffer.seek(0)
+                pcm_data = audio_buffer.read()
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
                     with wave.open(tmp_wav.name, "wb") as wav_file:
                         wav_file.setnchannels(1)
@@ -722,8 +794,13 @@ async def stream_with_buffering(
     
     # Buffer for accumulating chunks
     buffer = io.BytesIO()
-    # Separate buffer for saving complete audio
+    # Separate buffer for saving complete audio (encoded bytes, e.g. opus/mp3)
     save_buffer = io.BytesIO() if save_audio else None
+    # VM-1685: accumulate the DECODED PCM for the history buffer. save_buffer
+    # holds the encoded container, which can't feed the PCM-based replay buffer,
+    # so we collect int16 PCM at each playback write instead. Independent of
+    # SAVE_AUDIO.
+    pcm_parts: list = []
     audio_started = False
     stream = None
     control_stopped = False
@@ -800,6 +877,7 @@ async def stream_with_buffering(
                             # Play audio
                             stream.write(samples)
                             metrics.chunks_played += len(samples) // 1024
+                            pcm_parts.append(_float_samples_to_pcm16(samples))
 
                             # Reset buffer for next batch
                             buffer = io.BytesIO()
@@ -853,6 +931,7 @@ async def stream_with_buffering(
 
                 stream.write(samples)
                 metrics.chunks_played += len(samples) // 1024
+                pcm_parts.append(_float_samples_to_pcm16(samples))
 
                 # Belt-and-braces drain in addition to the silence padding above.
                 # Sleep for the reported output latency plus a small safety margin
@@ -867,7 +946,18 @@ async def stream_with_buffering(
         
         metrics.generation_time = time.perf_counter() - start_time
         metrics.playback_time = metrics.generation_time  # Approximate
-        
+
+        # VM-1685: capture the rendered utterance (decoded PCM) for skip-back
+        # replay, regardless of SAVE_AUDIO.
+        _capture_utterance(
+            text=text,
+            pcm_bytes=b"".join(pcm_parts),
+            sample_rate=sample_rate,
+            channels=1,
+            voice=request_params.get("voice"),
+            conversation_id=conversation_id,
+        )
+
         # Save audio if enabled
         if save_audio and save_buffer and audio_dir:
             try:

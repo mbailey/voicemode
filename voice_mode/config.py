@@ -680,6 +680,17 @@ CONTROL_PAUSE_TIMEOUT_ACTION = os.getenv(
 if CONTROL_PAUSE_TIMEOUT_ACTION not in ("stop", "resume"):
     CONTROL_PAUSE_TIMEOUT_ACTION = "stop"
 
+# Utterance history buffer (VM-1685): how many recently-rendered TTS utterances
+# the process-wide ring buffer keeps for CD-style skip-back replay. Bounded
+# because each entry holds raw PCM (~48 KB/s at 24 kHz mono 16-bit), so keep it
+# small. Must be >= 1; an invalid value falls back to the default.
+try:
+    HISTORY_BUFFER_SIZE = int(os.getenv("VOICEMODE_HISTORY_BUFFER_SIZE", "8"))
+    if HISTORY_BUFFER_SIZE < 1:
+        HISTORY_BUFFER_SIZE = 8
+except ValueError:
+    HISTORY_BUFFER_SIZE = 8
+
 # ==================== SERVICE CONFIGURATION ====================
 
 # OpenAI configuration
