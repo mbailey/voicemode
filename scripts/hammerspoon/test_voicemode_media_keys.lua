@@ -181,30 +181,33 @@ eq(M._onSystemDefined(event("PREVIOUS", PRESS)), true, "live: PREVIOUS swallowed
 eq(#stubState.controlCommands, 0, "live: PREVIOUS is a stub -> no control command (VM-1685)")
 
 -- ---------------------------------------------------------------------------
--- 7. Play/Pause = do-both: always pass through, toggles VoiceMode when live
+-- 7. Play/Pause DEFAULT (pauseEverything=false): control ONLY VoiceMode when a
+--    converse is live, swallowing the key (media app untouched); pass through
+--    when no converse is live.
 -- ---------------------------------------------------------------------------
 
 stubState.live = true
 resetCaptured()
--- First press while live -> pause; passes through.
-eq(M._onSystemDefined(event("PLAY", PRESS)), false, "live: PLAY passes through (1)")
+-- First press while live -> pause; SWALLOWED (VoiceMode-only default).
+eq(M._onSystemDefined(event("PLAY", PRESS)), true, "live default: PLAY swallowed (1)")
 eq(stubState.controlCommands[1], "pause", "live: 1st PLAY -> pause")
 -- Second press -> resume.
-eq(M._onSystemDefined(event("PLAY", PRESS)), false, "live: PLAY passes through (2)")
+eq(M._onSystemDefined(event("PLAY", PRESS)), true, "live default: PLAY swallowed (2)")
 eq(stubState.controlCommands[2], "resume", "live: 2nd PLAY -> resume")
 -- Third press -> pause again (toggles back).
-eq(M._onSystemDefined(event("PLAY", PRESS)), false, "live: PLAY passes through (3)")
+eq(M._onSystemDefined(event("PLAY", PRESS)), true, "live default: PLAY swallowed (3)")
 eq(stubState.controlCommands[3], "pause", "live: 3rd PLAY -> pause")
 
--- Going not-live resets the toggle mirror: next live press pauses (not resumes).
-eq(M._onSystemDefined(event("PLAY", PRESS)), false, "transition: PLAY passes through")  -- still live=true here
+-- Going not-live: PLAY passes through to the media app and resets the toggle
+-- mirror, so the next live press pauses (not resumes).
+eq(M._onSystemDefined(event("PLAY", PRESS)), true, "transition: PLAY swallowed (still live)")
 stubState.live = false
 resetCaptured()
 eq(M._onSystemDefined(event("PLAY", PRESS)), false, "dead: PLAY passes through")
 eq(#stubState.controlCommands, 0, "dead: PLAY fires no control command")
 stubState.live = true
 resetCaptured()
-eq(M._onSystemDefined(event("PLAY", PRESS)), false, "relive: PLAY passes through")
+eq(M._onSystemDefined(event("PLAY", PRESS)), true, "relive: PLAY swallowed")
 eq(stubState.controlCommands[1], "pause", "relive: first PLAY after dead -> pause (mirror reset)")
 
 -- ---------------------------------------------------------------------------
@@ -259,6 +262,30 @@ eq(M._onSystemDefined(event("REWIND", PRESS)), false, "dead: REWIND passes throu
 eq(#stubState.controlCommands, 0, "dead: FAST/REWIND fire no control command")
 
 M.setOwnership("auto")
+
+-- ---------------------------------------------------------------------------
+-- 10. pauseEverything=true restores do-both: when live, Play/Pause toggles
+--     VoiceMode AND passes through so the media app toggles too.
+--     (Re-load the module with the opt-in config.)
+-- ---------------------------------------------------------------------------
+
+_G.voicemodeMediaKeys.pauseEverything = true
+local M2 = dofile(thisDir .. "/voicemode-media-keys.lua")
+
+stubState.live = true
+resetCaptured()
+eq(M2._onSystemDefined(event("PLAY", PRESS)), false, "pauseEverything+live: PLAY passes through (do-both)")
+eq(stubState.controlCommands[1], "pause", "pauseEverything+live: PLAY still toggles VoiceMode")
+eq(M2._onSystemDefined(event("PLAY", PRESS)), false, "pauseEverything+live: PLAY passes through (2)")
+eq(stubState.controlCommands[2], "resume", "pauseEverything+live: 2nd PLAY -> resume")
+
+-- Dead behaves the same in both modes: pass through, no command.
+stubState.live = false
+resetCaptured()
+eq(M2._onSystemDefined(event("PLAY", PRESS)), false, "pauseEverything+dead: PLAY passes through")
+eq(#stubState.controlCommands, 0, "pauseEverything+dead: no control command")
+
+_G.voicemodeMediaKeys.pauseEverything = false
 
 -- ---------------------------------------------------------------------------
 -- Report

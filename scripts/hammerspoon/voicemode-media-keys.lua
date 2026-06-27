@@ -45,12 +45,23 @@
 ---
 --- Optional config before loading (all have sane defaults):
 ---     _G.voicemodeMediaKeys = {
----       voicemodePath = "/custom/bin/voicemode",   -- else auto-resolved
----       socketPath    = "~/.voicemode/control.sock",
----       toggleHotkey  = { mods = {"cmd","alt","ctrl"}, key = "M" },
----       showMenubar   = true,
----       alertOnAction = true,                      -- brief hs.alert on barge/pause
+---       voicemodePath  = "/custom/bin/voicemode",   -- else auto-resolved
+---       socketPath     = "~/.voicemode/control.sock",
+---       toggleHotkey   = { mods = {"cmd","alt","ctrl"}, key = "M" },
+---       showMenubar    = true,
+---       alertOnAction  = true,                      -- brief hs.alert on barge/pause
+---       pauseEverything = false,                    -- Play/Pause scope when a converse
+---                                                   -- is live (see below)
 ---     }
+---
+--- `pauseEverything` controls what Play/Pause does WHILE A CONVERSE IS LIVE:
+---   • false (default) — pause/resume *only* VoiceMode; the key is swallowed so the
+---     media app is left untouched (it won't start a paused track). Clean "pause me".
+---   • true — the original "pause everything": also pass the key through so the media
+---     app toggles too. One press quiets both, but a *paused* media source will
+---     START (a stateless toggle can't know which way you meant).
+--- When NO converse is live, Play/Pause always passes straight through to the media
+--- app in both modes (VoiceMode never steals it during normal listening).
 
 local M = {}
 
@@ -110,6 +121,9 @@ local SOCKET_PATH = expanduser(
 
 local ALERT_ON_ACTION = userCfg.alertOnAction ~= false  -- default true
 local SHOW_MENUBAR = userCfg.showMenubar ~= false        -- default true
+-- Play/Pause scope while a converse is live: default false = pause VoiceMode only
+-- (swallow the key); true = do-both "pause everything" (also pass through to media).
+local PAUSE_EVERYTHING = userCfg.pauseEverything == true
 
 -- ---------------------------------------------------------------------------
 -- State
@@ -172,11 +186,11 @@ end
 -- Key behaviours
 -- ---------------------------------------------------------------------------
 
---- Play/Pause — "pause everything". Toggle VoiceMode if it is speaking, and always
---- let the event pass through so the media app toggles too. The handler never
---- swallows the key; the caller passes it through.
-local function handle_play()
-    if is_converse_live() then
+--- Play/Pause side effect: toggle VoiceMode pause/resume when a converse is live.
+--- `live` is computed once by the caller, which also owns the swallow-vs-pass-through
+--- decision (see on_system_defined / `pauseEverything`).
+local function handle_play(live)
+    if live then
         if vmPaused then
             voicemode_control("resume"); vmPaused = false
             alert("VoiceMode ▶ resume")
@@ -235,9 +249,14 @@ local function on_system_defined(event)
     local isPressEdge = t.down and not t["repeat"]
 
     if key == "PLAY" then
-        -- do-both: maybe toggle VoiceMode, ALWAYS pass through to the media app.
-        if isPressEdge then handle_play() end
-        return false
+        -- Toggle VoiceMode on the press edge. The swallow decision depends on mode:
+        --   * live + default (pauseEverything=false): control ONLY VoiceMode and
+        --     SWALLOW the key so the media app is untouched (no surprise un-pausing).
+        --   * live + pauseEverything=true: also pass through -> "pause everything".
+        --   * no converse live: always pass through (never steal it during listening).
+        local live = is_converse_live()
+        if isPressEdge then handle_play(live) end
+        return live and not PAUSE_EVERYTHING
     end
 
     -- NEXT / PREVIOUS route to a single owner.

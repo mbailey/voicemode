@@ -216,19 +216,24 @@ media app, unchanged:
 
 | Key | No converse live | Converse live (VoiceMode owns) |
 |-----|------------------|--------------------------------|
-| **Play/Pause** | toggles music (pass-through) | "pause everything" — pauses/resumes **both** VoiceMode *and* music |
+| **Play/Pause** | toggles music (pass-through) | pauses/resumes **VoiceMode only** — key swallowed, media untouched *(default)*; set `pauseEverything = true` to also toggle music |
 | **Next** | next track | **barge** — cuts the utterance (`control stop`); music does **not** skip |
 | **Previous** | previous track | replay last utterance — **stub** today (no-op + notice), pending VM-1685 |
 
-Play/Pause is always "do-both / pass-through" (one press quiets the room),
-because the two actions don't conflict. Next/Previous *do* conflict (barge vs
-skip-track), so they route to whichever side owns the keys for that event.
+**Play/Pause scope (`pauseEverything`).** By default, while a converse is live
+Play/Pause controls **only VoiceMode** and the key is *swallowed*, so your media
+app is left alone (it won't start a paused track). Set `pauseEverything = true`
+to restore "pause everything" — the key also passes through so the media app
+toggles too (one press quiets both). Either way, when no converse is live
+Play/Pause passes straight through to your media app. Next/Previous *do* conflict
+(barge vs skip-track), so they route to whichever side owns the keys.
 
 **Manual override.** A menubar item (`VM⌨︎:auto`) and a hotkey
 (<kbd>⌘</kbd><kbd>⌥</kbd><kbd>⌃</kbd><kbd>M</kbd>) cycle ownership
 `auto → always-me → always-music`. `always-me` forces VoiceMode to own
 Next/Previous even when no converse is live; `always-music` forces pass-through
-even mid-utterance. (Play/Pause stays do-both in every mode.)
+even mid-utterance. (The override governs Next/Previous; Play/Pause scope is set
+by `pauseEverything`.)
 
 **Setup:**
 
@@ -242,7 +247,10 @@ even mid-utterance. (Play/Pause stays do-both in every mode.)
     ```lua
     -- ~/.hammerspoon/init.lua
     -- Optional config (all keys have sane defaults):
-    -- _G.voicemodeMediaKeys = { voicemodePath = "/opt/homebrew/bin/voicemode" }
+    -- _G.voicemodeMediaKeys = {
+    --   voicemodePath   = "/opt/homebrew/bin/voicemode",
+    --   pauseEverything = true,   -- Play/Pause also toggles your media app (default false)
+    -- }
     dofile(os.getenv("HOME") .. "/Code/voicemode/scripts/hammerspoon/voicemode-media-keys.lua")
     ```
 
@@ -256,14 +264,16 @@ The config resolves an absolute `voicemode` path at load (media-key handlers
 don't inherit your shell `PATH`) and shells out non-blocking, so a keypress is
 never delayed by the control command.
 
-> **Music/Spotify pre-emption gotcha.** Because Play/Pause is *passed through* to
-> the frontmost media app, that app toggles regardless of its own state. If music
-> is **paused** and you press Play to quiet a VoiceMode utterance, the music will
-> **start** (the key is a single toggle; pass-through can't know which direction
-> you meant). Next/Previous don't have this problem — when VoiceMode owns them the
-> event is fully *swallowed*, so the media app never skips. If a key still reaches
-> the media app when VoiceMode should own it, re-check that Accessibility is
-> granted and the menubar shows `VM⌨︎`.
+> **Music/Spotify pre-emption gotcha (`pauseEverything = true` only).** With
+> `pauseEverything` enabled, Play/Pause is *passed through* to the frontmost media
+> app, which toggles regardless of its own state — so if music is **paused** and
+> you press Play to quiet a VoiceMode utterance, the music will **start** (a single
+> toggle can't know which direction you meant). The **default**
+> (`pauseEverything = false`) avoids this: while a converse is live the key is
+> *swallowed* and only VoiceMode pauses. Next/Previous never have this problem —
+> when VoiceMode owns them the event is fully swallowed, so the media app never
+> skips. If a key still reaches the media app when VoiceMode should own it,
+> re-check that Accessibility is granted and the menubar shows `VM⌨︎`.
 
 > **Keyboard key names vary.** Some keyboards — notably the **Logitech MX Keys
 > Mini** — report the next/previous-track keys as `FAST`/`REWIND` rather than
@@ -278,7 +288,8 @@ never delayed by the control command.
   a line for each action (`barge`, `pause`, `resume`).
 - **No converse running:** media keys behave exactly as before — music only.
 - **Converse live** (start one, let VoiceMode speak): **Next** cuts it (barge),
-  **Play/Pause** pauses both, **Previous** shows the replay-not-yet stub.
+  **Play/Pause** pauses VoiceMode (and your media app too if `pauseEverything =
+  true`), **Previous** shows the replay-not-yet stub.
 - Offline logic test (no Hammerspoon needed):
   `luajit scripts/hammerspoon/test_voicemode_media_keys.lua`.
 
