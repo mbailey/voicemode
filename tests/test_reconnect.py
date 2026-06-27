@@ -675,6 +675,69 @@ class TestReconnectDriver:
         assert result.exit_code == ExitCode.RECONNECTED
         assert runner.downs() == 0
 
+    def test_connecting_state_polls_without_reconnect(self, in_tmux):
+        # THE deferred connecting-state DRIVER test (impl-001 reviewer's rec,
+        # carried through impl-002/003/004 and finally folded in at verify-001).
+        # When voicemode opens already RECONNECTING, the driver must NOT navigate
+        # or press Reconnect -- it is already healing on its own -- and just poll
+        # until it reads connected. impl-004 made this branch share the
+        # close-then-reopen poll, so success must be observed by RE-OPENING /mcp
+        # (the menu is closed between polls), never by hanging on a closed screen.
+        class ConnectingMenu:
+            """voicemode opens 'connecting' (braille-spinner glyph) and flips to
+            'connected' on its own after ``connect_after`` re-open polls -- no
+            Reconnect needed. The list renders only while opened; capture() before
+            open / after Escape is the closed REPL (not a menu), as on CC v2.1.186.
+            """
+
+            _CLOSED = "❯ \n  (no /mcp menu open)\n"
+
+            def __init__(self, connect_after=1):
+                self.opened = False
+                self.polls = 0
+                self.connect_after = connect_after
+                self.sent = []
+                self.clock = 0.0
+
+            def send_keys(self, *keys):
+                self.sent.append(tuple(keys))
+                if tuple(keys) == ("/mcp", "Enter"):
+                    self.opened = True
+                elif tuple(keys) == ("Escape",):
+                    self.opened = False
+
+            def capture(self):
+                if not self.opened:
+                    return self._CLOSED
+                self.polls += 1
+                connected = self.polls > self.connect_after
+                glyph = "✔ connected · 3 tools" if connected else "⠙ connecting"
+                return ("  Manage MCP servers\n\n"
+                        f"  ❯ voicemode · {glyph}\n\n"
+                        " Esc to exit\n")
+
+            def sleep(self, seconds):
+                self.clock += seconds
+
+            def now(self):
+                return self.clock
+
+            def downs(self):
+                return sum(1 for c in self.sent if c == ("Down",))
+
+            def enters(self):
+                return sum(1 for c in self.sent if c == ("Enter",))
+
+        runner = ConnectingMenu(connect_after=1)
+        result = reconnect(pane="%5", runner=runner, settle=0, poll_interval=1, timeout=30)
+        assert result.exit_code == ExitCode.RECONNECTED
+        assert result.outcome == "reconnected"
+        assert runner.downs() == 0        # already reconnecting -> never navigated
+        assert runner.enters() == 0       # never opened a submenu / pressed Reconnect
+        # Polled by RE-OPENING /mcp (the menu is closed between polls -- impl-004).
+        assert sum(1 for c in runner.sent if c == ("/mcp", "Enter")) >= 2
+        assert result.reload_line == "ToolSearch select:mcp__voicemode__converse"
+
     def test_unexpected_submenu_fails_loud(self, in_tmux):
         # Reconnect is NOT the first action -> abort without pressing it.
         runner = CursorMenu(SIMPLE_LAYOUT, submenu_ok=False)
