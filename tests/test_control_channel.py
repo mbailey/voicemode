@@ -17,6 +17,7 @@ import pytest
 from voice_mode.control_channel import (
     COMMAND_PAUSE,
     COMMAND_RESUME,
+    COMMAND_SKIP_BACK,
     COMMAND_STOP,
     STATE_PAUSED,
     STATE_RUNNING,
@@ -240,7 +241,9 @@ class TestThreadSafety:
 
 
 class TestParseCommandGood:
-    @pytest.mark.parametrize("command", [COMMAND_PAUSE, COMMAND_RESUME, COMMAND_STOP])
+    @pytest.mark.parametrize(
+        "command", [COMMAND_PAUSE, COMMAND_RESUME, COMMAND_STOP, COMMAND_SKIP_BACK]
+    )
     def test_each_valid_command(self, command):
         cmd = parse_command(json.dumps({"command": command}))
         assert cmd.command == command
@@ -355,8 +358,114 @@ class TestApplyTo:
                 COMMAND_PAUSE: STATE_PAUSED,
                 COMMAND_RESUME: STATE_RUNNING,  # resume from running is a no-op -> running
                 COMMAND_STOP: STATE_STOPPED,
+                # skip_back is a transport request -- it sets the pending slot,
+                # not the play/hold/cut state, so the state stays running.
+                COMMAND_SKIP_BACK: STATE_RUNNING,
             }[command]
             assert state.snapshot().state == expected
+
+    def test_skip_back_command_sets_transport_request(self):
+        state = ControlState()
+        parse_command('{"command": "skip_back"}').apply_to(state)
+        # The play/hold/cut state is untouched; the transport slot carries it.
+        assert state.snapshot().state == STATE_RUNNING
+        assert state.snapshot().pending_transport == COMMAND_SKIP_BACK
+
+
+# --------------------------------------------------------------------------
+# Transport requests -- skip_back (VM-1685)
+# --------------------------------------------------------------------------
+
+
+class TestTransportRequest:
+    """The non-sticky transport-request slot: set / peek / read-and-clear,
+    and its independence from the sticky stop latch."""
+
+    def test_initial_pending_transport_is_none(self):
+        state = ControlState()
+        assert state.pending_transport is None
+        assert state.snapshot().pending_transport is None
+        assert state.take_transport_request() is None
+
+    def test_request_skip_back_records_and_returns_true(self):
+        state = ControlState()
+        assert state.request_skip_back() is True
+        assert state.pending_transport == COMMAND_SKIP_BACK
+        assert state.snapshot().pending_transport == COMMAND_SKIP_BACK
+
+    def test_take_transport_request_reads_and_clears(self):
+        state = ControlState()
+        state.request_skip_back()
+        # First take returns the request...
+        assert state.take_transport_request() == COMMAND_SKIP_BACK
+        # ...and clears it, so a single press is acted on exactly once.
+        assert state.pending_transport is None
+        assert state.take_transport_request() is None
+
+    def test_snapshot_peek_is_non_destructive(self):
+        state = ControlState()
+        state.request_skip_back()
+        # snapshot() peeks without consuming -- repeatable.
+        assert state.snapshot().pending_transport == COMMAND_SKIP_BACK
+        assert state.snapshot().pending_transport == COMMAND_SKIP_BACK
+        # take_transport_request is the one that consumes it.
+        assert state.take_transport_request() == COMMAND_SKIP_BACK
+        assert state.snapshot().pending_transport is None
+
+    def test_repeated_presses_coalesce(self):
+        state = ControlState()
+        state.request_skip_back()
+        state.request_skip_back()
+        assert state.take_transport_request() == COMMAND_SKIP_BACK
+        # Only one pending request survived; the next take is empty.
+        assert state.take_transport_request() is None
+
+    def test_transport_request_does_not_change_play_state(self):
+        state = ControlState()
+        state.request_skip_back()
+        assert state.snapshot().state == STATE_RUNNING
+        assert state.snapshot().is_running
+
+    def test_skip_back_composes_with_pause(self):
+        # pause then skip_back: the request is recorded and the paused state is
+        # left intact (the replay layer re-plays without un-pausing).
+        state = ControlState()
+        state.request_pause()
+        state.request_skip_back()
+        snap = state.snapshot()
+        assert snap.state == STATE_PAUSED
+        assert snap.pending_transport == COMMAND_SKIP_BACK
+
+    def test_independent_from_stop_stickiness(self):
+        # Unlike pause/resume (swallowed once stopped), a transport request is on
+        # a separate slot: it still records after a stop, and it neither revives
+        # nor clears the sticky stop latch.
+        state = ControlState()
+        state.request_stop(message="cut", hint="switch-to-text")
+        assert state.request_skip_back() is True
+        snap = state.snapshot()
+        assert snap.state == STATE_STOPPED  # stop latch untouched
+        assert snap.message == "cut" and snap.hint == "switch-to-text"
+        assert snap.pending_transport == COMMAND_SKIP_BACK
+        # And pause/resume remain ignored after stop (bit-for-bit unchanged).
+        assert state.request_pause() is False
+        assert state.request_resume() is False
+        assert state.snapshot().state == STATE_STOPPED
+
+    def test_stop_does_not_clear_pending_transport(self):
+        state = ControlState()
+        state.request_skip_back()
+        state.request_stop()
+        assert state.snapshot().pending_transport == COMMAND_SKIP_BACK
+
+    def test_reset_clears_pending_transport(self):
+        state = ControlState()
+        state.request_skip_back()
+        state.reset()
+        snap = state.snapshot()
+        assert snap.state == STATE_RUNNING
+        assert snap.pending_transport is None
+        assert state.take_transport_request() is None
 
 
 # --------------------------------------------------------------------------
@@ -374,6 +483,16 @@ class TestSnapshotAndSingleton:
         assert ControlSnapshot(STATE_RUNNING).is_running
         assert ControlSnapshot(STATE_PAUSED).is_paused
         assert ControlSnapshot(STATE_STOPPED).is_stopped
+
+    def test_snapshot_pending_transport_defaults_none(self):
+        # Backward compatible: existing 1-3 arg constructions still work and the
+        # new field defaults to None.
+        assert ControlSnapshot(STATE_RUNNING).pending_transport is None
+        assert ControlSnapshot(STATE_PAUSED, "m", "h").pending_transport is None
+        assert (
+            ControlSnapshot(STATE_RUNNING, None, None, "skip_back").pending_transport
+            == "skip_back"
+        )
 
     def test_get_control_state_returns_singleton(self):
         a = get_control_state()

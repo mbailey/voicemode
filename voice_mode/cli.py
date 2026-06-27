@@ -1834,12 +1834,13 @@ def deps(component, yes, dry_run, verbose):
 # ============================================================================
 # Control Channel Command Group (VM-1676)
 # ============================================================================
-# `voicemode control {pause|resume|stop}` writes one JSON line to the running
-# server's control socket so an in-flight TTS utterance can be paused, resumed,
-# or cut WITHOUT going through the agent and WITHOUT pressing ESC. This is the
-# documented, reusable interface a Stream Deck button, media key, or spoken
-# keyword shells out to. The server must have
-# VOICEMODE_CONTROL_CHANNEL_ENABLED=true. See docs/reference/control-channel.md.
+# `voicemode control {pause|resume|stop|skip-back}` writes one JSON line to the
+# running server's control socket so an in-flight TTS utterance can be paused,
+# resumed, cut, or skipped back (replay the previous utterance, VM-1685) WITHOUT
+# going through the agent and WITHOUT pressing ESC. This is the documented,
+# reusable interface a Stream Deck button, media key, or spoken keyword shells
+# out to. The server must have VOICEMODE_CONTROL_CHANNEL_ENABLED=true.
+# See docs/reference/control-channel.md.
 
 
 def _control_command_options(f):
@@ -1874,9 +1875,9 @@ def _control_command_options(f):
 def _send_control_command(command, message, hint, socket_path):
     """Send one control command to the socket and report the outcome.
 
-    Shared by the pause/resume/stop subcommands. Exits non-zero with a friendly
-    message when nothing is listening (the channel is only live while the server
-    is speaking, and only when enabled) or on any other socket error.
+    Shared by the pause/resume/stop/skip-back subcommands. Exits non-zero with a
+    friendly message when nothing is listening (the channel is only live while the
+    server is speaking, and only when enabled) or on any other socket error.
     """
     from voice_mode.control_socket import send_control_command
     from voice_mode.control_channel import ControlCommandError
@@ -1912,7 +1913,7 @@ def _send_control_command(command, message, hint, socket_path):
 @voice_mode_main_cli.group()
 @click.help_option('-h', '--help')
 def control():
-    """Pause / resume / stop the utterance the server is currently speaking.
+    """Pause / resume / stop / skip-back the utterance the server is speaking.
 
     Writes one JSON command line to the control socket the running server listens
     on while it speaks (default ~/.voicemode/control.sock). This is the reusable
@@ -1920,7 +1921,9 @@ def control():
     -- a second local process driving the in-flight utterance, without going
     through the agent and without pressing ESC. A `stop` makes `converse` return
     NORMALLY with a control marker, so the agent reads a clean tool result and
-    continues in text (no MCP teardown, no /mcp reconnect).
+    continues in text (no MCP teardown, no /mcp reconnect). A `skip-back` replays
+    a previously-spoken utterance from the history buffer (CD-style transport,
+    VM-1685) -- it re-plays audio already produced, never a new agent turn.
 
     \b
     The server must opt in:
@@ -1932,6 +1935,7 @@ def control():
       voicemode control stop --hint switch-to-text -m "can't talk right now"
       voicemode control pause                               # hold playback
       voicemode control resume                              # resume after a pause
+      voicemode control skip-back                           # replay the previous utterance
 
     See: docs/reference/control-channel.md
     """
@@ -1957,6 +1961,19 @@ def control_resume(message, hint, socket_path):
 def control_stop(message, hint, socket_path):
     """Stop the in-flight utterance cleanly; converse returns with the hint/message."""
     _send_control_command('stop', message, hint, socket_path)
+
+
+@control.command('skip-back')
+@_control_command_options
+def control_skip_back(message, hint, socket_path):
+    """Replay the previous utterance from the history buffer (CD-style transport).
+
+    Sends the `skip_back` command (the exact word the Stream Deck deck.py and
+    other triggers use). First press restarts the current/most-recent utterance;
+    each further press steps back through the buffer. Re-plays already-spoken
+    audio only -- never a new agent turn.
+    """
+    _send_control_command('skip_back', message, hint, socket_path)
 
 
 # Diagnostics group

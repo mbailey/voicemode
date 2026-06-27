@@ -98,6 +98,14 @@ class TestSendControlCommand:
         send_control_command("stop", socket_path=listener.socket_path)
         assert wait_for(lambda: listener.test_state.snapshot().is_stopped)
 
+    def test_skip_back(self, listener):
+        send_control_command("skip_back", socket_path=listener.socket_path)
+        assert wait_for(
+            lambda: listener.test_state.snapshot().pending_transport == "skip_back"
+        )
+        # Transport request is orthogonal to the play/hold/cut state.
+        assert listener.test_state.snapshot().state == STATE_RUNNING
+
     def test_stop_with_message_and_hint(self, listener):
         send_control_command(
             "stop",
@@ -148,6 +156,16 @@ class TestControlCLI:
         assert result.exit_code == 0, result.output
         assert wait_for(lambda: listener.test_state.snapshot().is_stopped)
 
+    def test_skip_back(self, listener):
+        # CLI verb is hyphenated (`skip-back`); the wire command is `skip_back`
+        # (the word deck.py and other triggers send).
+        result = run_control("skip-back", "--socket", str(listener.socket_path))
+        assert result.exit_code == 0, result.output
+        assert "Sent 'skip_back'" in result.output
+        assert wait_for(
+            lambda: listener.test_state.snapshot().pending_transport == "skip_back"
+        )
+
     def test_stop_with_message_and_hint(self, listener):
         result = run_control(
             "stop",
@@ -191,5 +209,5 @@ class TestControlCLI:
     def test_help_lists_subcommands(self):
         result = run_control("--help")
         assert result.exit_code == 0
-        for verb in ("pause", "resume", "stop"):
+        for verb in ("pause", "resume", "stop", "skip-back"):
             assert verb in result.output
