@@ -20,8 +20,10 @@
 ---   • Next / Previous route to the *active owner* (they can't be both — barge vs
 ---     music-skip conflict):
 ---       – converse live (or override=always-me) → VoiceMode owns:
----           Next = barge (`voicemode control stop`); Previous = replay (STUB,
----           pending VM-1685) — the event is swallowed so music never sees it.
+---           Next = barge (`voicemode control skip-forward` — cut the current
+---           utterance AND advance straight to my record/listen turn, VM-1739);
+---           Previous = replay (STUB, pending VM-1685) — the event is swallowed
+---           so music never sees it.
 ---       – no converse (or override=always-music) → pass through to the media app
 ---           (normal next / previous track).
 ---   • Manual override toggle (auto / always-me / always-music) forces ownership
@@ -207,9 +209,13 @@ local function handle_play(live)
     end
 end
 
---- Next, with VoiceMode owning → barge (cut the current utterance).
+--- Next, with VoiceMode owning → barge: cut the current utterance AND advance
+--- straight to the record/listen turn (`skip-forward`, VM-1739), so the keypress
+--- hands Mike the mic mid-sentence rather than just stopping (`stop` left the turn
+--- with the agent, never listening). Falls through to the speak-only result when
+--- the converse wasn't waiting for a response — see converse.py skip_forward.
 local function handle_next_voicemode()
-    voicemode_control("stop")
+    voicemode_control("skip-forward")
     alert("VoiceMode ⏭ barge")
 end
 
