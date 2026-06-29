@@ -18,6 +18,88 @@ from .providers import _select_stt_model_for_endpoint
 logger = logging.getLogger("voicemode")
 
 
+def _resolve_tts_endpoints(voice, ref_text_override):
+    """Resolve which TTS endpoints to try and the clone profile (if any).
+
+    Clone voices route directly to their own endpoint; an explicit ``ref_text``
+    override wins over the profile/sidecar transcript (VM-1278). For non-clone
+    voices a stray ref_text override is ignored with a warning. Shared by the
+    play (``simple_tts_failover``) and synth-only (``simple_tts_synthesize``)
+    paths so endpoint selection stays identical between them.
+
+    Returns:
+        tuple: (endpoints_to_try, clone_profile)
+    """
+    from dataclasses import replace as _dc_replace
+    from .voice_profiles import get_profile, is_clone_voice
+
+    clone_profile = get_profile(voice) if is_clone_voice(voice) else None
+    if clone_profile:
+        if ref_text_override is not None:
+            clone_profile = _dc_replace(clone_profile, ref_text=ref_text_override)
+            logger.info(f"Voice '{voice}': applying ref_text override ({len(ref_text_override)} chars)")
+        logger.info(f"Voice '{voice}' is a clone profile, routing to {clone_profile.base_url}")
+        return [clone_profile.base_url], clone_profile
+
+    if ref_text_override is not None:
+        logger.warning(
+            f"ref_text override supplied but voice '{voice}' is not a clone "
+            f"voice (no abs-path clip or registered profile) — override ignored"
+        )
+    return TTS_BASE_URLS, None
+
+
+def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
+    """Build the client + select the voice/model for one TTS endpoint.
+
+    Shared by the play and synth-only failover loops. Returns the configured
+    ``AsyncOpenAI`` client plus the voice/model actually sent to the provider
+    (clone voices pass through; OpenAI maps Kokoro voice names to equivalents).
+
+    Returns:
+        tuple: (client, selected_voice, selected_model, provider_type)
+    """
+    provider_type = detect_provider_type(base_url)
+    api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
+
+    selected_model = model
+    if clone_profile:
+        # Clone voice: use profile's model and pass voice name through
+        # (mlx-audio server accepts any voice string)
+        selected_voice = voice
+        selected_model = clone_profile.model
+        logger.info(f"Clone voice '{voice}': model={selected_model}")
+    elif provider_type == "openai":
+        # Map Kokoro voices to OpenAI equivalents, or use OpenAI default
+        openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+        if voice in openai_voices:
+            selected_voice = voice
+        else:
+            voice_mapping = {
+                "af_sky": "nova",
+                "af_sarah": "nova",
+                "af_alloy": "alloy",
+                "am_adam": "onyx",
+                "am_echo": "echo",
+                "am_onyx": "onyx",
+                "bm_fable": "fable"
+            }
+            selected_voice = voice_mapping.get(voice, "alloy")  # Default to alloy
+            logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
+    else:
+        selected_voice = voice  # Use original voice for Kokoro
+
+    # Disable retries for local endpoints - they either work or don't
+    max_retries = 0 if is_local_provider(base_url) else 2
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=30.0,  # Reasonable timeout
+        max_retries=max_retries
+    )
+    return client, selected_voice, selected_model, provider_type
+
+
 async def simple_tts_failover(
     text: str,
     voice: str,
@@ -33,10 +115,8 @@ async def simple_tts_failover(
     logger.info(f"simple_tts_failover called with: text='{text[:50]}...', voice={voice}, model={model}")
     logger.info(f"kwargs: {kwargs}")
 
-    from dataclasses import replace as _dc_replace
     from .core import text_to_speech
     from .conversation_logger import get_conversation_logger
-    from .voice_profiles import get_profile, is_clone_voice
 
     # Pull the optional ref_text override out of kwargs before it gets
     # forwarded to text_to_speech (which has no ref_text param). None means
@@ -51,70 +131,15 @@ async def simple_tts_failover(
     conversation_id = conversation_logger.conversation_id
 
     # Check if this is a clone voice — if so, route directly to its endpoint
-    clone_profile = get_profile(voice) if is_clone_voice(voice) else None
-    if clone_profile:
-        # An explicit ref_text override wins over the profile/sidecar
-        # transcript (VM-1278). Empty string is a valid override (clone
-        # with no reference transcript).
-        if ref_text_override is not None:
-            clone_profile = _dc_replace(clone_profile, ref_text=ref_text_override)
-            logger.info(f"Voice '{voice}': applying ref_text override ({len(ref_text_override)} chars)")
-        endpoints_to_try = [clone_profile.base_url]
-        logger.info(f"Voice '{voice}' is a clone profile, routing to {clone_profile.base_url}")
-    elif ref_text_override is not None:
-        logger.warning(
-            f"ref_text override supplied but voice '{voice}' is not a clone "
-            f"voice (no abs-path clip or registered profile) — override ignored"
-        )
-        endpoints_to_try = TTS_BASE_URLS
-    else:
-        endpoints_to_try = TTS_BASE_URLS
+    endpoints_to_try, clone_profile = _resolve_tts_endpoints(voice, ref_text_override)
 
     # Try each TTS endpoint in order
     logger.info(f"simple_tts_failover: Starting with endpoints = {endpoints_to_try}")
     for base_url in endpoints_to_try:
         logger.info(f"Trying TTS endpoint: {base_url}")
 
-        # Create client for this endpoint
-        provider_type = detect_provider_type(base_url)
-        api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
-
-        # Select appropriate voice and model for this provider
-        selected_model = model
-        if clone_profile:
-            # Clone voice: use profile's model and pass voice name through
-            # (mlx-audio server accepts any voice string)
-            selected_voice = voice
-            selected_model = clone_profile.model
-            logger.info(f"Clone voice '{voice}': model={selected_model}")
-        elif provider_type == "openai":
-            # Map Kokoro voices to OpenAI equivalents, or use OpenAI default
-            openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
-            if voice in openai_voices:
-                selected_voice = voice
-            else:
-                # Map common Kokoro voices to OpenAI equivalents
-                voice_mapping = {
-                    "af_sky": "nova",
-                    "af_sarah": "nova",
-                    "af_alloy": "alloy",
-                    "am_adam": "onyx",
-                    "am_echo": "echo",
-                    "am_onyx": "onyx",
-                    "bm_fable": "fable"
-                }
-                selected_voice = voice_mapping.get(voice, "alloy")  # Default to alloy
-                logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
-        else:
-            selected_voice = voice  # Use original voice for Kokoro
-
-        # Disable retries for local endpoints - they either work or don't
-        max_retries = 0 if is_local_provider(base_url) else 2
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            timeout=30.0,  # Reasonable timeout
-            max_retries=max_retries
+        client, selected_voice, selected_model, provider_type = _prepare_tts_endpoint(
+            base_url, voice, model, clone_profile
         )
 
         # Create clients dict for text_to_speech
@@ -193,6 +218,103 @@ async def simple_tts_failover(
         'attempted_endpoints': attempted_endpoints
     }
     return False, None, error_config
+
+
+async def simple_tts_synthesize(
+    text: str,
+    voice: str,
+    model: str,
+    **kwargs
+) -> Tuple[bool, Optional[Any], Optional[int], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Synth-only TTS failover - decode audio without playing it (VM-1772).
+
+    Mirrors :func:`simple_tts_failover` (same endpoint selection, clone routing,
+    voice mapping and error reporting) but calls :func:`core.synthesize_tts_audio`
+    so the decoded samples are returned to the caller for pipelined playback.
+
+    Returns:
+        Tuple of (success, samples, sample_rate, metrics, config). On total
+        failure ``config`` carries ``error_type='all_providers_failed'`` and the
+        per-endpoint ``attempted_endpoints`` list, matching the play path.
+    """
+    logger.info(f"simple_tts_synthesize called with: text='{text[:50]}...', voice={voice}, model={model}")
+
+    from .core import synthesize_tts_audio
+    from .conversation_logger import get_conversation_logger
+
+    ref_text_override = kwargs.pop("ref_text", None)
+    attempted_endpoints = []
+
+    conversation_logger = get_conversation_logger()
+    conversation_id = conversation_logger.conversation_id
+
+    endpoints_to_try, clone_profile = _resolve_tts_endpoints(voice, ref_text_override)
+
+    logger.info(f"simple_tts_synthesize: Starting with endpoints = {endpoints_to_try}")
+    for base_url in endpoints_to_try:
+        logger.info(f"Trying TTS endpoint (synth): {base_url}")
+
+        client, selected_voice, selected_model, provider_type = _prepare_tts_endpoint(
+            base_url, voice, model, clone_profile
+        )
+        openai_clients = {'tts': client}
+
+        last_exception = None
+        try:
+            tts_kwargs = dict(kwargs)
+            if clone_profile:
+                tts_kwargs['clone_profile'] = clone_profile
+
+            success, samples, sample_rate, metrics = await synthesize_tts_audio(
+                text=text,
+                openai_clients=openai_clients,
+                tts_model=selected_model,
+                tts_voice=selected_voice,
+                tts_base_url=base_url,
+                conversation_id=conversation_id,
+                **tts_kwargs
+            )
+
+            if success:
+                config = {
+                    'base_url': base_url,
+                    'provider': provider_type,
+                    'voice': selected_voice,
+                    'model': model,
+                    'endpoint': f"{base_url}/audio/speech"
+                }
+                logger.info(f"TTS(synth) succeeded with {base_url} using voice {selected_voice}")
+                return True, samples, sample_rate, metrics, config
+            else:
+                last_exception = Exception("TTS request failed")
+
+        except Exception as e:
+            last_exception = e
+
+        if last_exception:
+            error_message = str(last_exception)
+            logger.error(f"TTS(synth) failed for {base_url}: {error_message}")
+
+            error_details = None
+            if provider_type == "openai":
+                error_details = OpenAIErrorParser.parse_error(last_exception, endpoint=f"{base_url}/audio/speech")
+
+            attempted_endpoints.append({
+                'endpoint': f"{base_url}/audio/speech",
+                'provider': provider_type,
+                'voice': selected_voice,
+                'model': model,
+                'error': error_message,
+                'error_details': error_details
+            })
+            continue
+
+    logger.error(f"All TTS(synth) endpoints failed after {len(attempted_endpoints)} attempts")
+    error_config = {
+        'error_type': 'all_providers_failed',
+        'attempted_endpoints': attempted_endpoints
+    }
+    return False, None, None, None, error_config
 
 
 async def simple_stt_failover(
