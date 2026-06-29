@@ -15,8 +15,10 @@
 # Pass criteria (record both numbers in the task log):
 #   * candidate wall-clock < baseline wall-clock
 #   * candidate inter-utterance gap ≈ pause_after_ms (synth dead-air gone after
-#     turn 1) — audible on a listen; use --metrics verbose / per-turn gen vs
-#     play times to confirm generation overlapped playback.
+#     turn 1) — audible on a listen. To confirm generation overlapped playback,
+#     watch the converse INFO logs: per-turn "TTS synthesized … (gen Ns)" lines
+#     land while earlier turns are still playing, and the final
+#     "Spoke N/N turns (gen: Xs, play: Ys)" summary shows total gen < total play.
 set -euo pipefail
 
 L1="My milkshake brings all the boys to the yard."
