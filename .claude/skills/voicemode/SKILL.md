@@ -152,6 +152,33 @@ voicemode:converse("Five minutes is up. Ready when you are.")
 
 **Configuration:** The short pause duration is configurable via `VOICEMODE_WAIT_DURATION` (default: 60 seconds).
 
+## Transport controls (media keys & Stream Deck)
+
+While a converse is live, VoiceMode exposes a **control channel** — drive it with
+`voicemode control pause | resume | stop | skip-forward | skip-back`. You can wire
+these to physical buttons so the human can pause/barge/replay without typing:
+
+- **Stream Deck** (or any tool that runs a shell command): bind a button straight
+  to `voicemode control skip-forward` etc. No extra dependency — it shells out to
+  the CLI directly.
+- **macOS media keys** (▶❙❙ / ⏭ / ⏮): routed through a **Hammerspoon** eventtap
+  (`scripts/hammerspoon/voicemode-media-keys.lua`) that only grabs the keys while
+  a converse is live, so music is untouched otherwise.
+
+**Enabling:**
+
+1. Set `VOICEMODE_CONTROL_CHANNEL_ENABLED=true` in `~/.voicemode/voicemode.env`
+   (server binds `~/.voicemode/control.sock` for the converse turn).
+2. For media keys: install Hammerspoon, load the config from `~/.hammerspoon/init.lua`,
+   grant **Accessibility**, and **keep Hammerspoon running — make it a login item.**
+   The eventtap only exists while Hammerspoon is running; if it's not, the keys
+   silently pass through to Music/Spotify and VoiceMode never sees them (no error —
+   they just do nothing). A working Stream Deck with dead media keys = Hammerspoon
+   isn't running. Quick check: `pgrep -x Hammerspoon`.
+
+Full reference (ownership model, skip-back history buffer, raw-socket protocol):
+[docs/reference/control-channel.md](../../docs/reference/control-channel.md).
+
 ## STT Recovery - Manual Transcription
 
 If Whisper STT fails but the audio was recorded successfully, you can manually transcribe the saved audio file:
