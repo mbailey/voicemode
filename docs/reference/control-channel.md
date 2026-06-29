@@ -458,7 +458,7 @@ media app, unchanged:
 | Key | No converse live | Converse live (VoiceMode owns) |
 |-----|------------------|--------------------------------|
 | **Play/Pause** | toggles music (pass-through) | pauses/resumes **VoiceMode only** — key swallowed, media untouched *(default)*; set `pauseEverything = true` to also toggle music |
-| **Next** | next track | **barge** — cuts the utterance (`control stop`); music does **not** skip |
+| **Next** | next track | **barge** — cuts the utterance and hands you the mic (`control skip-forward`, VM-1742); music does **not** skip |
 | **Previous** | previous track | replay last utterance — server side now works (`control skip-back`, VM-1685); the **shipped Hammerspoon binding is still a stub** (no-op + notice) pending a wire-up |
 
 **Play/Pause scope (`pauseEverything`).** By default, while a converse is live
@@ -500,6 +500,16 @@ by `pauseEverything`.)
    → **Privacy & Security → Accessibility** → enable **Hammerspoon**. The event
    tap cannot see (or swallow) key events until you do; Hammerspoon prompts on
    first run. Some setups also need **Input Monitoring**.
+5. **Keep Hammerspoon running — make it a login item.** The eventtap only exists
+   while **Hammerspoon itself is running**; it is a GUI app, not a daemon. If
+   Hammerspoon isn't running, the media keys silently pass straight through to
+   Music/Spotify and VoiceMode never sees them — there is no error, the keys just
+   do nothing for VoiceMode. So add Hammerspoon as a login item (System Settings →
+   **General → Login Items**, or `open -a Hammerspoon` to start it now) so it
+   survives a reboot. *(The Stream Deck control buttons don't need this — they
+   shell out to `voicemode control` directly and never touch Hammerspoon. So a
+   working Stream Deck with dead media keys is the tell-tale sign Hammerspoon
+   isn't running.)*
 
 The config resolves an absolute `voicemode` path at load (media-key handlers
 don't inherit your shell `PATH`) and shells out non-blocking, so a keypress is
@@ -525,6 +535,10 @@ never delayed by the control command.
 
 **Verify:**
 
+- **Hammerspoon is running** — first thing to check when the keys do nothing:
+  `pgrep -x Hammerspoon` (or look for the menubar `VM⌨︎` item). Confirm the
+  eventtap is live with `hs -c 'print(_G.__voicemodeMediaKeys.tap:isEnabled())'`
+  → `true`, and the permission with `hs -c 'print(hs.accessibilityState())'`.
 - The Hammerspoon Console logs `[voicemode-media-keys] started (...)` on load and
   a line for each action (`barge`, `pause`, `resume`).
 - **No converse running:** media keys behave exactly as before — music only.
