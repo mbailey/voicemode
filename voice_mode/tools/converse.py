@@ -1101,6 +1101,20 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     if snap.pending_transport == COMMAND_SKIP_BACK:
                         logger.info("⏮  Recording ended early by skip_back -- handing off to replay")
                         break
+                    # VM-1754: a skip_forward pressed while listening ends this
+                    # recording NOW -- the manual "I'm done, go now" end-of-turn
+                    # and the VAD fallback for when silence detection isn't firing.
+                    # A plain break: unlike the stop path we do NOT set
+                    # stop_recording (so converse builds no [control: stop] marker),
+                    # and unlike skip_back there is no replay -- whatever was
+                    # captured so far is returned from this function and converse
+                    # transcribes it. skip_forward is a sticky STATE
+                    # (is_skip_forward, not a one-shot pending_transport), so
+                    # converse consumes the edge with control_state.reset() once we
+                    # return.
+                    if snap.is_skip_forward:
+                        logger.info("⏭  Recording ended early by skip_forward -- transcribing what we have")
+                        break
                     try:
                         # Get audio chunk from queue with timeout
                         chunk = audio_queue.get(timeout=0.1)
@@ -2166,10 +2180,28 @@ consult the MCP resources listed above.
                         success = True
                         return _build_control_stop_result(control_snapshot, timings)
 
+                    # VM-1754: a skip_forward pressed while listening is the manual
+                    # "I'm done, go now" end-of-turn (and the VAD fallback when
+                    # silence detection isn't firing). Consume the sticky-state edge
+                    # (reset, mirroring the playback consume above) and fall through
+                    # to the normal STT + return path: transcribe whatever was
+                    # captured and return it as the user's response. Distinct from
+                    # both siblings -- NOT a [control: stop] marker (stop) and NOT a
+                    # replay (skip_back). Checked before skip_back: skip_forward is a
+                    # sticky terminal STATE (softer than stop, but harder than the
+                    # one-shot skip_back transport), so a decisive "advance" wins
+                    # over a "replay" if both happened to be pressed. The
+                    # skip_forward_ended flag tells the empty-buffer guard below that
+                    # an empty capture here is intentional ("go now"), not an error.
+                    skip_forward_ended = False
+                    if control_snapshot.is_skip_forward:
+                        logger.info("skip_forward received during recording -- ending turn, transcribing captured audio")
+                        control_state.reset()
+                        skip_forward_ended = True
                     # VM-1685: a skip_back pressed while listening -> replay the
                     # cached audio, then listen again. Otherwise this recording is
                     # the user's real response; proceed to STT.
-                    if control_state.pending_transport == COMMAND_SKIP_BACK:
+                    elif control_state.pending_transport == COMMAND_SKIP_BACK:
                         logger.info("skip_back received during recording -- replaying then re-listening")
                         continue
                     break
@@ -2189,8 +2221,16 @@ consult the MCP resources listed above.
                 logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
                 
                 if len(audio_data) == 0:
-                    result = "Error: Could not record audio"
-                    return result
+                    # VM-1754: under skip_forward an empty buffer is intentional --
+                    # the user pressed "go now" before any audio was captured (the
+                    # VAD-fallback edge). Don't surface it as a recording error;
+                    # fall through to the graceful no-speech path so the turn simply
+                    # advances (returns "No speech detected", success=True).
+                    if not skip_forward_ended:
+                        result = "Error: Could not record audio"
+                        return result
+                    logger.info("skip_forward ended recording before any audio was captured -- advancing with no speech")
+                    speech_detected = False
                 
                 # Track STT-specific metrics (defined here to be in scope for event logging later)
                 stt_metrics = None
@@ -2201,8 +2241,9 @@ consult the MCP resources listed above.
                     response_text = None
                     timings['stt'] = 0.0
 
-                    # Still save the audio if configured
-                    if SAVE_AUDIO and AUDIO_DIR:
+                    # Still save the audio if configured (skip an empty buffer --
+                    # e.g. a skip_forward fired before any audio was captured).
+                    if SAVE_AUDIO and AUDIO_DIR and len(audio_data) > 0:
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
                         write(audio_path, SAMPLE_RATE, audio_data)
