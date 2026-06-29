@@ -2130,9 +2130,25 @@ consult the MCP resources listed above.
                     # Replay any queued skip_back(s) before listening.
                     replay_cursor = await _drain_skip_back(control_state, replay_cursor)
 
-                    # A stop (possibly during a replay) ends the turn cleanly.
                     control_snapshot = control_state.snapshot()
-                    if control_snapshot.is_stopped:
+                    # VM-1763: a skip_forward pressed during/around the replay is a
+                    # transport barge-in. play_cached_utterance already cut the replay
+                    # audio (is_skip_forward aborts playback like a stop), but the
+                    # sticky STATE_SKIP_FORWARD is still latched -- _drain_skip_back only
+                    # consumes the one-shot skip_back pending_transport, never this state.
+                    # Consume the edge HERE (reset, mirroring the playback consume at
+                    # ~2066) and advance to the record/listen turn, instead of carrying
+                    # the latched state into recording -- where it would otherwise defer
+                    # the turn-advance to the post-record consume at ~2197 and batch with
+                    # the next press (the "first press dropped, second works" symptom).
+                    # Checked BEFORE is_stopped: the two are mutually exclusive states,
+                    # and a racing stop dominates the latch upstream (request_stop
+                    # overrides skip_forward), so a stop already reads is_stopped here.
+                    if control_snapshot.is_skip_forward:
+                        logger.info("Converse skip-forward via control channel during skip-back replay")
+                        control_state.reset()
+                    # A stop (possibly during a replay) ends the turn cleanly.
+                    elif control_snapshot.is_stopped:
                         logger.info("Converse stopped via control channel during skip-back replay")
                         success = True
                         return _build_control_stop_result(control_snapshot, timings)
