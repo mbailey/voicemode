@@ -652,6 +652,159 @@ async def text_to_speech(
         return False, metrics
 
 
+async def synthesize_tts_audio(
+    text: str,
+    openai_clients: dict,
+    tts_model: str,
+    tts_voice: str,
+    tts_base_url: str,
+    debug: bool = False,
+    debug_dir: Optional[Path] = None,
+    save_audio: bool = False,
+    audio_dir: Optional[Path] = None,
+    client_key: str = 'tts',
+    instructions: Optional[str] = None,
+    audio_format: Optional[str] = None,
+    conversation_id: Optional[str] = None,
+    speed: Optional[float] = None,
+    clone_profile: Optional[object] = None
+) -> tuple[bool, Optional[np.ndarray], Optional[int], dict]:
+    """Synthesize speech to decoded audio samples WITHOUT playing it.
+
+    This is the synth-only sibling of :func:`text_to_speech` (which synthesizes
+    *and* plays). It exists for the multi-utterance pipeline (VM-1772): a
+    producer can synthesize turn N+1 while a consumer plays turn N, so the
+    decode step must hand back the audio instead of owning playback.
+
+    Always uses the buffered request path (no streaming): for a pipeline the
+    per-turn generation latency is hidden behind the previous turn's playback,
+    so progressive streaming buys nothing here while complicating the hand-off.
+    The single-message path keeps its streaming behaviour untouched.
+
+    Returns:
+        tuple: (success, samples, sample_rate, metrics) where ``samples`` is a
+        float32 numpy array (mono ``(N,)`` or stereo ``(N, 2)``) normalized to
+        [-1, 1], ready for ``NonBlockingAudioPlayer.play``. On failure returns
+        ``(False, None, None, metrics)``. API errors are re-raised so the
+        failover loop can attempt the next endpoint.
+    """
+    from .config import (
+        TTS_AUDIO_FORMAT, validate_audio_format, get_audio_loader_for_format,
+        SAMPLE_RATE,
+    )
+
+    logger.info(f"TTS(synth): Converting text to speech: '{text[:100]}{'...' if len(text) > 100 else ''}'")
+
+    metrics: dict = {}
+    event_logger = get_event_logger()
+    if event_logger:
+        event_logger.log_event(event_logger.TTS_START, {
+            "message": text[:200],
+            "voice": tts_voice,
+            "model": tts_model,
+        })
+
+    try:
+        # Determine provider from base URL (mirrors text_to_speech)
+        if "api.cartesia.ai" in tts_base_url:
+            provider = "cartesia"
+        elif "openai" in tts_base_url:
+            provider = "openai"
+        else:
+            provider = "kokoro"
+
+        format_to_use = audio_format if audio_format else TTS_AUDIO_FORMAT
+        validated_format = validate_audio_format(format_to_use, provider, "tts")
+
+        request_params = {
+            "model": tts_model,
+            "input": text,
+            "voice": tts_voice,
+            "response_format": validated_format,
+        }
+        if instructions and tts_model == "gpt-4o-mini-tts":
+            request_params["instructions"] = instructions
+        if speed is not None:
+            request_params["speed"] = speed
+        if clone_profile:
+            # mlx-audio clone path (see text_to_speech for the rationale on each key)
+            request_params["extra_body"] = {
+                "ref_audio": clone_profile.ref_audio,
+                "ref_text": clone_profile.ref_text,
+                "stream": True,
+                "streaming_interval": 0.3,
+                "lang_code": "auto",
+            }
+
+        generation_start = time.perf_counter()
+        if provider == "cartesia":
+            from . import cartesia_tts
+            response_content = await cartesia_tts.synthesize(
+                text=text,
+                voice_id=tts_voice,
+                sample_rate=SAMPLE_RATE,
+                speed=speed,
+            )
+            validated_format = "wav"
+        else:
+            async with openai_clients[client_key].audio.speech.with_streaming_response.create(
+                **request_params
+            ) as response:
+                response_content = await response.read()
+
+        metrics['generation'] = time.perf_counter() - generation_start
+        if event_logger:
+            event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
+
+        if debug and debug_dir:
+            save_debug_file(response_content, "tts-output", validated_format, debug_dir, debug, conversation_id)
+        if save_audio and audio_dir:
+            audio_path = save_debug_file(response_content, "tts", validated_format, audio_dir, True, conversation_id)
+            if audio_path:
+                metrics['audio_path'] = audio_path
+                update_latest_symlinks(audio_path, "tts")
+
+        # Decode to float32 samples (mirrors the buffered branch of
+        # text_to_speech, minus the sounddevice playback).
+        with tempfile.NamedTemporaryFile(suffix=f'.{validated_format}', delete=False) as tmp_file:
+            tmp_file.write(response_content)
+            tmp_file.flush()
+            tmp_path = tmp_file.name
+        try:
+            loader = get_audio_loader_for_format(validated_format)
+            if not loader:
+                audio = AudioSegment.from_file(tmp_path, format=validated_format)
+            elif validated_format == "pcm":
+                audio = loader(tmp_path, sample_width=2, frame_rate=SAMPLE_RATE, channels=1)
+            else:
+                audio = loader(tmp_path)
+
+            samples = np.array(audio.get_array_of_samples())
+            if audio.channels == 2:
+                samples = samples.reshape((-1, 2))
+            samples = samples.astype(np.float32) / 32767.0
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        logger.info(f"✓ TTS synthesized {len(samples)} samples @ {audio.frame_rate}Hz "
+                    f"(gen {metrics['generation']:.2f}s)")
+        return True, samples, audio.frame_rate, metrics
+
+    except Exception as e:
+        logger.error(f"TTS(synth) failed: {e}")
+        logger.error(f"TTS config when error occurred - Model: {tts_model}, Voice: {tts_voice}, Base URL: {tts_base_url}")
+        logger.debug("Full TTS(synth) error details:", exc_info=True)
+        # Re-raise API/transport errors so the failover loop can parse them and
+        # try the next endpoint (same contract as text_to_speech).
+        error_message = str(e).lower()
+        if hasattr(e, 'response') or 'Error code:' in str(e) or not error_message.startswith('error decoding audio'):
+            raise
+        return False, None, None, metrics
+
+
 def generate_chime(
     frequencies: list, 
     duration: float = 0.1, 

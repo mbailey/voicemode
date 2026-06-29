@@ -2093,7 +2093,78 @@ Examples:
   voicemode converse "Hello there!" --voice nova        # pick a TTS voice
   voicemode converse "Hi" --voice ./voices/ray/default.wav  # clone from a relative path
   voicemode converse "Hey, urgent question." --skip-conch  # bypass the conch lock
+\b
+Multi-voice (speak a gap-free sequence in one call; synth overlaps playback):
+  voicemode converse --say 'sandy:My milkshake brings all the boys to the yard.' \\
+                     --say 'tripitaka:Damn right. It is better than yours.' \\
+                     --say 'pigsy:I could teach you. But I would have to charge.' \\
+                     --say 'monkey:So! You still want a milkshake?'
+  # --say 'VOICE:TEXT' (VOICE: optional → falls back to --voice/default).
+  # Repeat --say to build the sequence; order is preserved.
+\b
+  # --script reads a JSON array of turns (same schema as the MCP tool). Use it
+  # for text containing ':' . '-' = stdin (heredoc-friendly):
+  voicemode converse --script - <<'JSON'
+  [ {"say":"My milkshake brings all the boys to the yard.", "voice":"sandy"},
+    {"say":"So! You still want a milkshake?", "voice":"monkey", "pause_after_ms":400} ]
+  JSON
 """
+
+
+def _parse_say_item(say_str, default_voice):
+    """Parse a single --say 'VOICE:TEXT' value into a turn dict (VM-1772).
+
+    Splits on the FIRST ':' only. No ':' (or an empty VOICE part) → the whole
+    string is the text and the voice falls back to --voice/default. Text that
+    contains a ':' should use --script instead (documented escape hatch).
+    """
+    if ':' in say_str:
+        voice_part, text_part = say_str.split(':', 1)
+        voice_part = voice_part.strip()
+        return {'say': text_part, 'voice': voice_part or default_voice}
+    return {'say': say_str, 'voice': default_voice}
+
+
+def _build_turns_from_cli(say_items, script, default_voice):
+    """Build the ``turns`` list from the CLI's --say / --script surfaces.
+
+    Returns ``None`` when neither is supplied (scalar message path). Raises
+    ``click.UsageError`` on conflicting/invalid input.
+    """
+    if say_items and script:
+        raise click.UsageError("Use either --say (repeatable) or --script, not both.")
+
+    if script:
+        import json
+        if script == '-':
+            raw = sys.stdin.read()
+            source = 'stdin'
+        else:
+            try:
+                with open(os.path.expanduser(script), 'r') as fh:
+                    raw = fh.read()
+            except OSError as e:
+                raise click.UsageError(f"--script: could not read {script}: {e}")
+            source = script
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise click.UsageError(f"--script: {source} is not valid JSON: {e}")
+        if not isinstance(parsed, list):
+            raise click.UsageError("--script: expected a JSON array of turn objects.")
+        # Apply the default voice to any turn that didn't specify one; leave the
+        # rest of the schema for the MCP tool to validate.
+        turns = []
+        for item in parsed:
+            if isinstance(item, dict) and not item.get('voice') and default_voice:
+                item = {**item, 'voice': default_voice}
+            turns.append(item)
+        return turns
+
+    if say_items:
+        return [_parse_say_item(s, default_voice) for s in say_items]
+
+    return None
 
 
 @voice_mode_main_cli.command(epilog=_CONVERSE_EPILOG)
@@ -2121,15 +2192,42 @@ Examples:
 @click.option('--skip-tts/--no-skip-tts', default=None, help='Skip TTS and only show text')
 @click.option('--skip-conch', is_flag=True, default=False,
               help='Bypass the conch lock; speak immediately even if another agent holds it.')
+@click.option('--say', 'say_items', multiple=True, metavar="'VOICE:TEXT'",
+              help="Speak a turn in a multi-voice sequence. Repeatable; order preserved. "
+                   "'VOICE:' prefix optional (falls back to --voice/default). Speak-only.")
+@click.option('--script', 'script', default=None, metavar='FILE|-',
+              help="Read a JSON array of turns (same schema as the MCP tool). "
+                   "'-' reads stdin (heredoc-friendly). Use this for text containing ':'.")
+@click.option('--pause-after-ms', 'pause_after_ms', type=int, default=150, show_default=True,
+              help='Silence (ms) inserted after each turn in a --say/--script sequence.')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
 def converse(message_args, message, wait, skip_stt, duration, min_duration, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
-            speed, vad_aggressiveness, skip_tts, skip_conch, continuous):
+            speed, vad_aggressiveness, skip_tts, skip_conch, say_items, script, pause_after_ms,
+            continuous):
     """Have a voice conversation directly from the command line.
 
     The MESSAGE to speak can be passed as a positional argument or via
     -m/--message. Use `--` to pass a message that starts with a dash.
+
+    For a multi-voice sequence spoken gap-free in one call, use repeatable
+    --say 'VOICE:TEXT' or --script FILE|- (a JSON array of turns).
     """
+    # VM-1772: build the optional multi-voice turns[] sequence from --say /
+    # --script. Speak-only; mutually exclusive with a scalar message and with
+    # continuous mode.
+    turns = _build_turns_from_cli(say_items, script, voice)
+    if turns is not None:
+        if message_args or message is not None:
+            raise click.UsageError(
+                "--say/--script speak a turns sequence; don't combine them with a "
+                "positional message or --message/-m."
+            )
+        if continuous:
+            raise click.UsageError("--say/--script are speak-only and can't be used with --continuous.")
+        if not turns:
+            raise click.UsageError("--say/--script produced no turns to speak.")
+
     # Resolve the message source:
     #   - positional MESSAGE wins when given
     #   - --message/-m is kept for backward compatibility and scripts
@@ -2141,7 +2239,7 @@ def converse(message_args, message, wait, skip_stt, duration, min_duration, voic
                 "Pass the message as either a positional argument OR --message/-m, not both."
             )
         message = ' '.join(message_args)
-    elif message is None:
+    elif message is None and turns is None:
         message = "Hello! How can I help you today?"
 
     # Deprecation: --no-wait was renamed to --skip-stt.
@@ -2184,6 +2282,27 @@ def converse(message_args, message, wait, skip_stt, duration, min_duration, voic
         logging.getLogger('voicemode').setLevel(logging.INFO)
 
         try:
+            if turns is not None:
+                # VM-1772: multi-voice turns[] sequence (speak-only). One call,
+                # synth pipelined behind playback.
+                result = await getattr(converse_fn, 'fn', converse_fn)(
+                    turns=turns,
+                    pause_after_ms=pause_after_ms,
+                    wait_for_response=False,
+                    voice=voice,
+                    tts_provider=tts_provider,
+                    tts_model=tts_model,
+                    tts_instructions=tts_instructions,
+                    chime_enabled=audio_feedback,
+                    audio_format=audio_format,
+                    speed=speed,
+                    skip_tts=skip_tts,
+                    skip_conch=skip_conch,
+                )
+                if result:
+                    click.echo(result)
+                return
+
             if continuous:
                 # Continuous conversation mode
                 click.echo("🎤 Starting continuous conversation mode...")

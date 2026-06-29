@@ -606,6 +606,269 @@ async def text_to_speech_with_failover(
     )
 
 
+async def synthesize_turn_with_failover(
+    message: str,
+    voice: Optional[str] = None,
+    model: Optional[str] = None,
+    instructions: Optional[str] = None,
+    audio_format: Optional[str] = None,
+    initial_provider: Optional[str] = None,
+    speed: Optional[float] = None,
+    ref_text: Optional[str] = None,
+):
+    """Synthesize one turn to decoded audio samples WITHOUT playing it (VM-1772).
+
+    Synth-only sibling of :func:`text_to_speech_with_failover`, used by the
+    multi-utterance pipeline so turn N+1 can be generated while turn N plays.
+
+    Returns:
+        Tuple of (success, samples, sample_rate, metrics, config).
+    """
+    # Apply pronunciation rules if enabled (parity with the play path).
+    if pronounce_enabled():
+        pronounce_mgr = get_pronounce_manager()
+        message = pronounce_mgr.process_tts(message)
+
+    from voice_mode.simple_failover import simple_tts_synthesize
+    return await simple_tts_synthesize(
+        text=message,
+        voice=voice or TTS_VOICES[0],
+        model=model or TTS_MODELS[0],
+        instructions=instructions,
+        audio_format=audio_format,
+        debug=DEBUG,
+        debug_dir=DEBUG_DIR if DEBUG else None,
+        save_audio=SAVE_AUDIO,
+        audio_dir=AUDIO_DIR if SAVE_AUDIO else None,
+        speed=speed,
+        ref_text=ref_text,
+    )
+
+
+# ---------------------------------------------------------------------------
+# VM-1772: multi-utterance turns[] support (speak-only, P1)
+# ---------------------------------------------------------------------------
+
+# P1 Turn schema (flat, additive). `play`/`ask`/`wait_for_response` keys are
+# RESERVED for P2 (VM-1775) / P3 (VM-840) — present here only so we can reject
+# them with a clear "not in P1" message rather than silently ignoring them.
+_TURN_RESERVED_KEYS = {"play", "ask", "wait_for_response"}
+_TURN_KNOWN_KEYS = {"say", "voice", "pause_after_ms", "tts_instructions", "speed"} | _TURN_RESERVED_KEYS
+
+
+def _normalize_turns(
+    turns,
+    *,
+    default_voice: Optional[str],
+    default_pause_after_ms: int,
+    default_tts_instructions: Optional[str],
+    default_speed: Optional[float],
+) -> list:
+    """Validate and normalize the raw ``turns`` argument into a flat list.
+
+    Each item is resolved against the call-level defaults so the pipeline can
+    treat every turn uniformly: ``{say, voice, pause_after_ms, tts_instructions,
+    speed}``. Raises ``ValueError`` (caught by ``converse`` and returned as an
+    error string) on any malformed item.
+    """
+    if isinstance(turns, dict):
+        # A single turn object passed unwrapped — accept it as a length-1 list.
+        turns = [turns]
+    if not isinstance(turns, (list, tuple)):
+        raise ValueError("`turns` must be a list of turn objects.")
+
+    normalized = []
+    for i, raw in enumerate(turns):
+        if not isinstance(raw, dict):
+            raise ValueError(f"turn {i}: each turn must be an object, got {type(raw).__name__}.")
+
+        # Reject reserved (future-phase) verbs explicitly so callers aren't
+        # surprised by silent no-ops.
+        for key in _TURN_RESERVED_KEYS:
+            if key in raw and raw[key] not in (None, False):
+                raise ValueError(
+                    f"turn {i}: '{key}' is reserved for a later phase and is not "
+                    f"supported in P1 (speak-only). Use 'say'."
+                )
+
+        say = raw.get("say")
+        if say is None or not isinstance(say, str) or not say.strip():
+            raise ValueError(f"turn {i}: 'say' is required and must be a non-empty string.")
+
+        # pause_after_ms: per-turn override, else the call-level default.
+        pause = raw.get("pause_after_ms", default_pause_after_ms)
+        try:
+            pause = int(pause)
+        except (TypeError, ValueError):
+            raise ValueError(f"turn {i}: 'pause_after_ms' must be an integer (got {pause!r}).")
+        if pause < 0:
+            raise ValueError(f"turn {i}: 'pause_after_ms' cannot be negative (got {pause}).")
+
+        # speed: per-turn override, else call-level default.
+        turn_speed = raw.get("speed", default_speed)
+        if turn_speed is not None:
+            try:
+                turn_speed = float(turn_speed)
+            except (TypeError, ValueError):
+                raise ValueError(f"turn {i}: 'speed' must be a number (got {turn_speed!r}).")
+            if not (0.25 <= turn_speed <= 4.0):
+                raise ValueError(f"turn {i}: 'speed' must be between 0.25 and 4.0 (got {turn_speed}).")
+
+        voice = raw.get("voice") or default_voice
+        instructions = raw.get("tts_instructions") or default_tts_instructions
+
+        normalized.append({
+            "say": say,
+            "voice": voice,
+            "pause_after_ms": pause,
+            "tts_instructions": instructions,
+            "speed": turn_speed,
+        })
+
+    return normalized
+
+
+def _play_samples_blocking(samples, sample_rate):
+    """Play decoded samples to completion (blocking). Runs in a worker thread
+    via ``asyncio.to_thread`` so the producer keeps synthesizing during playback."""
+    player = NonBlockingAudioPlayer()
+    player.play(samples, sample_rate, blocking=True)
+
+
+async def _speak_turns_pipeline(
+    turns,
+    *,
+    tts_model,
+    tts_provider,
+    audio_format,
+    resolved_ref_text,
+    should_skip_tts,
+    lookahead: int = 1,
+) -> list:
+    """Producer/consumer pipeline: synthesize turn N+1 while turn N plays.
+
+    A single producer walks the ordered ``turns`` list, synthesizing each to
+    decoded audio and pushing onto a bounded queue (``maxsize=lookahead`` →
+    "synth one ahead"). A single consumer drains the queue in order, plays each
+    turn, then waits ``pause_after_ms`` before the next. After the first turn's
+    synthesis, playback is continuous — the only inter-utterance gap is the
+    configured pause (synth dead-air is hidden behind playback).
+
+    Per-turn TTS failure is logged and skipped (the sequence continues), per the
+    task's graceful-degradation requirement.
+
+    Returns a list of per-turn result dicts (in order).
+    """
+    audio_queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, lookahead))
+    SENTINEL = object()
+    results: list = []
+    n = len(turns)
+
+    async def producer():
+        for idx, turn in enumerate(turns):
+            if should_skip_tts:
+                await audio_queue.put({
+                    "index": idx, "turn": turn, "samples": None, "sample_rate": None,
+                    "success": True, "skipped": True, "metrics": {"generation": 0.0},
+                })
+                continue
+            try:
+                success, samples, sample_rate, metrics, _config = await synthesize_turn_with_failover(
+                    message=turn["say"],
+                    voice=turn["voice"],
+                    model=tts_model,
+                    instructions=turn["tts_instructions"],
+                    audio_format=audio_format,
+                    initial_provider=tts_provider,
+                    speed=turn["speed"],
+                    ref_text=resolved_ref_text,
+                )
+            except Exception as e:
+                logger.error(f"Turn {idx} synthesis raised: {e}")
+                success, samples, sample_rate, metrics = False, None, None, {}
+            await audio_queue.put({
+                "index": idx, "turn": turn, "samples": samples, "sample_rate": sample_rate,
+                "success": bool(success), "metrics": metrics or {},
+            })
+        await audio_queue.put(SENTINEL)
+
+    async def consumer():
+        while True:
+            item = await audio_queue.get()
+            if item is SENTINEL:
+                break
+            idx = item["index"]
+            turn = item["turn"]
+            rec = {
+                "index": idx,
+                "voice": turn["voice"],
+                "success": item["success"],
+                "generation": item["metrics"].get("generation", 0.0),
+                "playback": 0.0,
+                "pause_after_ms": turn["pause_after_ms"],
+            }
+            if item.get("skipped"):
+                rec["skipped"] = True
+            elif item["success"] and item.get("samples") is not None:
+                play_start = time.perf_counter()
+                try:
+                    await asyncio.to_thread(_play_samples_blocking, item["samples"], item["sample_rate"])
+                except Exception as e:
+                    logger.error(f"Turn {idx} playback failed: {e}")
+                    rec["success"] = False
+                rec["playback"] = time.perf_counter() - play_start
+            else:
+                logger.warning(f"Turn {idx} synthesis failed; skipping playback and continuing.")
+            results.append(rec)
+
+            # Pace: insert pause_after_ms after each turn except the last (a
+            # trailing pause would only delay the return with nothing to follow).
+            if idx < n - 1 and turn["pause_after_ms"] > 0:
+                await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
+
+    await asyncio.gather(producer(), consumer())
+    # Defensive: results are appended in consumption order (single ordered
+    # producer + queue), but sort by index so callers never depend on timing.
+    results.sort(key=lambda r: r["index"])
+    return results
+
+
+def _format_turns_result(results, metrics_level: str) -> Tuple[str, bool]:
+    """Build the speak-only summary string for a turns[] run + overall success.
+
+    Mirrors the single-message speak-only return, extended across N turns.
+    """
+    n_total = len(results)
+    n_ok = sum(1 for r in results if r["success"])
+    total_gen = sum(r["generation"] for r in results)
+    total_play = sum(r["playback"] for r in results)
+
+    if n_ok == 0:
+        return (
+            "Error: Could not speak any turn. All TTS attempts failed. "
+            "Check that local services are running or set OPENAI_API_KEY for cloud fallback.",
+            False,
+        )
+
+    failed_note = "" if n_ok == n_total else f" ({n_total - n_ok} failed)"
+
+    if metrics_level == "minimal":
+        return f"✓ Spoke {n_ok}/{n_total} turns{failed_note}", True
+
+    summary = f"✓ Spoke {n_ok}/{n_total} turns{failed_note} (gen: {total_gen:.1f}s, play: {total_play:.1f}s)"
+    if metrics_level == "verbose":
+        lines = [summary]
+        for r in results:
+            status = "" if r["success"] else " [FAILED]"
+            lines.append(
+                f"  turn {r['index'] + 1} [{r['voice'] or 'default'}]: "
+                f"gen {r['generation']:.2f}s, play {r['playback']:.2f}s, "
+                f"pause {r['pause_after_ms']}ms{status}"
+            )
+        return "\n".join(lines), True
+    return summary, True
+
+
 def prepare_audio_for_stt(audio_data: np.ndarray, output_format: str = "mp3") -> bytes:
     """
     Prepare audio data for STT upload with optional compression.
@@ -1423,7 +1686,9 @@ async def _drain_skip_back(control_state, replay_cursor: int) -> int:
 
 @mcp.tool()
 async def converse(
-    message: str,
+    message: Optional[str] = None,
+    turns: Optional[list] = None,
+    pause_after_ms: int = 150,
     wait_for_response: Union[bool, str] = True,
     listen_duration_max: float = DEFAULT_LISTEN_DURATION,
     listen_duration_min: float = 2.0,
@@ -1483,7 +1748,15 @@ Example: If user says "search for tasks created yesterday", check for and invoke
      speaking in-character (index: PERSONAS.md). MCP-resource version planned: VM-1222.
 
 KEY PARAMETERS:
-• message (required): The message to speak
+• message (string): The message to speak (required unless `turns` is given)
+• turns (list, optional): Speak an ordered multi-voice sequence in ONE call,
+  gap-free — turn N+1 is synthesized while turn N plays (no synth dead-air).
+  Each turn is an object: {"say": str (required), "voice"?: str,
+  "pause_after_ms"?: int, "tts_instructions"?: str, "speed"?: float}. Per-turn
+  `voice` overrides the call-level `voice`. Speak-only (no reply collection in
+  this version). If both `message` and `turns` are given, `turns` wins.
+• pause_after_ms (int, default: 150): Silence inserted after each turn in a
+  `turns` sequence; a turn's own `pause_after_ms` overrides this. 0 = gap-free.
 • wait_for_response (bool, default: true): Listen for response after speaking
 • voice (string): TTS voice name (auto-selected unless specified)
   - To list available voices, read MCP resource voice://voices
@@ -1708,6 +1981,37 @@ consult the MCP resources listed above.
 
     # Determine effective metrics level (parameter overrides config)
     effective_metrics_level = metrics_level if metrics_level else METRICS_LEVEL
+
+    # VM-1772: normalize the optional turns[] list (speak-only multivoice). When
+    # present it takes precedence over the scalar `message` (precedence is
+    # resolved here, not in the schema — strict-mode JSON Schema has no oneOf).
+    normalized_turns = None
+    if turns is not None:
+        try:
+            normalized_turns = _normalize_turns(
+                turns,
+                default_voice=voice,
+                default_pause_after_ms=pause_after_ms,
+                default_tts_instructions=tts_instructions,
+                default_speed=speed,
+            )
+        except ValueError as e:
+            return f"❌ Error: {e}"
+        if not normalized_turns:
+            # Empty list -> nothing to speak via turns; fall back to `message`.
+            normalized_turns = None
+
+    # Neither a message nor turns -> nothing to speak. The MCP tool errors here
+    # (the CLI keeps its default greeting upstream). `message == ""` stays valid
+    # for the listen-only / continuous case, so only None counts as "absent".
+    if normalized_turns is None and message is None:
+        return ("❌ Error: converse needs either `message` (text to speak) or a "
+                "non-empty `turns` list.")
+
+    # When speaking turns, the scalar `message` is irrelevant; keep the
+    # message-based logging/metrics below from tripping over None.
+    if normalized_turns is not None and message is None:
+        message = ""
 
     logger.info(f"Converse: '{message[:50]}{'...' if len(message) > 50 else ''}' (wait_for_response: {wait_for_response})")
     
@@ -1949,6 +2253,45 @@ consult the MCP resources listed above.
             # serialized with all other audio ops; ``control_state`` is the shared
             # singleton the streaming loops + record loop poll for pause/stop.
             async with audio_operation_lock, _control_listener_scope() as control_state:
+                # VM-1772: multi-utterance turns[] pipeline (speak-only, P1).
+                # The conch is already held for the whole call (acquired above,
+                # released in the finally), so the sequence plays in order under
+                # a single hold — no per-turn conch race. Synth N+1 overlaps
+                # playback of N. Speak-only: no reply collection in this slice,
+                # so we return the multi-turn summary without entering the
+                # record/listen path (regardless of wait_for_response).
+                if normalized_turns is not None:
+                    with DJDucker():
+                        turn_results = await _speak_turns_pipeline(
+                            normalized_turns,
+                            tts_model=tts_model,
+                            tts_provider=tts_provider,
+                            audio_format=audio_format,
+                            resolved_ref_text=resolved_ref_text,
+                            should_skip_tts=should_skip_tts,
+                        )
+                    result, success = _format_turns_result(turn_results, effective_metrics_level)
+
+                    n_ok = sum(1 for r in turn_results if r["success"])
+                    timing_str = ", ".join(
+                        f"turn{r['index'] + 1} gen {r['generation']:.1f}s play {r['playback']:.1f}s"
+                        for r in turn_results
+                    )
+                    track_voice_interaction(
+                        message=f"[turns x{len(turn_results)}] "
+                                + " | ".join(t["say"][:40] for t in normalized_turns),
+                        response="[speak-only]",
+                        timing_str=timing_str,
+                        transport="speak-only",
+                        voice_provider=tts_provider,
+                        voice_name=voice,
+                        model=tts_model,
+                        success=success,
+                        error_message=None if success else f"{len(turn_results) - n_ok} turn(s) failed",
+                    )
+                    logger.info(f"Turns result: {result}")
+                    return result
+
                 # Speak the message
                 tts_start = time.perf_counter()
                 if should_skip_tts:
