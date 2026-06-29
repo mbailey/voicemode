@@ -37,7 +37,11 @@ from voice_mode.streaming import (
     stream_pcm_audio,
     stream_with_buffering,
 )
-from voice_mode.control_channel import COMMAND_SKIP_BACK, get_control_state
+from voice_mode.control_channel import (
+    COMMAND_SKIP_BACK,
+    STATE_RUNNING,
+    get_control_state,
+)
 from voice_mode.history_buffer import UtteranceRecord, get_history_buffer
 
 
@@ -756,3 +760,110 @@ class TestConverseSkipBack:
         assert replayed == ["latest"]          # the press during listening replayed
         assert record_calls["n"] == 2          # ...and we listened again afterwards
         assert isinstance(result, str)
+
+
+# --------------------------------------------------------------------------
+# VM-1763: skip_forward pressed DURING a skip_back replay must barge at the
+# replay layer -- the replay loop has to consume the sticky STATE_SKIP_FORWARD
+# (mirroring the playback consume) and advance to a genuine listen, instead of
+# carrying the latched state into recording where it batches with the next
+# press ("first press dropped after a skip_back, second works").
+# --------------------------------------------------------------------------
+
+class TestSkipForwardDuringReplay:
+    async def _converse_with_skip_forward_during_replay(self, record_fn):
+        """Drive converse so a skip_back lands after TTS, then a skip_forward is
+        pressed *during* the replay -- returning whatever ``record_fn`` captures.
+
+        Models the runtime: the listener thread latched skip_back right after the
+        utterance, then latched skip_forward while play_cached_utterance was
+        replaying cached audio (which aborts the replay, returning REPLAY_TRANSPORT
+        and leaving STATE_SKIP_FORWARD latched).
+        """
+        _populate_buffer("older", "current")     # "current" is newest
+
+        async def fake_tts(*_a, **_k):
+            get_control_state().request_skip_back()
+            metrics = {"ttfa": 0.1, "generation": 0.2, "playback": 0.3}
+            return True, metrics, {"provider": "kokoro", "voice": "af_sky"}
+
+        replayed = []
+
+        async def fake_replay(record, control_state=None):
+            replayed.append(record.text)
+            # A skip_forward press arrives mid-replay: play_cached_utterance cuts
+            # the audio (transport interrupt) and leaves STATE_SKIP_FORWARD latched.
+            control_state.request_skip_forward()
+            return REPLAY_TRANSPORT
+
+        async def _noop_feedback(*_a, **_k):
+            return None
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "the real response", "provider": "whisper"}
+
+        with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=fake_tts), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.streaming.play_cached_utterance", new=fake_replay), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=record_fn), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="Let me explain at length...", wait_for_response=True
+            )
+
+        return result, replayed
+
+    async def test_skip_forward_consumed_at_replay_layer_before_recording(self):
+        """The load-bearing invariant: by the time the record turn starts, the
+        skip_forward edge from the replay has been consumed (state is running).
+
+        On the bug, the replay loop only checked is_stopped, so STATE_SKIP_FORWARD
+        was still latched when recording began -- deferring the turn-advance to the
+        post-record consume and dropping the user's first press.
+        """
+        seen = {}
+
+        def _record(*_a, **_k):
+            seen["state_at_record"] = get_control_state().snapshot().state
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        result, replayed = await self._converse_with_skip_forward_during_replay(_record)
+
+        assert replayed == ["current"]    # the skip_back replay actually ran (then was cut)
+        assert seen.get("state_at_record") == STATE_RUNNING, (
+            "skip_forward edge from the replay was not consumed before recording: "
+            f"{seen.get('state_at_record')!r}"
+        )
+        # Advanced to a genuine record turn -> normal response, no stop marker.
+        assert isinstance(result, str)
+        assert "[control: stop]" not in result
+        assert get_control_state().snapshot().state == STATE_RUNNING
+
+    async def test_skip_forward_during_replay_yields_a_genuine_listen(self):
+        """User-facing outcome: the first skip_forward advances replay -> listen and
+        the user's spoken response is captured and returned.
+
+        Models the real record loop, which itself polls skip_forward and breaks
+        immediately if it is latched. On the bug, the latched state would make the
+        record loop return empty at once ("No speech detected"), losing the turn;
+        with the fix the edge is already consumed, so a real response is heard.
+        """
+        def _record_honoring_skip_forward(*_a, **_k):
+            if get_control_state().snapshot().is_skip_forward:
+                # The real record_audio_with_silence_detection breaks on its first
+                # poll when skip_forward is latched -> empty capture, no listen.
+                return (np.array([], dtype=np.int16), False)
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        result, replayed = await self._converse_with_skip_forward_during_replay(
+            _record_honoring_skip_forward
+        )
+
+        assert replayed == ["current"]
+        # The fix lets the record turn actually listen, so the response is returned.
+        assert "the real response" in result, f"got: {result!r}"
+        assert "No speech detected" not in result
+        assert "[control: stop]" not in result
+        assert get_control_state().snapshot().state == STATE_RUNNING
