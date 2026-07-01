@@ -5,13 +5,17 @@ This module provides a direct try-and-failover approach without health checks.
 Connection refused errors are instant, so there's no performance penalty.
 """
 
+import asyncio
 import logging
 from typing import Optional, Tuple, Dict, Any
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIConnectionError, APIStatusError
 from .openai_error_parser import OpenAIErrorParser
 from .provider_discovery import is_local_provider
 
-from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE
+from .config import (
+    TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE,
+    STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX,
+)
 from .provider_discovery import detect_provider_type, EndpointInfo
 from .providers import _select_stt_model_for_endpoint
 
@@ -317,6 +321,29 @@ async def simple_tts_synthesize(
     return False, None, None, None, error_config
 
 
+def _is_transient_stt_error(e: Exception) -> bool:
+    """Classify an STT transcription exception as transient (retry) or permanent.
+
+    Transient (retry — the failure usually clears on a second try):
+      - APITimeoutError / APIConnectionError: read-timeout, connection reset or
+        refused. This is the whisper.cpp daily-timeout case (VM-926);
+        APITimeoutError is a subclass of APIConnectionError.
+      - APIStatusError with status_code >= 500: transient server-side error.
+
+    Permanent (do NOT retry — fail closed, re-raise so failover / error surfaces):
+      - APIStatusError with a 4xx status: bad audio (400), auth (401/403), 404,
+        422, and 429 RateLimitError (a local whisper.cpp doesn't rate-limit;
+        retrying a real 429 just hammers it — treated as permanent per design).
+      - Any other / unrecognised exception: we never loop on an error we don't
+        understand.
+    """
+    if isinstance(e, APIConnectionError):
+        return True
+    if isinstance(e, APIStatusError):
+        return e.status_code >= 500
+    return False
+
+
 async def simple_stt_failover(
     audio_file,
     model: Optional[str] = None,
@@ -377,7 +404,11 @@ async def simple_stt_failover(
             # Create client for this endpoint
             api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
 
-            # Disable retries for local endpoints - they either work or don't
+            # Local endpoints keep the SDK client's own retries at 0; transient
+            # retries for local STT are handled by the explicit backoff loop
+            # around the transcription call below (VM-926) so we can classify
+            # transient vs permanent and log each attempt. Remote endpoints keep
+            # 2 SDK-level retries.
             max_retries = 0 if is_local_provider(base_url) else 2
             client = AsyncOpenAI(
                 api_key=api_key,
@@ -418,7 +449,34 @@ async def simple_stt_failover(
                 transcription_kwargs["language"] = "auto"
             # For OpenAI with "auto" - don't pass parameter (auto-detect by default)
 
-            transcription = await client.audio.transcriptions.create(**transcription_kwargs)
+            # Bounded, transient-only retry with backoff for LOCAL STT (VM-926).
+            # Local whisper.cpp does time out transiently and usually recovers on
+            # a retry milliseconds later; retry the same endpoint a few times
+            # before falling through to the outer `except` (next-endpoint
+            # failover / final failure). This loop is the single retry mechanism
+            # for local (the client above uses max_retries=0, so no double-retry).
+            # Remote endpoints get retries=0 here and keep their SDK max_retries=2,
+            # so remote behaviour is unchanged.
+            retries = STT_RETRY_ATTEMPTS if is_local_provider(base_url) else 0
+            attempt = 0
+            while True:
+                try:
+                    transcription = await client.audio.transcriptions.create(**transcription_kwargs)
+                    break
+                except Exception as e:
+                    if attempt < retries and _is_transient_stt_error(e):
+                        delay = min(STT_RETRY_BACKOFF * (2 ** attempt), STT_RETRY_BACKOFF_MAX)
+                        logger.warning(
+                            f"STT transient failure on {base_url} "
+                            f"(try {attempt + 1}/{retries + 1}): {e}; retry in {delay:.1f}s"
+                        )
+                        await asyncio.sleep(delay)
+                        attempt += 1
+                        continue
+                    # Permanent error or retries exhausted: re-raise to the outer
+                    # except, which records the failure and advances to the next
+                    # endpoint (or returns connection_failed).
+                    raise
             request_time_ms = (time.perf_counter() - request_start) * 1000
 
             text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()

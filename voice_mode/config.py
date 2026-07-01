@@ -152,6 +152,14 @@ def load_voicemode_env():
 # Example: VOICEMODE_STT_PROMPT=tmux, Tali, kubectl, VoiceMode
 # VOICEMODE_STT_PROMPT=
 
+# STT transient-retry for LOCAL endpoints (VM-926) - local whisper.cpp times out
+# transiently and recovers on retry. Retry the same endpoint on transient failure
+# (timeout / connection reset / 5xx) with exponential backoff before giving up.
+# Remote endpoints are unaffected (they use the OpenAI SDK's own retries).
+# VOICEMODE_STT_RETRY_ATTEMPTS=2       # retries after the first try (0 disables)
+# VOICEMODE_STT_RETRY_BACKOFF=0.5      # base backoff seconds (sleep = base * 2**attempt)
+# VOICEMODE_STT_RETRY_BACKOFF_MAX=4.0  # per-sleep cap in seconds
+
 # Comma-separated list of preferred voices (local-only by default)
 VOICEMODE_VOICES=af_sky
 # To use OpenAI voices, set OPENAI_API_KEY and add them here:
@@ -720,6 +728,19 @@ STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
 # See: https://platform.openai.com/docs/guides/speech-to-text#prompting
 STT_PROMPT = os.getenv("VOICEMODE_STT_PROMPT", "")
 
+# STT transient-retry configuration (VM-926). Local whisper.cpp DOES time out
+# transiently and recovers on retry, so a LOCAL STT endpoint gets a small,
+# bounded, same-endpoint retry with exponential backoff on transient failures
+# (timeout / connection reset / 5xx). Remote endpoints are unaffected (they
+# keep the OpenAI SDK's own max_retries=2). See simple_failover.simple_stt_failover.
+#   VOICEMODE_STT_RETRY_ATTEMPTS   retries AFTER the first try, per local endpoint
+#                                  (total local tries = 1 + this). 0 disables.
+#   VOICEMODE_STT_RETRY_BACKOFF    base backoff seconds; sleep = base * 2**attempt
+#   VOICEMODE_STT_RETRY_BACKOFF_MAX per-sleep cap in seconds
+STT_RETRY_ATTEMPTS = int(os.getenv("VOICEMODE_STT_RETRY_ATTEMPTS", "2"))
+STT_RETRY_BACKOFF = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF", "0.5"))
+STT_RETRY_BACKOFF_MAX = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF_MAX", "4.0"))
+
 # Voice preferences cache
 _cached_voice_preferences: Optional[list] = None
 _voice_preferences_loaded = False
@@ -768,12 +789,16 @@ def reload_configuration():
     
     # Update global configuration variables
     global TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS
+    global STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX
     TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
     STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
     TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
     TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
     STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
     STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
+    STT_RETRY_ATTEMPTS = int(os.getenv("VOICEMODE_STT_RETRY_ATTEMPTS", "2"))
+    STT_RETRY_BACKOFF = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF", "0.5"))
+    STT_RETRY_BACKOFF_MAX = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF_MAX", "4.0"))
 
     logger.info("Configuration reloaded successfully")
 
