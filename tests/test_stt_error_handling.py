@@ -24,6 +24,21 @@ def pin_stt_base_urls(monkeypatch):
     monkeypatch.setattr("voice_mode.simple_failover.STT_BASE_URLS", list(TEST_STT_BASE_URLS))
 
 
+@pytest.fixture(autouse=True)
+def no_stt_backoff_sleep(monkeypatch):
+    """Make the VM-926 local-STT retry backoff instantaneous in unit tests.
+
+    ``simple_stt_failover`` now retries a LOCAL endpoint on transient failures
+    (timeout / connection reset) with an exponential backoff sleep. The
+    connection-error tests below exercise the local whisper endpoint, so without
+    this they would incur real backoff sleeps. No-op the sleep to keep the suite
+    fast; retry *behaviour* is asserted in test_stt_retry.py.
+    """
+    async def _instant(_delay):
+        return None
+    monkeypatch.setattr("voice_mode.simple_failover.asyncio.sleep", _instant)
+
+
 class TestSTTErrorHandling:
     """Test STT error handling and structured response generation"""
 
@@ -62,24 +77,30 @@ class TestSTTErrorHandling:
         """Test when OpenAI fails with authentication error"""
         mock_file = MagicMock()
 
-        with patch('voice_mode.simple_failover.STT_BASE_URLS', TEST_STT_BASE_URLS):
-            with patch('voice_mode.simple_failover.AsyncOpenAI') as MockClient:
-                mock_client = MockClient.return_value
+        # This test is about failover surfacing OpenAI's auth error, not about
+        # retry. Pin STT_RETRY_ATTEMPTS=0 so the local whisper connection error
+        # is a single attempt that fails over immediately (VM-926 would otherwise
+        # retry the transient local connection error and consume the second
+        # side_effect below). Retry behaviour is covered in test_stt_retry.py.
+        with patch('voice_mode.simple_failover.STT_RETRY_ATTEMPTS', 0):
+            with patch('voice_mode.simple_failover.STT_BASE_URLS', TEST_STT_BASE_URLS):
+                with patch('voice_mode.simple_failover.AsyncOpenAI') as MockClient:
+                    mock_client = MockClient.return_value
 
-                # First call (Whisper) - connection refused
-                # Second call (OpenAI) - auth error
-                mock_client.audio.transcriptions.create = AsyncMock(
-                    side_effect=[
-                        APIConnectionError(message="Connection error.", request=MagicMock()),
-                        AuthenticationError(
-                            message="Error code: 401 - Incorrect API key provided",
-                            response=MagicMock(status_code=401),
-                            body={'error': {'message': 'Incorrect API key'}},
-                        )
-                    ]
-                )
+                    # First call (Whisper) - connection refused
+                    # Second call (OpenAI) - auth error
+                    mock_client.audio.transcriptions.create = AsyncMock(
+                        side_effect=[
+                            APIConnectionError(message="Connection error.", request=MagicMock()),
+                            AuthenticationError(
+                                message="Error code: 401 - Incorrect API key provided",
+                                response=MagicMock(status_code=401),
+                                body={'error': {'message': 'Incorrect API key'}},
+                            )
+                        ]
+                    )
 
-                result = await simple_stt_failover(mock_file)
+                    result = await simple_stt_failover(mock_file)
 
                 assert result["error_type"] == "connection_failed"
                 assert len(result["attempted_endpoints"]) == 2
