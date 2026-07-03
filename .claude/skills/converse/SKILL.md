@@ -36,6 +36,29 @@ When the user asks for more time or requests not to be cut off (e.g., "끊지 �
 
 A converse result may contain inline silence markers (e.g. `⟨pause 5.1s⟩` or `⟨pre-speech 3.2s⟩`) within the transcript and a `| Silence:` field in the summary. These markers indicate hesitation or significant thinking time. When you observe them, acknowledge the user's hesitation empathetically and offer to help—for example: "I noticed you paused there—what's on your mind?" or "Take your time, I'm here to help you think through this."
 
+## Block Timeline Mode (`measure_blocks`)
+
+**When to set `measure_blocks=True`:** When the user wants per-block timing of how they speak — e.g. asking about their speech patterns, hesitation, how long their pauses are, or how their words flow between silences.
+
+Pass `measure_blocks=True` on the `converse` call for that turn.
+
+**Reading a block timeline result:**
+
+A result with `measure_blocks=True` looks like:
+
+```
+(gap 0.7s) 모델은 (5.3s) (gap 5.3s) 음 잘모르겠어요. 그... (6.3s)
+```
+
+- `text (Ns)` = **speech block**: the user said that text; the block lasted Ns seconds
+- `(gap Ns)` = **silence between speech blocks**: Ns seconds of silence
+
+**Interpreting timing:**
+- Long block duration + few words → stumbling / slow speech
+- Long gap → thinking / hesitation between thoughts
+- Short gap → natural breath between clauses
+- All durations are seconds from VAD — use them to judge the user's speaking pattern
+
 ## If MCP Connection Fails
 
 If the MCP server isn't connected or the tool isn't available:
