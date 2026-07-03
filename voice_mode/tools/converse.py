@@ -1269,6 +1269,21 @@ def _release_threshold_ms(silence_release_sec: float) -> float:
     return float(SILENCE_THRESHOLD_MS)
 
 
+def _build_silence_profile(pre_speech_delay_s, total_silence_s, speech_active_s,
+                           gaps, first_speech_start, recording_end):
+    """Construct a SilenceProfile from record-loop tracker values."""
+    longest_gap = max((e - s for (s, e) in gaps), default=0.0)
+    return SilenceProfile(
+        pre_speech_delay=pre_speech_delay_s,
+        longest_gap=longest_gap,
+        total_silence=total_silence_s,
+        speech_active=speech_active_s,
+        gaps=gaps,
+        first_speech_start=first_speech_start,
+        recording_end=recording_end,
+    )
+
+
 def _needs_word_timestamps(profile, threshold: float) -> bool:
     """Return True if word-level timestamps should be requested for this turn.
 
@@ -1341,6 +1356,7 @@ def record_audio_with_silence_detection(max_duration: float, silence_release_sec
         speech_active_s = 0.0
         gaps: list = []              # completed speech-internal gaps (start_s, end_s)
         current_gap_start = None     # start time of an in-progress gap
+        first_speech_start = None    # recording_duration when speech first detected
         
         # Use a queue for thread-safe communication
         import queue
@@ -1468,6 +1484,7 @@ def record_audio_with_silence_detection(max_duration: float, silence_release_sec
                                 if VAD_DEBUG:
                                     logger.info(f"[VAD_DEBUG] STATE CHANGE: WAITING_FOR_SPEECH -> SPEECH_ACTIVE at t={recording_duration:.1f}s")
                                 speech_detected = True
+                                first_speech_start = recording_duration
                                 silence_duration_ms = 0
                                 speech_active_s += chunk_duration_s  # count first speech chunk
                             else:
@@ -1520,13 +1537,13 @@ def record_audio_with_silence_detection(max_duration: float, silence_release_sec
                 # Close a gap still open at end-of-turn.
                 if current_gap_start is not None:
                     gaps.append((current_gap_start, recording_duration))
-                longest_gap = max((e - s for (s, e) in gaps), default=0.0)
-                profile = SilenceProfile(
-                    pre_speech_delay=pre_speech_delay_s,
-                    longest_gap=longest_gap,
-                    total_silence=total_silence_s,
-                    speech_active=speech_active_s,
+                profile = _build_silence_profile(
+                    pre_speech_delay_s=pre_speech_delay_s,
+                    total_silence_s=total_silence_s,
+                    speech_active_s=speech_active_s,
                     gaps=gaps,
+                    first_speech_start=(first_speech_start or 0.0),
+                    recording_end=recording_duration,
                 )
 
                 if not speech_detected:
