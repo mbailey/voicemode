@@ -72,6 +72,7 @@ from voice_mode.config import (
     AUTO_FOCUS_PANE,
     MAX_LISTEN_DURATION,
     SILENCE_RELEASE_SEC,
+    SIGNIFICANCE_THRESHOLD_SEC,
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -952,7 +953,8 @@ async def speech_to_text(
     audio_data: np.ndarray,
     save_audio: bool = False,
     audio_dir: Optional[Path] = None,
-    transport: str = "local"
+    transport: str = "local",
+    word_timestamps: bool = False,
 ) -> Optional[Dict]:
     """
     Convert audio to text with automatic failover.
@@ -1060,6 +1062,7 @@ async def speech_to_text(
             with open(tmp_path, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
+                    word_timestamps=word_timestamps,
                 )
         finally:
             # Clean up temp file (we keep the WAV)
@@ -1080,6 +1083,7 @@ async def speech_to_text(
             with open(tmp_path, 'rb') as audio_file:
                 result = await simple_stt_failover(
                     audio_file=audio_file,
+                    word_timestamps=word_timestamps,
                 )
         finally:
             # Clean up temp file
@@ -1263,6 +1267,16 @@ def _release_threshold_ms(silence_release_sec: float) -> float:
     if silence_release_sec < 0:
         return float("inf")
     return float(SILENCE_THRESHOLD_MS)
+
+
+def _needs_word_timestamps(profile, threshold: float) -> bool:
+    """Return True if word-level timestamps should be requested for this turn.
+
+    Word timestamps are needed when the silence profile indicates a significant
+    gap inside speech or a significant pre-speech pause, so downstream code can
+    align words with those silences.
+    """
+    return bool(profile.significant_gaps(threshold)) or profile.pre_speech_significant(threshold)
 
 
 def record_audio_with_silence_detection(max_duration: float, silence_release_sec: float = 0.0, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None) -> Tuple[np.ndarray, bool, "SilenceProfile"]:
@@ -2649,6 +2663,7 @@ consult the MCP resources listed above.
                 if not speech_detected:
                     logger.info("No speech detected during recording - skipping STT processing")
                     response_text = None
+                    stt_words = None
                     timings['stt'] = 0.0
 
                     # Still save the audio if configured (skip an empty buffer --
@@ -2665,7 +2680,9 @@ consult the MCP resources listed above.
                         event_logger.log_event(event_logger.STT_START)
 
                     stt_start = time.perf_counter()
-                    stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+                    want_words = _needs_word_timestamps(silence_prof, SIGNIFICANCE_THRESHOLD_SEC) if silence_prof is not None else False
+                    stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport, word_timestamps=want_words)
+                    stt_words = stt_result.get("words") if isinstance(stt_result, dict) else None
                     timings['stt'] = time.perf_counter() - stt_start
 
                     # Handle structured STT result
