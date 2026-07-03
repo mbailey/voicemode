@@ -37,6 +37,8 @@ def detect_provider_type(base_url: str) -> str:
         return "kokoro"
     elif ":2022" in base_url:
         return "whisper"
+    elif ":2023" in base_url:
+        return "faster-whisper"
     elif urlparse(base_url).port == 8890 or "mlx_audio" in base_url or "mlx-audio" in base_url:
         return "mlx-audio"
     elif "127.0.0.1" in base_url or "localhost" in base_url:

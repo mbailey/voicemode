@@ -791,6 +791,7 @@ DEFAULT_WHISPER_MODEL = "base"
 # Whisper-specific configuration
 WHISPER_MODEL = os.getenv("VOICEMODE_WHISPER_MODEL", DEFAULT_WHISPER_MODEL)
 WHISPER_PORT = int(os.getenv("VOICEMODE_WHISPER_PORT", "2022"))
+FASTER_WHISPER_PORT = int(os.getenv("VOICEMODE_FASTER_WHISPER_PORT", "2023"))
 WHISPER_LANGUAGE = os.getenv("VOICEMODE_WHISPER_LANGUAGE", "auto")
 WHISPER_MODEL_PATH = expand_path(os.getenv("VOICEMODE_WHISPER_MODEL_PATH", str(Path.home() / ".voicemode" / "services" / "whisper" / "models")))
 
