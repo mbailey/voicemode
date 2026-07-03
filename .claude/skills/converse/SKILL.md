@@ -28,6 +28,14 @@ All other parameters have sensible defaults.
 
 If `$1` is provided but doesn't look like a known voice name (e.g. it contains spaces or punctuation that voices don't have), assume the user meant it as a message and pass it as the message instead — don't fail silently on a typo.
 
+## Turn Control: Handling Requests for More Time
+
+When the user asks for more time or requests not to be cut off (e.g., "끊지 마", "생각 좀 할게", "let me think", "give me a sec"), set `silence_release_sec=60` on the next `converse` call. This allows the user to pause mid-sentence without the assistant taking the floor prematurely. The user can still end their turn explicitly with a skip-forward control (media key or Stream Deck).
+
+## Interpreting Silence Markers: Recognizing Hesitation
+
+A converse result may contain inline silence markers (e.g. `⟨pause 5.1s⟩` or `⟨pre-speech 3.2s⟩`) within the transcript and a `| Silence:` field in the summary. These markers indicate hesitation or significant thinking time. When you observe them, acknowledge the user's hesitation empathetically and offer to help—for example: "I noticed you paused there—what's on your mind?" or "Take your time, I'm here to help you think through this."
+
 ## If MCP Connection Fails
 
 If the MCP server isn't connected or the tool isn't available:
