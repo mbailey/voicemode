@@ -1,10 +1,4 @@
 import inspect
-import os
-import sys
-
-# Remove SOCKS proxy env vars before importing voice_mode modules (httpx rejects socks without socksio)
-for _k in ("ALL_PROXY", "all_proxy", "FTP_PROXY", "ftp_proxy", "GRPC_PROXY", "grpc_proxy"):
-    os.environ.pop(_k, None)
 
 import numpy as np
 import voice_mode.tools.converse as c

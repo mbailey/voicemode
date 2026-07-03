@@ -12,6 +12,21 @@ import pytest_asyncio
 # Add voice_mode to path for testing
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Remove SOCKS proxy env vars at conftest load time (before any test modules are
+# imported).  voice_mode.tools.converse creates httpx.AsyncClient at module
+# scope; when a SOCKS proxy is present in the environment but 'socksio' is not
+# installed, httpx raises ImportError at that point.  conftest is loaded before
+# test-module collection, so stripping the vars here prevents the error without
+# permanently mutating the process environment in production code.
+for _proxy_key in (
+    "ALL_PROXY", "all_proxy",
+    "HTTP_PROXY", "http_proxy",
+    "HTTPS_PROXY", "https_proxy",
+    "FTP_PROXY", "ftp_proxy",
+    "GRPC_PROXY", "grpc_proxy",
+):
+    os.environ.pop(_proxy_key, None)
+
 
 # Commands that should never run in tests - these affect system services
 BLOCKED_COMMANDS = {

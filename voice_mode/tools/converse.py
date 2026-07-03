@@ -1430,6 +1430,7 @@ def record_audio_with_silence_detection(max_duration: float, silence_release_sec
                                     logger.info(f"[VAD_DEBUG] STATE CHANGE: WAITING_FOR_SPEECH -> SPEECH_ACTIVE at t={recording_duration:.1f}s")
                                 speech_detected = True
                                 silence_duration_ms = 0
+                                speech_active_s += chunk_duration_s  # count first speech chunk
                             else:
                                 pre_speech_delay_s += chunk_duration_s
                                 total_silence_s += chunk_duration_s
