@@ -861,7 +861,18 @@ VAD_CHUNK_DURATION_MS = 30  # VAD frame size (must be 10, 20, or 30ms)
 INITIAL_SILENCE_GRACE_PERIOD = float(os.getenv("VOICEMODE_INITIAL_SILENCE_GRACE_PERIOD", "1"))  # No initial silence grace period by default
 
 # Default listen duration for converse tool
-DEFAULT_LISTEN_DURATION = float(os.getenv("VOICEMODE_DEFAULT_LISTEN_DURATION", "120.0"))  # Default 120s listening time
+DEFAULT_LISTEN_DURATION = float(os.getenv("VOICEMODE_DEFAULT_LISTEN_DURATION", "180.0"))  # Default 180s (3 min) listening time
+
+# Absolute upper bound on any listen duration (per-call values clamp to this)
+MAX_LISTEN_DURATION = float(os.getenv("VOICEMODE_MAX_LISTEN_DURATION", "300.0"))  # Hard cap: 5 min
+
+# Silence release scalar: 0 = end on normal VAD threshold (current behavior);
+# N>0 = tolerate silence up to N seconds within/before the turn, then release;
+# -1 = never release on silence (turn ends only at listen_duration_max or skip_forward).
+SILENCE_RELEASE_SEC = float(os.getenv("VOICEMODE_SILENCE_RELEASE_SEC", "0"))
+
+# A pre-speech delay or speech gap is "significant" (surfaced as a marker) at or above this many seconds.
+SIGNIFICANCE_THRESHOLD_SEC = float(os.getenv("VOICEMODE_SILENCE_SIGNIFICANCE_SEC", "2.0"))
 
 # Repeat phrase detection for audio replay
 REPEAT_PHRASES = parse_comma_list("VOICEMODE_REPEAT_PHRASES", "repeat,say that again,pardon,what,come again")
