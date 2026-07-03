@@ -342,6 +342,9 @@ async def simple_stt_failover(
     successful_but_empty = False
     successful_provider = None
 
+    # Extract word_timestamps before building per-endpoint kwargs
+    want_word_timestamps = kwargs.pop("word_timestamps", False)
+
     # Get file size for metrics
     file_size_bytes = 0
     try:
@@ -418,6 +421,14 @@ async def simple_stt_failover(
                 transcription_kwargs["language"] = "auto"
             # For OpenAI with "auto" - don't pass parameter (auto-detect by default)
 
+            # When word-level timestamps are requested, switch to verbose_json format
+            # which returns a structured object with per-word timing information.
+            # Note: local whisper.cpp endpoints may not support timestamp_granularities;
+            # we send it regardless and handle gracefully if words are absent.
+            if want_word_timestamps:
+                transcription_kwargs["response_format"] = "verbose_json"
+                transcription_kwargs["timestamp_granularities"] = ["word"]
+
             transcription = await client.audio.transcriptions.create(**transcription_kwargs)
             request_time_ms = (time.perf_counter() - request_start) * 1000
 
@@ -436,7 +447,17 @@ async def simple_stt_failover(
                 logger.info(f"  Transcribed: {text[:100]}{'...' if len(text) > 100 else ''}")
                 logger.info(f"  Request time: {request_time_ms:.0f}ms, File size: {file_size_bytes/1024:.1f}KB")
                 # Return both text and provider info for display, plus metrics
-                return {"text": text, "provider": provider_type, "endpoint": base_url, "metrics": metrics}
+                result = {"text": text, "provider": provider_type, "endpoint": base_url, "metrics": metrics}
+                # Include word-level timestamps when they were requested and the provider returned them
+                if want_word_timestamps and not isinstance(transcription, str):
+                    raw_words = getattr(transcription, "words", None)
+                    if raw_words:
+                        result["words"] = [
+                            {"word": w.word, "start": w.start, "end": w.end}
+                            for w in raw_words
+                        ]
+                        logger.info(f"  Word timestamps: {len(result['words'])} words")
+                return result
             else:
                 # Successful connection but no speech detected
                 logger.warning(f"STT returned empty result from {base_url} ({provider_type})")
