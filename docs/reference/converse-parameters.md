@@ -46,7 +46,8 @@ Explicit turn handoff: how long to tolerate silence before releasing the floor s
 **Silence Profile:**
 Every turn reports silence metrics in the `Silence:` result field and inline transcript markers so you can respond to hesitation:
 - **Inline markers**: pauses ≥2 seconds appear as `⟨pause Ns⟩` (during assistant speech) or `⟨pre-speech Ns⟩` (before user speaks)
-- **Silence field**: `Silence: { profile: { total_silence: N, max_gap: N, pre_speech: N }, markers: [...] }` for full metrics
+- **Silence field** (summary, default): `| Silence: pre 3.2s, gap 5.1s, speech 6.0s` — only significant components shown; `pre` omitted when <2s, `gap` omitted when no significant gap; speech always shown when any component is significant
+- **Silence field** (verbose): `Silence: pre 3.2s, gap 5.1s, total 8.3s, speech 6.0s` — all fields always shown
 
 **Deprecated alias:**
 `disable_silence_detection: true` is now an alias for `silence_release_sec: -1` (never release on silence). It will continue to work for backward compatibility but new code should use the scalar parameter.

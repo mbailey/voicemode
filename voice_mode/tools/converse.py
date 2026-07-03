@@ -2837,6 +2837,7 @@ consult the MCP resources listed above.
                         audio_data, speech_detected, silence_prof = await asyncio.get_event_loop().run_in_executor(
                             None, record_audio_with_silence_detection, listen_duration_max, effective_release, listen_duration_min, vad_aggressiveness
                         )
+                        stt_words = None  # reset: re-listen doesn't request word timestamps
                         record_time = time.perf_counter() - record_start
                         timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
 
@@ -2893,6 +2894,7 @@ consult the MCP resources listed above.
                         audio_data, speech_detected, silence_prof = await asyncio.get_event_loop().run_in_executor(
                             None, record_audio_with_silence_detection, listen_duration_max, effective_release, listen_duration_min, vad_aggressiveness
                         )
+                        stt_words = None  # reset: re-listen doesn't request word timestamps
                         record_time = time.perf_counter() - record_start
                         timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
 
