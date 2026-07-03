@@ -471,12 +471,12 @@ async def start_service(service_name: str) -> str:
         whisper_bin = find_whisper_server()
         if not whisper_bin:
             return "❌ whisper-server not found. Run `voicemode service install whisper` first."
-        
+
         # Find model
         model_file = find_whisper_model()
         if not model_file:
             return "❌ No Whisper model found. Run `voicemode whisper model <name>` first (e.g. `voicemode whisper model large-v2`)."
-        
+
         # Start whisper-server
         start_script = Path(config_vars["START_SCRIPT"])
         if start_script.exists():
@@ -489,7 +489,16 @@ async def start_service(service_name: str) -> str:
                 "--inference-path", "/v1/audio/transcriptions",
                 "--convert",
             ]
-        
+
+    elif service_name == "faster_whisper":
+        start_script = Path(config_vars["START_SCRIPT"])
+        if not start_script.exists():
+            return (
+                f"❌ Faster-whisper start script not found: {start_script}. "
+                "Run `voicemode service install faster-whisper` first."
+            )
+        cmd = [str(start_script)]
+
     elif service_name == "kokoro":
         # Find kokoro installation
         kokoro_dir = find_kokoro_fastapi()
@@ -696,6 +705,11 @@ async def enable_service(service_name: str) -> str:
             start_script = config_vars.get("START_SCRIPT", "")
             if not start_script or not Path(start_script).exists():
                 return "❌ Whisper start script not found. Run `voicemode service install whisper` first."
+
+        elif service_name == "faster_whisper":
+            start_script = config_vars.get("START_SCRIPT", "")
+            if not start_script or not Path(start_script).exists():
+                return "❌ Faster-whisper start script not found. Run `voicemode service install faster-whisper` first."
 
         elif service_name == "kokoro":
             start_script = config_vars.get("START_SCRIPT", "")
