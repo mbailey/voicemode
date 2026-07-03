@@ -1774,11 +1774,21 @@ async def _drain_skip_back(control_state, replay_cursor: int) -> int:
         # On a transport interrupt (a further press) the loop consumes it next.
 
 
-def _assemble_voice_result(response_text, stt_info, timing_str, metrics_level, profile, words, threshold):
-    """Assemble the result string for a voice turn, inserting silence markers and Silence: field."""
+def _assemble_voice_result(response_text, stt_info, timing_str, metrics_level, profile, words, threshold, measure_blocks: bool = False):
+    """Assemble the result string for a voice turn.
+
+    measure_blocks on: transcript body is the VAD block timeline; the
+    significant-silence markers and Silence: field are suppressed (the timeline
+    replaces them). measure_blocks off: existing marker/Silence path."""
     from voice_mode.tools.silence_markers import insert_markers, format_silence_field
-    text = insert_markers(response_text, words, profile, threshold) if profile is not None else response_text
-    silence_field = format_silence_field(profile, threshold) if profile is not None else None
+    if measure_blocks and profile is not None:
+        from voice_mode.tools.block_timeline import render_block_timeline
+        text = render_block_timeline(profile, words, response_text)
+        silence_field = None
+    else:
+        text = insert_markers(response_text, words, profile, threshold) if profile is not None else response_text
+        silence_field = format_silence_field(profile, threshold) if profile is not None else None
+
     if metrics_level == "minimal":
         return f"Voice response: {text}"
     if metrics_level == "verbose":
@@ -3083,7 +3093,8 @@ consult the MCP resources listed above.
                 stt_info = f" (STT: {stt_provider})" if 'stt_provider' in locals() and stt_provider != "unknown" else ""
                 result = _assemble_voice_result(
                     response_text, stt_info, timing_str, effective_metrics_level,
-                    silence_prof, stt_words, SIGNIFICANCE_THRESHOLD_SEC)
+                    silence_prof, stt_words, SIGNIFICANCE_THRESHOLD_SEC,
+                    measure_blocks=effective_measure_blocks)
                 if effective_metrics_level == "verbose":
                     # Append additional verbose-only STT detail fields
                     extra_verbose_parts = []
