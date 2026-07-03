@@ -1294,6 +1294,17 @@ def _needs_word_timestamps(profile, threshold: float) -> bool:
     return bool(profile.significant_gaps(threshold)) or profile.pre_speech_significant(threshold)
 
 
+def _want_words_for_turn(profile, measure_blocks: bool, threshold: float) -> bool:
+    """When measure_blocks is on, words are needed to split text across blocks --
+    but only if there is at least one gap (pre-speech or speech-internal).
+    When off, defer to the significance-based marker path."""
+    if profile is None:
+        return False
+    if measure_blocks:
+        return bool(profile.gaps) or profile.first_speech_start > 1e-9
+    return _needs_word_timestamps(profile, threshold)
+
+
 def record_audio_with_silence_detection(max_duration: float, silence_release_sec: float = 0.0, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None) -> Tuple[np.ndarray, bool, "SilenceProfile"]:
     """Record audio from microphone with automatic silence detection.
 
@@ -1802,6 +1813,7 @@ async def converse(
     audio_format: Optional[str] = None,
     disable_silence_detection: Union[bool, str] = False,
     silence_release_sec: Optional[Union[float, str]] = None,
+    measure_blocks: Union[bool, str] = False,
     speed: Optional[float] = None,
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
@@ -1963,6 +1975,9 @@ consult the MCP resources listed above.
         wait_for_response = wait_for_response.lower() in ('true', '1', 'yes', 'on')
     if isinstance(disable_silence_detection, str):
         disable_silence_detection = disable_silence_detection.lower() in ('true', '1', 'yes', 'on')
+    if isinstance(measure_blocks, str):
+        measure_blocks = measure_blocks.lower() in ('true', '1', 'yes', 'on')
+    effective_measure_blocks = bool(measure_blocks)
     if isinstance(chime_enabled, str):
         chime_enabled = chime_enabled.lower() in ('true', '1', 'yes', 'on')
     if skip_tts is not None and isinstance(skip_tts, str):
@@ -2719,7 +2734,7 @@ consult the MCP resources listed above.
                         event_logger.log_event(event_logger.STT_START)
 
                     stt_start = time.perf_counter()
-                    want_words = _needs_word_timestamps(silence_prof, SIGNIFICANCE_THRESHOLD_SEC) if silence_prof is not None else False
+                    want_words = _want_words_for_turn(silence_prof, effective_measure_blocks, SIGNIFICANCE_THRESHOLD_SEC)
                     stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport, word_timestamps=want_words)
                     stt_words = stt_result.get("words") if isinstance(stt_result, dict) else None
                     timings['stt'] = time.perf_counter() - stt_start
