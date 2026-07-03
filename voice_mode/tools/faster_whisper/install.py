@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from voice_mode.config import FASTER_WHISPER_PORT, SERVICE_AUTO_ENABLE
+from voice_mode.server import mcp
 
 logger = logging.getLogger("voicemode")
 
@@ -217,12 +218,18 @@ async def _register_service(
             auto_enable = SERVICE_AUTO_ENABLE
 
         if auto_enable:
-            logger.info("Auto-enabling faster-whisper service...")
-            from voice_mode.tools.service import enable_service
-            enable_result = await enable_service("faster_whisper")
-            result["enabled"] = "✅" in enable_result
+            logger.info("Auto-enabling faster-whisper service via launchctl...")
+            load_result = subprocess.run(
+                ["launchctl", "load", "-w", str(plist_path)],
+                capture_output=True,
+                text=True,
+            )
+            result["enabled"] = load_result.returncode == 0
             if not result["enabled"]:
-                logger.warning("faster-whisper auto-enable failed: %s", enable_result)
+                logger.warning(
+                    "faster-whisper launchctl load failed: %s",
+                    load_result.stderr or load_result.stdout,
+                )
 
     elif system == "Linux":
         systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
@@ -260,12 +267,28 @@ WantedBy=default.target
             auto_enable = SERVICE_AUTO_ENABLE
 
         if auto_enable:
-            logger.info("Auto-enabling faster-whisper service...")
-            from voice_mode.tools.service import enable_service
-            enable_result = await enable_service("faster_whisper")
-            result["enabled"] = "✅" in enable_result
-            if not result["enabled"]:
-                logger.warning("faster-whisper auto-enable failed: %s", enable_result)
+            logger.info("Auto-enabling faster-whisper service via systemctl...")
+            try:
+                subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+                enable_run = subprocess.run(
+                    ["systemctl", "--user", "enable", SYSTEMD_SERVICE_NAME],
+                    capture_output=True,
+                    text=True,
+                )
+                result["enabled"] = enable_run.returncode == 0
+                if result["enabled"]:
+                    subprocess.run(
+                        ["systemctl", "--user", "start", SYSTEMD_SERVICE_NAME],
+                        capture_output=True,
+                    )
+                else:
+                    logger.warning(
+                        "faster-whisper systemctl enable failed: %s",
+                        enable_run.stderr or enable_run.stdout,
+                    )
+            except subprocess.CalledProcessError as exc:
+                result["enabled"] = False
+                logger.warning("faster-whisper systemctl step failed: %s", exc)
 
     else:
         result["success"] = False
@@ -274,6 +297,7 @@ WantedBy=default.target
     return result
 
 
+@mcp.tool()
 async def faster_whisper_install(
     port: Union[int, str] = FASTER_WHISPER_PORT,
     force_reinstall: Union[bool, str] = False,
