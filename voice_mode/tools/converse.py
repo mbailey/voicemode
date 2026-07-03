@@ -1902,6 +1902,10 @@ KEY PARAMETERS:
   - minimal: Just response text (saves tokens)
   - summary: Response + compact timing (default)
   - verbose: Response + detailed metrics breakdown
+• measure_blocks (bool): When true, render this turn as a VAD-timed block timeline —
+  `text (Ns)` speech blocks and `(gap Ns)` silences (e.g. `모델은 (0.7s) (gap 5.3s) 음 잘모르겠어요 (6.3s)`).
+  Replaces the ⟨pause⟩/Silence: markers for the turn. Durations are seconds; you judge
+  stumbling/thinking from them. Requires a word-timestamp STT backend (faster-whisper).
 • wait_for_conch (bool|number, default: false): Multi-agent coordination — the
   GATE for whether a busy conch puts you in the waiter queue at all.
   - false: If another agent is speaking, return a status immediately WITHOUT
