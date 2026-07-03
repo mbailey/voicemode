@@ -52,6 +52,7 @@ A result with `measure_blocks=True` looks like:
 
 - `text (Ns)` = **speech block**: the user said that text; the block lasted Ns seconds
 - `(gap Ns)` = **silence between speech blocks**: Ns seconds of silence
+- Fillers ("음", "그...") appear inline in the speech block text — no separate marker
 
 **Interpreting timing:**
 - Long block duration + few words → stumbling / slow speech
