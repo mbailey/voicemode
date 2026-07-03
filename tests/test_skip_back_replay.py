@@ -696,7 +696,7 @@ class TestConverseSkipBack:
 
         def _record_no_speech(*_a, **_k):
             # No spoken response -> converse ends the turn without STT.
-            return (np.zeros(10, dtype=np.int16), False)
+            return (np.zeros(10, dtype=np.int16), False, None)
 
         stt_spy = MagicMock(side_effect=AssertionError("STT must not run for a replay"))
 
@@ -740,9 +740,9 @@ class TestConverseSkipBack:
             if record_calls["n"] == 1:
                 # First listen: user presses skip_back instead of speaking.
                 get_control_state().request_skip_back()
-                return (np.zeros(10, dtype=np.int16), False)
+                return (np.zeros(10, dtype=np.int16), False, None)
             # Second listen (after the replay): still no speech -> end the turn.
-            return (np.zeros(10, dtype=np.int16), False)
+            return (np.zeros(10, dtype=np.int16), False, None)
 
         stt_spy = MagicMock(side_effect=AssertionError("STT must not run for a replay"))
 
@@ -827,7 +827,7 @@ class TestSkipForwardDuringReplay:
 
         def _record(*_a, **_k):
             seen["state_at_record"] = get_control_state().snapshot().state
-            return (np.zeros(2400, dtype=np.int16), True)
+            return (np.zeros(2400, dtype=np.int16), True, None)
 
         result, replayed = await self._converse_with_skip_forward_during_replay(_record)
 
@@ -854,8 +854,8 @@ class TestSkipForwardDuringReplay:
             if get_control_state().snapshot().is_skip_forward:
                 # The real record_audio_with_silence_detection breaks on its first
                 # poll when skip_forward is latched -> empty capture, no listen.
-                return (np.array([], dtype=np.int16), False)
-            return (np.zeros(2400, dtype=np.int16), True)
+                return (np.array([], dtype=np.int16), False, None)
+            return (np.zeros(2400, dtype=np.int16), True, None)
 
         result, replayed = await self._converse_with_skip_forward_during_replay(
             _record_honoring_skip_forward

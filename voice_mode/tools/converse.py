@@ -69,7 +69,9 @@ from voice_mode.config import (
     CONCH_TIMEOUT,
     CONCH_CHECK_INTERVAL,
     CONCH_MODE,
-    AUTO_FOCUS_PANE
+    AUTO_FOCUS_PANE,
+    MAX_LISTEN_DURATION,
+    SILENCE_RELEASE_SEC,
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
@@ -111,6 +113,20 @@ logger.info(f"Module loaded with DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETE
 def is_tmux() -> bool:
     """Check if the current process is running inside a tmux session."""
     return bool(os.environ.get("TMUX"))
+
+
+def _resolve_silence_release(silence_release_sec, disable_silence_detection) -> float:
+    """Deprecated disable flag is an alias for -1 (never release). Otherwise
+    use the explicit value, or the config default when None."""
+    if disable_silence_detection:
+        return -1.0
+    if silence_release_sec is None:
+        return float(SILENCE_RELEASE_SEC)
+    return float(silence_release_sec)
+
+
+def _clamp_listen(value: float) -> float:
+    return min(float(value), MAX_LISTEN_DURATION)
 
 
 def _is_focus_held() -> bool:
@@ -1732,6 +1748,7 @@ async def converse(
     chime_enabled: Optional[Union[bool, str]] = None,
     audio_format: Optional[str] = None,
     disable_silence_detection: Union[bool, str] = False,
+    silence_release_sec: Optional[Union[float, str]] = None,
     speed: Optional[float] = None,
     vad_aggressiveness: Optional[Union[int, str]] = None,
     skip_tts: Optional[Union[bool, str]] = None,
@@ -2548,10 +2565,12 @@ consult the MCP resources listed above.
                     if event_logger:
                         event_logger.log_event(event_logger.RECORDING_START)
 
+                    listen_duration_max = _clamp_listen(listen_duration_max)
+                    effective_release = _resolve_silence_release(silence_release_sec, disable_silence_detection)
                     record_start = time.perf_counter()
-                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, effective_release={effective_release}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
+                    audio_data, speech_detected, silence_prof = await asyncio.get_event_loop().run_in_executor(
+                        None, record_audio_with_silence_detection, listen_duration_max, effective_release, listen_duration_min, vad_aggressiveness
                     )
                     timings['record'] = time.perf_counter() - record_start
 
@@ -2776,8 +2795,8 @@ consult the MCP resources listed above.
 
                         # Record audio
                         record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                        audio_data, speech_detected, silence_prof = await asyncio.get_event_loop().run_in_executor(
+                            None, record_audio_with_silence_detection, listen_duration_max, effective_release, listen_duration_min, vad_aggressiveness
                         )
                         record_time = time.perf_counter() - record_start
                         timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
@@ -2832,8 +2851,8 @@ consult the MCP resources listed above.
 
                         # Record audio
                         record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+                        audio_data, speech_detected, silence_prof = await asyncio.get_event_loop().run_in_executor(
+                            None, record_audio_with_silence_detection, listen_duration_max, effective_release, listen_duration_min, vad_aggressiveness
                         )
                         record_time = time.perf_counter() - record_start
                         timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing

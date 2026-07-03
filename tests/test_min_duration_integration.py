@@ -41,10 +41,10 @@ class TestMinDurationIntegration:
                 with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
                     mock_tts.return_value = (True, {}, {})
                     with patch('voice_mode.tools.converse.record_audio_with_silence_detection') as mock_record:
-                        mock_record.return_value = (np.array([1, 2, 3]), True)  # Returns tuple (audio, speech_detected)
+                        mock_record.return_value = (np.array([1, 2, 3]), True, None)  # Returns tuple (audio, speech_detected, silence_prof)
                         with patch('voice_mode.tools.converse.speech_to_text', new_callable=AsyncMock) as mock_stt:
                             mock_stt.return_value = {"text": "Test response", "provider": "whisper"}
-                            
+
                             result = await converse_func(
                                 message="Test",
                                 wait_for_response=True,
@@ -75,7 +75,7 @@ class TestMinDurationIntegration:
             with patch('voice_mode.tools.converse.text_to_speech_with_failover', new_callable=AsyncMock) as mock_tts:
                 mock_tts.return_value = (True, {'generation': 0.5, 'playback': 1.0}, {})
                 with patch('voice_mode.tools.converse.record_audio_with_silence_detection') as mock_record:
-                    mock_record.return_value = (np.array([1, 2, 3]), True)  # Returns tuple (audio, speech_detected)
+                    mock_record.return_value = (np.array([1, 2, 3]), True, None)  # Returns tuple (audio, speech_detected, silence_prof)
                     with patch('voice_mode.tools.converse.speech_to_text', new_callable=AsyncMock) as mock_stt:
                         mock_stt.return_value = {"text": "Test response", "provider": "whisper"}
                         
@@ -90,8 +90,8 @@ class TestMinDurationIntegration:
                         # Verify record_audio_with_silence_detection was called with correct parameters
                         mock_record.assert_called_once()
                         args = mock_record.call_args[0]
-                        assert args[0] == 30.0  # max_duration
-                        assert args[1] == False  # disable_silence_detection
+                        assert args[0] == 30.0  # max_duration (clamped)
+                        assert args[1] == 0.0   # effective_release (config default SILENCE_RELEASE_SEC)
                         assert args[2] == 2.5    # min_duration
                         
                         assert "Test response" in result

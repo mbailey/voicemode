@@ -76,7 +76,7 @@ class TestConverseSkipForwardAdvancesToRecord:
         def _record(*_args, **_kwargs):
             # Proof we advanced into the record/listen turn (not a control-stop return).
             recorded["called"] = True
-            return (np.zeros(2400, dtype=np.int16), True)
+            return (np.zeros(2400, dtype=np.int16), True, None)
 
         async def _fake_stt(*_args, **_kwargs):
             return {"text": "I have a question about the design", "provider": "whisper"}
@@ -120,7 +120,7 @@ class TestConverseSkipForwardAdvancesToRecord:
 
         def _record(*_args, **_kwargs):
             seen_state["at_record"] = get_control_state().snapshot().state
-            return (np.zeros(2400, dtype=np.int16), True)
+            return (np.zeros(2400, dtype=np.int16), True, None)
 
         async def _fake_stt(*_args, **_kwargs):
             return {"text": "carry on then", "provider": "whisper"}
@@ -224,7 +224,7 @@ class TestConverseSkipForwardEndsRecord:
         with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok()), \
              patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
              patch("voice_mode.tools.converse.record_audio_with_silence_detection",
-                   new=_record_then_skip_forward((captured, True))), \
+                   new=_record_then_skip_forward((captured, True, None))), \
              patch("voice_mode.tools.converse.speech_to_text", new=_fake_stt), \
              patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
              patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
@@ -256,7 +256,7 @@ class TestConverseSkipForwardEndsRecord:
         with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok()), \
              patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
              patch("voice_mode.tools.converse.record_audio_with_silence_detection",
-                   new=_record_then_skip_forward((empty, False))), \
+                   new=_record_then_skip_forward((empty, False, None))), \
              patch("voice_mode.tools.converse.speech_to_text", new=stt_spy), \
              patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
              patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
@@ -287,7 +287,7 @@ class TestConverseSkipForwardEndsRecord:
         with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok()), \
              patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
              patch("voice_mode.tools.converse.record_audio_with_silence_detection",
-                   new=_record_then_skip_forward((partial, False))), \
+                   new=_record_then_skip_forward((partial, False, None))), \
              patch("voice_mode.tools.converse.speech_to_text", new=stt_spy), \
              patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
              patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
@@ -342,7 +342,7 @@ class TestRecordLoopSkipForward:
         t.join(timeout=5.0)
 
         assert not t.is_alive(), "record loop did not break on skip_forward (hung)"
-        audio_data, speech_detected = result_box["value"]
+        audio_data, speech_detected, silence_prof = result_box["value"]
         # Broke on the first iteration before any chunk was read.
         assert len(audio_data) == 0
         assert speech_detected is False
@@ -357,7 +357,7 @@ class TestRecordPhaseRegressions:
         [control: stop] marker -- skip_forward must not hijack the stop path."""
         def _record(*_args, **_kwargs):
             get_control_state().request_stop(hint="switch-to-text")
-            return (np.zeros(2400, dtype=np.int16), True)
+            return (np.zeros(2400, dtype=np.int16), True, None)
 
         stt_spy = MagicMock(
             side_effect=AssertionError("STT must be skipped on a control stop")
@@ -401,9 +401,9 @@ class TestRecordPhaseRegressions:
             if record_calls["n"] == 1:
                 # First listen: user presses skip_back instead of speaking.
                 get_control_state().request_skip_back()
-                return (np.zeros(10, dtype=np.int16), False)
+                return (np.zeros(10, dtype=np.int16), False, None)
             # Second listen (after the replay): still no speech -> end the turn.
-            return (np.zeros(10, dtype=np.int16), False)
+            return (np.zeros(10, dtype=np.int16), False, None)
 
         stt_spy = MagicMock(
             side_effect=AssertionError("STT must not run for a replay")

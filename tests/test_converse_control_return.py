@@ -191,7 +191,7 @@ class TestConverseControlReturn:
         def _record_then_stop(*_args, **_kwargs):
             # The listener fires a stop while we were listening.
             get_control_state().request_stop(message="can't talk now", hint="switch-to-text")
-            return (np.zeros(2400, dtype=np.int16), True)
+            return (np.zeros(2400, dtype=np.int16), True, None)
         # (message "can't talk now" must NOT reach the agent -- F1)
 
         # speech_to_text must NOT be reached -- if it is, the test should notice.
@@ -274,7 +274,7 @@ class TestRecordLoopControlStop:
         t.join(timeout=5.0)
 
         assert not t.is_alive(), "record loop did not break on a control stop (hung)"
-        audio_data, speech_detected = result_box["value"]
+        audio_data, speech_detected, silence_prof = result_box["value"]
         # Broke on the first iteration before any chunk was read.
         assert len(audio_data) == 0
         assert speech_detected is False
