@@ -97,6 +97,7 @@ from voice_mode.utils import (
     update_latest_symlinks
 )
 from voice_mode.pronounce import get_manager as get_pronounce_manager, is_enabled as pronounce_enabled
+from voice_mode.tools.silence_profile import SilenceProfile
 from voice_mode.control_channel import get_control_state, intent_sentence, COMMAND_SKIP_BACK
 from voice_mode.control_socket import start_control_listener, stop_control_listener
 from voice_mode.history_buffer import get_history_buffer
@@ -1239,38 +1240,38 @@ def record_audio(duration: float) -> np.ndarray:
             sys.stderr = original_stderr
 
 
-def record_audio_with_silence_detection(max_duration: float, disable_silence_detection: bool = False, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None) -> Tuple[np.ndarray, bool]:
+def record_audio_with_silence_detection(max_duration: float, silence_release_sec: float = 0.0, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None) -> Tuple[np.ndarray, bool, "SilenceProfile"]:
     """Record audio from microphone with automatic silence detection.
-    
+
     Uses WebRTC VAD to detect when the user stops speaking and automatically
     stops recording after a configurable silence threshold.
-    
+
     Args:
         max_duration: Maximum recording duration in seconds
-        disable_silence_detection: If True, disables silence detection and uses fixed duration recording
+        silence_release_sec: Seconds of silence before stopping (0=legacy SILENCE_THRESHOLD_MS, -1=never stop on silence)
         min_duration: Minimum recording duration before silence detection can stop (default: 0.0)
         vad_aggressiveness: VAD aggressiveness level (0-3). If None, uses VAD_AGGRESSIVENESS from config
-        
+
     Returns:
-        Tuple of (audio_data, speech_detected):
+        Tuple of (audio_data, speech_detected, silence_profile):
             - audio_data: Numpy array of recorded audio samples
             - speech_detected: Boolean indicating if speech was detected during recording
+            - silence_profile: SilenceProfile with timing data (SilenceProfile.empty() on fallback paths)
     """
     
     logger.info(f"record_audio_with_silence_detection called - VAD_AVAILABLE={VAD_AVAILABLE}, DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}, min_duration={min_duration}")
     
     if not VAD_AVAILABLE:
         logger.warning("webrtcvad not available, falling back to fixed duration recording")
-        # For fallback, assume speech is present since we can't detect
-        return (record_audio(max_duration), True)
-    
-    if DISABLE_SILENCE_DETECTION or disable_silence_detection:
-        if disable_silence_detection:
-            logger.info("Silence detection disabled for this interaction by request")
-        else:
-            logger.info("Silence detection disabled globally via VOICEMODE_DISABLE_SILENCE_DETECTION")
-        # For fallback, assume speech is present since we can't detect
-        return (record_audio(max_duration), True)
+        return (record_audio(max_duration), True, SilenceProfile.empty())
+
+    global_disabled = DISABLE_SILENCE_DETECTION  # legacy global env still honored as -1
+    effective_release = silence_release_sec
+    if global_disabled and effective_release == 0.0:
+        effective_release = -1.0
+    if effective_release < 0:
+        logger.info("Silence release disabled (silence_release_sec=-1): fixed-duration record")
+        return (record_audio(max_duration), True, SilenceProfile.empty())
     
     logger.info(f"🎤 Recording with silence detection (max {max_duration}s)...")
     
@@ -1295,6 +1296,12 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         recording_duration = 0
         speech_detected = False
         stop_recording = False
+        # --- silence profile trackers ---
+        pre_speech_delay_s = 0.0
+        total_silence_s = 0.0
+        speech_active_s = 0.0
+        gaps: list = []              # completed speech-internal gaps (start_s, end_s)
+        current_gap_start = None     # start time of an in-progress gap
         
         # Use a queue for thread-safe communication
         import queue
@@ -1416,41 +1423,51 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                         
                         # State machine for speech detection
                         if not speech_detected:
-                            # WAITING_FOR_SPEECH state
+                            # WAITING_FOR_SPEECH: accumulate pre-speech delay
                             if is_speech:
                                 logger.info("🎤 Speech detected, starting active recording")
                                 if VAD_DEBUG:
                                     logger.info(f"[VAD_DEBUG] STATE CHANGE: WAITING_FOR_SPEECH -> SPEECH_ACTIVE at t={recording_duration:.1f}s")
                                 speech_detected = True
                                 silence_duration_ms = 0
-                            # No timeout in this state - just keep waiting
-                            # The only exit is speech detection or max_duration
+                            else:
+                                pre_speech_delay_s += chunk_duration_s
+                                total_silence_s += chunk_duration_s
                         else:
-                            # We have detected speech at some point
                             if is_speech:
-                                # SPEECH_ACTIVE state - reset silence counter
+                                # SPEECH_ACTIVE: close any in-progress gap
+                                if current_gap_start is not None:
+                                    gaps.append((current_gap_start, recording_duration))
+                                    current_gap_start = None
+                                speech_active_s += chunk_duration_s
                                 silence_duration_ms = 0
                             else:
-                                # SILENCE_AFTER_SPEECH state - accumulate silence
+                                # SILENCE_AFTER_SPEECH
+                                if current_gap_start is None:
+                                    current_gap_start = recording_duration
                                 silence_duration_ms += VAD_CHUNK_DURATION_MS
-                                if VAD_DEBUG and silence_duration_ms % 100 == 0:  # More frequent logging in debug mode
-                                    logger.info(f"[VAD_DEBUG] Accumulating silence: {silence_duration_ms}/{SILENCE_THRESHOLD_MS}ms, t={recording_duration:.1f}s")
-                                elif silence_duration_ms % 200 == 0:  # Log every 200ms
+                                total_silence_s += chunk_duration_s
+                                if VAD_DEBUG and silence_duration_ms % 100 == 0:
+                                    logger.info(f"[VAD_DEBUG] Accumulating silence: {silence_duration_ms}ms, t={recording_duration:.1f}s")
+                                elif silence_duration_ms % 200 == 0:
                                     logger.debug(f"Silence: {silence_duration_ms}ms")
-                                
-                                # Check if we should stop due to silence threshold
-                                # Use the larger of MIN_RECORDING_DURATION (global) or min_duration (parameter)
+
                                 effective_min_duration = max(MIN_RECORDING_DURATION, min_duration)
-                                if recording_duration >= effective_min_duration and silence_duration_ms >= SILENCE_THRESHOLD_MS:
-                                    logger.info(f"✓ Silence threshold reached after {recording_duration:.1f}s of recording")
+                                # Release threshold: 0 -> legacy SILENCE_THRESHOLD_MS; >0 -> scalar seconds.
+                                if effective_release > 0:
+                                    release_ms = effective_release * 1000
+                                else:
+                                    release_ms = SILENCE_THRESHOLD_MS
+                                if recording_duration >= effective_min_duration and silence_duration_ms >= release_ms:
+                                    logger.info(f"✓ Silence release reached after {recording_duration:.1f}s (threshold {release_ms:.0f}ms)")
                                     if VAD_DEBUG:
-                                        logger.info(f"[VAD_DEBUG] STOP: silence_duration={silence_duration_ms}ms >= threshold={SILENCE_THRESHOLD_MS}ms")
+                                        logger.info(f"[VAD_DEBUG] STOP: silence_duration={silence_duration_ms}ms >= threshold={release_ms:.0f}ms")
                                         logger.info(f"[VAD_DEBUG] STOP: recording_duration={recording_duration:.1f}s >= min_duration={effective_min_duration}s")
                                     stop_recording = True
                                 elif VAD_DEBUG and recording_duration < effective_min_duration:
-                                    if int(recording_duration * 1000) % 500 == 0:  # Log every 500ms
+                                    if int(recording_duration * 1000) % 500 == 0:
                                         logger.info(f"[VAD_DEBUG] Min duration not met: {recording_duration:.1f}s < {effective_min_duration}s")
-                        
+
                         recording_duration += chunk_duration_s
                             
                     except queue.Empty:
@@ -1463,7 +1480,18 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
             # Concatenate all chunks
             if chunks:
                 full_recording = np.concatenate(chunks)
-                
+                # Close a gap still open at end-of-turn.
+                if current_gap_start is not None:
+                    gaps.append((current_gap_start, recording_duration))
+                longest_gap = max((e - s for (s, e) in gaps), default=0.0)
+                profile = SilenceProfile(
+                    pre_speech_delay=pre_speech_delay_s,
+                    longest_gap=longest_gap,
+                    total_silence=total_silence_s,
+                    speech_active=speech_active_s,
+                    gaps=gaps,
+                )
+
                 if not speech_detected:
                     logger.info(f"✓ Recording completed ({recording_duration:.1f}s) - No speech detected")
                     if VAD_DEBUG:
@@ -1472,17 +1500,16 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     logger.info(f"✓ Recorded {len(full_recording)} samples ({recording_duration:.1f}s) with speech")
                     if VAD_DEBUG:
                         logger.info(f"[VAD_DEBUG] FINAL STATE: Speech was detected, recording complete")
-                
+
                 if DEBUG:
                     # Calculate RMS for debug
                     rms = np.sqrt(np.mean(full_recording.astype(float) ** 2))
                     logger.debug(f"Recording stats - RMS: {rms:.2f}, Speech detected: {speech_detected}")
-                
-                # Return tuple: (audio_data, speech_detected)
-                return (full_recording, speech_detected)
+
+                return (full_recording, speech_detected, profile)
             else:
                 logger.warning("No audio chunks recorded")
-                return (np.array([]), False)
+                return (np.array([]), False, SilenceProfile.empty())
                 
         except Exception as e:
             logger.error(f"Recording with VAD failed: {e}")
@@ -1523,7 +1550,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     
                     # Try recording again with the new device (recursive call in sync context)
                     logger.info("Retrying recording with new audio device...")
-                    return record_audio_with_silence_detection(max_duration, disable_silence_detection, min_duration, vad_aggressiveness)
+                    return record_audio_with_silence_detection(max_duration, silence_release_sec, min_duration, vad_aggressiveness)
                     
                 except Exception as reinit_error:
                     logger.error(f"Failed to reinitialize audio: {reinit_error}")
@@ -1534,9 +1561,8 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
             logger.error(f"\n{help_message}")
             
             logger.info("Falling back to fixed duration recording")
-            # For fallback, assume speech is present since we can't detect
-            return (record_audio(max_duration), True)
-            
+            return (record_audio(max_duration), True, SilenceProfile.empty())
+
         finally:
             # Restore stdio
             if sys.stdin != original_stdin:
@@ -1549,8 +1575,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
     except Exception as e:
         logger.error(f"VAD initialization failed: {e}")
         logger.info("Falling back to fixed duration recording")
-        # For fallback, assume speech is present since we can't detect
-        return (record_audio(max_duration), True)
+        return (record_audio(max_duration), True, SilenceProfile.empty())
 
 
 # ==================== CONTROL CHANNEL (VM-1676) ====================
