@@ -1746,6 +1746,28 @@ async def _drain_skip_back(control_state, replay_cursor: int) -> int:
         # On a transport interrupt (a further press) the loop consumes it next.
 
 
+def _assemble_voice_result(response_text, stt_info, timing_str, metrics_level, profile, words, threshold):
+    """Assemble the result string for a voice turn, inserting silence markers and Silence: field."""
+    from voice_mode.tools.silence_markers import insert_markers, format_silence_field
+    text = insert_markers(response_text, words, profile, threshold) if profile is not None else response_text
+    silence_field = format_silence_field(profile, threshold) if profile is not None else None
+    if metrics_level == "minimal":
+        return f"Voice response: {text}"
+    if metrics_level == "verbose":
+        parts = [f"Voice response: {text}{stt_info}"]
+        if profile is not None:
+            parts.append(f"Silence: pre {profile.pre_speech_delay:.1f}s, gap {profile.longest_gap:.1f}s, "
+                         f"total {profile.total_silence:.1f}s, speech {profile.speech_active:.1f}s")
+        parts.append(f"Timing: {timing_str}")
+        return " | ".join(parts)
+    # summary (default)
+    seg = f"Voice response: {text}{stt_info}"
+    if silence_field:
+        seg += f" | Silence: {silence_field}"
+    seg += f" | Timing: {timing_str}"
+    return seg
+
+
 @mcp.tool()
 async def converse(
     message: Optional[str] = None,
@@ -3025,21 +3047,20 @@ consult the MCP resources listed above.
 
                 # Format result based on metrics level
                 stt_info = f" (STT: {stt_provider})" if 'stt_provider' in locals() and stt_provider != "unknown" else ""
-                if effective_metrics_level == "minimal":
-                    result = f"Voice response: {response_text}"
-                elif effective_metrics_level == "verbose":
-                    # Build verbose metrics block
-                    verbose_parts = [f"Voice response: {response_text}{stt_info}"]
-                    verbose_parts.append(f"Timing: {timing_str}")
+                result = _assemble_voice_result(
+                    response_text, stt_info, timing_str, effective_metrics_level,
+                    silence_prof, stt_words, SIGNIFICANCE_THRESHOLD_SEC)
+                if effective_metrics_level == "verbose":
+                    # Append additional verbose-only STT detail fields
+                    extra_verbose_parts = []
                     if 'stt_request_ms' in timings:
-                        verbose_parts.append(f"STT request: {timings['stt_request_ms']:.0f}ms")
+                        extra_verbose_parts.append(f"STT request: {timings['stt_request_ms']:.0f}ms")
                     if 'stt_file_size_bytes' in timings:
-                        verbose_parts.append(f"STT file: {timings['stt_file_size_bytes']/1024:.0f}KB")
+                        extra_verbose_parts.append(f"STT file: {timings['stt_file_size_bytes']/1024:.0f}KB")
                     if 'stt_is_local' in timings:
-                        verbose_parts.append(f"STT local: {timings['stt_is_local']}")
-                    result = " | ".join(verbose_parts)
-                else:  # summary (default)
-                    result = f"Voice response: {response_text}{stt_info} | Timing: {timing_str}"
+                        extra_verbose_parts.append(f"STT local: {timings['stt_is_local']}")
+                    if extra_verbose_parts:
+                        result = result + " | " + " | ".join(extra_verbose_parts)
                 success = True
             else:
                 if effective_metrics_level == "minimal":
