@@ -20,3 +20,10 @@ def test_returns_three_tuple_with_profile(monkeypatch):
     assert isinstance(result, tuple) and len(result) == 3
     audio, speech, profile = result
     assert isinstance(profile, SilenceProfile)
+
+
+def test_release_threshold_mapping():
+    from voice_mode.tools.converse import _release_threshold_ms, SILENCE_THRESHOLD_MS
+    assert _release_threshold_ms(0) == float(SILENCE_THRESHOLD_MS)
+    assert _release_threshold_ms(60) == 60000
+    assert _release_threshold_ms(-1) == float("inf")

@@ -1240,6 +1240,15 @@ def record_audio(duration: float) -> np.ndarray:
             sys.stderr = original_stderr
 
 
+def _release_threshold_ms(silence_release_sec: float) -> float:
+    """0 -> legacy SILENCE_THRESHOLD_MS; >0 -> scalar seconds in ms; <0 -> inf (never)."""
+    if silence_release_sec > 0:
+        return silence_release_sec * 1000
+    if silence_release_sec < 0:
+        return float("inf")
+    return float(SILENCE_THRESHOLD_MS)
+
+
 def record_audio_with_silence_detection(max_duration: float, silence_release_sec: float = 0.0, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None) -> Tuple[np.ndarray, bool, "SilenceProfile"]:
     """Record audio from microphone with automatic silence detection.
 
@@ -1455,10 +1464,7 @@ def record_audio_with_silence_detection(max_duration: float, silence_release_sec
 
                                 effective_min_duration = max(MIN_RECORDING_DURATION, min_duration)
                                 # Release threshold: 0 -> legacy SILENCE_THRESHOLD_MS; >0 -> scalar seconds.
-                                if effective_release > 0:
-                                    release_ms = effective_release * 1000
-                                else:
-                                    release_ms = SILENCE_THRESHOLD_MS
+                                release_ms = _release_threshold_ms(effective_release)
                                 if recording_duration >= effective_min_duration and silence_duration_ms >= release_ms:
                                     logger.info(f"✓ Silence release reached after {recording_duration:.1f}s (threshold {release_ms:.0f}ms)")
                                     if VAD_DEBUG:
