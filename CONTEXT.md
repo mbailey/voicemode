@@ -83,3 +83,58 @@ significant silence, so the assistant sees *where* in the utterance the user
 hesitated. Written in angle brackets: `⟨pause 5.1s⟩` for a speech gap,
 `⟨pre-speech 3.2s⟩` for a pre-speech delay.
 _Avoid_: silence tag, pause token.
+
+## Block timeline measurement
+
+The `measure_blocks` mode: a fuller, opt-in rendering of a user turn as an
+explicit sequence of timed blocks. When on, the **block timeline** *replaces*
+the significant-silence marker model above for that turn.
+
+**Block timeline**:
+A user turn expressed as a time-ordered sequence of blocks, each carrying its
+duration in seconds. Two block kinds alternate: **speech blocks** and **gaps**.
+Rendered as, e.g.:
+`모델은 (0.7s) (gap 5.3s) 음 잘모르겠어요. 그... (6.3s) (gap 10.2s) 그러니까 (1.6s)`.
+Produced only when the `measure_blocks` converse parameter is set.
+_Avoid_: block breakdown, timing string, segment list.
+
+**Speech block**:
+A contiguous run of the user actually speaking, bounded on each side by a gap
+(or by the turn's start/end). Rendered as `text (Ns)` where N is the block's
+duration. Filler words ("음", "그...") stay inside the block as ordinary text —
+they do **not** break a block and are **not** timed separately.
+_Avoid_: utterance, segment, phrase.
+
+**Gap**:
+A silence (unfilled pause) *between* speech blocks — the only thing that breaks
+one speech block from the next. Rendered as `(gap Ns)`. A pre-speech silence
+before the first speech block is also a gap. Gaps are the block-timeline
+counterpart of *speech gap* / *pre-speech delay* above.
+_Avoid_: pause, break, silence marker.
+
+**Block boundary**:
+The rule for where one speech block ends and the next begins: **only a gap
+(silence) breaks a block.** A filler never does. So "음 잘모르겠어요. 그..." with
+no intervening silence is one 6.3s speech block, not three.
+_Avoid_: segmentation, split point.
+
+**Filler**:
+A filled pause — a hesitation the user voices rather than falling silent ("어",
+"음", "그", "저", "uh", "um"). Because it is voiced, VAD counts it as speech, so
+it lives inside a speech block as plain text. VoiceMode does **not** identify or
+time fillers separately; the assistant infers disfluency from a block's duration
+being large relative to how much it actually says.
+_Avoid_: filled pause (in prose use "filler"), hesitation sound.
+
+**Block time source**:
+Block and gap durations come from the **VAD** (the record loop's frame-level
+wall-clock), never from STT — VAD is the single source of truth for time. Word
+timestamps are used **only** to assign transcript text to the block it belongs
+to, so the durations always sum to the recording length.
+_Avoid_: timing source, duration origin.
+
+**Deliberation** / **Disfluency**:
+Assistant-side *interpretations* ("how much the user is thinking / stumbling"),
+**not** system outputs. VoiceMode reports seconds; the assistant judges. Kept
+out of the measured data by design (ADR 0002: measurement, not policy).
+_Avoid_: thinking score, hesitation score, stutter metric.
