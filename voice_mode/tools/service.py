@@ -12,7 +12,7 @@ from typing import Literal, Optional, Dict, Any, Union
 import psutil
 
 from voice_mode.server import mcp
-from voice_mode.config import WHISPER_PORT, KOKORO_PORT, MLX_AUDIO_PORT, SERVICE_AUTO_ENABLE
+from voice_mode.config import WHISPER_PORT, KOKORO_PORT, MLX_AUDIO_PORT, FASTER_WHISPER_PORT, SERVICE_AUTO_ENABLE
 from voice_mode.utils.services.common import find_process_by_port, check_service_status
 
 # Default port for VoiceMode serve command (HTTP MCP server)
@@ -27,9 +27,11 @@ logger = logging.getLogger("voicemode")
 # used in plist labels, systemd unit filenames, and log directories.
 # voicemode -> serve   (HTTP MCP server has the legacy "serve" naming)
 # mlx_audio -> mlx-audio (kebab-case matches the deployed plist label)
+# faster_whisper -> faster-whisper (kebab-case matches the deployed plist label)
 _SERVICE_FILE_NAMES: Dict[str, str] = {
     "voicemode": "serve",
     "mlx_audio": "mlx-audio",
+    "faster_whisper": "faster-whisper",
 }
 
 
@@ -55,6 +57,15 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
         # Find whisper start script
         whisper_dir = os.path.join(voicemode_dir, "services", "whisper")
         start_script = os.path.join(whisper_dir, "bin", "start-whisper-server.sh")
+
+        return {
+            "HOME": home,
+            "START_SCRIPT": start_script,
+        }
+    elif service_name == "faster_whisper":
+        # Find faster-whisper start script
+        faster_whisper_dir = os.path.join(voicemode_dir, "services", "faster-whisper")
+        start_script = os.path.join(faster_whisper_dir, "bin", "start-faster-whisper-server.sh")
 
         return {
             "HOME": home,
@@ -227,6 +238,9 @@ async def status_service(service_name: str) -> str:
     if service_name == "whisper":
         port = WHISPER_PORT
         process_name = "whisper-server"
+    elif service_name == "faster_whisper":
+        port = FASTER_WHISPER_PORT
+        process_name = None
     elif service_name == "kokoro":
         port = KOKORO_PORT
         process_name = None
@@ -378,6 +392,8 @@ async def start_service(service_name: str) -> str:
     # Check if already running
     if service_name == "whisper":
         port = WHISPER_PORT
+    elif service_name == "faster_whisper":
+        port = FASTER_WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
     elif service_name == "mlx_audio":
@@ -576,6 +592,8 @@ async def stop_service(service_name: str) -> str:
     """Stop a service."""
     if service_name == "whisper":
         port = WHISPER_PORT
+    elif service_name == "faster_whisper":
+        port = FASTER_WHISPER_PORT
     elif service_name == "kokoro":
         port = KOKORO_PORT
     elif service_name == "mlx_audio":
@@ -890,7 +908,7 @@ async def view_logs(service_name: str, lines: Optional[int] = None) -> str:
 
 @mcp.tool()
 async def service(
-    service_name: Literal["whisper", "kokoro", "mlx_audio", "voicemode"],
+    service_name: Literal["whisper", "faster_whisper", "kokoro", "mlx_audio", "voicemode"],
     action: Literal["status", "start", "stop", "restart", "enable", "disable", "logs"] = "status",
     lines: Optional[Union[int, str]] = None
 ) -> str:
