@@ -13,12 +13,14 @@ Whether to listen for a voice response after speaking.
 ## Timing Parameters
 
 ### listen_duration_max
-**Type:** number (default: 120.0 seconds)
+**Type:** number (default: 180.0 seconds)
 Maximum time to listen for response. The tool handles silence detection well.
+
+**Bounds:** hard-capped at 300 seconds.
 
 **When to override:**
 - Silence detection is disabled and you need specific timeout
-- Response will be exceptionally long (>120s)
+- Response will be exceptionally long (>180s)
 - Special timing requirements
 
 **Usually:** Let default and silence detection handle it.
@@ -31,6 +33,23 @@ Minimum recording time before silence detection can stop.
 - Complex questions: 2-3 seconds
 - Open-ended prompts: 3-5 seconds
 - Quick responses: 0.5-1 second
+
+### silence_release_sec
+**Type:** number (default: 0)
+Explicit turn handoff: how long to tolerate silence before releasing the floor so the assistant can keep speaking through hesitations.
+
+**Semantics:**
+- `0` — current VAD behavior: release the floor immediately on silence (classical end-of-turn detection)
+- `N > 0` — tolerate N seconds of silence, then release. Lets the assistant pause mid-thought without handing you the mic (e.g. `1.5` allows 1.5s of thinking silence)
+- `-1` — never release on silence alone; only `listen_duration_max` or explicit control (`skip_forward`) ends the turn
+
+**Silence Profile:**
+Every turn reports silence metrics in the `Silence:` result field and inline transcript markers so you can respond to hesitation:
+- **Inline markers**: pauses ≥2 seconds appear as `⟨pause Ns⟩` (during assistant speech) or `⟨pre-speech Ns⟩` (before user speaks)
+- **Silence field**: `Silence: { profile: { total_silence: N, max_gap: N, pre_speech: N }, markers: [...] }` for full metrics
+
+**Deprecated alias:**
+`disable_silence_detection: true` is now an alias for `silence_release_sec: -1` (never release on silence). It will continue to work for backward compatibility but new code should use the scalar parameter.
 
 ### timeout (DEPRECATED)
 Use `listen_duration_max` instead.
