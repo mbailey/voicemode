@@ -81,7 +81,7 @@ async def _poll_control_channel() -> bool:
         # F4 (VM-1697): bound the pause. Holding here keeps the global audio lock,
         # so a pause that is never resumed would wedge every later converse. After
         # CONTROL_PAUSE_TIMEOUT seconds we self-heal: stop (clean return) or resume.
-        timeout = getattr(config, "CONTROL_PAUSE_TIMEOUT", 30.0) or 0.0
+        timeout = getattr(config, "CONTROL_PAUSE_TIMEOUT", 300.0) or 0.0
         waited = 0.0
         while True:
             await asyncio.sleep(CONTROL_POLL_INTERVAL)

@@ -84,7 +84,7 @@ multiple agent instances.
 |----------|-------------|---------|
 | `VOICEMODE_CONTROL_CHANNEL_ENABLED` | Bind the control socket while speaking | `false` |
 | `VOICEMODE_CONTROL_SOCKET` | Path to the control Unix domain socket | `~/.voicemode/control.sock` |
-| `VOICEMODE_CONTROL_PAUSE_TIMEOUT` | Seconds before a never-resumed `pause` self-heals (0 disables) | `30` |
+| `VOICEMODE_CONTROL_PAUSE_TIMEOUT` | Seconds before a never-resumed `pause` self-heals (0 disables) | `300` |
 | `VOICEMODE_CONTROL_PAUSE_TIMEOUT_ACTION` | What a timed-out pause does: `stop` or `resume` | `stop` |
 | `VOICEMODE_HISTORY_BUFFER_SIZE` | How many recent utterances `skip_back` can replay (ring-buffer depth, ≥1) | `8` |
 
@@ -103,8 +103,8 @@ nothing to talk to. See [Security](#security) for the full model.
   authoritative gate is the **peer-credential check** (same-UID only) on connect,
   since socket-file mode isn't reliably enforced on macOS/BSD.
 - **Pause safety:** a `pause` that is never resumed auto-resolves after
-  `VOICEMODE_CONTROL_PAUSE_TIMEOUT` seconds (default 30) so it can't wedge the
-  audio subsystem.
+  `VOICEMODE_CONTROL_PAUSE_TIMEOUT` seconds (default 300 — 5 min, long enough to
+  step away and resume) so it can't wedge the audio subsystem.
 - **Lifecycle:** bound only while the server is speaking; unlinked on exit. A
   stale socket left by a crashed server is cleared with unlink-then-bind.
 
