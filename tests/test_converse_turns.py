@@ -441,6 +441,21 @@ async def test_converse_unknown_turn_key_lists_allowed_keys():
 
 
 @pytest.mark.asyncio
+async def test_converse_unknown_turn_key_allowed_list_excludes_play():
+    """N-c (fable pre-merge audit): "play" is always rejected one check
+    earlier (it's reserved for VM-840, not yet supported) -- advertising it
+    in the unknown-key error's "allowed:" list would be misleading typo-help
+    text, since using it never actually works."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi", "typo_field": 1}],
+        wait_for_response=False, skip_conch=True,
+    )
+    allowed_section = result.split("allowed:", 1)[1]
+    allowed_keys = [k.strip().rstrip(").") for k in allowed_section.split(",")]
+    assert "play" not in allowed_keys
+
+
+@pytest.mark.asyncio
 async def test_call_level_vad_aggressiveness_error_not_blamed_on_turn_zero():
     """N4 (fable progress review): an out-of-range CALL-LEVEL
     vad_aggressiveness with turns present must be reported as a call-level
@@ -452,6 +467,35 @@ async def test_call_level_vad_aggressiveness_error_not_blamed_on_turn_zero():
         wait_for_response=False, skip_conch=True,
     )
     assert "vad_aggressiveness must be an integer between 0 and 3" in result
+    assert "turn 0" not in result
+
+
+@pytest.mark.asyncio
+async def test_call_level_listen_duration_min_error_not_blamed_on_turn_zero():
+    """N-b (fable pre-merge audit): N4's misattribution fix covered
+    vad_aggressiveness only -- extend it to listen_duration_min/
+    listen_duration_max, the two other call-level fields this branch made
+    per-turn-inheritable. An out-of-range CALL-LEVEL listen_duration_min
+    with turns present must be reported as a call-level error, not
+    misattributed to "turn 0"."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi"}],
+        listen_duration_min=-1,
+        wait_for_response=True, skip_conch=True,
+    )
+    assert "listen_duration_min cannot be negative" in result
+    assert "turn 0" not in result
+
+
+@pytest.mark.asyncio
+async def test_call_level_listen_duration_max_error_not_blamed_on_turn_zero():
+    """N-b (fable pre-merge audit): same fix, the sibling field."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi"}],
+        listen_duration_max=0,
+        wait_for_response=True, skip_conch=True,
+    )
+    assert "listen_duration_max must be positive" in result
     assert "turn 0" not in result
 
 

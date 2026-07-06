@@ -593,3 +593,150 @@ class TestRepeatWaitGainControlAwareness:
 
         assert result.startswith("STT service connection failed:")
         assert "repeat" not in result
+
+    # -----------------------------------------------------------------------
+    # F1 (fable pre-merge audit): the repeat/wait re-listen loops were
+    # missing the main listen path's VM-1763 consume -- a skip_forward
+    # pressed during/around the _drain_skip_back replay left the sticky
+    # STATE_SKIP_FORWARD latch armed into the IMMEDIATE re-listen, whose
+    # record loop then exits on its very first poll with an (near-)empty
+    # capture (stt_classified stays False), silently returning the stale
+    # "repeat"/"wait" utterance as the final answer instead of listening for
+    # real -- the precise misleading return S4/S6 were built to kill.
+    # -----------------------------------------------------------------------
+
+    async def test_repeat_relisten_skip_forward_during_skip_back_replay_is_consumed(self):
+        record_calls = {"n": 0}
+
+        def _record(*_a, **_k):
+            record_calls["n"] += 1
+            if record_calls["n"] == 1:
+                return (np.zeros(2400, dtype=np.int16), True)  # initial "repeat" capture
+            # Second listen (post skip_back replay): faithfully reproduce the
+            # real record loop -- an already-armed sticky skip_forward ends
+            # recording on its very first poll.
+            if get_control_state().snapshot().is_skip_forward:
+                return (np.zeros(0, dtype=np.int16), False)
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        stt_texts = ["repeat", "forty two"]
+
+        async def _stt(*_a, **_k):
+            return {"text": stt_texts.pop(0), "provider": "whisper-local"}
+
+        drain_calls = {"n": 0}
+
+        async def _drain_that_arms_skip_forward(control_state, cursor):
+            drain_calls["n"] += 1
+            if drain_calls["n"] == 2:
+                # The repeat re-listen's OWN drain call -- simulate a
+                # skip_forward pressed DURING the replay it manages.
+                # play_cached_utterance stops playback but (like
+                # _play_samples_controllable) does not reset the sticky
+                # latch itself.
+                get_control_state().request_skip_forward()
+            return cursor
+
+        with patch("voice_mode.tools.converse._drain_skip_back", new=_drain_that_arms_skip_forward), \
+             patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.play_system_audio", new=AsyncMock()), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="Long explanation...",
+                wait_for_response=True,
+                metrics_level="minimal",
+                skip_conch=True,
+            )
+
+        assert record_calls["n"] == 2
+        assert result == "Voice response: forty two"
+        assert get_control_state().snapshot().is_skip_forward is False
+
+    async def test_wait_relisten_skip_forward_during_skip_back_replay_is_consumed(self):
+        record_calls = {"n": 0}
+
+        def _record(*_a, **_k):
+            record_calls["n"] += 1
+            if record_calls["n"] == 1:
+                return (np.zeros(2400, dtype=np.int16), True)  # initial "wait" capture
+            if get_control_state().snapshot().is_skip_forward:
+                return (np.zeros(0, dtype=np.int16), False)
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        stt_texts = ["wait", "ready now"]
+
+        async def _stt(*_a, **_k):
+            return {"text": stt_texts.pop(0), "provider": "whisper-local"}
+
+        drain_calls = {"n": 0}
+
+        async def _drain_that_arms_skip_forward(control_state, cursor):
+            drain_calls["n"] += 1
+            if drain_calls["n"] == 2:
+                get_control_state().request_skip_forward()
+            return cursor
+
+        with patch("voice_mode.tools.converse._drain_skip_back", new=_drain_that_arms_skip_forward), \
+             patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.play_system_audio", new=AsyncMock()), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt), \
+             patch("voice_mode.tools.converse.asyncio.sleep", new=AsyncMock()), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="Long explanation...",
+                wait_for_response=True,
+                metrics_level="minimal",
+                skip_conch=True,
+            )
+
+        assert record_calls["n"] == 2
+        assert result == "Voice response: ready now"
+        assert get_control_state().snapshot().is_skip_forward is False
+
+    async def test_repeat_relisten_stop_during_skip_back_replay_ends_turn(self):
+        """A stop pressed during the repeat re-listen's own skip_back replay
+        must end the turn immediately -- not fall through to another
+        (spurious) listen."""
+        record_calls = {"n": 0}
+
+        def _record(*_a, **_k):
+            record_calls["n"] += 1
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            return {"text": "repeat", "provider": "whisper-local"}
+
+        drain_calls = {"n": 0}
+
+        async def _drain_that_stops(control_state, cursor):
+            drain_calls["n"] += 1
+            if drain_calls["n"] == 2:
+                get_control_state().request_stop(hint="switch-to-text")
+            return cursor
+
+        with patch("voice_mode.tools.converse._drain_skip_back", new=_drain_that_stops), \
+             patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.play_system_audio", new=AsyncMock()), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="Long explanation...",
+                wait_for_response=True,
+                skip_conch=True,
+            )
+
+        assert result.startswith("[control: stop] ")
+        # Only ONE real record call (the initial "repeat" capture) -- the
+        # stop during the re-listen's own replay ends the turn before a
+        # second listen ever starts.
+        assert record_calls["n"] == 1

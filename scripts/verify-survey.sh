@@ -115,16 +115,30 @@ PY
   fi
 }
 
-# check_convo_log RUN_NAME SINCE_EPOCH_S — confirm at least one survey-transport
-# STT reply landed in today's conversation log at/after SINCE_EPOCH_S (Decision
-# 7's crash-persistence guarantee: per-turn logging, not batched at survey
-# end -- must hold even on a stop/break run that returns a partial).
+# check_convo_log RUN_NAME JSON_FILE SINCE_EPOCH_S — confirm EVERY answered
+# reply in the run's own survey JSON landed in today's conversation log
+# at/after SINCE_EPOCH_S (Decision 7's crash-persistence guarantee: per-turn
+# logging, not batched at survey end -- must hold even on a stop/break run
+# that returns a partial). N-d (fable pre-merge audit): this used to require
+# only >=1 logged reply regardless of how many turns were actually answered,
+# which would silently pass even if a multi-answer run only logged one of
+# its replies. Now computes the expected count from the run's own JSON and
+# requires every answered turn accounted for.
 check_convo_log() {
-  local name="$1" since="$2"
-  if python3 - "$CONVO_LOG_FILE" "$since" "$name" <<'PY'
+  local name="$1" file="$2" since="$3"
+  if python3 - "$CONVO_LOG_FILE" "$file" "$since" "$name" <<'PY'
 import json, sys
-path, since, name = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 from datetime import datetime
+path, survey_file, since, name = sys.argv[1], sys.argv[2], float(sys.argv[3]), sys.argv[4]
+
+try:
+    survey = json.loads(open(survey_file).read()).get("survey") or {}
+    turns = survey.get("turns") or []
+except Exception as e:
+    print(f"ASSERT FAIL [{name}]: could not parse {survey_file} to compute expected answered count ({e})")
+    sys.exit(1)
+expected = sum(1 for t in turns if t.get("status") == "answered")
+
 try:
     lines = open(path).readlines()
 except FileNotFoundError:
@@ -146,10 +160,10 @@ for line in lines:
         continue
     if ts >= since:
         found += 1
-if found < 1:
-    print(f"ASSERT FAIL [{name}]: no survey-transport STT entries in conversation log since run start")
+if found < expected:
+    print(f"ASSERT FAIL [{name}]: only {found}/{expected} answered survey replies durably logged since run start")
     sys.exit(1)
-print(f"ASSERT PASS [{name}]: {found} survey-transport reply/replies durably logged")
+print(f"ASSERT PASS [{name}]: {found}/{expected} answered survey replies durably logged")
 sys.exit(0)
 PY
   then
@@ -198,7 +212,7 @@ run_full() {
   echo "exit=$rc -- see $OUT_DIR/run1.json"
   cat "$OUT_DIR/run1.json"
   assert_survey "run1-full" "$OUT_DIR/run1.json" "$rc" true
-  check_convo_log "run1-full" "$since"
+  check_convo_log "run1-full" "$OUT_DIR/run1.json" "$since"
 }
 
 run_bargein() {
@@ -208,16 +222,37 @@ run_bargein() {
   uv run voicemode converse --skip-conch --ask "$VOICE:$Q1" --ask "$VOICE:$Q2" --ask "$VOICE:$Q3" \
     >"$OUT_DIR/run2.json" 2>"$OUT_DIR/run2.log" &
   local pid=$!
+  # N-d (fable pre-merge audit): track whether each gesture actually fired --
+  # if poll_phase times out, `control skip-forward` never runs and the run
+  # silently degrades to a plain full-completion survey, which would
+  # otherwise still satisfy `assert_survey ... true` unnoticed.
+  local bargein_fired=0
   # Turn 0: fire skip_forward while still SPEAKING -> answer-early (jumps to listen)
-  poll_phase 0 speaking 15 && sleep 0.8 && control skip-forward
+  if poll_phase 0 speaking 15; then
+    sleep 0.8
+    control skip-forward && bargein_fired=$((bargein_fired + 1))
+  else
+    echo "  !! poll_phase(turn=0, speaking) timed out -- turn-0 skip_forward will NOT fire"
+  fi
   # Turn 1: let it reach LISTENING, then fire skip_forward again -> end-capture
-  poll_phase 1 listening 60 && sleep 2.5 && control skip-forward
+  if poll_phase 1 listening 60; then
+    sleep 2.5
+    control skip-forward && bargein_fired=$((bargein_fired + 1))
+  else
+    echo "  !! poll_phase(turn=1, listening) timed out -- turn-1 skip_forward will NOT fire"
+  fi
   wait "$pid"
   local rc=$?
   echo "exit=$rc -- see $OUT_DIR/run2.json"
   cat "$OUT_DIR/run2.json"
   assert_survey "run2-bargein" "$OUT_DIR/run2.json" "$rc" true
-  check_convo_log "run2-bargein" "$since"
+  if [ "$bargein_fired" -ne 2 ]; then
+    echo "ASSERT FAIL [run2-bargein-gestures]: only $bargein_fired/2 skip_forward gestures actually fired -- this run does not exercise barge-in and would otherwise be indistinguishable from run 1's full completion"
+    ASSERT_FAILS=$((ASSERT_FAILS + 1))
+  else
+    echo "ASSERT PASS [run2-bargein-gestures]: both skip_forward gestures fired (turn-0 speaking barge-in + turn-1 listening end-capture)"
+  fi
+  check_convo_log "run2-bargein" "$OUT_DIR/run2.json" "$since"
 }
 
 run_stop() {
@@ -233,7 +268,7 @@ run_stop() {
   echo "exit=$rc -- see $OUT_DIR/run3.json"
   cat "$OUT_DIR/run3.json"
   assert_survey "run3-stop" "$OUT_DIR/run3.json" "$rc" false 1 listening stop
-  check_convo_log "run3-stop" "$since"
+  check_convo_log "run3-stop" "$OUT_DIR/run3.json" "$since"
 }
 
 run_break() {
@@ -247,7 +282,7 @@ run_break() {
   echo "exit=$rc -- see $OUT_DIR/run4.json"
   cat "$OUT_DIR/run4.json"
   assert_survey "run4-break" "$OUT_DIR/run4.json" "$rc" false 1 listening spoken_break
-  check_convo_log "run4-break" "$since"
+  check_convo_log "run4-break" "$OUT_DIR/run4.json" "$since"
 }
 
 case "${1:-all}" in

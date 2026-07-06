@@ -736,10 +736,13 @@ def _normalize_turns(
         # protection, and explicitly closes off nesting a full converse call
         # (message/turns/conch/session) inside a turn. N2 (fable progress
         # review): list the allowed keys in the error, as Decision 1 rule 5
-        # specified.
+        # specified. N-c (fable pre-merge audit): the list excludes
+        # ``_TURN_RESERVED_KEYS`` (``play``) -- it is always rejected one
+        # check earlier (above), so advertising it here as "allowed" would be
+        # misleading typo-help text.
         for key in raw:
             if key not in _TURN_KNOWN_KEYS:
-                allowed = ", ".join(sorted(_TURN_KNOWN_KEYS))
+                allowed = ", ".join(sorted(_TURN_KNOWN_KEYS - _TURN_RESERVED_KEYS))
                 raise ValueError(
                     f"turn {i}: unknown key '{key}' is not supported inside a turn "
                     f"(allowed: {allowed})."
@@ -2114,6 +2117,38 @@ async def _play_samples_controllable(samples, sample_rate, control_state, poll_i
             player.stop()
 
 
+async def _replay_cached_question(cached_samples, cached_rate, control_state) -> bool:
+    """Replay a survey ask-turn's cached question for a skip_back or spoken
+    "repeat" re-listen, via ``_play_samples_controllable``.
+
+    Fable pre-merge audit F1 (empirically confirmed bug): both replay call
+    sites used to discard ``_play_samples_controllable``'s return value.
+    ``skip_forward`` stops playback but does NOT reset the sticky
+    ``STATE_SKIP_FORWARD`` latch (only ``player.stop()`` runs) -- so the
+    latch used to survive into the IMMEDIATE re-listen, whose record loop
+    would exit on its very first poll with an (near-)empty capture, turning
+    "cut the replay so I can answer" into a silent ``no_speech``. Consuming
+    the edge here (mirroring the main SPEAK phase's ``control_state.reset()``)
+    lets the re-listen actually listen. A ``stopped`` outcome during the
+    replay itself is reported to the caller so the survey ends immediately
+    instead of falling through to another (spurious) listen -- and its
+    "listening" chime.
+
+    Returns ``True`` if the replay was cut short by a control-channel
+    ``stop`` (the caller should end the turn/survey); ``False`` if the
+    caller should proceed to LISTEN as normal (whether the replay played to
+    completion or was barged into with ``skip_forward``).
+    """
+    if cached_samples is None:
+        return False
+    replay_outcome = await _play_samples_controllable(cached_samples, cached_rate, control_state)
+    if replay_outcome == "stopped":
+        return True
+    if replay_outcome == "skip_forward":
+        control_state.reset()
+    return False
+
+
 def _emit_converse_state(
     phase: Literal["speaking", "listening", "idle"],
     *,
@@ -2420,7 +2455,20 @@ async def _ask_turns_pipeline(
                         chime_leading_silence=chime_leading_silence,
                         chime_trailing_silence=chime_trailing_silence,
                         transport=transport,
-                        event_logger=event_logger,
+                        # F4 (fable pre-merge audit): a survey ask turn can
+                        # re-listen several times within the SAME turn
+                        # (skip_back replay, spoken repeat/wait) -- threading
+                        # the real event_logger through here used to emit
+                        # RECORDING_START/RECORDING_END/STT_START on every one
+                        # of those, with no matching STT_COMPLETE/STT_NO_SPEECH
+                        # ever emitted for survey mode (a 3-ask survey shipped
+                        # >=3 unpaired STT_START / 0 STT_COMPLETE). Passing
+                        # None here matches the S5 fix's philosophy for the
+                        # single-message repeat/wait re-listens: no event-log
+                        # entries from a construct that can legitimately loop
+                        # multiple times per logical turn, instead of trying
+                        # to keep a richer multi-listen event shape paired.
+                        event_logger=None,
                     )
                 except Exception as e:
                     logger.error(f"Survey turn {idx}: recording/STT raised: {e}")
@@ -2441,8 +2489,13 @@ async def _ask_turns_pipeline(
                     # one-shot request here. Left unconsumed, it re-fires forever.
                     control_state.take_transport_request()
                     logger.info(f"Survey turn {idx}: skip_back -- replaying question then re-listening")
-                    if cached_samples is not None:
-                        await _play_samples_controllable(cached_samples, cached_rate, control_state)
+                    if await _replay_cached_question(cached_samples, cached_rate, control_state):
+                        # F1: a stop pressed during the replay itself ends the
+                        # survey now -- no spurious extra listen/chime.
+                        stopped_at = {"turn": idx, "phase": "listening", "reason": "stop"}
+                        entry["status"] = "no_speech"
+                        aborted = True
+                        break
                     continue
 
                 if listen_result.outcome == "stopped":
@@ -2476,8 +2529,13 @@ async def _ask_turns_pipeline(
 
                 if text and should_repeat(text):
                     logger.info(f"Survey turn {idx}: repeat requested -- replaying then re-listening")
-                    if cached_samples is not None:
-                        await _play_samples_controllable(cached_samples, cached_rate, control_state)
+                    if await _replay_cached_question(cached_samples, cached_rate, control_state):
+                        # F1: a stop pressed during the replay itself ends the
+                        # survey now -- no spurious extra listen/chime.
+                        stopped_at = {"turn": idx, "phase": "listening", "reason": "stop"}
+                        entry["status"] = "no_speech"
+                        aborted = True
+                        break
                     continue
 
                 if text and should_wait(text):
@@ -2502,11 +2560,23 @@ async def _ask_turns_pipeline(
                 # leaves every prior reply in the logs. Mirrors the
                 # single-message listen path's log_stt call, scoped per ask
                 # turn instead of once per converse() call.
+                #
+                # F2 (fable pre-merge audit): tag the log entry's own
+                # "transport" label as "survey" -- decoupled from the
+                # STT-transport parameter above (always "local" today), which
+                # is a DIFFERENT concept (which microphone/audio path was
+                # used, not which logical construct produced the reply). The
+                # single-message listen path's own log_stt call keeps passing
+                # the real STT transport, unchanged. This makes survey
+                # replies queryable/distinguishable in the conversation log
+                # (matching track_voice_interaction's own transport="survey"
+                # tagging at the dispatch call site) and is what
+                # scripts/verify-survey.sh's check_convo_log filters on.
                 try:
                     get_conversation_logger().log_stt(
                         text=text if text else "[no speech detected]",
                         provider=listen_result.stt_provider,
-                        transport=transport,
+                        transport="survey",
                         timing=f"record {listen_result.timings.get('record', 0.0):.1f}s, "
                                f"stt {listen_result.timings.get('stt', 0.0):.1f}s",
                     )
@@ -2985,6 +3055,22 @@ consult the MCP resources listed above.
         if not isinstance(vad_aggressiveness, int) or vad_aggressiveness < 0 or vad_aggressiveness > 3:
             return f"Error: vad_aggressiveness must be an integer between 0 and 3 (got {vad_aggressiveness})"
 
+    # Validate duration parameters (call-level). N-b (fable pre-merge audit):
+    # extends N4's misattribution fix to listen_duration_min/listen_duration_max
+    # -- same reason, same fix shape: this must also run BEFORE _normalize_turns
+    # below. With turns present, an out-of-range call-level listen_duration_min
+    # used to be caught by the per-turn inheritance validation first, so the
+    # error misleadingly read "turn 0: 'listen_duration_min' cannot be
+    # negative…", blaming turn 0 for a call-level argument.
+    if wait_for_response:
+        if listen_duration_min < 0:
+            return "❌ Error: listen_duration_min cannot be negative"
+        if listen_duration_max <= 0:
+            return "❌ Error: listen_duration_max must be positive"
+        if listen_duration_min > listen_duration_max:
+            logger.warning(f"listen_duration_min ({listen_duration_min}s) is greater than listen_duration_max ({listen_duration_max}s), using listen_duration_max as minimum")
+            listen_duration_min = listen_duration_max
+
     # VM-1772/VM-1775: normalize the optional turns[] list (speak-only P1 +
     # ask/collect-response P2). When present it takes precedence over the
     # scalar `message` (precedence is resolved here, not in the schema —
@@ -3026,16 +3112,6 @@ consult the MCP resources listed above.
 
     logger.info(f"Converse: '{message[:50]}{'...' if len(message) > 50 else ''}' (wait_for_response: {wait_for_response})")
 
-    # Validate duration parameters
-    if wait_for_response:
-        if listen_duration_min < 0:
-            return "❌ Error: listen_duration_min cannot be negative"
-        if listen_duration_max <= 0:
-            return "❌ Error: listen_duration_max must be positive"
-        if listen_duration_min > listen_duration_max:
-            logger.warning(f"listen_duration_min ({listen_duration_min}s) is greater than listen_duration_max ({listen_duration_max}s), using listen_duration_max as minimum")
-            listen_duration_min = listen_duration_max
-    
     # Check if FFmpeg is available
     ffmpeg_available = getattr(voice_mode.config, 'FFMPEG_AVAILABLE', True)  # Default to True if not set
     if not ffmpeg_available:
@@ -3681,8 +3757,32 @@ consult the MCP resources listed above.
                         # instead of silently leaving the "repeat" utterance
                         # presented as the answer.
                         replay_cursor = 0
+                        stopped_during_replay = False
                         while True:
                             replay_cursor = await _drain_skip_back(control_state, replay_cursor)
+
+                            # F1 (fable pre-merge audit): mirror the main
+                            # listen path's VM-1763 consume -- a skip_forward
+                            # during/around _drain_skip_back's replay stops
+                            # the audio but does NOT clear the sticky
+                            # STATE_SKIP_FORWARD latch. Left unconsumed, the
+                            # IMMEDIATE re-listen below would see it already
+                            # armed and end on its very first poll with an
+                            # (near-)empty capture -- stt_classified stays
+                            # False and the stale "repeat" utterance would be
+                            # silently kept as the answer (the exact
+                            # misleading return S4/S6 were built to kill). A
+                            # stop during the replay itself ends the turn here
+                            # instead of falling through to another listen.
+                            control_snapshot = control_state.snapshot()
+                            if control_snapshot.is_skip_forward:
+                                logger.info("Converse skip-forward via control channel during repeat re-listen's skip-back replay")
+                                control_state.reset()
+                            elif control_snapshot.is_stopped:
+                                logger.info("Converse stopped via control channel during repeat re-listen's skip-back replay")
+                                stopped_during_replay = True
+                                break
+
                             listen_result = await listen_and_transcribe(
                                 control_state,
                                 listen_duration_max=listen_duration_max,
@@ -3702,6 +3802,9 @@ consult the MCP resources listed above.
                                 continue
                             break
 
+                        if stopped_during_replay:
+                            success = True
+                            return _build_control_stop_result(control_snapshot, timings)
                         if listen_result.outcome == "stopped":
                             success = True
                             return _build_control_stop_result(listen_result.control, timings)
@@ -3743,8 +3846,25 @@ consult the MCP resources listed above.
                         # surfaced explicitly instead of leaving the "wait"
                         # utterance presented as the answer.
                         replay_cursor = 0
+                        stopped_during_replay = False
                         while True:
                             replay_cursor = await _drain_skip_back(control_state, replay_cursor)
+
+                            # F1 (fable pre-merge audit): mirror the main
+                            # listen path's VM-1763 consume -- see the
+                            # identical comment on the repeat re-listen above
+                            # for the full rationale (a skip_forward during
+                            # the replay leaves the sticky latch armed into
+                            # this immediate re-listen otherwise).
+                            control_snapshot = control_state.snapshot()
+                            if control_snapshot.is_skip_forward:
+                                logger.info("Converse skip-forward via control channel during wait re-listen's skip-back replay")
+                                control_state.reset()
+                            elif control_snapshot.is_stopped:
+                                logger.info("Converse stopped via control channel during wait re-listen's skip-back replay")
+                                stopped_during_replay = True
+                                break
+
                             listen_result = await listen_and_transcribe(
                                 control_state,
                                 listen_duration_max=listen_duration_max,
@@ -3764,6 +3884,9 @@ consult the MCP resources listed above.
                                 continue
                             break
 
+                        if stopped_during_replay:
+                            success = True
+                            return _build_control_stop_result(control_snapshot, timings)
                         if listen_result.outcome == "stopped":
                             success = True
                             return _build_control_stop_result(listen_result.control, timings)

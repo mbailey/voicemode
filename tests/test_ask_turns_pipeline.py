@@ -380,6 +380,23 @@ class TestPipelineFailurePolicy:
         assert results[0]["status"] == "stt_failed"
         assert results[1]["status"] == "not_reached"
 
+    async def test_generic_exception_mid_pipeline_aborts_with_partials_reason_error(self):
+        """N-e (fable pre-merge audit): the generic-exception branch (reason
+        "error") previously had no test of its own -- only its
+        CancelledError twin was covered (impl-003)."""
+        turns = _norm([{"say": "a"}, {"ask": "b"}])
+
+        async def boom(*_a, **_k):
+            raise RuntimeError("synthetic unexpected failure")
+
+        with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=boom):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at == {"turn": 0, "phase": "speaking", "reason": "error"}
+        assert results[0]["status"] == "not_reached"
+        assert results[1]["status"] == "not_reached"
+
 
 # ---------------------------------------------------------------------------
 # _ask_turns_pipeline -- control matrix
@@ -503,6 +520,138 @@ class TestPipelineControlMatrix:
         assert record_calls["n"] == 2
         # Initial play + one skip_back replay.
         assert len(play_fn.calls) == 2
+        assert results[0]["status"] == "answered" and results[0]["reply"] == "final answer"
+
+    # -------------------------------------------------------------------
+    # F1 (fable pre-merge audit): skip_forward during a replayed question
+    # used to discard _play_samples_controllable's outcome, leaving the
+    # sticky STATE_SKIP_FORWARD latch armed into the immediate re-listen and
+    # silently destroying the answer window (turn resolved no_speech). A
+    # stop during the replay itself used to fall through to another
+    # (spurious) listen/chime instead of ending the survey there.
+    # -------------------------------------------------------------------
+
+    async def test_skip_forward_during_skip_back_replay_does_not_forfeit_answer(self):
+        turns = _norm([{"ask": "q1"}])
+        record_calls = {"n": 0}
+
+        def fake_record(*_a, **_k):
+            record_calls["n"] += 1
+            if record_calls["n"] == 1:
+                # First listen: user presses skip_back mid-recording.
+                get_control_state().request_skip_back()
+                return (np.zeros(10, dtype=np.int16), False)
+            # Second listen (post skip_back replay): faithfully reproduce
+            # the real record loop's behaviour -- if the sticky skip_forward
+            # latch from the replay survived, it exits on its very first
+            # poll with an (near-)empty, unclassified capture.
+            if get_control_state().snapshot().is_skip_forward:
+                return (np.zeros(0, dtype=np.int16), False)
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "final answer", "provider": "whisper-local"}
+
+        play_calls = {"n": 0}
+
+        async def fake_play(samples, sample_rate, control_state):
+            play_calls["n"] += 1
+            if play_calls["n"] == 1:
+                return "played"  # initial question playback
+            # The skip_back replay -- barge in with skip_forward ("cut the
+            # replay, let me answer"). The real _play_samples_controllable
+            # never resets the sticky latch itself (only stops playback) --
+            # mirror that here.
+            get_control_state().request_skip_forward()
+            return "skip_forward"
+
+        with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=fake_play), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at is None
+        assert record_calls["n"] == 2
+        assert results[0]["status"] == "answered" and results[0]["reply"] == "final answer"
+
+    async def test_stop_during_skip_back_replay_ends_survey_immediately(self):
+        turns = _norm([{"ask": "q1"}, {"ask": "q2"}])
+        record_calls = {"n": 0}
+
+        def fake_record(*_a, **_k):
+            record_calls["n"] += 1
+            get_control_state().request_skip_back()
+            return (np.zeros(10, dtype=np.int16), False)
+
+        play_calls = {"n": 0}
+
+        async def fake_play(samples, sample_rate, control_state):
+            play_calls["n"] += 1
+            if play_calls["n"] == 1:
+                return "played"
+            get_control_state().request_stop()
+            return "stopped"
+
+        stt_spy = AsyncMock(side_effect=AssertionError("STT must not run after a stop-during-replay"))
+
+        with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=fake_play), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=stt_spy):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at == {"turn": 0, "phase": "listening", "reason": "stop"}
+        assert results[0]["status"] == "no_speech" and results[0]["reply"] is None
+        assert results[1]["status"] == "not_reached"
+        stt_spy.assert_not_awaited()
+        assert play_calls["n"] == 2
+        # Only ONE listen/record call before the replay-stop ends the survey
+        # -- no spurious second listen (and its "listening" chime) after the
+        # replay was already stopped.
+        assert record_calls["n"] == 1
+
+    async def test_skip_forward_during_repeat_replay_does_not_forfeit_answer(self):
+        turns = _norm([{"ask": "q1"}])
+        record_calls = {"n": 0}
+
+        def fake_record(*_a, **_k):
+            record_calls["n"] += 1
+            if record_calls["n"] == 1:
+                return (np.zeros(2400, dtype=np.int16), True)  # initial "repeat" capture
+            # Second listen (post repeat replay): faithfully reproduce the
+            # real record loop's behaviour -- an armed sticky skip_forward
+            # ends recording on its very first poll.
+            if get_control_state().snapshot().is_skip_forward:
+                return (np.zeros(0, dtype=np.int16), False)
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        stt_texts = ["repeat", "final answer"]
+
+        async def fake_stt(*_a, **_k):
+            return {"text": stt_texts.pop(0), "provider": "whisper-local"}
+
+        play_calls = {"n": 0}
+
+        async def fake_play(samples, sample_rate, control_state):
+            play_calls["n"] += 1
+            if play_calls["n"] == 1:
+                return "played"  # initial question playback
+            # The repeat replay -- barge in with skip_forward mid-replay.
+            get_control_state().request_skip_forward()
+            return "skip_forward"
+
+        with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=fake_play), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at is None
+        assert record_calls["n"] == 2
         assert results[0]["status"] == "answered" and results[0]["reply"] == "final answer"
 
 
@@ -757,3 +906,79 @@ class TestPipelineConversationLogging:
 
         assert stopped_at is None
         assert results[0]["status"] == "answered" and results[0]["reply"] == "an answer"
+
+    async def test_ask_reply_logged_with_survey_transport_not_stt_transport(self):
+        """F2 (fable pre-merge audit): the log entry's own "transport" label
+        must be "survey" -- decoupled from the STT-transport parameter
+        (always "local" today) -- so scripts/verify-survey.sh's
+        conversation-log assertion (which filters on transport=="survey")
+        can actually pass, and survey replies are queryable/distinguishable
+        from single-message "local" entries."""
+        turns = _norm([{"ask": "Q1"}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "blue", "provider": "whisper-local"}
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs(transport="local"))
+
+        assert stopped_at is None
+        fake_logger.log_stt.assert_called_once()
+        assert fake_logger.log_stt.call_args.kwargs.get("transport") == "survey"
+
+
+# ---------------------------------------------------------------------------
+# F4 (fable pre-merge audit): survey mode must not emit unpaired STT_START
+# events -- reintroducing on the new surface the exact cardinality problem
+# impl-003b's S5 fix cleaned up for the single-message repeat/wait re-listens.
+# ---------------------------------------------------------------------------
+
+class TestPipelineEventLogCardinality:
+    async def test_ask_turn_listen_never_emits_recording_or_stt_events(self):
+        turns = _norm([{"ask": "Q1"}, {"ask": "Q2"}])
+
+        class _FakeEventLogger:
+            RECORDING_START = "RECORDING_START"
+            RECORDING_END = "RECORDING_END"
+            STT_START = "STT_START"
+            STT_COMPLETE = "STT_COMPLETE"
+            STT_NO_SPEECH = "STT_NO_SPEECH"
+
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event_type, data=None):
+                self.events.append(event_type)
+
+        fake_event_logger = _FakeEventLogger()
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "an answer", "provider": "whisper-local"}
+
+        with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(
+                turns, **_pipeline_kwargs(event_logger=fake_event_logger),
+            )
+
+        assert stopped_at is None
+        assert all(r["status"] == "answered" for r in results)
+        # A 2-ask survey used to ship >=2 unpaired STT_START / 0 STT_COMPLETE
+        # -- now it emits none of the single-message path's per-listen events
+        # from the survey pipeline at all.
+        assert fake_event_logger.events == []
