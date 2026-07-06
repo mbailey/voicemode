@@ -62,6 +62,7 @@ from voice_mode.config import (
     REPEAT_MAX_LEADING_WORDS,
     WAIT_MAX_LEADING_WORDS,
     WAIT_DURATION,
+    SURVEY_BREAK_PHRASES,
     METRICS_LEVEL,
     STT_AUDIO_FORMAT,
     STT_SAVE_FORMAT,
@@ -392,6 +393,25 @@ def should_wait(text: str) -> bool:
     phrase = _matching_trailing_phrase(text, WAIT_PHRASES, WAIT_MAX_LEADING_WORDS)
     if phrase is not None:
         logger.info(f"Wait phrase detected: '{phrase}' in '{text}'")
+        return True
+    return False
+
+
+def _is_survey_break(text: str) -> bool:
+    """Check if a survey ask-turn's reply is a standalone "break" request
+    (VM-1775 impl-002).
+
+    Deliberately STRICTER than ``should_repeat``/``should_wait``:
+    ``max_leading_words=0`` means the reply must consist ENTIRELY of a break
+    phrase, not merely end with one -- a false positive destroys the whole
+    survey (vs. a false repeat, which only wastes one re-listen). See
+    ``SURVEY_BREAK_PHRASES`` (deliberately excludes bare "stop" -- too common
+    inside a legitimate answer; the physical stop control is the reliable
+    path).
+    """
+    phrase = _matching_trailing_phrase(text, SURVEY_BREAK_PHRASES, max_leading_words=0)
+    if phrase is not None:
+        logger.info(f"Survey break phrase detected: '{phrase}' in '{text}'")
         return True
     return False
 
@@ -2014,6 +2034,365 @@ async def listen_and_transcribe(
         skip_forward_ended=skip_forward_ended,
         stt_attempted=stt_attempted,
     )
+
+
+# ---------------------------------------------------------------------------
+# VM-1775 impl-002: survey loop -- _ask_turns_pipeline, the module-level
+# sibling of _speak_turns_pipeline that also collects a reply after each
+# `ask` turn (the per-turn ask/collect-response half of VM-1772's turns[]).
+# ---------------------------------------------------------------------------
+
+async def _play_samples_controllable(samples, sample_rate, control_state, poll_interval: float = 0.05) -> str:
+    """Play decoded samples to completion, but abort INSTANTLY on a
+    control-channel ``stop`` or ``skip_forward`` (README ## Design control
+    matrix, SPEAKING phase).
+
+    Unlike ``_play_samples_blocking`` (the P1 speak-only pipeline's helper,
+    which blocks in a worker thread with no control-channel awareness and is
+    left untouched -- that pipeline predates the survey's control-matrix
+    requirement), this starts non-blocking playback and polls the control
+    channel from the event loop, calling ``player.stop()`` the instant a stop
+    or skip_forward is observed.
+
+    Returns "played" (ran to completion), "stopped", or "skip_forward".
+    """
+    player = NonBlockingAudioPlayer()
+    player.play(samples, sample_rate, blocking=False)
+    try:
+        while not player.playback_complete.is_set():
+            snap = control_state.snapshot()
+            if snap.is_stopped:
+                player.stop()
+                return "stopped"
+            if snap.is_skip_forward:
+                player.stop()
+                return "skip_forward"
+            await asyncio.sleep(poll_interval)
+        player.wait()
+        return "played"
+    finally:
+        if player.stream is not None:
+            player.stop()
+
+
+def _not_reached_turn_result(turn: dict, idx: int) -> dict:
+    """Build the alignment-invariant filler entry for a turn the survey loop
+    never got to (abort before this index). Always present so ``results`` is
+    length N regardless of where/why the survey stopped."""
+    entry = {
+        "index": idx,
+        "verb": turn["verb"],
+        "voice": turn["voice"],
+        "pause_after_ms": turn["pause_after_ms"],
+        "generation": 0.0,
+        "playback": 0.0,
+        "record": 0.0,
+        "stt": 0.0,
+        "status": "not_reached",
+    }
+    if turn["verb"] == "ask":
+        entry["reply"] = None
+    return entry
+
+
+async def _ask_turns_pipeline(
+    turns,
+    *,
+    tts_model,
+    tts_provider,
+    audio_format,
+    resolved_ref_text,
+    should_skip_tts,
+    control_state,
+    disable_silence_detection: bool = False,
+    chime_enabled: Optional[bool] = None,
+    chime_leading_silence: Optional[float] = None,
+    chime_trailing_silence: Optional[float] = None,
+    transport: str = "local",
+    event_logger=None,
+    lookahead: int = 1,
+) -> Tuple[list, Optional[dict]]:
+    """Survey pipeline (VM-1775 impl-002): the module-level sibling of
+    ``_speak_turns_pipeline`` that ALSO collects a reply after each ``ask``
+    turn, under the ONE conch hold the caller already acquired.
+
+    Same producer/consumer shape as the speak-only pipeline -- a single
+    producer synthesizes turn N+1 while turn N plays or LISTENS (``lookahead``
+    turns ahead; listening time hides synth latency for an ask-heavy survey,
+    so there is deliberately no extra synth barrier at ask turns) -- but the
+    consumer additionally drives ``listen_and_transcribe`` per ask turn and
+    applies the survey control matrix (README ## Design):
+
+    * ``stop`` (any phase)          -> end the survey; partial results.
+    * ``skip_forward`` (speaking)   -> cut playback; ``say`` advances, ``ask``
+      jumps straight to LISTEN ("answer early" barge-in).
+    * ``skip_forward`` (listening)  -> ends capture, transcribes, advances
+      (``listen_and_transcribe``'s own ``skip_forward_ended`` handling).
+    * ``skip_back`` (listening)     -> replay this turn's cached samples,
+      re-listen (the physical "repeat the question" gesture).
+    * spoken ``should_repeat``      -> replay this turn's cached samples,
+      re-listen (rescoped per ask turn from the single-message path).
+    * spoken ``should_wait``        -> pause ``WAIT_DURATION``, re-listen.
+    * spoken standalone break phrase (``_is_survey_break``) -> end the
+      survey; the break utterance itself is NOT recorded as a reply.
+
+    Failure policy (alignment invariant always holds -- ``results`` stays
+    length N, index-aligned):
+
+    * TTS fails on a ``say`` turn -> logged, skipped, continue (P1 policy,
+      unchanged).
+    * TTS fails on an ``ask`` turn -> do NOT listen (Mike never heard the
+      question; a capture would misattribute his confusion as an answer),
+      continue.
+    * No speech / STT-level no_speech -> ``reply: null``, advance (no
+      auto-re-ask in MVP).
+    * STT connection failure, or an audio-device exception mid-record -> abort
+      with partials (the failure will recur on every later ask).
+    * Any other unexpected exception is caught at the loop level -> abort with
+      partials (collected replies are never thrown away).
+
+    Returns ``(results, stopped_at)``:
+
+    * ``results`` -- ALWAYS length N, index-aligned. Each entry is
+      ``{"index", "verb", "status", "reply"?, "voice", "pause_after_ms",
+      "generation", "playback", "record", "stt"}`` ("reply" is present iff
+      ``verb == "ask"``). Entries beyond an abort point are ``"not_reached"``.
+    * ``stopped_at`` -- ``None`` on full completion, else
+      ``{"turn": int, "phase": "speaking"|"listening", "reason": str}``.
+
+    This function does not decide conch or JSON serialization -- see
+    ``converse()``'s turns dispatch (VM-1775 impl-003) for both.
+    """
+    n = len(turns)
+    audio_queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, lookahead))
+
+    async def producer():
+        for idx, turn in enumerate(turns):
+            if should_skip_tts:
+                await audio_queue.put({
+                    "index": idx, "samples": None, "sample_rate": None,
+                    "success": True, "skipped": True, "metrics": {"generation": 0.0},
+                })
+                continue
+            try:
+                success, samples, sample_rate, metrics, _config = await synthesize_turn_with_failover(
+                    message=turn["say"],
+                    voice=turn["voice"],
+                    model=tts_model,
+                    instructions=turn["tts_instructions"],
+                    audio_format=audio_format,
+                    initial_provider=tts_provider,
+                    speed=turn["speed"],
+                    ref_text=resolved_ref_text,
+                )
+            except Exception as e:
+                logger.error(f"Survey turn {idx} synthesis raised: {e}")
+                success, samples, sample_rate, metrics = False, None, None, {}
+            await audio_queue.put({
+                "index": idx, "samples": samples, "sample_rate": sample_rate,
+                "success": bool(success), "metrics": metrics or {},
+            })
+
+    producer_task = asyncio.create_task(producer())
+
+    results: list = [None] * n
+    stopped_at: Optional[dict] = None
+    idx = 0
+
+    try:
+        while idx < n:
+            # A stop (or an unconsumed skip_forward) latched during the
+            # PREVIOUS turn's inter-turn pause is noticed here, before this
+            # turn's audio ever plays -- skip_forward is transport-only (just
+            # "advance", already about to happen) so only reset it; a stop
+            # ends the survey with this turn reported "not_reached" (nothing
+            # of it was ever delivered).
+            snap = control_state.snapshot()
+            if snap.is_stopped:
+                stopped_at = {"turn": idx, "phase": "speaking", "reason": "stop"}
+                break
+            if snap.is_skip_forward:
+                control_state.reset()
+
+            item = await audio_queue.get()
+            turn = turns[idx]
+            verb = turn["verb"]
+            entry = {
+                "index": idx,
+                "verb": verb,
+                "voice": turn["voice"],
+                "pause_after_ms": turn["pause_after_ms"],
+                "generation": item["metrics"].get("generation", 0.0),
+                "playback": 0.0,
+                "record": 0.0,
+                "stt": 0.0,
+            }
+            if verb == "ask":
+                entry["reply"] = None
+
+            tts_ok = item["success"] and (item.get("skipped") or item.get("samples") is not None)
+            if not tts_ok:
+                logger.warning(f"Survey turn {idx} synthesis failed; skipping its audio.")
+                entry["status"] = "tts_failed"
+                results[idx] = entry
+                idx += 1
+                continue
+
+            # --- SPEAK phase ------------------------------------------------
+            play_outcome = "played"
+            if not item.get("skipped"):
+                play_start = time.perf_counter()
+                play_outcome = await _play_samples_controllable(
+                    item["samples"], item["sample_rate"], control_state,
+                )
+                entry["playback"] = time.perf_counter() - play_start
+
+            if play_outcome == "stopped":
+                stopped_at = {"turn": idx, "phase": "speaking", "reason": "stop"}
+                entry["status"] = "spoken" if verb == "say" else "no_speech"
+                results[idx] = entry
+                break
+
+            if play_outcome == "skip_forward":
+                control_state.reset()
+                if verb == "say":
+                    # skip_forward NEVER breaks -- it advances (the documented
+                    # gesture is "move on", not "answer this").
+                    entry["status"] = "spoken"
+                    results[idx] = entry
+                    idx += 1
+                    if idx < n and turn["pause_after_ms"] > 0:
+                        await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
+                    continue
+                # ask: "answer early" barge-in -- fall straight into LISTEN.
+            elif verb == "say":
+                entry["status"] = "spoken"
+                results[idx] = entry
+                idx += 1
+                if idx < n and turn["pause_after_ms"] > 0:
+                    await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
+                continue
+            # else: verb == "ask" and play_outcome == "played" -- fall
+            # through to LISTEN below (the normal, non-barge-in case).
+
+            # --- LISTEN phase (verb == "ask") --------------------------------
+            cached_samples = item.get("samples")
+            cached_rate = item.get("sample_rate")
+            aborted = False
+            while True:
+                try:
+                    listen_result = await listen_and_transcribe(
+                        control_state,
+                        listen_duration_max=turn["listen_duration_max"],
+                        listen_duration_min=turn["listen_duration_min"],
+                        disable_silence_detection=disable_silence_detection,
+                        vad_aggressiveness=turn["vad_aggressiveness"],
+                        chime_enabled=chime_enabled,
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence,
+                        transport=transport,
+                        event_logger=event_logger,
+                    )
+                except Exception as e:
+                    logger.error(f"Survey turn {idx}: recording/STT raised: {e}")
+                    stopped_at = {"turn": idx, "phase": "listening", "reason": "audio_device_error"}
+                    entry["status"] = "stt_failed"
+                    aborted = True
+                    break
+
+                entry["record"] += listen_result.timings.get("record", 0.0)
+                entry["stt"] += listen_result.timings.get("stt", 0.0)
+
+                if listen_result.outcome == "skip_back":
+                    # listen_and_transcribe only PEEKS at the pending skip_back
+                    # (so a caller that owns a richer replay -- e.g. the
+                    # single-message path's history-buffer cursor -- can act on
+                    # it first); a survey ask turn has no history buffer to walk,
+                    # it just replays THIS turn's cached question, so consume the
+                    # one-shot request here. Left unconsumed, it re-fires forever.
+                    control_state.take_transport_request()
+                    logger.info(f"Survey turn {idx}: skip_back -- replaying question then re-listening")
+                    if cached_samples is not None:
+                        await _play_samples_controllable(cached_samples, cached_rate, control_state)
+                    continue
+
+                if listen_result.outcome == "stopped":
+                    stopped_at = {"turn": idx, "phase": "listening", "reason": "stop"}
+                    entry["status"] = "no_speech"
+                    aborted = True
+                    break
+
+                if listen_result.outcome == "stt_error":
+                    reason = (
+                        "stt_connection_failed"
+                        if "connection failed" in (listen_result.error_message or "").lower()
+                        else "audio_device_error"
+                    )
+                    stopped_at = {"turn": idx, "phase": "listening", "reason": reason}
+                    entry["status"] = "stt_failed"
+                    aborted = True
+                    break
+
+                text = listen_result.text
+                if text and _is_survey_break(text):
+                    logger.info(f"Survey turn {idx}: standalone break phrase -- ending survey")
+                    stopped_at = {"turn": idx, "phase": "listening", "reason": "spoken_break"}
+                    entry["status"] = "no_speech"
+                    aborted = True
+                    break
+
+                if text and should_repeat(text):
+                    logger.info(f"Survey turn {idx}: repeat requested -- replaying then re-listening")
+                    if cached_samples is not None:
+                        await _play_samples_controllable(cached_samples, cached_rate, control_state)
+                    continue
+
+                if text and should_wait(text):
+                    logger.info(f"Survey turn {idx}: wait requested -- pausing {WAIT_DURATION}s")
+                    await asyncio.sleep(WAIT_DURATION)
+                    continue
+
+                if text:
+                    entry["status"] = "answered"
+                    entry["reply"] = text
+                else:
+                    entry["status"] = "no_speech"
+                    entry["reply"] = None
+                break
+
+            results[idx] = entry
+            if aborted:
+                break
+            idx += 1
+            if idx < n and turn["pause_after_ms"] > 0:
+                await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.error(f"Survey pipeline aborted by an unexpected error at turn {idx}: {e}")
+        if stopped_at is None:
+            stopped_at = {"turn": idx, "phase": "speaking", "reason": "error"}
+        if idx < n and results[idx] is None:
+            results[idx] = _not_reached_turn_result(turns[idx], idx)
+    finally:
+        producer_task.cancel()
+        try:
+            await producer_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        # Drain anything left in the queue (an abandoned in-flight synth
+        # result) so the bounded queue never leaks between calls.
+        while not audio_queue.empty():
+            try:
+                audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    for j in range(n):
+        if results[j] is None:
+            results[j] = _not_reached_turn_result(turns[j], j)
+
+    return results, stopped_at
 
 
 @mcp.tool()
