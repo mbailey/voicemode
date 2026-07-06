@@ -146,6 +146,20 @@ def isolate_home_directory(tmp_path, monkeypatch):
     except Exception:
         pass
     try:
+        # VM-1775 impl-005: _emit_converse_state (the VM-1793 phase emitter)
+        # writes ~/.voicemode/state.json on every survey speaking/listening
+        # transition -- unconditionally, unlike the opt-in SAVE_AUDIO/
+        # SAVE_TRANSCRIPTIONS debug writers. Any test that drives a real
+        # `_ask_turns_pipeline`/`converse(turns=[{"ask": ...}])` call would
+        # otherwise clobber the developer's real state.json, same class of
+        # bug the Conch.LOCK_FILE re-pin above already guards against.
+        import voice_mode.tools.converse as _converse_module
+        monkeypatch.setattr(
+            _converse_module, "BASE_DIR", fake_home / ".voicemode",
+        )
+    except Exception:
+        pass
+    try:
         from voice_mode.cli_commands import autofocus
         monkeypatch.setattr(
             autofocus, "SENTINEL_FILE",

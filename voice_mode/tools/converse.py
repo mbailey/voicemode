@@ -33,6 +33,7 @@ from voice_mode.conch_queue import ConchQueue
 from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
     audio_operation_lock,
+    BASE_DIR,
     SAMPLE_RATE,
     CHANNELS,
     DEBUG,
@@ -2112,6 +2113,66 @@ async def _play_samples_controllable(samples, sample_rate, control_state, poll_i
             player.stop()
 
 
+def _emit_converse_state(
+    phase: Literal["speaking", "listening", "idle"],
+    *,
+    session_id: Optional[str] = None,
+    turn: Optional[int] = None,
+    n_turns: Optional[int] = None,
+    verb: Optional[str] = None,
+    replies_answered: Optional[int] = None,
+) -> None:
+    """VM-1793 phase-signal hook (VM-1775 impl-005; design report Decision 9):
+    atomically write ``~/.voicemode/state.json`` on each speaking/listening
+    transition of the survey loop, so an external consumer (menu bar app,
+    Stream Deck, ...) can read live phase state without polling the conch
+    lock file. The last-written phase also doubles as a crash-recovery
+    breadcrumb: a killed call leaves its most recent phase/turn on disk
+    (replies themselves are separately persisted to the conversation log at
+    capture time -- see ``_ask_turns_pipeline``'s per-turn ``log_stt`` call;
+    this file covers "was a call in flight, and where", not the replies).
+
+    ``conch_holder`` is read fresh from ``Conch.get_holder()`` rather than
+    threaded in by the caller -- it is always the ground truth of who
+    currently holds the voice channel (an agent name, or ``None`` when the
+    conch is free / was bypassed with ``skip_conch``), not just this call's
+    own belief.
+
+    Called at survey start (``phase="speaking"``, turn 0), on every
+    speaking<->listening transition thereafter, and once more at
+    completion/abort with ``phase="idle"`` -- at which point ``turn`` is left
+    ``None`` and the ``survey`` key is omitted entirely from the payload
+    (design report: "idle, survey key removed"), rather than serialized as
+    null, so a reader can tell "no survey in flight" from "survey at turn 0".
+
+    Best-effort only: every failure (permissions, disk full, a race with
+    another writer) is logged at debug level and swallowed -- writing this
+    breadcrumb must never abort or slow down a live voice call.
+    """
+    try:
+        holder = Conch.get_holder()
+        payload: Dict[str, Any] = {
+            "phase": phase,
+            "ts": datetime.now().astimezone().isoformat(),
+            "session": session_id,
+            "conch_holder": holder.get("agent") if holder else None,
+        }
+        if turn is not None:
+            payload["survey"] = {
+                "turn": turn,
+                "n_turns": n_turns,
+                "verb": verb,
+                "answered": replies_answered,
+            }
+        state_path = BASE_DIR / "state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = state_path.with_name(f".{state_path.name}.tmp.{os.getpid()}")
+        tmp_path.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp_path, state_path)
+    except Exception as e:
+        logger.debug(f"_emit_converse_state: failed to write state.json (swallowed): {e}")
+
+
 def _not_reached_turn_result(turn: dict, idx: int) -> dict:
     """Build the alignment-invariant filler entry for a turn the survey loop
     never got to (abort before this index). Always present so ``results`` is
@@ -2148,6 +2209,7 @@ async def _ask_turns_pipeline(
     transport: str = "local",
     event_logger=None,
     lookahead: int = 1,
+    session_id: Optional[str] = None,
 ) -> Tuple[list, Optional[dict]]:
     """Survey pipeline (VM-1775 impl-002): the module-level sibling of
     ``_speak_turns_pipeline`` that ALSO collects a reply after each ``ask``
@@ -2243,6 +2305,10 @@ async def _ask_turns_pipeline(
     results: list = [None] * n
     stopped_at: Optional[dict] = None
     idx = 0
+    # VM-1793 phase emitter (impl-005): cumulative count of ask turns
+    # answered SO FAR (before the turn currently being emitted resolves),
+    # matching the design report's worked example semantics.
+    answered_so_far = 0
     # Tracks which phase turn `idx` is currently in, purely so the
     # CancelledError / generic-exception handlers below (which fire from an
     # `await` anywhere in the loop body) can report an accurate
@@ -2270,6 +2336,10 @@ async def _ask_turns_pipeline(
             item = await audio_queue.get()
             turn = turns[idx]
             verb = turn["verb"]
+            _emit_converse_state(
+                "speaking", session_id=session_id, turn=idx, n_turns=n,
+                verb=verb, replies_answered=answered_so_far,
+            )
             entry = {
                 "index": idx,
                 "verb": verb,
@@ -2330,6 +2400,10 @@ async def _ask_turns_pipeline(
 
             # --- LISTEN phase (verb == "ask") --------------------------------
             current_phase = "listening"
+            _emit_converse_state(
+                "listening", session_id=session_id, turn=idx, n_turns=n,
+                verb=verb, replies_answered=answered_so_far,
+            )
             cached_samples = item.get("samples")
             cached_rate = item.get("sample_rate")
             aborted = False
@@ -2413,6 +2487,7 @@ async def _ask_turns_pipeline(
                 if text:
                     entry["status"] = "answered"
                     entry["reply"] = text
+                    answered_so_far += 1
                 else:
                     entry["status"] = "no_speech"
                     entry["reply"] = None
@@ -2472,6 +2547,12 @@ async def _ask_turns_pipeline(
         if idx < n and results[idx] is None:
             results[idx] = _not_reached_turn_result(turns[idx], idx)
     finally:
+        # VM-1793 phase emitter (impl-005): every exit path -- full
+        # completion, break, abort, cancellation -- ends with one final
+        # "idle" write so a reader never sees a stale "speaking"/"listening"
+        # phase after the survey is actually over (the design report's
+        # "completion/abort (idle, survey key removed)" contract).
+        _emit_converse_state("idle", session_id=session_id)
         producer_task.cancel()
         try:
             await producer_task
@@ -3157,6 +3238,7 @@ consult the MCP resources listed above.
                             chime_trailing_silence=chime_trailing_silence,
                             transport=transport,
                             event_logger=event_logger,
+                            session_id=resolved_session_id,
                         )
                     result, success = _format_survey_result(
                         survey_results, stopped_at, n_ask, effective_metrics_level,
