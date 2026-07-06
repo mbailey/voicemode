@@ -674,10 +674,13 @@ CONTROL_SOCKET_PATH = expand_path(
 # waits, so a pause that is never resumed (a forgotten/buggy trigger, or a
 # malicious one) would wedge ALL voice ops for this server. Auto-resolve a pause
 # left hanging this many seconds. 0 disables the cap (not recommended).
+# Default 300s / 5 min (VM-1853): long enough for a host to pause the assistant,
+# step away to serve guests, and come back to resume -- the old 30s cut off a
+# deliberate hold too soon. Lower it (or raise it) via the env var below.
 try:
-    CONTROL_PAUSE_TIMEOUT = float(os.getenv("VOICEMODE_CONTROL_PAUSE_TIMEOUT", "30"))
+    CONTROL_PAUSE_TIMEOUT = float(os.getenv("VOICEMODE_CONTROL_PAUSE_TIMEOUT", "300"))
 except ValueError:
-    CONTROL_PAUSE_TIMEOUT = 30.0
+    CONTROL_PAUSE_TIMEOUT = 300.0
 
 # What a timed-out pause resolves to: "stop" (cut the utterance, returns cleanly
 # with the pause-timeout intent -- safest, self-heals to a normal return) or
