@@ -2149,6 +2149,97 @@ async def _replay_cached_question(cached_samples, cached_rate, control_state) ->
     return False
 
 
+async def _relisten_after_keyword(
+    control_state,
+    *,
+    listen_duration_max,
+    listen_duration_min,
+    disable_silence_detection,
+    vad_aggressiveness,
+    chime_enabled,
+    chime_leading_silence,
+    chime_trailing_silence,
+    transport,
+    timings: Dict,
+    context_label: str,
+):
+    """Shared re-listen loop for the ``should_repeat``/``should_wait``
+    single-message keyword handlers (extracted verify-001: this loop was
+    duplicated verbatim, save for ``context_label``, at both call sites,
+    growing ``converse()`` past its pre-slice line count).
+
+    S4/S5/S6 (fable progress review, impl-003b): a skip_back arriving during
+    this re-listen used to be silently swallowed (no replay, capture
+    discarded, the pending request left latched) -- this loop now drains and
+    replays it via the same shared history-buffer helper the main listen
+    path uses (``_drain_skip_back``), then re-listens. ``event_logger=None``
+    restores master's event-log cardinality for this re-listen (no unpaired
+    ``STT_START`` / undisclosed ``no_speech_*.wav`` saves).
+
+    F1 (fable pre-merge audit): mirrors the main listen path's VM-1763
+    consume -- a skip_forward pressed during/around ``_drain_skip_back``'s
+    replay stops the audio but does NOT clear the sticky
+    ``STATE_SKIP_FORWARD`` latch. Left unconsumed, the IMMEDIATE re-listen
+    below would see it already armed and end on its very first poll with an
+    (near-)empty capture -- ``stt_classified`` stays False and the stale
+    keyword utterance would be silently kept as the answer (the exact
+    misleading return S4/S6 were built to kill). A stop during the replay
+    itself ends the turn here instead of falling through to another
+    (spurious) listen.
+
+    Returns a ``(outcome, payload)`` pair:
+      ``("stopped", control_snapshot)`` -- caller should
+        ``return _build_control_stop_result(control_snapshot, timings)``.
+      ``("stt_error", listen_result)`` -- caller should surface
+        ``listen_result.error_message`` directly (S6: matches the main
+        listen path instead of silently keeping the keyword as the answer).
+      ``("ok", listen_result)`` -- caller checks ``listen_result.stt_classified``
+        to decide whether to overwrite the prior response (matches the
+        pre-extraction guard: only overwrite once STT actually ran and
+        classified the capture).
+    """
+    replay_cursor = 0
+    stopped_during_replay = False
+    while True:
+        replay_cursor = await _drain_skip_back(control_state, replay_cursor)
+
+        control_snapshot = control_state.snapshot()
+        if control_snapshot.is_skip_forward:
+            logger.info(f"Converse skip-forward via control channel during {context_label} re-listen's skip-back replay")
+            control_state.reset()
+        elif control_snapshot.is_stopped:
+            logger.info(f"Converse stopped via control channel during {context_label} re-listen's skip-back replay")
+            stopped_during_replay = True
+            break
+
+        listen_result = await listen_and_transcribe(
+            control_state,
+            listen_duration_max=listen_duration_max,
+            listen_duration_min=listen_duration_min,
+            disable_silence_detection=disable_silence_detection,
+            vad_aggressiveness=vad_aggressiveness,
+            chime_enabled=chime_enabled,
+            chime_leading_silence=chime_leading_silence,
+            chime_trailing_silence=chime_trailing_silence,
+            transport=transport,
+            event_logger=None,
+        )
+        timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
+        timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
+
+        if listen_result.outcome == "skip_back":
+            continue
+        break
+
+    if stopped_during_replay:
+        return "stopped", control_snapshot
+    if listen_result.outcome == "stopped":
+        return "stopped", listen_result.control
+    if listen_result.outcome == "stt_error":
+        return "stt_error", listen_result
+    return "ok", listen_result
+
+
 def _emit_converse_state(
     phase: Literal["speaking", "listening", "idle"],
     *,
@@ -3745,75 +3836,35 @@ consult the MCP resources listed above.
                         # marker instead of silently falling through).
                         logger.info("Listening for response after repeat...")
 
-                        # S4/S5/S6 (fable progress review): a skip_back during
-                        # THIS re-listen used to be silently swallowed (no
-                        # replay, capture discarded, pending latched); now it
-                        # replays + re-listens, mirroring the main listen
-                        # path's loop (via the same shared history-buffer
-                        # helper). event_logger=None restores master's
-                        # event-log cardinality for this re-listen (no
-                        # unpaired STT_START / undisclosed no_speech_*.wav
-                        # saves). An stt_error is now surfaced explicitly
-                        # instead of silently leaving the "repeat" utterance
-                        # presented as the answer.
-                        replay_cursor = 0
-                        stopped_during_replay = False
-                        while True:
-                            replay_cursor = await _drain_skip_back(control_state, replay_cursor)
-
-                            # F1 (fable pre-merge audit): mirror the main
-                            # listen path's VM-1763 consume -- a skip_forward
-                            # during/around _drain_skip_back's replay stops
-                            # the audio but does NOT clear the sticky
-                            # STATE_SKIP_FORWARD latch. Left unconsumed, the
-                            # IMMEDIATE re-listen below would see it already
-                            # armed and end on its very first poll with an
-                            # (near-)empty capture -- stt_classified stays
-                            # False and the stale "repeat" utterance would be
-                            # silently kept as the answer (the exact
-                            # misleading return S4/S6 were built to kill). A
-                            # stop during the replay itself ends the turn here
-                            # instead of falling through to another listen.
-                            control_snapshot = control_state.snapshot()
-                            if control_snapshot.is_skip_forward:
-                                logger.info("Converse skip-forward via control channel during repeat re-listen's skip-back replay")
-                                control_state.reset()
-                            elif control_snapshot.is_stopped:
-                                logger.info("Converse stopped via control channel during repeat re-listen's skip-back replay")
-                                stopped_during_replay = True
-                                break
-
-                            listen_result = await listen_and_transcribe(
-                                control_state,
-                                listen_duration_max=listen_duration_max,
-                                listen_duration_min=listen_duration_min,
-                                disable_silence_detection=disable_silence_detection,
-                                vad_aggressiveness=vad_aggressiveness,
-                                chime_enabled=chime_enabled,
-                                chime_leading_silence=chime_leading_silence,
-                                chime_trailing_silence=chime_trailing_silence,
-                                transport=transport,
-                                event_logger=None,
-                            )
-                            timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
-                            timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
-
-                            if listen_result.outcome == "skip_back":
-                                continue
-                            break
-
-                        if stopped_during_replay:
+                        # S4/S5/S6 (fable progress review) + F1 (fable
+                        # pre-merge audit): shared with the wait re-listen
+                        # below -- see _relisten_after_keyword()'s docstring
+                        # for the full rationale (verify-001 extracted this
+                        # loop out of converse() to restore the line-count
+                        # hard constraint; behaviour is unchanged).
+                        outcome, payload = await _relisten_after_keyword(
+                            control_state,
+                            listen_duration_max=listen_duration_max,
+                            listen_duration_min=listen_duration_min,
+                            disable_silence_detection=disable_silence_detection,
+                            vad_aggressiveness=vad_aggressiveness,
+                            chime_enabled=chime_enabled,
+                            chime_leading_silence=chime_leading_silence,
+                            chime_trailing_silence=chime_trailing_silence,
+                            transport=transport,
+                            timings=timings,
+                            context_label="repeat",
+                        )
+                        if outcome == "stopped":
                             success = True
-                            return _build_control_stop_result(control_snapshot, timings)
-                        if listen_result.outcome == "stopped":
-                            success = True
-                            return _build_control_stop_result(listen_result.control, timings)
-                        if listen_result.outcome == "stt_error":
+                            return _build_control_stop_result(payload, timings)
+                        if outcome == "stt_error":
                             # Surface the STT failure, matching the main
                             # listen path's behaviour, instead of silently
                             # keeping the "repeat" utterance as the answer.
-                            return listen_result.error_message
-                        elif listen_result.stt_classified:
+                            return payload.error_message
+                        listen_result = payload
+                        if listen_result.stt_classified:
                             # Matches the pre-extraction guard (len(audio_data) > 0
                             # and speech_detected): only overwrite the response once
                             # STT actually ran and classified the capture.
@@ -3838,61 +3889,30 @@ consult the MCP resources listed above.
                     # the repeat re-listen above).
                     logger.info("Wait period ended. Listening for response...")
                     if transport == "local":
-                        # S4/S5/S6 (fable progress review): same fix as the
-                        # repeat re-listen above -- replay+re-listen on
-                        # skip_back (mirroring the main loop) instead of
-                        # swallowing it, event_logger=None to restore
-                        # master's event-log cardinality, and an stt_error is
-                        # surfaced explicitly instead of leaving the "wait"
-                        # utterance presented as the answer.
-                        replay_cursor = 0
-                        stopped_during_replay = False
-                        while True:
-                            replay_cursor = await _drain_skip_back(control_state, replay_cursor)
-
-                            # F1 (fable pre-merge audit): mirror the main
-                            # listen path's VM-1763 consume -- see the
-                            # identical comment on the repeat re-listen above
-                            # for the full rationale (a skip_forward during
-                            # the replay leaves the sticky latch armed into
-                            # this immediate re-listen otherwise).
-                            control_snapshot = control_state.snapshot()
-                            if control_snapshot.is_skip_forward:
-                                logger.info("Converse skip-forward via control channel during wait re-listen's skip-back replay")
-                                control_state.reset()
-                            elif control_snapshot.is_stopped:
-                                logger.info("Converse stopped via control channel during wait re-listen's skip-back replay")
-                                stopped_during_replay = True
-                                break
-
-                            listen_result = await listen_and_transcribe(
-                                control_state,
-                                listen_duration_max=listen_duration_max,
-                                listen_duration_min=listen_duration_min,
-                                disable_silence_detection=disable_silence_detection,
-                                vad_aggressiveness=vad_aggressiveness,
-                                chime_enabled=chime_enabled,
-                                chime_leading_silence=chime_leading_silence,
-                                chime_trailing_silence=chime_trailing_silence,
-                                transport=transport,
-                                event_logger=None,
-                            )
-                            timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
-                            timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
-
-                            if listen_result.outcome == "skip_back":
-                                continue
-                            break
-
-                        if stopped_during_replay:
+                        # S4/S5/S6 (fable progress review) + F1 (fable
+                        # pre-merge audit): shared with the repeat re-listen
+                        # above -- see _relisten_after_keyword()'s docstring
+                        # for the full rationale.
+                        outcome, payload = await _relisten_after_keyword(
+                            control_state,
+                            listen_duration_max=listen_duration_max,
+                            listen_duration_min=listen_duration_min,
+                            disable_silence_detection=disable_silence_detection,
+                            vad_aggressiveness=vad_aggressiveness,
+                            chime_enabled=chime_enabled,
+                            chime_leading_silence=chime_leading_silence,
+                            chime_trailing_silence=chime_trailing_silence,
+                            transport=transport,
+                            timings=timings,
+                            context_label="wait",
+                        )
+                        if outcome == "stopped":
                             success = True
-                            return _build_control_stop_result(control_snapshot, timings)
-                        if listen_result.outcome == "stopped":
-                            success = True
-                            return _build_control_stop_result(listen_result.control, timings)
-                        if listen_result.outcome == "stt_error":
-                            return listen_result.error_message
-                        elif listen_result.stt_classified:
+                            return _build_control_stop_result(payload, timings)
+                        if outcome == "stt_error":
+                            return payload.error_message
+                        listen_result = payload
+                        if listen_result.stt_classified:
                             response_text = listen_result.text
                             stt_provider = listen_result.stt_provider
                             logger.info(f"New response after wait: {response_text}")

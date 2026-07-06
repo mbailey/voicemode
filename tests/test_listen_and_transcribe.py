@@ -740,3 +740,135 @@ class TestRepeatWaitGainControlAwareness:
         # stop during the re-listen's own replay ends the turn before a
         # second listen ever starts.
         assert record_calls["n"] == 1
+
+
+# ---------------------------------------------------------------------------
+# verify-001: _relisten_after_keyword() -- the repeat/wait re-listen loop
+# above was duplicated verbatim (save for a couple of log strings) at both
+# call sites, growing converse() past its pre-slice (VM-1775) line count and
+# breaking the README's hard constraint that converse() must not grow. This
+# extracted the shared loop into one module-level helper (same pattern as
+# the pre-existing _drain_skip_back/_replay_cached_question extractions);
+# behaviour is unchanged -- the tests above (TestRepeatWaitGainControlAwareness)
+# already pin it end-to-end through converse(). These tests pin the helper's
+# own outcome/payload contract directly.
+# ---------------------------------------------------------------------------
+
+class TestRelistenAfterKeyword:
+    async def test_returns_ok_with_listen_result_on_answered(self):
+        from voice_mode.tools.converse import _relisten_after_keyword
+
+        async def _fake_listen(*_a, **_k):
+            return ListenResult(outcome="answered", text="forty two",
+                                 stt_provider="whisper-local", stt_classified=True)
+
+        with patch("voice_mode.tools.converse.listen_and_transcribe", new=_fake_listen), \
+             patch("voice_mode.tools.converse._drain_skip_back",
+                   new=AsyncMock(side_effect=lambda cs, cursor: cursor)):
+            outcome, payload = await _relisten_after_keyword(
+                get_control_state(),
+                **{k: v for k, v in _listen_kwargs().items()
+                   if k not in ("control_state", "event_logger")},
+                timings={},
+                context_label="repeat",
+            )
+
+        assert outcome == "ok"
+        assert payload.stt_classified is True
+        assert payload.text == "forty two"
+
+    async def test_returns_stt_error_on_stt_failure(self):
+        from voice_mode.tools.converse import _relisten_after_keyword
+
+        async def _fake_listen(*_a, **_k):
+            return ListenResult(outcome="stt_error", error_message="boom",
+                                 error_kind="stt_connection_failed")
+
+        with patch("voice_mode.tools.converse.listen_and_transcribe", new=_fake_listen), \
+             patch("voice_mode.tools.converse._drain_skip_back",
+                   new=AsyncMock(side_effect=lambda cs, cursor: cursor)):
+            outcome, payload = await _relisten_after_keyword(
+                get_control_state(),
+                **{k: v for k, v in _listen_kwargs().items()
+                   if k not in ("control_state", "event_logger")},
+                timings={},
+                context_label="wait",
+            )
+
+        assert outcome == "stt_error"
+        assert payload.error_message == "boom"
+
+    async def test_returns_stopped_when_stop_arrives_during_replay(self):
+        from voice_mode.tools.converse import _relisten_after_keyword
+
+        async def _drain_that_stops(control_state, cursor):
+            control_state.request_stop(hint="switch-to-text")
+            return cursor
+
+        listen_spy = AsyncMock()
+
+        with patch("voice_mode.tools.converse.listen_and_transcribe", new=listen_spy), \
+             patch("voice_mode.tools.converse._drain_skip_back", new=_drain_that_stops):
+            outcome, payload = await _relisten_after_keyword(
+                get_control_state(),
+                **{k: v for k, v in _listen_kwargs().items()
+                   if k not in ("control_state", "event_logger")},
+                timings={},
+                context_label="repeat",
+            )
+
+        assert outcome == "stopped"
+        assert payload.is_stopped is True
+        # Never even reached listen_and_transcribe -- the stop during the
+        # replay itself ends the turn immediately (no spurious listen).
+        listen_spy.assert_not_called()
+
+    async def test_returns_stopped_when_listen_itself_reports_stopped(self):
+        from voice_mode.tools.converse import _relisten_after_keyword
+
+        async def _fake_listen(*_a, **_k):
+            return ListenResult(outcome="stopped",
+                                 control=get_control_state().snapshot())
+
+        with patch("voice_mode.tools.converse.listen_and_transcribe", new=_fake_listen), \
+             patch("voice_mode.tools.converse._drain_skip_back",
+                   new=AsyncMock(side_effect=lambda cs, cursor: cursor)):
+            outcome, payload = await _relisten_after_keyword(
+                get_control_state(),
+                **{k: v for k, v in _listen_kwargs().items()
+                   if k not in ("control_state", "event_logger")},
+                timings={},
+                context_label="wait",
+            )
+
+        assert outcome == "stopped"
+
+    async def test_skip_forward_during_replay_is_consumed_not_left_latched(self):
+        """F1: a skip_forward pressed during _drain_skip_back's replay must be
+        reset here, not left armed into the immediate re-listen."""
+        from voice_mode.tools.converse import _relisten_after_keyword
+
+        async def _drain_that_arms_skip_forward(control_state, cursor):
+            control_state.request_skip_forward()
+            return cursor
+
+        async def _fake_listen(*_a, **_k):
+            # If the latch survived, a real record loop would end instantly
+            # with an empty capture -- assert it was already cleared before
+            # this point instead.
+            assert get_control_state().snapshot().is_skip_forward is False
+            return ListenResult(outcome="answered", text="forty two",
+                                 stt_provider="whisper-local", stt_classified=True)
+
+        with patch("voice_mode.tools.converse.listen_and_transcribe", new=_fake_listen), \
+             patch("voice_mode.tools.converse._drain_skip_back", new=_drain_that_arms_skip_forward):
+            outcome, payload = await _relisten_after_keyword(
+                get_control_state(),
+                **{k: v for k, v in _listen_kwargs().items()
+                   if k not in ("control_state", "event_logger")},
+                timings={},
+                context_label="repeat",
+            )
+
+        assert outcome == "ok"
+        assert get_control_state().snapshot().is_skip_forward is False
