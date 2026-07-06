@@ -304,6 +304,43 @@ pause/resume/stop, `skip_back` stays on the **safe** side of the danger line and
 needs no dangerous-channels flag. The worst a `skip_back` can do is make the
 assistant repeat itself.
 
+## Controls during a survey (`turns` with `ask`)
+
+`converse(turns=[...])` with at least one `ask` turn runs a **survey**: speak
+a turn, optionally listen for a reply, advance — repeated across the list,
+inside one tool call, one conch hold (VM-1775). The same control channel above
+drives it, with survey-specific meaning per phase:
+
+- **`stop`** ends the survey immediately, in either phase, and returns the
+  replies collected so far plus `stopped_at: {turn, phase, reason: "stop"}` —
+  never a bare error string once at least one reply is already held.
+- **`skip_forward`** never breaks the survey — same "universal advance" as a
+  single-message call: during a `say`/`ask` turn's playback it cuts the
+  utterance and (on an `ask` turn) jumps straight to listening
+  ("answer early"); while already listening on an `ask` turn it ends capture,
+  transcribes, and advances (VM-1739/VM-1754, applied per turn).
+- **`skip_back`** while listening on an `ask` turn replays *that turn's*
+  question from its cached synthesis (no re-render) and re-listens — the
+  survey's "repeat", reachable by button/key or by saying "repeat" (existing
+  `should_repeat` phrase matching, rescoped per ask turn).
+- **Spoken standalone break phrase** (`VOICEMODE_SURVEY_BREAK_PHRASES`,
+  default `break,stop the survey,end survey,cancel the survey`) ends the
+  survey the same way `stop` does (`stopped_at.reason: "spoken_break"`) —
+  the triggering utterance itself is **not** recorded as a reply. Matching is
+  standalone-only (word-boundary, not a substring), so an answer that merely
+  *contains* "break" (e.g. "I don't want to break up the work") is never
+  mistaken for the break command.
+
+**Killed-call recovery:** every reply is written to the conversation logs
+(`~/.voicemode/logs/conversations/`) the instant its `ask` turn resolves —
+not batched until the survey ends. If the MCP call itself is killed or the
+client crashes mid-survey, every reply already given is still on disk, even
+though the call never got to return its survey JSON. `~/.voicemode/state.json`
+(VM-1793) doubles as the live breadcrumb: it flips between `speaking` and
+`listening` with the current turn index on every transition, so an external
+observer can also tell where a still-running survey is without waiting for
+the tool call to return.
+
 ## The "now playing" status query
 
 Alongside the fire-and-forget commands, the socket answers one **request/response**
@@ -665,5 +702,9 @@ below are honest about what is and isn't guaranteed (security review, VM-1688).
 
 - [Environment Variables](environment.md) — `VOICEMODE_CONTROL_CHANNEL_ENABLED`,
   `VOICEMODE_CONTROL_SOCKET`, `VOICEMODE_HISTORY_BUFFER_SIZE`.
-- [CLI Commands](cli.md) — the full `voicemode` command surface.
+- [CLI Commands](cli.md) — the full `voicemode` command surface, incl. `converse --ask`.
 - [Architecture](../concepts/architecture.md) — the conch and the TTS path.
+- The `converse` tool's `turns` parameter schema (VM-1775) — the full survey
+  turn schema (`say`/`ask` verbs, per-turn overrides, the aligned-replies JSON
+  return contract); [Controls during a survey](#controls-during-a-survey-turns-with-ask)
+  above covers just the control-channel half.

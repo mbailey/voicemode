@@ -8,7 +8,7 @@ import time
 import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Optional, Literal, Tuple, Dict, Union, Any
+from typing import Optional, Literal, Tuple, Dict, Union, Any, Annotated
 from pathlib import Path
 from datetime import datetime
 
@@ -17,6 +17,7 @@ import sounddevice as sd
 from scipy.io.wavfile import write
 from pydub import AudioSegment
 from openai import AsyncOpenAI
+from pydantic import Field
 import httpx
 
 # Optional webrtcvad for silence detection
@@ -2634,10 +2635,47 @@ def _format_survey_result(
     return json.dumps({"survey": survey}, ensure_ascii=False, indent=2), success
 
 
+# Literal schema-description text for the `turns` parameter (README ## Design,
+# VM-1775 slice 6). Applied here via Annotated/Field so it lands in the tool's
+# JSON schema (not just prose in the docstring); every other converse() param
+# still gets its description from the KEY PARAMETERS prose below pending the
+# broader per-arg Annotated/Field migration (VM-1451).
+_TURNS_PARAM_DESCRIPTION = (
+    "Ordered list of utterances to deliver in ONE call, pipelined (turn N+1 is "
+    "synthesized while turn N plays — no synth dead-air). Each turn is an "
+    "object with EXACTLY ONE of: \"say\": str — speak this text and advance "
+    "(no listening), or \"ask\": str — speak this text, then LISTEN and "
+    "record the user's spoken reply. Optional per-turn overrides (each "
+    "defaults to the call-level argument of the same name): \"voice\", "
+    "\"speed\", \"tts_instructions\", \"pause_after_ms\"; and, meaningful on "
+    "ask turns: \"listen_duration_max\", \"listen_duration_min\", "
+    "\"vad_aggressiveness\". (\"wait_for_response\": true on a say turn is an "
+    "accepted alias for \"ask\".) The call-level wait_for_response is IGNORED "
+    "when turns is present — listening happens only for ask turns. If NO turn "
+    "asks, the call speaks the sequence and returns a text summary. If ANY "
+    "turn asks, the call returns a JSON object (as a string) with replies "
+    "aligned to turns by index: {\"survey\": {\"completed\": bool, \"asked\": "
+    "n, \"answered\": n, \"stopped_at\": null|{turn, phase, reason}, "
+    "\"turns\": [{\"turn\": i, \"verb\": \"say\"|\"ask\", \"status\": "
+    "\"spoken\"|\"answered\"|\"no_speech\"|\"tts_failed\"|\"stt_failed\"|"
+    "\"not_reached\", \"reply\": str|null}, ...]}} — entries for no_speech / "
+    "tts_failed / not_reached can simply be re-asked in a follow-up call. "
+    "Keep surveys short (≤ ~7 ask turns) and give each ask turn a sensible "
+    "\"listen_duration_max\" (30–45s for normal questions). During a survey "
+    "the user can: answer early or finish answering with skip-forward, hear "
+    "the question again with skip-back or by saying \"repeat\", pause with "
+    "\"wait\", and abandon the survey with the stop control or by saying only "
+    "\"break\" / \"stop the survey\" (returns the replies collected so far "
+    "plus where it stopped). Unknown keys in a turn are rejected. \"play\" is "
+    "reserved for a future phase. If both message and turns are given, turns "
+    "wins."
+)
+
+
 @mcp.tool()
 async def converse(
     message: Optional[str] = None,
-    turns: Optional[list] = None,
+    turns: Annotated[Optional[list], Field(description=_TURNS_PARAM_DESCRIPTION)] = None,
     pause_after_ms: int = 150,
     wait_for_response: Union[bool, str] = True,
     listen_duration_max: float = DEFAULT_LISTEN_DURATION,
@@ -2699,12 +2737,17 @@ Example: If user says "search for tasks created yesterday", check for and invoke
 
 KEY PARAMETERS:
 • message (string): The message to speak (required unless `turns` is given)
-• turns (list, optional): Speak an ordered multi-voice sequence in ONE call,
-  gap-free — turn N+1 is synthesized while turn N plays (no synth dead-air).
-  Each turn is an object: {"say": str (required), "voice"?: str,
-  "pause_after_ms"?: int, "tts_instructions"?: str, "speed"?: float}. Per-turn
-  `voice` overrides the call-level `voice`. Speak-only (no reply collection in
-  this version). If both `message` and `turns` are given, `turns` wins.
+• turns (list, optional): ordered multi-voice sequence in ONE call; each turn
+  {"say": ...} speaks, {"ask": ...} speaks then listens and collects the
+  reply; returns replies aligned to turns as JSON when any turn asks. See the
+  turns parameter description for the full schema (verbs, per-turn overrides,
+  survey controls: skip-forward advances, skip-back/"repeat" replays the
+  question, spoken "break"/stop ends the survey with partials). If both
+  `message` and `turns` are given, `turns` wins. Killed-call recovery: every
+  reply already collected is durably written to the conversation logs the
+  instant its ask turn resolves, not batched at the end — a killed/crashed
+  call still leaves every already-given reply on disk, even one that never
+  returns its survey JSON.
 • pause_after_ms (int, default: 150): Silence inserted after each turn in a
   `turns` sequence; a turn's own `pause_after_ms` overrides this. 0 = gap-free.
 • wait_for_response (bool, default: true): Listen for response after speaking
