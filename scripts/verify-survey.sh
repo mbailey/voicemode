@@ -27,12 +27,138 @@ VOICE="${VOICE:-sandy}"
 STATE_FILE="${VOICEMODE_BASE_DIR:-$HOME/.voicemode}/state.json"
 OUT_DIR="$(mktemp -d /tmp/vm1775-verify-survey.XXXXXX 2>/dev/null || mktemp -d)"
 CONVO_LOG_DIR="${VOICEMODE_BASE_DIR:-$HOME/.voicemode}/logs/conversations"
+CONVO_LOG_FILE="$CONVO_LOG_DIR/exchanges_$(date +%Y-%m-%d).jsonl"
 
 Q1="Question one: what is two plus two?"
 Q2="Question two: what's your favorite color?"
 Q3="Question three: say one thing you're grateful for today."
 
+ASSERT_FAILS=0
+
 say() { uv run voicemode converse --skip-stt --voice "$VOICE" --skip-conch "$1" >/dev/null 2>&1; }
+
+# assert_survey RUN_NAME JSON_FILE EXIT_CODE EXPECT_COMPLETED [EXPECT_TURN EXPECT_PHASE EXPECT_REASON]
+#
+# Structural assertions against the README ## Design return contract --
+# alignment invariant (turns always length 3, index-aligned), completed/
+# exit-code agreement (0 completed / 3 partial), and (on a partial) the
+# stopped_at shape + every turn past the stop point reporting not_reached.
+# This is the per-run "PASS/FAIL" the VM-1772 bench-turns.sh pattern computes
+# for its speedup claim -- here computed for the survey JSON's structure
+# rather than a human eyeballing the raw dump. It intentionally does NOT
+# assert on the actual spoken reply text (that varies with the live
+# respondent) -- only on the shape/contract, which is deterministic.
+assert_survey() {
+  local name="$1" file="$2" exit_code="$3" expect_completed="$4"
+  local expect_turn="${5:-}" expect_phase="${6:-}" expect_reason="${7:-}"
+  if python3 - "$file" "$exit_code" "$expect_completed" "$expect_turn" "$expect_phase" "$expect_reason" "$name" <<'PY'
+import json, sys
+file, exit_code, expect_completed, expect_turn, expect_phase, expect_reason, name = sys.argv[1:8]
+exit_code = int(exit_code)
+expect_completed = expect_completed == "true"
+problems = []
+try:
+    raw = open(file).read()
+    payload = json.loads(raw)
+except Exception as e:
+    print(f"ASSERT FAIL [{name}]: could not parse JSON ({e}); raw={raw[:200]!r}" if 'raw' in dir() else f"ASSERT FAIL [{name}]: could not read {file} ({e})")
+    sys.exit(1)
+survey = payload.get("survey")
+if survey is None:
+    print(f"ASSERT FAIL [{name}]: no top-level 'survey' key -- got: {raw[:200]!r}")
+    sys.exit(1)
+turns = survey.get("turns")
+if not isinstance(turns, list) or len(turns) != 3:
+    problems.append(f"turns array not length 3 (got {turns!r})")
+if survey.get("asked") != 3:
+    problems.append(f"asked != 3 (got {survey.get('asked')!r})")
+if survey.get("completed") != expect_completed:
+    problems.append(f"completed={survey.get('completed')!r}, expected {expect_completed}")
+expected_exit = 0 if expect_completed else 3
+if exit_code != expected_exit:
+    problems.append(f"exit={exit_code}, expected {expected_exit}")
+stopped_at = survey.get("stopped_at")
+if expect_completed:
+    if stopped_at is not None:
+        problems.append(f"stopped_at should be null on completion, got {stopped_at!r}")
+    if any(t.get("status") == "not_reached" for t in (turns or [])):
+        problems.append("a turn is not_reached despite completed=true")
+else:
+    if stopped_at is None:
+        problems.append("stopped_at is null but survey did not complete")
+    else:
+        if expect_turn and stopped_at.get("turn") != int(expect_turn):
+            problems.append(f"stopped_at.turn={stopped_at.get('turn')!r}, expected {expect_turn}")
+        if expect_phase and stopped_at.get("phase") != expect_phase:
+            problems.append(f"stopped_at.phase={stopped_at.get('phase')!r}, expected {expect_phase!r}")
+        if expect_reason and stopped_at.get("reason") != expect_reason:
+            problems.append(f"stopped_at.reason={stopped_at.get('reason')!r}, expected {expect_reason!r}")
+        stop_turn = stopped_at.get("turn")
+        if stop_turn is not None:
+            for t in (turns or []):
+                if t.get("turn") is not None and t.get("turn") > stop_turn and t.get("status") != "not_reached":
+                    problems.append(f"turn {t.get('turn')} should be not_reached (got {t.get('status')!r})")
+if problems:
+    print(f"ASSERT FAIL [{name}]:")
+    for p in problems:
+        print(f"  - {p}")
+    sys.exit(1)
+suffix = f", stopped_at.reason={expect_reason}" if expect_reason else ""
+print(f"ASSERT PASS [{name}]: completed={expect_completed}, exit={exit_code}, turns=3/3 aligned{suffix}")
+sys.exit(0)
+PY
+  then
+    return 0
+  else
+    ASSERT_FAILS=$((ASSERT_FAILS + 1))
+    return 1
+  fi
+}
+
+# check_convo_log RUN_NAME SINCE_EPOCH_S — confirm at least one survey-transport
+# STT reply landed in today's conversation log at/after SINCE_EPOCH_S (Decision
+# 7's crash-persistence guarantee: per-turn logging, not batched at survey
+# end -- must hold even on a stop/break run that returns a partial).
+check_convo_log() {
+  local name="$1" since="$2"
+  if python3 - "$CONVO_LOG_FILE" "$since" "$name" <<'PY'
+import json, sys
+path, since, name = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+from datetime import datetime
+try:
+    lines = open(path).readlines()
+except FileNotFoundError:
+    print(f"ASSERT FAIL [{name}]: conversation log not found at {path}")
+    sys.exit(1)
+found = 0
+for line in lines:
+    try:
+        entry = json.loads(line)
+    except Exception:
+        continue
+    if entry.get("type") != "stt":
+        continue
+    if (entry.get("metadata") or {}).get("transport") != "survey":
+        continue
+    try:
+        ts = datetime.fromisoformat(entry["timestamp"]).timestamp()
+    except Exception:
+        continue
+    if ts >= since:
+        found += 1
+if found < 1:
+    print(f"ASSERT FAIL [{name}]: no survey-transport STT entries in conversation log since run start")
+    sys.exit(1)
+print(f"ASSERT PASS [{name}]: {found} survey-transport reply/replies durably logged")
+sys.exit(0)
+PY
+  then
+    return 0
+  else
+    ASSERT_FAILS=$((ASSERT_FAILS + 1))
+    return 1
+  fi
+}
 
 # poll_phase TURN PHASE TIMEOUT_S — block until state.json shows
 # survey.turn==TURN and phase==PHASE, or timeout.
@@ -65,15 +191,20 @@ control() {
 run_full() {
   echo "=== RUN 1: full completion ==="
   say "Run 1 of 4: full completion. Please answer all three questions normally."
+  local since; since="$(date +%s)"
   uv run voicemode converse --skip-conch --ask "$VOICE:$Q1" --ask "$VOICE:$Q2" --ask "$VOICE:$Q3" \
     >"$OUT_DIR/run1.json" 2>"$OUT_DIR/run1.log"
-  echo "exit=$? -- see $OUT_DIR/run1.json"
+  local rc=$?
+  echo "exit=$rc -- see $OUT_DIR/run1.json"
   cat "$OUT_DIR/run1.json"
+  assert_survey "run1-full" "$OUT_DIR/run1.json" "$rc" true
+  check_convo_log "run1-full" "$since"
 }
 
 run_bargein() {
   echo "=== RUN 2: skip-forward barge-in (answer-early + end-capture) ==="
   say "Run 2 of 4: barge in. I will trigger skip forward automatically. For question one, answer with just the single word four, right away. For question two, keep talking continuously and do not stop, in one long rambling stream about any color, until you notice I cut you off."
+  local since; since="$(date +%s)"
   uv run voicemode converse --skip-conch --ask "$VOICE:$Q1" --ask "$VOICE:$Q2" --ask "$VOICE:$Q3" \
     >"$OUT_DIR/run2.json" 2>"$OUT_DIR/run2.log" &
   local pid=$!
@@ -82,30 +213,41 @@ run_bargein() {
   # Turn 1: let it reach LISTENING, then fire skip_forward again -> end-capture
   poll_phase 1 listening 60 && sleep 2.5 && control skip-forward
   wait "$pid"
-  echo "exit=$? -- see $OUT_DIR/run2.json"
+  local rc=$?
+  echo "exit=$rc -- see $OUT_DIR/run2.json"
   cat "$OUT_DIR/run2.json"
+  assert_survey "run2-bargein" "$OUT_DIR/run2.json" "$rc" true
+  check_convo_log "run2-bargein" "$since"
 }
 
 run_stop() {
   echo "=== RUN 3: stop mid-listen ==="
   say "Run 3 of 4: stop mid listen. For question one, answer with just the single word four, right away. Then wait -- I will stop the survey myself during question two, no need to answer it."
+  local since; since="$(date +%s)"
   uv run voicemode converse --skip-conch --ask "$VOICE:$Q1" --ask "$VOICE:$Q2" --ask "$VOICE:$Q3" \
     >"$OUT_DIR/run3.json" 2>"$OUT_DIR/run3.log" &
   local pid=$!
   poll_phase 1 listening 60 && sleep 1.5 && control stop
   wait "$pid"
-  echo "exit=$? -- see $OUT_DIR/run3.json"
+  local rc=$?
+  echo "exit=$rc -- see $OUT_DIR/run3.json"
   cat "$OUT_DIR/run3.json"
+  assert_survey "run3-stop" "$OUT_DIR/run3.json" "$rc" false 1 listening stop
+  check_convo_log "run3-stop" "$since"
 }
 
 run_break() {
   echo "=== RUN 4: spoken break ==="
   say "Run 4 of 4: spoken break. Answer question one normally. On question two you will be told to just say the word break -- do that instead of actually answering."
   local q2_break="Question two: right now, please just say the single word break."
+  local since; since="$(date +%s)"
   uv run voicemode converse --skip-conch --ask "$VOICE:$Q1" --ask "$VOICE:$q2_break" --ask "$VOICE:$Q3" \
     >"$OUT_DIR/run4.json" 2>"$OUT_DIR/run4.log"
-  echo "exit=$? -- see $OUT_DIR/run4.json"
+  local rc=$?
+  echo "exit=$rc -- see $OUT_DIR/run4.json"
   cat "$OUT_DIR/run4.json"
+  assert_survey "run4-break" "$OUT_DIR/run4.json" "$rc" false 1 listening spoken_break
+  check_convo_log "run4-break" "$since"
 }
 
 case "${1:-all}" in
@@ -124,4 +266,11 @@ esac
 
 echo
 echo "Output dir: $OUT_DIR"
-echo "Conversation logs: $CONVO_LOG_DIR"
+echo "Conversation logs: $CONVO_LOG_FILE"
+echo
+if [ "$ASSERT_FAILS" -eq 0 ]; then
+  echo "=== RESULT: PASS (0 assertion failures) ==="
+else
+  echo "=== RESULT: FAIL ($ASSERT_FAILS assertion failure(s) -- see ASSERT FAIL lines above) ==="
+  exit 1
+fi
