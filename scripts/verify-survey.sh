@@ -285,27 +285,40 @@ run_break() {
   check_convo_log "run4-break" "$OUT_DIR/run4.json" "$since"
 }
 
-case "${1:-all}" in
-  full) run_full ;;
-  bargein) run_bargein ;;
-  stop) run_stop ;;
-  break) run_break ;;
-  all)
-    run_full
-    run_bargein
-    run_stop
-    run_break
-    ;;
-  *) echo "usage: $0 [full|bargein|stop|break|all]"; exit 2 ;;
-esac
+# Incident guard (2026-07-06, reported to foreman.VM-1775/worker.VM-1775):
+# `source scripts/verify-survey.sh` (e.g. to reuse a helper function in a
+# subshell) used to fall straight through to this dispatcher with no arg
+# guard -- `${1:-all}` defaults to `all`, so sourcing the file fired the
+# REAL live 4-drill run against a live mic (skip-conch) unannounced. Only
+# execute the dispatcher (and the exit-bearing result block below) when this
+# file is actually being RUN, not sourced -- the standard
+# `BASH_SOURCE[0] == $0` check is false when sourced (BASH_SOURCE[0] is the
+# sourced file's own path, $0 stays the parent shell/script's). Sourcing for
+# function reuse is now inert: no dispatch, no live drills, no `exit` that
+# would otherwise kill the sourcing shell.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "${1:-all}" in
+    full) run_full ;;
+    bargein) run_bargein ;;
+    stop) run_stop ;;
+    break) run_break ;;
+    all)
+      run_full
+      run_bargein
+      run_stop
+      run_break
+      ;;
+    *) echo "usage: $0 [full|bargein|stop|break|all]"; exit 2 ;;
+  esac
 
-echo
-echo "Output dir: $OUT_DIR"
-echo "Conversation logs: $CONVO_LOG_FILE"
-echo
-if [ "$ASSERT_FAILS" -eq 0 ]; then
-  echo "=== RESULT: PASS (0 assertion failures) ==="
-else
-  echo "=== RESULT: FAIL ($ASSERT_FAILS assertion failure(s) -- see ASSERT FAIL lines above) ==="
-  exit 1
+  echo
+  echo "Output dir: $OUT_DIR"
+  echo "Conversation logs: $CONVO_LOG_FILE"
+  echo
+  if [ "$ASSERT_FAILS" -eq 0 ]; then
+    echo "=== RESULT: PASS (0 assertion failures) ==="
+  else
+    echo "=== RESULT: FAIL ($ASSERT_FAILS assertion failure(s) -- see ASSERT FAIL lines above) ==="
+    exit 1
+  fi
 fi
