@@ -80,14 +80,27 @@ class TestNormalizeTurns:
         assert len(turns) == 1 and turns[0]["say"] == "solo"
 
     @pytest.mark.parametrize("bad", [
-        [{"voice": "x"}],                       # missing say
+        [{"voice": "x"}],                       # missing say/ask
         [{"say": ""}],                          # empty say
         [{"say": "   "}],                       # whitespace say
         [{"say": "ok", "pause_after_ms": -5}],  # negative pause
         [{"say": "ok", "pause_after_ms": "x"}], # non-int pause
         [{"say": "ok", "speed": 9}],            # speed out of range
         [{"say": "ok", "play": "file.wav"}],    # reserved P3 key
-        [{"say": "ok", "wait_for_response": True}],  # reserved P2 key
+        [{"ask": ""}],                          # empty ask
+        [{"say": "a", "ask": "b"}],              # both verbs
+        [{"ask": "a", "wait_for_response": True}],   # wfr alongside ask (error regardless of value)
+        [{"ask": "a", "wait_for_response": False}],  # wfr alongside ask, still an error
+        [{"say": "a", "wait_for_response": "true"}],  # wfr must be bool, not string
+        [{"say": "ok", "listen_duration_max": 0}],    # non-positive
+        [{"say": "ok", "listen_duration_min": -1}],   # negative
+        [{"say": "ok", "vad_aggressiveness": 9}],     # out of range
+        [{"say": "ok", "vad_aggressiveness": "x"}],   # not an int
+        [{"say": "ok", "message": "nested"}],   # not a turn key (no nested converse call)
+        [{"say": "ok", "turns": []}],           # not a turn key
+        [{"say": "ok", "conch": True}],         # not a turn key
+        [{"say": "ok", "session": "x"}],        # not a turn key
+        [{"say": "ok", "bogus": 1}],            # generic unknown key
         ["just a string"],                      # not an object
     ])
     def test_invalid_turns_raise(self, bad):
@@ -97,6 +110,97 @@ class TestNormalizeTurns:
                 default_voice=None, default_pause_after_ms=150,
                 default_tts_instructions=None, default_speed=None,
             )
+
+    def test_ask_verb_selected_and_text_captured(self):
+        turns = _normalize_turns(
+            [{"ask": "how are you?"}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["verb"] == "ask"
+        assert turns[0]["say"] == "how are you?"
+
+    def test_say_verb_default(self):
+        turns = _normalize_turns(
+            [{"say": "hi"}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["verb"] == "say"
+
+    def test_wait_for_response_true_is_ask_alias(self):
+        turns = _normalize_turns(
+            [{"say": "how are you?", "wait_for_response": True}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["verb"] == "ask"
+        assert turns[0]["say"] == "how are you?"
+
+    def test_wait_for_response_false_stays_say(self):
+        turns = _normalize_turns(
+            [{"say": "hi", "wait_for_response": False}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["verb"] == "say"
+
+    def test_listen_fields_inherit_call_level_defaults(self):
+        turns = _normalize_turns(
+            [{"ask": "a"}, {"ask": "b", "listen_duration_max": 45, "listen_duration_min": 5, "vad_aggressiveness": 1}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+            default_listen_duration_max=30, default_listen_duration_min=2,
+            default_vad_aggressiveness=2,
+        )
+        assert turns[0]["listen_duration_max"] == 30    # call default
+        assert turns[0]["listen_duration_min"] == 2
+        assert turns[0]["vad_aggressiveness"] == 2
+        assert turns[1]["listen_duration_max"] == 45    # per-turn override
+        assert turns[1]["listen_duration_min"] == 5
+        assert turns[1]["vad_aggressiveness"] == 1
+
+    def test_listen_fields_present_on_say_turns_too(self):
+        # Normalized uniformly (harmless on say turns) so a later say -> ask
+        # edit doesn't need to add them.
+        turns = _normalize_turns(
+            [{"say": "hi"}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+            default_listen_duration_max=30, default_listen_duration_min=2,
+            default_vad_aggressiveness=None,
+        )
+        assert turns[0]["listen_duration_max"] == 30
+        assert turns[0]["listen_duration_min"] == 2
+        assert turns[0]["vad_aggressiveness"] is None
+
+    def test_listen_duration_min_clamped_to_max(self):
+        turns = _normalize_turns(
+            [{"ask": "a", "listen_duration_min": 100, "listen_duration_max": 30}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["listen_duration_min"] == 30
+
+    # ---------------------------------------------------------------------
+    # P1 speak-only back-compat matrix -- every P1-valid speak-only turns
+    # call keeps behaving exactly as before (verb defaults to "say", no
+    # listen fields required, reserved-key/unknown-key semantics preserved
+    # for the keys P1 already covered).
+    # ---------------------------------------------------------------------
+    @pytest.mark.parametrize("good", [
+        [{"say": "one"}],
+        [{"say": "one", "voice": "alpha"}, {"say": "two"}],
+        [{"say": "a", "pause_after_ms": 400}, {"say": "b"}],
+        [{"say": "a"}, {"say": "b", "speed": 1.5, "tts_instructions": "whisper"}],
+    ])
+    def test_p1_back_compat_matrix_still_all_say(self, good):
+        turns = _normalize_turns(
+            good,
+            default_voice="callvoice", default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert all(t["verb"] == "say" for t in turns)
 
 
 # ---------------------------------------------------------------------------

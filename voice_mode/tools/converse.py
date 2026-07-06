@@ -650,11 +650,18 @@ async def synthesize_turn_with_failover(
 # VM-1772: multi-utterance turns[] support (speak-only, P1)
 # ---------------------------------------------------------------------------
 
-# P1 Turn schema (flat, additive). `play`/`ask`/`wait_for_response` keys are
-# RESERVED for P2 (VM-1775) / P3 (VM-840) — present here only so we can reject
-# them with a clear "not in P1" message rather than silently ignoring them.
-_TURN_RESERVED_KEYS = {"play", "ask", "wait_for_response"}
-_TURN_KNOWN_KEYS = {"say", "voice", "pause_after_ms", "tts_instructions", "speed"} | _TURN_RESERVED_KEYS
+# P1 shipped speak-only turns; P2 (VM-1775, this slice) adds the `ask` verb
+# (listen + collect a reply). `play` stays RESERVED for P3 (VM-840) — present
+# here only so we can reject it with a clear "not yet" message rather than
+# silently ignoring it. `message`/`turns`/`conch`/`session` are explicitly
+# NOT turn keys (a turn is not a nested converse call) and fall through to the
+# generic unknown-key rejection below.
+_TURN_RESERVED_KEYS = {"play"}
+_TURN_KNOWN_KEYS = {
+    "say", "ask", "wait_for_response",
+    "voice", "pause_after_ms", "tts_instructions", "speed",
+    "listen_duration_max", "listen_duration_min", "vad_aggressiveness",
+} | _TURN_RESERVED_KEYS
 
 
 def _normalize_turns(
@@ -664,13 +671,23 @@ def _normalize_turns(
     default_pause_after_ms: int,
     default_tts_instructions: Optional[str],
     default_speed: Optional[float],
+    default_listen_duration_max: float = DEFAULT_LISTEN_DURATION,
+    default_listen_duration_min: float = 2.0,
+    default_vad_aggressiveness: Optional[int] = None,
 ) -> list:
     """Validate and normalize the raw ``turns`` argument into a flat list.
 
     Each item is resolved against the call-level defaults so the pipeline can
-    treat every turn uniformly: ``{say, voice, pause_after_ms, tts_instructions,
-    speed}``. Raises ``ValueError`` (caught by ``converse`` and returned as an
-    error string) on any malformed item.
+    treat every turn uniformly: ``{say, verb, voice, pause_after_ms,
+    tts_instructions, speed, listen_duration_max, listen_duration_min,
+    vad_aggressiveness}``. Raises ``ValueError`` (caught by ``converse`` and
+    returned as an error string) on any malformed item.
+
+    Verb selection (VM-1775): a turn carries EXACTLY ONE of ``say`` (speak,
+    advance) or ``ask`` (speak, then listen and collect the reply). As a
+    back-compat-friendly alias, ``{"say": X, "wait_for_response": true}`` is
+    equivalent to ``{"ask": X}``; specifying ``wait_for_response`` alongside
+    ``ask`` is a hard error (redundant/ambiguous — say which one you meant).
     """
     if isinstance(turns, dict):
         # A single turn object passed unwrapped — accept it as a length-1 list.
@@ -683,18 +700,55 @@ def _normalize_turns(
         if not isinstance(raw, dict):
             raise ValueError(f"turn {i}: each turn must be an object, got {type(raw).__name__}.")
 
-        # Reject reserved (future-phase) verbs explicitly so callers aren't
+        # Reject reserved (future-phase) keys explicitly so callers aren't
         # surprised by silent no-ops.
         for key in _TURN_RESERVED_KEYS:
             if key in raw and raw[key] not in (None, False):
                 raise ValueError(
-                    f"turn {i}: '{key}' is reserved for a later phase and is not "
-                    f"supported in P1 (speak-only). Use 'say'."
+                    f"turn {i}: '{key}' is reserved for a later phase (VM-840) "
+                    f"and is not supported yet."
                 )
 
-        say = raw.get("say")
-        if say is None or not isinstance(say, str) or not say.strip():
-            raise ValueError(f"turn {i}: 'say' is required and must be a non-empty string.")
+        # Hard-reject anything else not in the known turn schema — typo
+        # protection, and explicitly closes off nesting a full converse call
+        # (message/turns/conch/session) inside a turn.
+        for key in raw:
+            if key not in _TURN_KNOWN_KEYS:
+                raise ValueError(f"turn {i}: unknown key '{key}' is not supported inside a turn.")
+
+        has_say = "say" in raw
+        has_ask = "ask" in raw
+        has_wfr = "wait_for_response" in raw
+
+        if has_say and has_ask:
+            raise ValueError(f"turn {i}: a turn must have exactly one of 'say' or 'ask', not both.")
+        if has_ask and has_wfr:
+            raise ValueError(
+                f"turn {i}: 'wait_for_response' cannot be used alongside 'ask' "
+                f"(redundant/ambiguous — 'ask' already means listen for a reply)."
+            )
+
+        wfr = raw.get("wait_for_response")
+        if wfr is not None and not isinstance(wfr, bool):
+            raise ValueError(f"turn {i}: 'wait_for_response' must be a boolean (got {wfr!r}).")
+
+        if has_ask:
+            verb = "ask"
+            text = raw.get("ask")
+            text_key = "ask"
+        elif wfr:
+            # {"say": X, "wait_for_response": true} is an accepted alias for
+            # {"ask": X} (back-compat-friendly spelling).
+            verb = "ask"
+            text = raw.get("say")
+            text_key = "say"
+        else:
+            verb = "say"
+            text = raw.get("say")
+            text_key = "say"
+
+        if text is None or not isinstance(text, str) or not text.strip():
+            raise ValueError(f"turn {i}: '{text_key}' is required and must be a non-empty string.")
 
         # pause_after_ms: per-turn override, else the call-level default.
         pause = raw.get("pause_after_ms", default_pause_after_ms)
@@ -715,15 +769,50 @@ def _normalize_turns(
             if not (0.25 <= turn_speed <= 4.0):
                 raise ValueError(f"turn {i}: 'speed' must be between 0.25 and 4.0 (got {turn_speed}).")
 
+        # listen_duration_max/min + vad_aggressiveness (VM-1775): per-turn
+        # override, else the call-level default. Meaningful on `ask` turns;
+        # normalized uniformly (harmless on `say` turns) so a later `say` ->
+        # `ask` edit doesn't need to add them.
+        listen_max = raw.get("listen_duration_max", default_listen_duration_max)
+        try:
+            listen_max = float(listen_max)
+        except (TypeError, ValueError):
+            raise ValueError(f"turn {i}: 'listen_duration_max' must be a number (got {listen_max!r}).")
+        if listen_max <= 0:
+            raise ValueError(f"turn {i}: 'listen_duration_max' must be positive (got {listen_max}).")
+
+        listen_min = raw.get("listen_duration_min", default_listen_duration_min)
+        try:
+            listen_min = float(listen_min)
+        except (TypeError, ValueError):
+            raise ValueError(f"turn {i}: 'listen_duration_min' must be a number (got {listen_min!r}).")
+        if listen_min < 0:
+            raise ValueError(f"turn {i}: 'listen_duration_min' cannot be negative (got {listen_min}).")
+        if listen_min > listen_max:
+            listen_min = listen_max
+
+        turn_vad = raw.get("vad_aggressiveness", default_vad_aggressiveness)
+        if turn_vad is not None:
+            try:
+                turn_vad = int(turn_vad)
+            except (TypeError, ValueError):
+                raise ValueError(f"turn {i}: 'vad_aggressiveness' must be an integer (got {turn_vad!r}).")
+            if not (0 <= turn_vad <= 3):
+                raise ValueError(f"turn {i}: 'vad_aggressiveness' must be between 0 and 3 (got {turn_vad}).")
+
         voice = raw.get("voice") or default_voice
         instructions = raw.get("tts_instructions") or default_tts_instructions
 
         normalized.append({
-            "say": say,
+            "say": text,
+            "verb": verb,
             "voice": voice,
             "pause_after_ms": pause,
             "tts_instructions": instructions,
             "speed": turn_speed,
+            "listen_duration_max": listen_max,
+            "listen_duration_min": listen_min,
+            "vad_aggressiveness": turn_vad,
         })
 
     return normalized
@@ -2225,9 +2314,14 @@ consult the MCP resources listed above.
     # Determine effective metrics level (parameter overrides config)
     effective_metrics_level = metrics_level if metrics_level else METRICS_LEVEL
 
-    # VM-1772: normalize the optional turns[] list (speak-only multivoice). When
-    # present it takes precedence over the scalar `message` (precedence is
-    # resolved here, not in the schema — strict-mode JSON Schema has no oneOf).
+    # VM-1772/VM-1775: normalize the optional turns[] list (speak-only P1 +
+    # ask/collect-response P2). When present it takes precedence over the
+    # scalar `message` (precedence is resolved here, not in the schema —
+    # strict-mode JSON Schema has no oneOf). The call-level `wait_for_response`
+    # is intentionally NOT threaded through here — turns mode never enters the
+    # scalar-message listen path below (see the `normalized_turns is not None`
+    # branch), so a call-level wait_for_response default can't leak into a
+    # turns call; listening is per-turn opt-in only (`ask` / alias).
     normalized_turns = None
     if turns is not None:
         try:
@@ -2237,6 +2331,9 @@ consult the MCP resources listed above.
                 default_pause_after_ms=pause_after_ms,
                 default_tts_instructions=tts_instructions,
                 default_speed=speed,
+                default_listen_duration_max=listen_duration_max,
+                default_listen_duration_min=listen_duration_min,
+                default_vad_aggressiveness=vad_aggressiveness,
             )
         except ValueError as e:
             return f"❌ Error: {e}"
