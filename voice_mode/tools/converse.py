@@ -1,12 +1,14 @@
 """Conversation tools for interactive voice interactions."""
 
 import asyncio
+import json
 import logging
 import os
 import time
 import traceback
 from contextlib import asynccontextmanager
-from typing import Optional, Literal, Tuple, Dict, Union
+from dataclasses import dataclass, field
+from typing import Optional, Literal, Tuple, Dict, Union, Any, Annotated
 from pathlib import Path
 from datetime import datetime
 
@@ -15,6 +17,7 @@ import sounddevice as sd
 from scipy.io.wavfile import write
 from pydub import AudioSegment
 from openai import AsyncOpenAI
+from pydantic import Field
 import httpx
 
 # Optional webrtcvad for silence detection
@@ -31,6 +34,7 @@ from voice_mode.conch_queue import ConchQueue
 from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
     audio_operation_lock,
+    BASE_DIR,
     SAMPLE_RATE,
     CHANNELS,
     DEBUG,
@@ -61,6 +65,7 @@ from voice_mode.config import (
     REPEAT_MAX_LEADING_WORDS,
     WAIT_MAX_LEADING_WORDS,
     WAIT_DURATION,
+    SURVEY_BREAK_PHRASES,
     METRICS_LEVEL,
     STT_AUDIO_FORMAT,
     STT_SAVE_FORMAT,
@@ -395,6 +400,25 @@ def should_wait(text: str) -> bool:
     return False
 
 
+def _is_survey_break(text: str) -> bool:
+    """Check if a survey ask-turn's reply is a standalone "break" request
+    (VM-1775 impl-002).
+
+    Deliberately STRICTER than ``should_repeat``/``should_wait``:
+    ``max_leading_words=0`` means the reply must consist ENTIRELY of a break
+    phrase, not merely end with one -- a false positive destroys the whole
+    survey (vs. a false repeat, which only wastes one re-listen). See
+    ``SURVEY_BREAK_PHRASES`` (deliberately excludes bare "stop" -- too common
+    inside a legitimate answer; the physical stop control is the reliable
+    path).
+    """
+    phrase = _matching_trailing_phrase(text, SURVEY_BREAK_PHRASES, max_leading_words=0)
+    if phrase is not None:
+        logger.info(f"Survey break phrase detected: '{phrase}' in '{text}'")
+        return True
+    return False
+
+
 # Track last session end time for measuring AI thinking time
 last_session_end_time = None
 
@@ -649,11 +673,18 @@ async def synthesize_turn_with_failover(
 # VM-1772: multi-utterance turns[] support (speak-only, P1)
 # ---------------------------------------------------------------------------
 
-# P1 Turn schema (flat, additive). `play`/`ask`/`wait_for_response` keys are
-# RESERVED for P2 (VM-1775) / P3 (VM-840) — present here only so we can reject
-# them with a clear "not in P1" message rather than silently ignoring them.
-_TURN_RESERVED_KEYS = {"play", "ask", "wait_for_response"}
-_TURN_KNOWN_KEYS = {"say", "voice", "pause_after_ms", "tts_instructions", "speed"} | _TURN_RESERVED_KEYS
+# P1 shipped speak-only turns; P2 (VM-1775, this slice) adds the `ask` verb
+# (listen + collect a reply). `play` stays RESERVED for P3 (VM-840) — present
+# here only so we can reject it with a clear "not yet" message rather than
+# silently ignoring it. `message`/`turns`/`conch`/`session` are explicitly
+# NOT turn keys (a turn is not a nested converse call) and fall through to the
+# generic unknown-key rejection below.
+_TURN_RESERVED_KEYS = {"play"}
+_TURN_KNOWN_KEYS = {
+    "say", "ask", "wait_for_response",
+    "voice", "pause_after_ms", "tts_instructions", "speed",
+    "listen_duration_max", "listen_duration_min", "vad_aggressiveness",
+} | _TURN_RESERVED_KEYS
 
 
 def _normalize_turns(
@@ -663,13 +694,23 @@ def _normalize_turns(
     default_pause_after_ms: int,
     default_tts_instructions: Optional[str],
     default_speed: Optional[float],
+    default_listen_duration_max: float = DEFAULT_LISTEN_DURATION,
+    default_listen_duration_min: float = 2.0,
+    default_vad_aggressiveness: Optional[int] = None,
 ) -> list:
     """Validate and normalize the raw ``turns`` argument into a flat list.
 
     Each item is resolved against the call-level defaults so the pipeline can
-    treat every turn uniformly: ``{say, voice, pause_after_ms, tts_instructions,
-    speed}``. Raises ``ValueError`` (caught by ``converse`` and returned as an
-    error string) on any malformed item.
+    treat every turn uniformly: ``{say, verb, voice, pause_after_ms,
+    tts_instructions, speed, listen_duration_max, listen_duration_min,
+    vad_aggressiveness}``. Raises ``ValueError`` (caught by ``converse`` and
+    returned as an error string) on any malformed item.
+
+    Verb selection (VM-1775): a turn carries EXACTLY ONE of ``say`` (speak,
+    advance) or ``ask`` (speak, then listen and collect the reply). As a
+    back-compat-friendly alias, ``{"say": X, "wait_for_response": true}`` is
+    equivalent to ``{"ask": X}``; specifying ``wait_for_response`` alongside
+    ``ask`` is a hard error (redundant/ambiguous — say which one you meant).
     """
     if isinstance(turns, dict):
         # A single turn object passed unwrapped — accept it as a length-1 list.
@@ -682,18 +723,71 @@ def _normalize_turns(
         if not isinstance(raw, dict):
             raise ValueError(f"turn {i}: each turn must be an object, got {type(raw).__name__}.")
 
-        # Reject reserved (future-phase) verbs explicitly so callers aren't
+        # Reject reserved (future-phase) keys explicitly so callers aren't
         # surprised by silent no-ops.
         for key in _TURN_RESERVED_KEYS:
             if key in raw and raw[key] not in (None, False):
                 raise ValueError(
-                    f"turn {i}: '{key}' is reserved for a later phase and is not "
-                    f"supported in P1 (speak-only). Use 'say'."
+                    f"turn {i}: '{key}' is reserved for a later phase (VM-840) "
+                    f"and is not supported yet."
                 )
 
-        say = raw.get("say")
-        if say is None or not isinstance(say, str) or not say.strip():
-            raise ValueError(f"turn {i}: 'say' is required and must be a non-empty string.")
+        # Hard-reject anything else not in the known turn schema — typo
+        # protection, and explicitly closes off nesting a full converse call
+        # (message/turns/conch/session) inside a turn. N2 (fable progress
+        # review): list the allowed keys in the error, as Decision 1 rule 5
+        # specified. N-c (fable pre-merge audit): the list excludes
+        # ``_TURN_RESERVED_KEYS`` (``play``) -- it is always rejected one
+        # check earlier (above), so advertising it here as "allowed" would be
+        # misleading typo-help text.
+        for key in raw:
+            if key not in _TURN_KNOWN_KEYS:
+                allowed = ", ".join(sorted(_TURN_KNOWN_KEYS - _TURN_RESERVED_KEYS))
+                raise ValueError(
+                    f"turn {i}: unknown key '{key}' is not supported inside a turn "
+                    f"(allowed: {allowed})."
+                )
+
+        has_say = "say" in raw
+        has_ask = "ask" in raw
+        has_wfr = "wait_for_response" in raw
+
+        if has_say and has_ask:
+            raise ValueError(f"turn {i}: a turn must have exactly one of 'say' or 'ask', not both.")
+        if has_ask and has_wfr:
+            raise ValueError(
+                f"turn {i}: 'wait_for_response' cannot be used alongside 'ask' "
+                f"(redundant/ambiguous — 'ask' already means listen for a reply)."
+            )
+        # N2 (fable progress review): a turn with NEITHER verb key present at
+        # all gets a message naming the actual requirement ("exactly one of
+        # 'say' or 'ask'") rather than the generic "'say' is required" below,
+        # which is accurate for P1 callers but misleading now that 'ask' is
+        # an equally valid verb.
+        if not has_say and not has_ask:
+            raise ValueError(f"turn {i}: a turn must have exactly one of 'say' or 'ask'.")
+
+        wfr = raw.get("wait_for_response")
+        if wfr is not None and not isinstance(wfr, bool):
+            raise ValueError(f"turn {i}: 'wait_for_response' must be a boolean (got {wfr!r}).")
+
+        if has_ask:
+            verb = "ask"
+            text = raw.get("ask")
+            text_key = "ask"
+        elif wfr:
+            # {"say": X, "wait_for_response": true} is an accepted alias for
+            # {"ask": X} (back-compat-friendly spelling).
+            verb = "ask"
+            text = raw.get("say")
+            text_key = "say"
+        else:
+            verb = "say"
+            text = raw.get("say")
+            text_key = "say"
+
+        if text is None or not isinstance(text, str) or not text.strip():
+            raise ValueError(f"turn {i}: '{text_key}' is required and must be a non-empty string.")
 
         # pause_after_ms: per-turn override, else the call-level default.
         pause = raw.get("pause_after_ms", default_pause_after_ms)
@@ -714,15 +808,50 @@ def _normalize_turns(
             if not (0.25 <= turn_speed <= 4.0):
                 raise ValueError(f"turn {i}: 'speed' must be between 0.25 and 4.0 (got {turn_speed}).")
 
+        # listen_duration_max/min + vad_aggressiveness (VM-1775): per-turn
+        # override, else the call-level default. Meaningful on `ask` turns;
+        # normalized uniformly (harmless on `say` turns) so a later `say` ->
+        # `ask` edit doesn't need to add them.
+        listen_max = raw.get("listen_duration_max", default_listen_duration_max)
+        try:
+            listen_max = float(listen_max)
+        except (TypeError, ValueError):
+            raise ValueError(f"turn {i}: 'listen_duration_max' must be a number (got {listen_max!r}).")
+        if listen_max <= 0:
+            raise ValueError(f"turn {i}: 'listen_duration_max' must be positive (got {listen_max}).")
+
+        listen_min = raw.get("listen_duration_min", default_listen_duration_min)
+        try:
+            listen_min = float(listen_min)
+        except (TypeError, ValueError):
+            raise ValueError(f"turn {i}: 'listen_duration_min' must be a number (got {listen_min!r}).")
+        if listen_min < 0:
+            raise ValueError(f"turn {i}: 'listen_duration_min' cannot be negative (got {listen_min}).")
+        if listen_min > listen_max:
+            listen_min = listen_max
+
+        turn_vad = raw.get("vad_aggressiveness", default_vad_aggressiveness)
+        if turn_vad is not None:
+            try:
+                turn_vad = int(turn_vad)
+            except (TypeError, ValueError):
+                raise ValueError(f"turn {i}: 'vad_aggressiveness' must be an integer (got {turn_vad!r}).")
+            if not (0 <= turn_vad <= 3):
+                raise ValueError(f"turn {i}: 'vad_aggressiveness' must be between 0 and 3 (got {turn_vad}).")
+
         voice = raw.get("voice") or default_voice
         instructions = raw.get("tts_instructions") or default_tts_instructions
 
         normalized.append({
-            "say": say,
+            "say": text,
+            "verb": verb,
             "voice": voice,
             "pause_after_ms": pause,
             "tts_instructions": instructions,
             "speed": turn_speed,
+            "listen_duration_max": listen_max,
+            "listen_duration_min": listen_min,
+            "vad_aggressiveness": turn_vad,
         })
 
     return normalized
@@ -1684,10 +1813,1030 @@ async def _drain_skip_back(control_state, replay_cursor: int) -> int:
         # On a transport interrupt (a further press) the loop consumes it next.
 
 
+# ---------------------------------------------------------------------------
+# VM-1775 / VM-1832: listen_and_transcribe() -- the named listen-and-transcribe
+# seam, extracted from the three inline chime->record->chime->STT copies that
+# used to live inline in converse() (the single-message listen path, plus the
+# `should_repeat` and `should_wait` re-listens). Slice 0 of VM-1775; the future
+# ask-turn survey loop (impl-002) will also call this once per ask turn.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ListenResult:
+    """Classified result of one listen exchange.
+
+    ``listen_and_transcribe()`` performs exactly one
+    chime(listening) -> record_audio_with_silence_detection (control-aware) ->
+    chime(finished) -> STT pass and classifies the outcome. A caller that wants
+    a replay-then-relisten loop (the main listen path's CD-style skip_back
+    handling) owns that loop and calls this function once per iteration.
+
+    Attributes:
+        outcome: one of "answered" (got transcribed text), "no_speech" (no
+            speech detected / STT reported no speech), "stopped" (a
+            control-channel stop ended the exchange -- see ``control``),
+            "skip_back" (a pending skip_back was detected post-recording --
+            the caller should replay then call again), or "stt_error" (empty
+            recording buffer or an STT connection failure -- see
+            ``error_message`` / ``error_kind``).
+        text: transcribed reply text (set only when outcome == "answered").
+        stt_provider: the STT provider name, else "unknown".
+        timings: this exchange's own timing sub-dict (keys like "record",
+            "stt", "stt_request_ms", ...) -- callers merge/accumulate as
+            needed rather than this function mutating a shared dict.
+        control: the ``ControlSnapshot`` that caused a "stopped" outcome.
+        skip_forward_ended: True when a VM-1754 skip_forward ended the
+            recording early (whatever was captured is still transcribed).
+        error_message: set when outcome == "stt_error" -- human-readable, for
+            display/logging. Do NOT string-match this for control flow (fable
+            progress review S2); use ``error_kind`` instead.
+        error_kind: set when outcome == "stt_error" -- a stable machine
+            classification: "record_failed" (empty recording buffer, not a
+            skip_forward "go now") or "stt_connection_failed" (STT service
+            unreachable). ``None`` for every other outcome.
+        stt_classified: True iff STT actually ran AND returned a definitive
+            classification of the capture -- i.e. outcome is "answered", or
+            outcome is "no_speech" *because STT itself* reported no speech
+            (not because VAD never detected speech in the first place, which
+            skips STT entirely). False for "stopped"/"skip_back"/"stt_error"
+            and for a VAD-level "no_speech" where STT was never invoked.
+            Renamed from the original ``stt_attempted`` (fable progress
+            review S3): the old name was misleading because a "stt_error"
+            connection-failure outcome DID attempt STT but reported
+            ``stt_attempted=False`` -- the new name states what the field
+            actually certifies (a usable classification), and callers that
+            need "did STT even run" should branch on ``outcome`` instead.
+    """
+    outcome: str
+    text: Optional[str] = None
+    stt_provider: Optional[str] = None
+    timings: Dict[str, float] = field(default_factory=dict)
+    control: Optional[Any] = None
+    skip_forward_ended: bool = False
+    error_message: Optional[str] = None
+    error_kind: Optional[str] = None
+    stt_classified: bool = False
+
+
+async def listen_and_transcribe(
+    control_state,
+    *,
+    listen_duration_max: float,
+    listen_duration_min: float,
+    disable_silence_detection: bool,
+    vad_aggressiveness: Optional[int],
+    chime_enabled: Optional[bool],
+    chime_leading_silence: Optional[float],
+    chime_trailing_silence: Optional[float],
+    transport: str,
+    event_logger=None,
+    pre_listen_pause: float = 0.0,
+) -> ListenResult:
+    """One listen-and-transcribe exchange (VM-1775's extraction of VM-1832's
+    named seam): chime(listening) -> record_audio_with_silence_detection
+    (control-aware) -> chime(finished) -> STT -> classified ``ListenResult``.
+
+    Control-channel awareness (VM-1676/VM-1685/VM-1754), evaluated right after
+    recording:
+      * a ``stop`` ends the exchange with outcome "stopped" -- the caller
+        builds the normal control-marker return via ``_build_control_stop_result``.
+      * a ``skip_forward`` ends the recording early and we still transcribe
+        whatever was captured (``skip_forward_ended=True``).
+      * a pending ``skip_back`` ends the exchange with outcome "skip_back"
+        (peeked only, not consumed) so a replay-capable caller (the main
+        listen path's ``while True`` loop) can replay then call again.
+
+    ``pre_listen_pause`` reproduces the main listen path's "brief pause before
+    listening" (0.5s); repeat/wait re-listens pass no pause (0.0), matching
+    their pre-extraction behaviour.
+    """
+    timings: Dict[str, float] = {}
+
+    if pre_listen_pause:
+        await asyncio.sleep(pre_listen_pause)
+
+    # Play "listening" feedback sound
+    await play_audio_feedback(
+        "listening",
+        openai_clients,
+        chime_enabled,
+        "whisper",
+        chime_leading_silence=chime_leading_silence,
+        chime_trailing_silence=chime_trailing_silence
+    )
+
+    # Record response
+    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+
+    if event_logger:
+        event_logger.log_event(event_logger.RECORDING_START)
+
+    record_start = time.perf_counter()
+    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
+    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+    )
+    timings['record'] = time.perf_counter() - record_start
+
+    if event_logger:
+        event_logger.log_event(event_logger.RECORDING_END, {
+            "duration": timings['record'],
+            "samples": len(audio_data)
+        })
+
+    # VM-1676: a control-channel stop that arrived while we were listening ends
+    # the exchange cleanly -- skip STT, let the caller build the control marker.
+    control_snapshot = control_state.snapshot()
+    if control_snapshot.is_stopped:
+        logger.info("Converse stopped via control channel during recording")
+        return ListenResult(outcome="stopped", control=control_snapshot, timings=timings)
+
+    # VM-1754: a skip_forward pressed while listening is the manual "I'm done,
+    # go now" end-of-turn (and the VAD fallback when silence detection isn't
+    # firing). Consume the sticky-state edge and fall through to STT.
+    skip_forward_ended = False
+    if control_snapshot.is_skip_forward:
+        logger.info("skip_forward received during recording -- ending turn, transcribing captured audio")
+        control_state.reset()
+        skip_forward_ended = True
+    elif control_state.pending_transport == COMMAND_SKIP_BACK:
+        # VM-1685: a skip_back pressed while listening -- hand off to a
+        # replay-capable caller (peeked only; NOT consumed here).
+        logger.info("skip_back received during recording -- signalling caller to replay then re-listen")
+        return ListenResult(outcome="skip_back", timings=timings)
+
+    # Play "finished" feedback sound
+    await play_audio_feedback(
+        "finished",
+        openai_clients,
+        chime_enabled,
+        "whisper",
+        chime_leading_silence=chime_leading_silence,
+        chime_trailing_silence=chime_trailing_silence
+    )
+
+    if len(audio_data) == 0:
+        # VM-1754: under skip_forward an empty buffer is intentional -- the
+        # user pressed "go now" before any audio was captured (the
+        # VAD-fallback edge). Don't surface it as a recording error; fall
+        # through to the graceful no-speech path so the turn simply advances.
+        if not skip_forward_ended:
+            return ListenResult(
+                outcome="stt_error", timings=timings,
+                error_message="Error: Could not record audio",
+                error_kind="record_failed",
+            )
+        logger.info("skip_forward ended recording before any audio was captured -- advancing with no speech")
+        speech_detected = False
+
+    stt_metrics = None
+    response_text = None
+    stt_provider = "unknown"
+    stt_classified = False
+
+    if not speech_detected:
+        logger.info("No speech detected during recording - skipping STT processing")
+        timings['stt'] = 0.0
+
+        # Still save the audio if configured (skip an empty buffer -- e.g. a
+        # skip_forward fired before any audio was captured).
+        if SAVE_AUDIO and AUDIO_DIR and len(audio_data) > 0:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
+            write(audio_path, SAMPLE_RATE, audio_data)
+            logger.debug(f"Saved no-speech audio to: {audio_path}")
+    else:
+        stt_classified = True
+        if event_logger:
+            event_logger.log_event(event_logger.STT_START)
+
+        stt_start = time.perf_counter()
+        stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+        timings['stt'] = time.perf_counter() - stt_start
+
+        # Handle structured STT result
+        if isinstance(stt_result, dict):
+            stt_metrics = stt_result.get("metrics")
+            if stt_metrics:
+                timings['stt_request_ms'] = stt_metrics.get('request_time_ms', 0)
+                timings['stt_file_size_bytes'] = stt_metrics.get('file_size_bytes', 0)
+                timings['stt_is_local'] = stt_metrics.get('is_local', False)
+                logger.debug(f"STT metrics: request={stt_metrics.get('request_time_ms')}ms, "
+                           f"file_size={stt_metrics.get('file_size_bytes')/1024:.1f}KB, "
+                           f"is_local={stt_metrics.get('is_local')}")
+
+            if "error_type" in stt_result:
+                # Handle connection failures vs no speech
+                if stt_result["error_type"] == "connection_failed":
+                    error_lines = ["STT service connection failed:"]
+                    openai_error_shown = False
+
+                    for attempt in stt_result.get("attempted_endpoints", []):
+                        if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
+                            error_details = attempt['error_details']
+                            error_lines.append("")
+                            error_lines.append(error_details.get('title', 'OpenAI Error'))
+                            error_lines.append(error_details.get('message', ''))
+                            if error_details.get('suggestion'):
+                                error_lines.append(f"💡 {error_details['suggestion']}")
+                            if error_details.get('fallback'):
+                                error_lines.append(f"ℹ️ {error_details['fallback']}")
+                            openai_error_shown = True
+                        else:
+                            error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
+
+                    error_msg = "\n".join(error_lines)
+                    logger.error(error_msg)
+                    return ListenResult(
+                        outcome="stt_error", timings=timings, error_message=error_msg,
+                        error_kind="stt_connection_failed",
+                    )
+
+                elif stt_result["error_type"] == "no_speech":
+                    # Genuine no speech detected
+                    response_text = None
+                    stt_provider = stt_result.get("provider", "unknown")
+            else:
+                # Successful transcription
+                response_text = stt_result.get("text")
+                stt_provider = stt_result.get("provider", "unknown")
+                if stt_provider != "unknown":
+                    logger.info(f"📡 STT Provider: {stt_provider}")
+        else:
+            # Should not happen with new code, but handle gracefully
+            response_text = None
+            stt_provider = "unknown"
+
+    outcome = "answered" if response_text else "no_speech"
+    return ListenResult(
+        outcome=outcome,
+        text=response_text,
+        stt_provider=stt_provider,
+        timings=timings,
+        skip_forward_ended=skip_forward_ended,
+        stt_classified=stt_classified,
+    )
+
+
+# ---------------------------------------------------------------------------
+# VM-1775 impl-002: survey loop -- _ask_turns_pipeline, the module-level
+# sibling of _speak_turns_pipeline that also collects a reply after each
+# `ask` turn (the per-turn ask/collect-response half of VM-1772's turns[]).
+# ---------------------------------------------------------------------------
+
+async def _play_samples_controllable(samples, sample_rate, control_state, poll_interval: float = 0.05) -> str:
+    """Play decoded samples to completion, but abort INSTANTLY on a
+    control-channel ``stop`` or ``skip_forward`` (README ## Design control
+    matrix, SPEAKING phase).
+
+    Unlike ``_play_samples_blocking`` (the P1 speak-only pipeline's helper,
+    which blocks in a worker thread with no control-channel awareness and is
+    left untouched -- that pipeline predates the survey's control-matrix
+    requirement), this starts non-blocking playback and polls the control
+    channel from the event loop, calling ``player.stop()`` the instant a stop
+    or skip_forward is observed.
+
+    Returns "played" (ran to completion), "stopped", or "skip_forward".
+    """
+    player = NonBlockingAudioPlayer()
+    player.play(samples, sample_rate, blocking=False)
+    try:
+        while not player.playback_complete.is_set():
+            snap = control_state.snapshot()
+            if snap.is_stopped:
+                player.stop()
+                return "stopped"
+            if snap.is_skip_forward:
+                player.stop()
+                return "skip_forward"
+            await asyncio.sleep(poll_interval)
+        player.wait()
+        return "played"
+    finally:
+        if player.stream is not None:
+            player.stop()
+
+
+async def _replay_cached_question(cached_samples, cached_rate, control_state) -> bool:
+    """Replay a survey ask-turn's cached question for a skip_back or spoken
+    "repeat" re-listen, via ``_play_samples_controllable``.
+
+    Fable pre-merge audit F1 (empirically confirmed bug): both replay call
+    sites used to discard ``_play_samples_controllable``'s return value.
+    ``skip_forward`` stops playback but does NOT reset the sticky
+    ``STATE_SKIP_FORWARD`` latch (only ``player.stop()`` runs) -- so the
+    latch used to survive into the IMMEDIATE re-listen, whose record loop
+    would exit on its very first poll with an (near-)empty capture, turning
+    "cut the replay so I can answer" into a silent ``no_speech``. Consuming
+    the edge here (mirroring the main SPEAK phase's ``control_state.reset()``)
+    lets the re-listen actually listen. A ``stopped`` outcome during the
+    replay itself is reported to the caller so the survey ends immediately
+    instead of falling through to another (spurious) listen -- and its
+    "listening" chime.
+
+    Returns ``True`` if the replay was cut short by a control-channel
+    ``stop`` (the caller should end the turn/survey); ``False`` if the
+    caller should proceed to LISTEN as normal (whether the replay played to
+    completion or was barged into with ``skip_forward``).
+    """
+    if cached_samples is None:
+        return False
+    replay_outcome = await _play_samples_controllable(cached_samples, cached_rate, control_state)
+    if replay_outcome == "stopped":
+        return True
+    if replay_outcome == "skip_forward":
+        control_state.reset()
+    return False
+
+
+async def _relisten_after_keyword(
+    control_state,
+    *,
+    listen_duration_max,
+    listen_duration_min,
+    disable_silence_detection,
+    vad_aggressiveness,
+    chime_enabled,
+    chime_leading_silence,
+    chime_trailing_silence,
+    transport,
+    timings: Dict,
+    context_label: str,
+):
+    """Shared re-listen loop for the ``should_repeat``/``should_wait``
+    single-message keyword handlers (extracted verify-001: this loop was
+    duplicated verbatim, save for ``context_label``, at both call sites,
+    growing ``converse()`` past its pre-slice line count).
+
+    S4/S5/S6 (fable progress review, impl-003b): a skip_back arriving during
+    this re-listen used to be silently swallowed (no replay, capture
+    discarded, the pending request left latched) -- this loop now drains and
+    replays it via the same shared history-buffer helper the main listen
+    path uses (``_drain_skip_back``), then re-listens. ``event_logger=None``
+    restores master's event-log cardinality for this re-listen (no unpaired
+    ``STT_START`` / undisclosed ``no_speech_*.wav`` saves).
+
+    F1 (fable pre-merge audit): mirrors the main listen path's VM-1763
+    consume -- a skip_forward pressed during/around ``_drain_skip_back``'s
+    replay stops the audio but does NOT clear the sticky
+    ``STATE_SKIP_FORWARD`` latch. Left unconsumed, the IMMEDIATE re-listen
+    below would see it already armed and end on its very first poll with an
+    (near-)empty capture -- ``stt_classified`` stays False and the stale
+    keyword utterance would be silently kept as the answer (the exact
+    misleading return S4/S6 were built to kill). A stop during the replay
+    itself ends the turn here instead of falling through to another
+    (spurious) listen.
+
+    Returns a ``(outcome, payload)`` pair:
+      ``("stopped", control_snapshot)`` -- caller should
+        ``return _build_control_stop_result(control_snapshot, timings)``.
+      ``("stt_error", listen_result)`` -- caller should surface
+        ``listen_result.error_message`` directly (S6: matches the main
+        listen path instead of silently keeping the keyword as the answer).
+      ``("ok", listen_result)`` -- caller checks ``listen_result.stt_classified``
+        to decide whether to overwrite the prior response (matches the
+        pre-extraction guard: only overwrite once STT actually ran and
+        classified the capture).
+    """
+    replay_cursor = 0
+    stopped_during_replay = False
+    while True:
+        replay_cursor = await _drain_skip_back(control_state, replay_cursor)
+
+        control_snapshot = control_state.snapshot()
+        if control_snapshot.is_skip_forward:
+            logger.info(f"Converse skip-forward via control channel during {context_label} re-listen's skip-back replay")
+            control_state.reset()
+        elif control_snapshot.is_stopped:
+            logger.info(f"Converse stopped via control channel during {context_label} re-listen's skip-back replay")
+            stopped_during_replay = True
+            break
+
+        listen_result = await listen_and_transcribe(
+            control_state,
+            listen_duration_max=listen_duration_max,
+            listen_duration_min=listen_duration_min,
+            disable_silence_detection=disable_silence_detection,
+            vad_aggressiveness=vad_aggressiveness,
+            chime_enabled=chime_enabled,
+            chime_leading_silence=chime_leading_silence,
+            chime_trailing_silence=chime_trailing_silence,
+            transport=transport,
+            event_logger=None,
+        )
+        timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
+        timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
+
+        if listen_result.outcome == "skip_back":
+            continue
+        break
+
+    if stopped_during_replay:
+        return "stopped", control_snapshot
+    if listen_result.outcome == "stopped":
+        return "stopped", listen_result.control
+    if listen_result.outcome == "stt_error":
+        return "stt_error", listen_result
+    return "ok", listen_result
+
+
+def _emit_converse_state(
+    phase: Literal["speaking", "listening", "idle"],
+    *,
+    session_id: Optional[str] = None,
+    turn: Optional[int] = None,
+    n_turns: Optional[int] = None,
+    verb: Optional[str] = None,
+    replies_answered: Optional[int] = None,
+) -> None:
+    """VM-1793 phase-signal hook (VM-1775 impl-005; design report Decision 9):
+    atomically write ``~/.voicemode/state.json`` on each speaking/listening
+    transition of the survey loop, so an external consumer (menu bar app,
+    Stream Deck, ...) can read live phase state without polling the conch
+    lock file. The last-written phase also doubles as a crash-recovery
+    breadcrumb: a killed call leaves its most recent phase/turn on disk
+    (replies themselves are separately persisted to the conversation log at
+    capture time -- see ``_ask_turns_pipeline``'s per-turn ``log_stt`` call;
+    this file covers "was a call in flight, and where", not the replies).
+
+    ``conch_holder`` is read fresh from ``Conch.get_holder()`` rather than
+    threaded in by the caller -- it is always the ground truth of who
+    currently holds the voice channel (an agent name, or ``None`` when the
+    conch is free / was bypassed with ``skip_conch``), not just this call's
+    own belief.
+
+    Called at survey start (``phase="speaking"``, turn 0), on every
+    speaking<->listening transition thereafter, and once more at
+    completion/abort with ``phase="idle"`` -- at which point ``turn`` is left
+    ``None`` and the ``survey`` key is omitted entirely from the payload
+    (design report: "idle, survey key removed"), rather than serialized as
+    null, so a reader can tell "no survey in flight" from "survey at turn 0".
+
+    Best-effort only: every failure (permissions, disk full, a race with
+    another writer) is logged at debug level and swallowed -- writing this
+    breadcrumb must never abort or slow down a live voice call.
+    """
+    try:
+        holder = Conch.get_holder()
+        payload: Dict[str, Any] = {
+            "phase": phase,
+            "ts": datetime.now().astimezone().isoformat(),
+            "session": session_id,
+            "conch_holder": holder.get("agent") if holder else None,
+        }
+        if turn is not None:
+            payload["survey"] = {
+                "turn": turn,
+                "n_turns": n_turns,
+                "verb": verb,
+                "answered": replies_answered,
+            }
+        state_path = BASE_DIR / "state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = state_path.with_name(f".{state_path.name}.tmp.{os.getpid()}")
+        tmp_path.write_text(json.dumps(payload, indent=2))
+        os.replace(tmp_path, state_path)
+    except Exception as e:
+        logger.debug(f"_emit_converse_state: failed to write state.json (swallowed): {e}")
+
+
+def _not_reached_turn_result(turn: dict, idx: int) -> dict:
+    """Build the alignment-invariant filler entry for a turn the survey loop
+    never got to (abort before this index). Always present so ``results`` is
+    length N regardless of where/why the survey stopped."""
+    entry = {
+        "index": idx,
+        "verb": turn["verb"],
+        "voice": turn["voice"],
+        "pause_after_ms": turn["pause_after_ms"],
+        "generation": 0.0,
+        "playback": 0.0,
+        "record": 0.0,
+        "stt": 0.0,
+        "status": "not_reached",
+    }
+    if turn["verb"] == "ask":
+        entry["reply"] = None
+    return entry
+
+
+async def _ask_turns_pipeline(
+    turns,
+    *,
+    tts_model,
+    tts_provider,
+    audio_format,
+    resolved_ref_text,
+    should_skip_tts,
+    control_state,
+    disable_silence_detection: bool = False,
+    chime_enabled: Optional[bool] = None,
+    chime_leading_silence: Optional[float] = None,
+    chime_trailing_silence: Optional[float] = None,
+    transport: str = "local",
+    event_logger=None,
+    lookahead: int = 1,
+    session_id: Optional[str] = None,
+) -> Tuple[list, Optional[dict]]:
+    """Survey pipeline (VM-1775 impl-002): the module-level sibling of
+    ``_speak_turns_pipeline`` that ALSO collects a reply after each ``ask``
+    turn, under the ONE conch hold the caller already acquired.
+
+    Same producer/consumer shape as the speak-only pipeline -- a single
+    producer synthesizes turn N+1 while turn N plays or LISTENS (``lookahead``
+    turns ahead; listening time hides synth latency for an ask-heavy survey,
+    so there is deliberately no extra synth barrier at ask turns) -- but the
+    consumer additionally drives ``listen_and_transcribe`` per ask turn and
+    applies the survey control matrix (README ## Design):
+
+    * ``stop`` (any phase)          -> end the survey; partial results.
+    * ``skip_forward`` (speaking)   -> cut playback; ``say`` advances, ``ask``
+      jumps straight to LISTEN ("answer early" barge-in).
+    * ``skip_forward`` (listening)  -> ends capture, transcribes, advances
+      (``listen_and_transcribe``'s own ``skip_forward_ended`` handling).
+    * ``skip_back`` (listening)     -> replay this turn's cached samples,
+      re-listen (the physical "repeat the question" gesture).
+    * spoken ``should_repeat``      -> replay this turn's cached samples,
+      re-listen (rescoped per ask turn from the single-message path).
+    * spoken ``should_wait``        -> pause ``WAIT_DURATION``, re-listen.
+    * spoken standalone break phrase (``_is_survey_break``) -> end the
+      survey; the break utterance itself is NOT recorded as a reply.
+
+    Failure policy (alignment invariant always holds -- ``results`` stays
+    length N, index-aligned):
+
+    * TTS fails on a ``say`` turn -> logged, skipped, continue (P1 policy,
+      unchanged).
+    * TTS fails on an ``ask`` turn -> do NOT listen (Mike never heard the
+      question; a capture would misattribute his confusion as an answer),
+      continue.
+    * No speech / STT-level no_speech -> ``reply: null``, advance (no
+      auto-re-ask in MVP).
+    * STT connection failure, or an audio-device exception mid-record -> abort
+      with partials (the failure will recur on every later ask).
+    * Any other unexpected exception is caught at the loop level -> abort with
+      partials (collected replies are never thrown away).
+
+    Per-exchange conversation logging (VM-1775 impl-003b, fable progress
+    review S8): every resolved ask-turn reply (answered or no_speech) is
+    logged via ``get_conversation_logger().log_stt(...)`` the moment it's
+    captured -- not batched at the end -- so a killed/cancelled call still
+    leaves every already-answered reply in the conversation logs even though
+    the tool's own JSON return value is lost (Decision 7's crash-persistence
+    guarantee).
+
+    Returns ``(results, stopped_at)``:
+
+    * ``results`` -- ALWAYS length N, index-aligned. Each entry is
+      ``{"index", "verb", "status", "reply"?, "voice", "pause_after_ms",
+      "generation", "playback", "record", "stt"}`` ("reply" is present iff
+      ``verb == "ask"``). Entries beyond an abort point are ``"not_reached"``.
+    * ``stopped_at`` -- ``None`` on full completion, else
+      ``{"turn": int, "phase": "speaking"|"listening", "reason": str}``.
+
+    This function does not decide conch or JSON serialization -- see
+    ``converse()``'s turns dispatch (VM-1775 impl-003) for both.
+    """
+    n = len(turns)
+    audio_queue: asyncio.Queue = asyncio.Queue(maxsize=max(1, lookahead))
+
+    async def producer():
+        for idx, turn in enumerate(turns):
+            if should_skip_tts:
+                await audio_queue.put({
+                    "index": idx, "samples": None, "sample_rate": None,
+                    "success": True, "skipped": True, "metrics": {"generation": 0.0},
+                })
+                continue
+            try:
+                success, samples, sample_rate, metrics, _config = await synthesize_turn_with_failover(
+                    message=turn["say"],
+                    voice=turn["voice"],
+                    model=tts_model,
+                    instructions=turn["tts_instructions"],
+                    audio_format=audio_format,
+                    initial_provider=tts_provider,
+                    speed=turn["speed"],
+                    ref_text=resolved_ref_text,
+                )
+            except Exception as e:
+                logger.error(f"Survey turn {idx} synthesis raised: {e}")
+                success, samples, sample_rate, metrics = False, None, None, {}
+            await audio_queue.put({
+                "index": idx, "samples": samples, "sample_rate": sample_rate,
+                "success": bool(success), "metrics": metrics or {},
+            })
+
+    producer_task = asyncio.create_task(producer())
+
+    results: list = [None] * n
+    stopped_at: Optional[dict] = None
+    idx = 0
+    # VM-1793 phase emitter (impl-005): cumulative count of ask turns
+    # answered SO FAR (before the turn currently being emitted resolves),
+    # matching the design report's worked example semantics.
+    answered_so_far = 0
+    # Tracks which phase turn `idx` is currently in, purely so the
+    # CancelledError / generic-exception handlers below (which fire from an
+    # `await` anywhere in the loop body) can report an accurate
+    # stopped_at.phase without re-deriving it from scratch. Reset to
+    # "speaking" at the top of every turn; flipped to "listening" only for
+    # the LISTEN phase of an `ask` turn.
+    current_phase = "speaking"
+
+    try:
+        while idx < n:
+            current_phase = "speaking"
+            # A stop (or an unconsumed skip_forward) latched during the
+            # PREVIOUS turn's inter-turn pause is noticed here, before this
+            # turn's audio ever plays -- skip_forward is transport-only (just
+            # "advance", already about to happen) so only reset it; a stop
+            # ends the survey with this turn reported "not_reached" (nothing
+            # of it was ever delivered).
+            snap = control_state.snapshot()
+            if snap.is_stopped:
+                stopped_at = {"turn": idx, "phase": "speaking", "reason": "stop"}
+                break
+            if snap.is_skip_forward:
+                control_state.reset()
+
+            item = await audio_queue.get()
+            turn = turns[idx]
+            verb = turn["verb"]
+            _emit_converse_state(
+                "speaking", session_id=session_id, turn=idx, n_turns=n,
+                verb=verb, replies_answered=answered_so_far,
+            )
+            entry = {
+                "index": idx,
+                "verb": verb,
+                "voice": turn["voice"],
+                "pause_after_ms": turn["pause_after_ms"],
+                "generation": item["metrics"].get("generation", 0.0),
+                "playback": 0.0,
+                "record": 0.0,
+                "stt": 0.0,
+            }
+            if verb == "ask":
+                entry["reply"] = None
+
+            tts_ok = item["success"] and (item.get("skipped") or item.get("samples") is not None)
+            if not tts_ok:
+                logger.warning(f"Survey turn {idx} synthesis failed; skipping its audio.")
+                entry["status"] = "tts_failed"
+                results[idx] = entry
+                idx += 1
+                continue
+
+            # --- SPEAK phase ------------------------------------------------
+            play_outcome = "played"
+            if not item.get("skipped"):
+                play_start = time.perf_counter()
+                play_outcome = await _play_samples_controllable(
+                    item["samples"], item["sample_rate"], control_state,
+                )
+                entry["playback"] = time.perf_counter() - play_start
+
+            if play_outcome == "stopped":
+                stopped_at = {"turn": idx, "phase": "speaking", "reason": "stop"}
+                entry["status"] = "spoken" if verb == "say" else "no_speech"
+                results[idx] = entry
+                break
+
+            if play_outcome == "skip_forward":
+                control_state.reset()
+                if verb == "say":
+                    # skip_forward NEVER breaks -- it advances (the documented
+                    # gesture is "move on", not "answer this").
+                    entry["status"] = "spoken"
+                    results[idx] = entry
+                    idx += 1
+                    if idx < n and turn["pause_after_ms"] > 0:
+                        await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
+                    continue
+                # ask: "answer early" barge-in -- fall straight into LISTEN.
+            elif verb == "say":
+                entry["status"] = "spoken"
+                results[idx] = entry
+                idx += 1
+                if idx < n and turn["pause_after_ms"] > 0:
+                    await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
+                continue
+            # else: verb == "ask" and play_outcome == "played" -- fall
+            # through to LISTEN below (the normal, non-barge-in case).
+
+            # --- LISTEN phase (verb == "ask") --------------------------------
+            current_phase = "listening"
+            _emit_converse_state(
+                "listening", session_id=session_id, turn=idx, n_turns=n,
+                verb=verb, replies_answered=answered_so_far,
+            )
+            cached_samples = item.get("samples")
+            cached_rate = item.get("sample_rate")
+            aborted = False
+            while True:
+                try:
+                    listen_result = await listen_and_transcribe(
+                        control_state,
+                        listen_duration_max=turn["listen_duration_max"],
+                        listen_duration_min=turn["listen_duration_min"],
+                        disable_silence_detection=disable_silence_detection,
+                        vad_aggressiveness=turn["vad_aggressiveness"],
+                        chime_enabled=chime_enabled,
+                        chime_leading_silence=chime_leading_silence,
+                        chime_trailing_silence=chime_trailing_silence,
+                        transport=transport,
+                        # F4 (fable pre-merge audit): a survey ask turn can
+                        # re-listen several times within the SAME turn
+                        # (skip_back replay, spoken repeat/wait) -- threading
+                        # the real event_logger through here used to emit
+                        # RECORDING_START/RECORDING_END/STT_START on every one
+                        # of those, with no matching STT_COMPLETE/STT_NO_SPEECH
+                        # ever emitted for survey mode (a 3-ask survey shipped
+                        # >=3 unpaired STT_START / 0 STT_COMPLETE). Passing
+                        # None here matches the S5 fix's philosophy for the
+                        # single-message repeat/wait re-listens: no event-log
+                        # entries from a construct that can legitimately loop
+                        # multiple times per logical turn, instead of trying
+                        # to keep a richer multi-listen event shape paired.
+                        event_logger=None,
+                    )
+                except Exception as e:
+                    logger.error(f"Survey turn {idx}: recording/STT raised: {e}")
+                    stopped_at = {"turn": idx, "phase": "listening", "reason": "audio_device_error"}
+                    entry["status"] = "stt_failed"
+                    aborted = True
+                    break
+
+                entry["record"] += listen_result.timings.get("record", 0.0)
+                entry["stt"] += listen_result.timings.get("stt", 0.0)
+
+                if listen_result.outcome == "skip_back":
+                    # listen_and_transcribe only PEEKS at the pending skip_back
+                    # (so a caller that owns a richer replay -- e.g. the
+                    # single-message path's history-buffer cursor -- can act on
+                    # it first); a survey ask turn has no history buffer to walk,
+                    # it just replays THIS turn's cached question, so consume the
+                    # one-shot request here. Left unconsumed, it re-fires forever.
+                    control_state.take_transport_request()
+                    logger.info(f"Survey turn {idx}: skip_back -- replaying question then re-listening")
+                    if await _replay_cached_question(cached_samples, cached_rate, control_state):
+                        # F1: a stop pressed during the replay itself ends the
+                        # survey now -- no spurious extra listen/chime.
+                        stopped_at = {"turn": idx, "phase": "listening", "reason": "stop"}
+                        entry["status"] = "no_speech"
+                        aborted = True
+                        break
+                    continue
+
+                if listen_result.outcome == "stopped":
+                    stopped_at = {"turn": idx, "phase": "listening", "reason": "stop"}
+                    entry["status"] = "no_speech"
+                    aborted = True
+                    break
+
+                if listen_result.outcome == "stt_error":
+                    # S2 (fable progress review): classify off the seam's own
+                    # stable ``error_kind`` field, not a substring match on the
+                    # human-readable ``error_message`` (a rewording there used
+                    # to be able to silently misclassify survey aborts).
+                    reason = (
+                        "stt_connection_failed"
+                        if listen_result.error_kind == "stt_connection_failed"
+                        else "audio_device_error"
+                    )
+                    stopped_at = {"turn": idx, "phase": "listening", "reason": reason}
+                    entry["status"] = "stt_failed"
+                    aborted = True
+                    break
+
+                text = listen_result.text
+                if text and _is_survey_break(text):
+                    logger.info(f"Survey turn {idx}: standalone break phrase -- ending survey")
+                    stopped_at = {"turn": idx, "phase": "listening", "reason": "spoken_break"}
+                    entry["status"] = "no_speech"
+                    aborted = True
+                    break
+
+                if text and should_repeat(text):
+                    logger.info(f"Survey turn {idx}: repeat requested -- replaying then re-listening")
+                    if await _replay_cached_question(cached_samples, cached_rate, control_state):
+                        # F1: a stop pressed during the replay itself ends the
+                        # survey now -- no spurious extra listen/chime.
+                        stopped_at = {"turn": idx, "phase": "listening", "reason": "stop"}
+                        entry["status"] = "no_speech"
+                        aborted = True
+                        break
+                    continue
+
+                if text and should_wait(text):
+                    logger.info(f"Survey turn {idx}: wait requested -- pausing {WAIT_DURATION}s")
+                    await asyncio.sleep(WAIT_DURATION)
+                    continue
+
+                if text:
+                    entry["status"] = "answered"
+                    entry["reply"] = text
+                    answered_so_far += 1
+                else:
+                    entry["status"] = "no_speech"
+                    entry["reply"] = None
+
+                # S8 (fable progress review): persist this reply to the
+                # conversation log AT CAPTURE TIME, not deferred to the end
+                # of the survey. Decision 7's crash-persistence guarantee is
+                # "a killed call loses the tool-result JSON, never the
+                # replies" -- that only holds if each reply lands on disk the
+                # moment it's captured, so a break/kill mid-survey still
+                # leaves every prior reply in the logs. Mirrors the
+                # single-message listen path's log_stt call, scoped per ask
+                # turn instead of once per converse() call.
+                #
+                # F2 (fable pre-merge audit): tag the log entry's own
+                # "transport" label as "survey" -- decoupled from the
+                # STT-transport parameter above (always "local" today), which
+                # is a DIFFERENT concept (which microphone/audio path was
+                # used, not which logical construct produced the reply). The
+                # single-message listen path's own log_stt call keeps passing
+                # the real STT transport, unchanged. This makes survey
+                # replies queryable/distinguishable in the conversation log
+                # (matching track_voice_interaction's own transport="survey"
+                # tagging at the dispatch call site) and is what
+                # scripts/verify-survey.sh's check_convo_log filters on.
+                try:
+                    get_conversation_logger().log_stt(
+                        text=text if text else "[no speech detected]",
+                        provider=listen_result.stt_provider,
+                        transport="survey",
+                        timing=f"record {listen_result.timings.get('record', 0.0):.1f}s, "
+                               f"stt {listen_result.timings.get('stt', 0.0):.1f}s",
+                    )
+                except Exception as log_err:
+                    logger.error(f"Survey turn {idx}: failed to log conversation STT: {log_err}")
+                break
+
+            results[idx] = entry
+            if aborted:
+                break
+            idx += 1
+            if idx < n and turn["pause_after_ms"] > 0:
+                await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
+    except asyncio.CancelledError:
+        # VM-1775 impl-003: the MCP client (ESC / tool-call cancel) can land
+        # here from an `await` anywhere in the loop body above. Unlike a
+        # generic leaf coroutine, this pipeline is NOT the top of the
+        # cancellation boundary -- converse() itself already swallows
+        # CancelledError at its own top level (see the rationale on that
+        # `except` block: leaf coroutine, no outer task needs to observe it,
+        # FastMCP stdio would otherwise tear down the whole server on an
+        # uncaught cancel). Swallowing it HERE instead is what fulfils the
+        # return-contract's guarantee that survey mode NEVER discards
+        # collected replies on cancellation: every reply gathered so far was
+        # already persisted to the conversation log at capture time, but the
+        # tool's return VALUE would be lost if this propagated past
+        # `_format_survey_result` uncaught. `results`/`stopped_at` are local
+        # to this function, so this is the one place that can attach them to
+        # a normal return instead of an unwind.
+        logger.info(f"Survey pipeline cancelled by client at turn {idx} ({current_phase})")
+        if stopped_at is None:
+            stopped_at = {"turn": idx, "phase": current_phase, "reason": "cancelled"}
+        if idx < n and results[idx] is None:
+            results[idx] = _not_reached_turn_result(turns[idx], idx)
+    except Exception as e:
+        logger.error(f"Survey pipeline aborted by an unexpected error at turn {idx}: {e}")
+        if stopped_at is None:
+            stopped_at = {"turn": idx, "phase": current_phase, "reason": "error"}
+        if idx < n and results[idx] is None:
+            results[idx] = _not_reached_turn_result(turns[idx], idx)
+    finally:
+        # VM-1793 phase emitter (impl-005): every exit path -- full
+        # completion, break, abort, cancellation -- ends with one final
+        # "idle" write so a reader never sees a stale "speaking"/"listening"
+        # phase after the survey is actually over (the design report's
+        # "completion/abort (idle, survey key removed)" contract).
+        _emit_converse_state("idle", session_id=session_id)
+        producer_task.cancel()
+        try:
+            await producer_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        # Drain anything left in the queue (an abandoned in-flight synth
+        # result) so the bounded queue never leaks between calls.
+        while not audio_queue.empty():
+            try:
+                audio_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+    for j in range(n):
+        if results[j] is None:
+            results[j] = _not_reached_turn_result(turns[j], j)
+
+    return results, stopped_at
+
+
+def _format_survey_result(
+    results: list,
+    stopped_at: Optional[dict],
+    n_ask: int,
+    metrics_level: str,
+) -> Tuple[str, bool]:
+    """Build the survey JSON return contract (README ## Design / Return
+    contract) from ``_ask_turns_pipeline``'s output.
+
+    ``json.dumps(payload, ensure_ascii=False, indent=2)`` -- a single JSON
+    object as the WHOLE return string (no prose prefix/suffix), so an agent
+    can detect survey mode by the leading ``{``. ``results`` is passed
+    through unchanged from the pipeline: it is ALWAYS length N and
+    index-aligned (the alignment invariant), including every abort path
+    (stop/skip/break/failure/cancellation) -- this function does not need to
+    re-derive or defend that invariant, only serialize it.
+
+    Returns ``(json_string, success)``. ``success`` mirrors ``completed`` in
+    spirit but is never a hard failure: a partial survey (break/abort) still
+    returns a fully-formed, parseable JSON payload -- that IS the success
+    case for survey mode (the "never a bare error string once >=1 reply is
+    held" guarantee), it just also reports where it stopped via
+    ``stopped_at``. ``success`` is only False when the survey never
+    delivered anything at all (aborted at turn 0 before any reply/spoken
+    turn was recorded) so callers/statistics can distinguish "a real survey
+    that got interrupted partway" from "nothing happened".
+    """
+    n_answered = sum(1 for r in results if r["status"] == "answered")
+    completed = stopped_at is None
+    any_progress = any(r["status"] != "not_reached" for r in results)
+    success = completed or any_progress
+
+    turns_payload = []
+    for r in results:
+        entry = {"turn": r["index"], "verb": r["verb"], "status": r["status"]}
+        if r["verb"] == "ask":
+            entry["reply"] = r.get("reply")
+        turns_payload.append(entry)
+
+    survey: Dict[str, Any] = {
+        "completed": completed,
+        "asked": n_ask,
+        "answered": n_answered,
+        "stopped_at": stopped_at,
+        "turns": turns_payload,
+    }
+
+    if metrics_level != "minimal":
+        total_gen = sum(r.get("generation", 0.0) for r in results)
+        total_play = sum(r.get("playback", 0.0) for r in results)
+        total_record = sum(r.get("record", 0.0) for r in results)
+        total_stt = sum(r.get("stt", 0.0) for r in results)
+        total = total_gen + total_play + total_record + total_stt
+        survey["timing"] = (
+            f"gen {total_gen:.1f}s, play {total_play:.1f}s, "
+            f"record {total_record:.1f}s, stt {total_stt:.1f}s, total {total:.1f}s"
+        )
+
+    return json.dumps({"survey": survey}, ensure_ascii=False, indent=2), success
+
+
+# Literal schema-description text for the `turns` parameter (README ## Design,
+# VM-1775 slice 6). Applied here via Annotated/Field so it lands in the tool's
+# JSON schema (not just prose in the docstring); every other converse() param
+# still gets its description from the KEY PARAMETERS prose below pending the
+# broader per-arg Annotated/Field migration (VM-1451).
+_TURNS_PARAM_DESCRIPTION = (
+    "Ordered list of utterances to deliver in ONE call, pipelined (turn N+1 is "
+    "synthesized while turn N plays — no synth dead-air). Each turn is an "
+    "object with EXACTLY ONE of: \"say\": str — speak this text and advance "
+    "(no listening), or \"ask\": str — speak this text, then LISTEN and "
+    "record the user's spoken reply. Optional per-turn overrides (each "
+    "defaults to the call-level argument of the same name): \"voice\", "
+    "\"speed\", \"tts_instructions\", \"pause_after_ms\"; and, meaningful on "
+    "ask turns: \"listen_duration_max\", \"listen_duration_min\", "
+    "\"vad_aggressiveness\". (\"wait_for_response\": true on a say turn is an "
+    "accepted alias for \"ask\".) The call-level wait_for_response is IGNORED "
+    "when turns is present — listening happens only for ask turns. If NO turn "
+    "asks, the call speaks the sequence and returns a text summary. If ANY "
+    "turn asks, the call returns a JSON object (as a string) with replies "
+    "aligned to turns by index: {\"survey\": {\"completed\": bool, \"asked\": "
+    "n, \"answered\": n, \"stopped_at\": null|{turn, phase, reason}, "
+    "\"turns\": [{\"turn\": i, \"verb\": \"say\"|\"ask\", \"status\": "
+    "\"spoken\"|\"answered\"|\"no_speech\"|\"tts_failed\"|\"stt_failed\"|"
+    "\"not_reached\", \"reply\": str|null}, ...]}} — entries for no_speech / "
+    "tts_failed / not_reached can simply be re-asked in a follow-up call. "
+    "Keep surveys short (≤ ~7 ask turns) and give each ask turn a sensible "
+    "\"listen_duration_max\" (30–45s for normal questions). During a survey "
+    "the user can: answer early or finish answering with skip-forward, hear "
+    "the question again with skip-back or by saying \"repeat\", pause with "
+    "\"wait\", and abandon the survey with the stop control or by saying only "
+    "\"break\" / \"stop the survey\" (returns the replies collected so far "
+    "plus where it stopped). Unknown keys in a turn are rejected. \"play\" is "
+    "reserved for a future phase. If both message and turns are given, turns "
+    "wins."
+)
+
+
 @mcp.tool()
 async def converse(
     message: Optional[str] = None,
-    turns: Optional[list] = None,
+    turns: Annotated[Optional[list], Field(description=_TURNS_PARAM_DESCRIPTION)] = None,
     pause_after_ms: int = 150,
     wait_for_response: Union[bool, str] = True,
     listen_duration_max: float = DEFAULT_LISTEN_DURATION,
@@ -1749,12 +2898,17 @@ Example: If user says "search for tasks created yesterday", check for and invoke
 
 KEY PARAMETERS:
 • message (string): The message to speak (required unless `turns` is given)
-• turns (list, optional): Speak an ordered multi-voice sequence in ONE call,
-  gap-free — turn N+1 is synthesized while turn N plays (no synth dead-air).
-  Each turn is an object: {"say": str (required), "voice"?: str,
-  "pause_after_ms"?: int, "tts_instructions"?: str, "speed"?: float}. Per-turn
-  `voice` overrides the call-level `voice`. Speak-only (no reply collection in
-  this version). If both `message` and `turns` are given, `turns` wins.
+• turns (list, optional): ordered multi-voice sequence in ONE call; each turn
+  {"say": ...} speaks, {"ask": ...} speaks then listens and collects the
+  reply; returns replies aligned to turns as JSON when any turn asks. See the
+  turns parameter description for the full schema (verbs, per-turn overrides,
+  survey controls: skip-forward advances, skip-back/"repeat" replays the
+  question, spoken "break"/stop ends the survey with partials). If both
+  `message` and `turns` are given, `turns` wins. Killed-call recovery: every
+  reply already collected is durably written to the conversation logs the
+  instant its ask turn resolves, not batched at the end — a killed/crashed
+  call still leaves every already-given reply on disk, even one that never
+  returns its survey JSON.
 • pause_after_ms (int, default: 150): Silence inserted after each turn in a
   `turns` sequence; a turn's own `pause_after_ms` overrides this. 0 = gap-free.
 • wait_for_response (bool, default: true): Listen for response after speaking
@@ -1982,9 +3136,40 @@ consult the MCP resources listed above.
     # Determine effective metrics level (parameter overrides config)
     effective_metrics_level = metrics_level if metrics_level else METRICS_LEVEL
 
-    # VM-1772: normalize the optional turns[] list (speak-only multivoice). When
-    # present it takes precedence over the scalar `message` (precedence is
-    # resolved here, not in the schema — strict-mode JSON Schema has no oneOf).
+    # Validate vad_aggressiveness parameter (call-level). N4 (fable progress
+    # review): this must run BEFORE _normalize_turns below -- with turns
+    # present, an out-of-range call-level vad_aggressiveness used to be
+    # caught by the per-turn inheritance validation first, so the error
+    # misleadingly read "turn 0: 'vad_aggressiveness' must be…", blaming
+    # turn 0 for a call-level argument.
+    if vad_aggressiveness is not None:
+        if not isinstance(vad_aggressiveness, int) or vad_aggressiveness < 0 or vad_aggressiveness > 3:
+            return f"Error: vad_aggressiveness must be an integer between 0 and 3 (got {vad_aggressiveness})"
+
+    # Validate duration parameters (call-level). N-b (fable pre-merge audit):
+    # extends N4's misattribution fix to listen_duration_min/listen_duration_max
+    # -- same reason, same fix shape: this must also run BEFORE _normalize_turns
+    # below. With turns present, an out-of-range call-level listen_duration_min
+    # used to be caught by the per-turn inheritance validation first, so the
+    # error misleadingly read "turn 0: 'listen_duration_min' cannot be
+    # negative…", blaming turn 0 for a call-level argument.
+    if wait_for_response:
+        if listen_duration_min < 0:
+            return "❌ Error: listen_duration_min cannot be negative"
+        if listen_duration_max <= 0:
+            return "❌ Error: listen_duration_max must be positive"
+        if listen_duration_min > listen_duration_max:
+            logger.warning(f"listen_duration_min ({listen_duration_min}s) is greater than listen_duration_max ({listen_duration_max}s), using listen_duration_max as minimum")
+            listen_duration_min = listen_duration_max
+
+    # VM-1772/VM-1775: normalize the optional turns[] list (speak-only P1 +
+    # ask/collect-response P2). When present it takes precedence over the
+    # scalar `message` (precedence is resolved here, not in the schema —
+    # strict-mode JSON Schema has no oneOf). The call-level `wait_for_response`
+    # is intentionally NOT threaded through here — turns mode never enters the
+    # scalar-message listen path below (see the `normalized_turns is not None`
+    # branch), so a call-level wait_for_response default can't leak into a
+    # turns call; listening is per-turn opt-in only (`ask` / alias).
     normalized_turns = None
     if turns is not None:
         try:
@@ -1994,6 +3179,9 @@ consult the MCP resources listed above.
                 default_pause_after_ms=pause_after_ms,
                 default_tts_instructions=tts_instructions,
                 default_speed=speed,
+                default_listen_duration_max=listen_duration_max,
+                default_listen_duration_min=listen_duration_min,
+                default_vad_aggressiveness=vad_aggressiveness,
             )
         except ValueError as e:
             return f"❌ Error: {e}"
@@ -2014,22 +3202,7 @@ consult the MCP resources listed above.
         message = ""
 
     logger.info(f"Converse: '{message[:50]}{'...' if len(message) > 50 else ''}' (wait_for_response: {wait_for_response})")
-    
-    # Validate vad_aggressiveness parameter
-    if vad_aggressiveness is not None:
-        if not isinstance(vad_aggressiveness, int) or vad_aggressiveness < 0 or vad_aggressiveness > 3:
-            return f"Error: vad_aggressiveness must be an integer between 0 and 3 (got {vad_aggressiveness})"
-    
-    # Validate duration parameters
-    if wait_for_response:
-        if listen_duration_min < 0:
-            return "❌ Error: listen_duration_min cannot be negative"
-        if listen_duration_max <= 0:
-            return "❌ Error: listen_duration_max must be positive"
-        if listen_duration_min > listen_duration_max:
-            logger.warning(f"listen_duration_min ({listen_duration_min}s) is greater than listen_duration_max ({listen_duration_max}s), using listen_duration_max as minimum")
-            listen_duration_min = listen_duration_max
-    
+
     # Check if FFmpeg is available
     ffmpeg_available = getattr(voice_mode.config, 'FFMPEG_AVAILABLE', True)  # Default to True if not set
     if not ffmpeg_available:
@@ -2253,6 +3426,61 @@ consult the MCP resources listed above.
             # serialized with all other audio ops; ``control_state`` is the shared
             # singleton the streaming loops + record loop poll for pause/stop.
             async with audio_operation_lock, _control_listener_scope() as control_state:
+                # VM-1775 impl-003: dispatch on whether ANY turn asks. No-ask
+                # turns[] calls fall through to the untouched VM-1772
+                # speak-only pipeline below (byte-identical return, per the
+                # README's back-compat requirement); any-ask calls take the
+                # survey pipeline + JSON return contract instead.
+                if normalized_turns is not None and any(t["verb"] == "ask" for t in normalized_turns):
+                    n_ask = sum(1 for t in normalized_turns if t["verb"] == "ask")
+                    with DJDucker():
+                        survey_results, stopped_at = await _ask_turns_pipeline(
+                            normalized_turns,
+                            tts_model=tts_model,
+                            tts_provider=tts_provider,
+                            audio_format=audio_format,
+                            resolved_ref_text=resolved_ref_text,
+                            should_skip_tts=should_skip_tts,
+                            control_state=control_state,
+                            disable_silence_detection=disable_silence_detection,
+                            chime_enabled=chime_enabled,
+                            chime_leading_silence=chime_leading_silence,
+                            chime_trailing_silence=chime_trailing_silence,
+                            transport=transport,
+                            event_logger=event_logger,
+                            session_id=resolved_session_id,
+                        )
+                    result, success = _format_survey_result(
+                        survey_results, stopped_at, n_ask, effective_metrics_level,
+                    )
+
+                    n_answered = sum(1 for r in survey_results if r["status"] == "answered")
+                    timing_str = ", ".join(
+                        f"turn{r['index'] + 1} gen {r['generation']:.1f}s play {r['playback']:.1f}s"
+                        + (f" record {r['record']:.1f}s stt {r['stt']:.1f}s" if r["verb"] == "ask" else "")
+                        for r in survey_results
+                    )
+                    track_voice_interaction(
+                        message=f"[survey x{len(survey_results)}, {n_ask} ask] "
+                                + " | ".join(t["say"][:40] for t in normalized_turns),
+                        response=f"[survey: {n_answered}/{n_ask} answered]",
+                        timing_str=timing_str,
+                        transport="survey",
+                        voice_provider=tts_provider,
+                        voice_name=voice,
+                        model=tts_model,
+                        success=success,
+                        error_message=(
+                            None if stopped_at is None
+                            else f"stopped at turn {stopped_at['turn']} ({stopped_at['reason']})"
+                        ),
+                    )
+                    logger.info(
+                        f"Survey result: completed={stopped_at is None}, "
+                        f"answered={n_answered}/{n_ask}"
+                    )
+                    return result
+
                 # VM-1772: multi-utterance turns[] pipeline (speak-only, P1).
                 # The conch is already held for the whole call (acquired above,
                 # released in the finally), so the sequence plays in order under
@@ -2468,7 +3696,12 @@ consult the MCP resources listed above.
                 # press *during* recording loops us back to replay again. The cursor
                 # persists across the whole turn so successive presses step further
                 # back through the history buffer.
+                #
+                # VM-1775: the actual listen exchange (chime->record->chime->STT)
+                # is now the extracted listen_and_transcribe() seam (VM-1832);
+                # this loop only owns the skip_back replay-then-relisten control.
                 replay_cursor = 0
+                listen_result = None
                 while True:
                     # Replay any queued skip_back(s) before listening.
                     replay_cursor = await _drain_skip_back(control_state, replay_cursor)
@@ -2482,7 +3715,7 @@ consult the MCP resources listed above.
                     # Consume the edge HERE (reset, mirroring the playback consume at
                     # ~2066) and advance to the record/listen turn, instead of carrying
                     # the latched state into recording -- where it would otherwise defer
-                    # the turn-advance to the post-record consume at ~2197 and batch with
+                    # the turn-advance to the post-record consume and batch with
                     # the next press (the "first press dropped, second works" symptom).
                     # Checked BEFORE is_stopped: the two are mutually exclusive states,
                     # and a racing stop dominates the latch upstream (request_stop
@@ -2496,183 +3729,50 @@ consult the MCP resources listed above.
                         success = True
                         return _build_control_stop_result(control_snapshot, timings)
 
-                    # Brief pause before listening
-                    await asyncio.sleep(0.5)
-
-                    # Play "listening" feedback sound
-                    await play_audio_feedback(
-                        "listening",
-                        openai_clients,
-                        chime_enabled,
-                        "whisper",
+                    listen_result = await listen_and_transcribe(
+                        control_state,
+                        listen_duration_max=listen_duration_max,
+                        listen_duration_min=listen_duration_min,
+                        disable_silence_detection=disable_silence_detection,
+                        vad_aggressiveness=vad_aggressiveness,
+                        chime_enabled=chime_enabled,
                         chime_leading_silence=chime_leading_silence,
-                        chime_trailing_silence=chime_trailing_silence
+                        chime_trailing_silence=chime_trailing_silence,
+                        transport=transport,
+                        event_logger=event_logger,
+                        pre_listen_pause=0.5,
                     )
+                    timings.update(listen_result.timings)
 
-                    # Record response
-                    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
-
-                    # Log recording start
-                    if event_logger:
-                        event_logger.log_event(event_logger.RECORDING_START)
-
-                    record_start = time.perf_counter()
-                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                    )
-                    timings['record'] = time.perf_counter() - record_start
-
-                    # Log recording end
-                    if event_logger:
-                        event_logger.log_event(event_logger.RECORDING_END, {
-                            "duration": timings['record'],
-                            "samples": len(audio_data)
-                        })
-
-                    # VM-1676: a control-channel stop that arrived while we were
-                    # listening also ends the turn cleanly -- skip STT and return the
-                    # control marker normally (again, NOT the ESC/CancelledError path).
-                    control_snapshot = control_state.snapshot()
-                    if control_snapshot.is_stopped:
-                        logger.info("Converse stopped via control channel during recording")
-                        success = True
-                        return _build_control_stop_result(control_snapshot, timings)
-
-                    # VM-1754: a skip_forward pressed while listening is the manual
-                    # "I'm done, go now" end-of-turn (and the VAD fallback when
-                    # silence detection isn't firing). Consume the sticky-state edge
-                    # (reset, mirroring the playback consume above) and fall through
-                    # to the normal STT + return path: transcribe whatever was
-                    # captured and return it as the user's response. Distinct from
-                    # both siblings -- NOT a [control: stop] marker (stop) and NOT a
-                    # replay (skip_back). Checked before skip_back: skip_forward is a
-                    # sticky terminal STATE (softer than stop, but harder than the
-                    # one-shot skip_back transport), so a decisive "advance" wins
-                    # over a "replay" if both happened to be pressed. The
-                    # skip_forward_ended flag tells the empty-buffer guard below that
-                    # an empty capture here is intentional ("go now"), not an error.
-                    skip_forward_ended = False
-                    if control_snapshot.is_skip_forward:
-                        logger.info("skip_forward received during recording -- ending turn, transcribing captured audio")
-                        control_state.reset()
-                        skip_forward_ended = True
-                    # VM-1685: a skip_back pressed while listening -> replay the
-                    # cached audio, then listen again. Otherwise this recording is
-                    # the user's real response; proceed to STT.
-                    elif control_state.pending_transport == COMMAND_SKIP_BACK:
+                    if listen_result.outcome == "skip_back":
+                        # VM-1685: a skip_back pressed while listening -> replay
+                        # the cached audio, then listen again.
                         logger.info("skip_back received during recording -- replaying then re-listening")
                         continue
+                    if listen_result.outcome == "stopped":
+                        logger.info("Converse stopped via control channel during recording")
+                        success = True
+                        return _build_control_stop_result(listen_result.control, timings)
                     break
 
-                # Play "finished" feedback sound
-                await play_audio_feedback(
-                    "finished",
-                    openai_clients,
-                    chime_enabled,
-                    "whisper",
-                    chime_leading_silence=chime_leading_silence,
-                    chime_trailing_silence=chime_trailing_silence
-                )
-                
                 # Mark the end of recording - this is when user expects response to start
                 user_done_time = time.perf_counter()
                 logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
-                
-                if len(audio_data) == 0:
-                    # VM-1754: under skip_forward an empty buffer is intentional --
-                    # the user pressed "go now" before any audio was captured (the
-                    # VAD-fallback edge). Don't surface it as a recording error;
-                    # fall through to the graceful no-speech path so the turn simply
-                    # advances (returns "No speech detected", success=True).
-                    if not skip_forward_ended:
-                        result = "Error: Could not record audio"
-                        return result
-                    logger.info("skip_forward ended recording before any audio was captured -- advancing with no speech")
-                    speech_detected = False
-                
+
+                if listen_result.outcome == "stt_error":
+                    # Empty recording buffer (not a skip_forward "go now") or an
+                    # STT connection failure -- both returned immediately pre-extraction.
+                    result = listen_result.error_message
+                    return result
+
+                response_text = listen_result.text
+                stt_provider = listen_result.stt_provider
                 # Track STT-specific metrics (defined here to be in scope for event logging later)
-                stt_metrics = None
-
-                # Check if no speech was detected
-                if not speech_detected:
-                    logger.info("No speech detected during recording - skipping STT processing")
-                    response_text = None
-                    timings['stt'] = 0.0
-
-                    # Still save the audio if configured (skip an empty buffer --
-                    # e.g. a skip_forward fired before any audio was captured).
-                    if SAVE_AUDIO and AUDIO_DIR and len(audio_data) > 0:
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
-                        write(audio_path, SAMPLE_RATE, audio_data)
-                        logger.debug(f"Saved no-speech audio to: {audio_path}")
-                else:
-                    # Convert to text
-                    # Log STT start
-                    if event_logger:
-                        event_logger.log_event(event_logger.STT_START)
-
-                    stt_start = time.perf_counter()
-                    stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                    timings['stt'] = time.perf_counter() - stt_start
-
-                    # Handle structured STT result
-                    if isinstance(stt_result, dict):
-                        # Extract metrics if present
-                        stt_metrics = stt_result.get("metrics")
-                        if stt_metrics:
-                            # Store in timings for later use
-                            timings['stt_request_ms'] = stt_metrics.get('request_time_ms', 0)
-                            timings['stt_file_size_bytes'] = stt_metrics.get('file_size_bytes', 0)
-                            timings['stt_is_local'] = stt_metrics.get('is_local', False)
-                            logger.debug(f"STT metrics: request={stt_metrics.get('request_time_ms')}ms, "
-                                       f"file_size={stt_metrics.get('file_size_bytes')/1024:.1f}KB, "
-                                       f"is_local={stt_metrics.get('is_local')}")
-
-                        if "error_type" in stt_result:
-                            # Handle connection failures vs no speech
-                            if stt_result["error_type"] == "connection_failed":
-                                # Build helpful error message
-                                error_lines = ["STT service connection failed:"]
-                                openai_error_shown = False
-
-                                for attempt in stt_result.get("attempted_endpoints", []):
-                                    # Check if we have parsed OpenAI error details
-                                    if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
-                                        error_details = attempt['error_details']
-                                        error_lines.append("")
-                                        error_lines.append(error_details.get('title', 'OpenAI Error'))
-                                        error_lines.append(error_details.get('message', ''))
-                                        if error_details.get('suggestion'):
-                                            error_lines.append(f"💡 {error_details['suggestion']}")
-                                        if error_details.get('fallback'):
-                                            error_lines.append(f"ℹ️ {error_details['fallback']}")
-                                        openai_error_shown = True
-                                    else:
-                                        # Show raw error for non-OpenAI or if we already showed OpenAI error
-                                        error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
-
-                                error_msg = "\n".join(error_lines)
-                                logger.error(error_msg)
-
-                                # Return error immediately
-                                return error_msg
-
-                            elif stt_result["error_type"] == "no_speech":
-                                # Genuine no speech detected
-                                response_text = None
-                                stt_provider = stt_result.get("provider", "unknown")
-                        else:
-                            # Successful transcription
-                            response_text = stt_result.get("text")
-                            stt_provider = stt_result.get("provider", "unknown")
-                            if stt_provider != "unknown":
-                                logger.info(f"📡 STT Provider: {stt_provider}")
-                    else:
-                        # Should not happen with new code, but handle gracefully
-                        response_text = None
-                        stt_provider = "unknown"
+                stt_metrics = {
+                    'request_time_ms': timings.get('stt_request_ms'),
+                    'file_size_bytes': timings.get('stt_file_size_bytes'),
+                    'is_local': timings.get('stt_is_local'),
+                } if 'stt_request_ms' in timings else None
 
                 # Check for repeat phrase - if detected, replay the audio and listen again
                 if response_text and should_repeat(response_text):
@@ -2729,49 +3829,48 @@ consult the MCP resources listed above.
                             if not tts_success:
                                 logger.error("Failed to replay audio via TTS regeneration")
 
-                        # Listen again for response - reuse the recording logic
+                        # Listen again for response (VM-1775: onto the
+                        # listen_and_transcribe seam -- gains control-channel
+                        # awareness this re-listen previously lacked entirely: a
+                        # control stop now ends the turn with the normal control
+                        # marker instead of silently falling through).
                         logger.info("Listening for response after repeat...")
 
-                        # Play "listening" feedback sound
-                        await play_audio_feedback(
-                            "listening",
-                            openai_clients,
-                            chime_enabled,
-                            "whisper",
+                        # S4/S5/S6 (fable progress review) + F1 (fable
+                        # pre-merge audit): shared with the wait re-listen
+                        # below -- see _relisten_after_keyword()'s docstring
+                        # for the full rationale (verify-001 extracted this
+                        # loop out of converse() to restore the line-count
+                        # hard constraint; behaviour is unchanged).
+                        outcome, payload = await _relisten_after_keyword(
+                            control_state,
+                            listen_duration_max=listen_duration_max,
+                            listen_duration_min=listen_duration_min,
+                            disable_silence_detection=disable_silence_detection,
+                            vad_aggressiveness=vad_aggressiveness,
+                            chime_enabled=chime_enabled,
                             chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence
+                            chime_trailing_silence=chime_trailing_silence,
+                            transport=transport,
+                            timings=timings,
+                            context_label="repeat",
                         )
-
-                        # Record audio
-                        record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                        )
-                        record_time = time.perf_counter() - record_start
-                        timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
-
-                        # Play "finished" feedback sound
-                        await play_audio_feedback(
-                            "finished",
-                            openai_clients,
-                            chime_enabled,
-                            "whisper",
-                            chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence
-                        )
-
-                        if len(audio_data) > 0 and speech_detected:
-                            # Transcribe the audio
-                            stt_start = time.perf_counter()
-                            stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                            stt_time = time.perf_counter() - stt_start
-                            timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
-
-                            # Process result
-                            if isinstance(stt_result, dict) and not stt_result.get("error"):
-                                response_text = stt_result.get("text")
-                                stt_provider = stt_result.get("provider", "unknown")
-                                logger.info(f"New response after repeat: {response_text}")
+                        if outcome == "stopped":
+                            success = True
+                            return _build_control_stop_result(payload, timings)
+                        if outcome == "stt_error":
+                            # Surface the STT failure, matching the main
+                            # listen path's behaviour, instead of silently
+                            # keeping the "repeat" utterance as the answer.
+                            return payload.error_message
+                        listen_result = payload
+                        if listen_result.stt_classified:
+                            # Matches the pre-extraction guard (len(audio_data) > 0
+                            # and speech_detected): only overwrite the response once
+                            # STT actually ran and classified the capture.
+                            response_text = listen_result.text
+                            stt_provider = listen_result.stt_provider
+                            logger.info(f"New response after repeat: {response_text}")
 
                 # Check for wait phrase - if detected, pause for configured duration
                 if response_text and should_wait(response_text):
@@ -2785,49 +3884,38 @@ consult the MCP resources listed above.
                     # Play system message when ready to listen again
                     await play_system_audio("ready-to-listen", fallback_text="Ready to listen")
 
-                    # After waiting, listen again
+                    # After waiting, listen again (VM-1775: onto the
+                    # listen_and_transcribe seam -- same control-channel gain as
+                    # the repeat re-listen above).
                     logger.info("Wait period ended. Listening for response...")
                     if transport == "local":
-                        # Play "listening" feedback sound
-                        await play_audio_feedback(
-                            "listening",
-                            openai_clients,
-                            chime_enabled,
-                            "whisper",
+                        # S4/S5/S6 (fable progress review) + F1 (fable
+                        # pre-merge audit): shared with the repeat re-listen
+                        # above -- see _relisten_after_keyword()'s docstring
+                        # for the full rationale.
+                        outcome, payload = await _relisten_after_keyword(
+                            control_state,
+                            listen_duration_max=listen_duration_max,
+                            listen_duration_min=listen_duration_min,
+                            disable_silence_detection=disable_silence_detection,
+                            vad_aggressiveness=vad_aggressiveness,
+                            chime_enabled=chime_enabled,
                             chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence
+                            chime_trailing_silence=chime_trailing_silence,
+                            transport=transport,
+                            timings=timings,
+                            context_label="wait",
                         )
-
-                        # Record audio
-                        record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                        )
-                        record_time = time.perf_counter() - record_start
-                        timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
-
-                        # Play "finished" feedback sound
-                        await play_audio_feedback(
-                            "finished",
-                            openai_clients,
-                            chime_enabled,
-                            "whisper",
-                            chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence
-                        )
-
-                        if len(audio_data) > 0 and speech_detected:
-                            # Transcribe the audio
-                            stt_start = time.perf_counter()
-                            stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                            stt_time = time.perf_counter() - stt_start
-                            timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
-
-                            # Process result
-                            if isinstance(stt_result, dict) and not stt_result.get("error"):
-                                response_text = stt_result.get("text")
-                                stt_provider = stt_result.get("provider", "unknown")
-                                logger.info(f"New response after wait: {response_text}")
+                        if outcome == "stopped":
+                            success = True
+                            return _build_control_stop_result(payload, timings)
+                        if outcome == "stt_error":
+                            return payload.error_message
+                        listen_result = payload
+                        if listen_result.stt_classified:
+                            response_text = listen_result.text
+                            stt_provider = listen_result.stt_provider
+                            logger.info(f"New response after wait: {response_text}")
 
                 # Log STT complete with metrics
                 if event_logger:

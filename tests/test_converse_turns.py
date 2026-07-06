@@ -80,14 +80,27 @@ class TestNormalizeTurns:
         assert len(turns) == 1 and turns[0]["say"] == "solo"
 
     @pytest.mark.parametrize("bad", [
-        [{"voice": "x"}],                       # missing say
+        [{"voice": "x"}],                       # missing say/ask
         [{"say": ""}],                          # empty say
         [{"say": "   "}],                       # whitespace say
         [{"say": "ok", "pause_after_ms": -5}],  # negative pause
         [{"say": "ok", "pause_after_ms": "x"}], # non-int pause
         [{"say": "ok", "speed": 9}],            # speed out of range
         [{"say": "ok", "play": "file.wav"}],    # reserved P3 key
-        [{"say": "ok", "wait_for_response": True}],  # reserved P2 key
+        [{"ask": ""}],                          # empty ask
+        [{"say": "a", "ask": "b"}],              # both verbs
+        [{"ask": "a", "wait_for_response": True}],   # wfr alongside ask (error regardless of value)
+        [{"ask": "a", "wait_for_response": False}],  # wfr alongside ask, still an error
+        [{"say": "a", "wait_for_response": "true"}],  # wfr must be bool, not string
+        [{"say": "ok", "listen_duration_max": 0}],    # non-positive
+        [{"say": "ok", "listen_duration_min": -1}],   # negative
+        [{"say": "ok", "vad_aggressiveness": 9}],     # out of range
+        [{"say": "ok", "vad_aggressiveness": "x"}],   # not an int
+        [{"say": "ok", "message": "nested"}],   # not a turn key (no nested converse call)
+        [{"say": "ok", "turns": []}],           # not a turn key
+        [{"say": "ok", "conch": True}],         # not a turn key
+        [{"say": "ok", "session": "x"}],        # not a turn key
+        [{"say": "ok", "bogus": 1}],            # generic unknown key
         ["just a string"],                      # not an object
     ])
     def test_invalid_turns_raise(self, bad):
@@ -97,6 +110,97 @@ class TestNormalizeTurns:
                 default_voice=None, default_pause_after_ms=150,
                 default_tts_instructions=None, default_speed=None,
             )
+
+    def test_ask_verb_selected_and_text_captured(self):
+        turns = _normalize_turns(
+            [{"ask": "how are you?"}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["verb"] == "ask"
+        assert turns[0]["say"] == "how are you?"
+
+    def test_say_verb_default(self):
+        turns = _normalize_turns(
+            [{"say": "hi"}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["verb"] == "say"
+
+    def test_wait_for_response_true_is_ask_alias(self):
+        turns = _normalize_turns(
+            [{"say": "how are you?", "wait_for_response": True}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["verb"] == "ask"
+        assert turns[0]["say"] == "how are you?"
+
+    def test_wait_for_response_false_stays_say(self):
+        turns = _normalize_turns(
+            [{"say": "hi", "wait_for_response": False}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["verb"] == "say"
+
+    def test_listen_fields_inherit_call_level_defaults(self):
+        turns = _normalize_turns(
+            [{"ask": "a"}, {"ask": "b", "listen_duration_max": 45, "listen_duration_min": 5, "vad_aggressiveness": 1}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+            default_listen_duration_max=30, default_listen_duration_min=2,
+            default_vad_aggressiveness=2,
+        )
+        assert turns[0]["listen_duration_max"] == 30    # call default
+        assert turns[0]["listen_duration_min"] == 2
+        assert turns[0]["vad_aggressiveness"] == 2
+        assert turns[1]["listen_duration_max"] == 45    # per-turn override
+        assert turns[1]["listen_duration_min"] == 5
+        assert turns[1]["vad_aggressiveness"] == 1
+
+    def test_listen_fields_present_on_say_turns_too(self):
+        # Normalized uniformly (harmless on say turns) so a later say -> ask
+        # edit doesn't need to add them.
+        turns = _normalize_turns(
+            [{"say": "hi"}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+            default_listen_duration_max=30, default_listen_duration_min=2,
+            default_vad_aggressiveness=None,
+        )
+        assert turns[0]["listen_duration_max"] == 30
+        assert turns[0]["listen_duration_min"] == 2
+        assert turns[0]["vad_aggressiveness"] is None
+
+    def test_listen_duration_min_clamped_to_max(self):
+        turns = _normalize_turns(
+            [{"ask": "a", "listen_duration_min": 100, "listen_duration_max": 30}],
+            default_voice=None, default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert turns[0]["listen_duration_min"] == 30
+
+    # ---------------------------------------------------------------------
+    # P1 speak-only back-compat matrix -- every P1-valid speak-only turns
+    # call keeps behaving exactly as before (verb defaults to "say", no
+    # listen fields required, reserved-key/unknown-key semantics preserved
+    # for the keys P1 already covered).
+    # ---------------------------------------------------------------------
+    @pytest.mark.parametrize("good", [
+        [{"say": "one"}],
+        [{"say": "one", "voice": "alpha"}, {"say": "two"}],
+        [{"say": "a", "pause_after_ms": 400}, {"say": "b"}],
+        [{"say": "a"}, {"say": "b", "speed": 1.5, "tts_instructions": "whisper"}],
+    ])
+    def test_p1_back_compat_matrix_still_all_say(self, good):
+        turns = _normalize_turns(
+            good,
+            default_voice="callvoice", default_pause_after_ms=150,
+            default_tts_instructions=None, default_speed=None,
+        )
+        assert all(t["verb"] == "say" for t in turns)
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +354,52 @@ async def test_turns_take_precedence_over_message():
 
 
 @pytest.mark.asyncio
+async def test_turns_with_call_level_wait_for_response_default_true_stays_speak_only():
+    """S7a (fable progress review): the back-compat invariant of Decision 1
+    rule 4 -- turns present + call-level ``wait_for_response`` left at its
+    default ``True`` must still be speak-only when no turn asks. Every other
+    turns-mode test in this module passes ``wait_for_response=False``
+    explicitly; this is the one that actually exercises the True default
+    (the commit message that first claimed this coverage overclaimed it --
+    the peer review caught it, this test closes the gap)."""
+    synth = AsyncMock(return_value=(True, _samples(), 24000, {"generation": 0.0}, {}))
+    stt_spy = AsyncMock(side_effect=AssertionError("must never listen -- no turn asks"))
+    with patch("voice_mode.tools.converse.synthesize_turn_with_failover", new=synth), \
+         patch("voice_mode.tools.converse._play_samples_blocking"), \
+         patch("voice_mode.tools.converse.asyncio.sleep", new=AsyncMock()), \
+         patch("voice_mode.tools.converse.listen_and_transcribe", new=stt_spy):
+        result = await getattr(converse, "fn", converse)(
+            turns=[{"say": "one"}, {"say": "two"}],
+            skip_conch=True,
+            metrics_level="minimal",
+            # wait_for_response deliberately OMITTED -- exercises the True default,
+            # not an explicit False.
+        )
+    assert result == "✓ Spoke 2/2 turns"
+    stt_spy.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_speak_only_turns_summary_is_byte_exact():
+    """S7b (fable progress review): this module's own turns-summary tests
+    (``TestFormatTurnsResult`` above) asserted substrings only ("1/1",
+    "failed"); the requirement is byte-for-byte, since impl-003's dispatch
+    ("no-ask turns[] calls fall through byte-identical") needs exactly this
+    net to prove it changed nothing."""
+    synth = AsyncMock(return_value=(True, _samples(), 24000, {"generation": 0.0}, {}))
+    with patch("voice_mode.tools.converse.synthesize_turn_with_failover", new=synth), \
+         patch("voice_mode.tools.converse._play_samples_blocking"), \
+         patch("voice_mode.tools.converse.asyncio.sleep", new=AsyncMock()):
+        result = await getattr(converse, "fn", converse)(
+            turns=[{"say": "one"}, {"say": "two"}],
+            wait_for_response=False,
+            skip_conch=True,
+            metrics_level="minimal",
+        )
+    assert result == "✓ Spoke 2/2 turns"
+
+
+@pytest.mark.asyncio
 async def test_converse_errors_with_neither_message_nor_turns():
     result = await getattr(converse, "fn", converse)(
         wait_for_response=False, skip_conch=True,
@@ -264,6 +414,89 @@ async def test_converse_rejects_malformed_turn():
         wait_for_response=False, skip_conch=True,
     )
     assert "Error" in result and "say" in result
+
+
+@pytest.mark.asyncio
+async def test_converse_rejects_neither_verb_with_exactly_one_of_message():
+    """N2 (fable progress review): a turn with NEITHER 'say' nor 'ask' reports
+    the actual requirement, not the misleading P1-era "'say' is required"."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"voice": "nova"}],
+        wait_for_response=False, skip_conch=True,
+    )
+    assert "exactly one of 'say' or 'ask'" in result
+
+
+@pytest.mark.asyncio
+async def test_converse_unknown_turn_key_lists_allowed_keys():
+    """N2 (fable progress review): the unknown-key error names the allowed
+    keys (Decision 1 rule 5), instead of just naming the bad one."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi", "typo_field": 1}],
+        wait_for_response=False, skip_conch=True,
+    )
+    assert "unknown key 'typo_field'" in result
+    assert "allowed:" in result
+    assert "ask" in result and "vad_aggressiveness" in result
+
+
+@pytest.mark.asyncio
+async def test_converse_unknown_turn_key_allowed_list_excludes_play():
+    """N-c (fable pre-merge audit): "play" is always rejected one check
+    earlier (it's reserved for VM-840, not yet supported) -- advertising it
+    in the unknown-key error's "allowed:" list would be misleading typo-help
+    text, since using it never actually works."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi", "typo_field": 1}],
+        wait_for_response=False, skip_conch=True,
+    )
+    allowed_section = result.split("allowed:", 1)[1]
+    allowed_keys = [k.strip().rstrip(").") for k in allowed_section.split(",")]
+    assert "play" not in allowed_keys
+
+
+@pytest.mark.asyncio
+async def test_call_level_vad_aggressiveness_error_not_blamed_on_turn_zero():
+    """N4 (fable progress review): an out-of-range CALL-LEVEL
+    vad_aggressiveness with turns present must be reported as a call-level
+    error, not misattributed to "turn 0" by the per-turn inheritance
+    validation running first."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi"}],
+        vad_aggressiveness=9,  # out of range (0-3)
+        wait_for_response=False, skip_conch=True,
+    )
+    assert "vad_aggressiveness must be an integer between 0 and 3" in result
+    assert "turn 0" not in result
+
+
+@pytest.mark.asyncio
+async def test_call_level_listen_duration_min_error_not_blamed_on_turn_zero():
+    """N-b (fable pre-merge audit): N4's misattribution fix covered
+    vad_aggressiveness only -- extend it to listen_duration_min/
+    listen_duration_max, the two other call-level fields this branch made
+    per-turn-inheritable. An out-of-range CALL-LEVEL listen_duration_min
+    with turns present must be reported as a call-level error, not
+    misattributed to "turn 0"."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi"}],
+        listen_duration_min=-1,
+        wait_for_response=True, skip_conch=True,
+    )
+    assert "listen_duration_min cannot be negative" in result
+    assert "turn 0" not in result
+
+
+@pytest.mark.asyncio
+async def test_call_level_listen_duration_max_error_not_blamed_on_turn_zero():
+    """N-b (fable pre-merge audit): same fix, the sibling field."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi"}],
+        listen_duration_max=0,
+        wait_for_response=True, skip_conch=True,
+    )
+    assert "listen_duration_max must be positive" in result
+    assert "turn 0" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -372,3 +605,171 @@ def test_cli_script_not_a_list_errors(patched_converse):
     )
     assert result.exit_code != 0
     assert "array" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# CLI --ask (VM-1775, impl-004)
+# ---------------------------------------------------------------------------
+
+from voice_mode.cli import _survey_exit_code
+
+
+def test_cli_ask_builds_turns_in_order(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "nova:one", "--ask", "two"],
+    )
+    assert result.exit_code == 0, result.output
+    turns = patched_converse.await_args.kwargs["turns"]
+    assert turns == [
+        {"ask": "one", "voice": "nova"},
+        {"ask": "two", "voice": None},   # no VOICE: prefix, no --voice -> default
+    ]
+
+
+def test_cli_ask_first_colon_only(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "nova:what time is it? 5:30-ish?"],
+    )
+    assert result.exit_code == 0, result.output
+    turns = patched_converse.await_args.kwargs["turns"]
+    assert turns == [{"ask": "what time is it? 5:30-ish?", "voice": "nova"}]
+
+
+def test_cli_ask_uses_voice_flag_as_default(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--voice", "shimmer", "--ask", "how did the demo land?"],
+    )
+    assert result.exit_code == 0, result.output
+    turns = patched_converse.await_args.kwargs["turns"]
+    assert turns == [{"ask": "how did the demo land?", "voice": "shimmer"}]
+
+
+def test_cli_ask_passes_call_level_listen_fields(patched_converse):
+    """Ask turns inherit listen_duration_max/min + vad_aggressiveness from the
+    CLI's --duration/--min-duration/--vad-aggressiveness flags (call-level
+    defaults per README ## Design)."""
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "one", "--duration", "20", "--min-duration", "3", "--vad-aggressiveness", "1"],
+    )
+    assert result.exit_code == 0, result.output
+    kwargs = patched_converse.await_args.kwargs
+    assert kwargs["listen_duration_max"] == 20
+    assert kwargs["listen_duration_min"] == 3
+    assert kwargs["vad_aggressiveness"] == 1
+
+
+def test_cli_say_and_ask_conflict(patched_converse):
+    """Mixing --say and --ask errors -- click can't preserve interleaving
+    order across two repeatable options; --script is the mixed surface."""
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--say", "one", "--ask", "two"],
+    )
+    assert result.exit_code != 0
+    assert "both" in result.output.lower()
+    assert "--script" in result.output
+    assert patched_converse.await_count == 0
+
+
+def test_cli_ask_and_script_conflict(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "one", "--script", "-"],
+        input="[]",
+    )
+    assert result.exit_code != 0
+    assert "not both" in result.output.lower()
+
+
+def test_cli_ask_with_positional_message_conflict(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "hello", "--ask", "one"],
+    )
+    assert result.exit_code != 0
+
+
+def test_cli_script_gains_ask_turns_for_free(patched_converse):
+    """--script's JSON turn schema already accepts "ask" (impl-001); the CLI
+    doesn't need any extra plumbing for the mixed say/ask surface."""
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--script", "-"],
+        input='[{"say":"hi","voice":"nova"},{"ask":"how are you?"}]',
+    )
+    assert result.exit_code == 0, result.output
+    turns = patched_converse.await_args.kwargs["turns"]
+    assert turns == [
+        {"say": "hi", "voice": "nova"},
+        {"ask": "how are you?"},  # no default --voice to backfill with
+    ]
+
+
+class TestSurveyExitCode:
+    """Unit tests for `_survey_exit_code` (VM-1775): exit 0 completed / 3
+    partial for a survey JSON result; None (default exit code) for a
+    speak-only (non-JSON) result."""
+
+    def test_speak_only_summary_is_not_survey(self):
+        assert _survey_exit_code("✓ Spoke 2/2 turns") is None
+
+    def test_empty_result_is_not_survey(self):
+        assert _survey_exit_code("") is None
+        assert _survey_exit_code(None) is None
+
+    def test_non_json_non_dict_result_is_not_survey(self):
+        assert _survey_exit_code("[]") is None
+        assert _survey_exit_code("not json at all") is None
+
+    def test_completed_survey_exits_zero(self):
+        result = '{"survey": {"completed": true, "turns": []}}'
+        assert _survey_exit_code(result) == 0
+
+    def test_partial_survey_exits_three(self):
+        result = '{"survey": {"completed": false, "stopped_at": {"turn": 1, "phase": "listening", "reason": "stop"}, "turns": []}}'
+        assert _survey_exit_code(result) == 3
+
+
+def test_cli_ask_survey_json_to_stdout_and_exit_zero_on_completion(patched_converse):
+    """Full completion: the survey JSON is the only stdout output, exit 0."""
+    survey_json = (
+        '{\n  "survey": {\n    "completed": true,\n    "asked": 1,\n    '
+        '"answered": 1,\n    "stopped_at": null,\n    "turns": [\n      '
+        '{"turn": 0, "verb": "ask", "status": "answered", "reply": "Great."}\n    ]\n  }\n}'
+    )
+    patched_converse.return_value = survey_json
+    runner = CliRunner()
+    result = runner.invoke(voice_mode_main_cli, ["converse", "--ask", "how did it go?"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == survey_json
+
+
+def test_cli_ask_survey_exit_three_on_partial(patched_converse):
+    """A break/abort mid-survey still prints the partial JSON, but exits 3
+    so scripts can branch on the exit code without parsing."""
+    survey_json = (
+        '{\n  "survey": {\n    "completed": false,\n    "asked": 2,\n    '
+        '"answered": 1,\n    "stopped_at": {"turn": 1, "phase": "listening", "reason": "stop"},\n'
+        '    "turns": [\n      {"turn": 0, "verb": "ask", "status": "answered", "reply": "Fine."},\n'
+        '      {"turn": 1, "verb": "ask", "status": "no_speech", "reply": null}\n    ]\n  }\n}'
+    )
+    patched_converse.return_value = survey_json
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "one", "--ask", "two"],
+    )
+    assert result.exit_code == 3, result.output
+    assert result.output.strip() == survey_json

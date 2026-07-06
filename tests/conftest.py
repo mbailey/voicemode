@@ -146,6 +146,40 @@ def isolate_home_directory(tmp_path, monkeypatch):
     except Exception:
         pass
     try:
+        # VM-1775 impl-005: _emit_converse_state (the VM-1793 phase emitter)
+        # writes ~/.voicemode/state.json on every survey speaking/listening
+        # transition -- unconditionally, unlike the opt-in SAVE_AUDIO/
+        # SAVE_TRANSCRIPTIONS debug writers. Any test that drives a real
+        # `_ask_turns_pipeline`/`converse(turns=[{"ask": ...}])` call would
+        # otherwise clobber the developer's real state.json, same class of
+        # bug the Conch.LOCK_FILE re-pin above already guards against.
+        import voice_mode.tools.converse as _converse_module
+        monkeypatch.setattr(
+            _converse_module, "BASE_DIR", fake_home / ".voicemode",
+        )
+    except Exception:
+        pass
+    try:
+        # VM-1775 impl-007b (fable pre-merge audit F3): ConversationLogger
+        # derives its base dir from voice_mode.config.BASE_DIR, frozen from
+        # the REAL Path.home() at import time -- the exact same bug-class as
+        # the Conch/converse BASE_DIR re-pins above, one file short. Without
+        # this, any test that drives a real _ask_turns_pipeline / listen path
+        # (most of test_ask_turns_pipeline.py, test_survey_return_contract.py,
+        # test_listen_and_transcribe.py, test_state_emitter.py) writes real
+        # entries into the developer's actual
+        # ~/.voicemode/logs/conversations/exchanges_*.jsonl on every run.
+        # Re-pin the module-level BASE_DIR constant into the fake home AND
+        # reset the process-wide singleton, so a stale instance already
+        # constructed (in an earlier test, or at import time) against the
+        # real home isn't reused -- the next get_conversation_logger() call
+        # builds a fresh one against the fake home.
+        import voice_mode.conversation_logger as _convo_logger_module
+        monkeypatch.setattr(_convo_logger_module, "BASE_DIR", fake_home / ".voicemode")
+        monkeypatch.setattr(_convo_logger_module, "_conversation_logger", None)
+    except Exception:
+        pass
+    try:
         from voice_mode.cli_commands import autofocus
         monkeypatch.setattr(
             autofocus, "SENTINEL_FILE",

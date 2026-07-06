@@ -917,6 +917,19 @@ WAIT_MAX_LEADING_WORDS = int(os.getenv("VOICEMODE_WAIT_MAX_LEADING_WORDS", "4"))
 # Wait duration in seconds when wait phrase is detected
 WAIT_DURATION = float(os.getenv("VOICEMODE_WAIT_DURATION", "60.0"))  # Default 60s (1 minute)
 
+# Standalone "break" phrase detection for a converse survey (turns with an
+# `ask`, VM-1775): ends the survey early, returning partial replies. Matched
+# with max_leading_words=0 (the reply must consist ENTIRELY of the phrase,
+# not just end with it) -- much stricter than REPEAT_PHRASES/WAIT_PHRASES,
+# since a false break destroys the whole survey while a false repeat only
+# wastes one re-listen. Deliberately does NOT include bare "stop" (too common
+# inside a legitimate answer) -- the physical stop control is the reliable
+# path; this is the low-risk spoken escape hatch.
+SURVEY_BREAK_PHRASES = parse_comma_list(
+    "VOICEMODE_SURVEY_BREAK_PHRASES",
+    "break,stop the survey,end survey,cancel the survey",
+)
+
 # Audio feedback chime configuration
 # Leading silence before chimes to allow Bluetooth devices to wake up
 CHIME_LEADING_SILENCE = float(os.getenv("VOICEMODE_CHIME_LEADING_SILENCE", "0.1"))  # Default 0.1s - minimal delay for Bluetooth
