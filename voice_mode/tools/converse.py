@@ -6,7 +6,8 @@ import os
 import time
 import traceback
 from contextlib import asynccontextmanager
-from typing import Optional, Literal, Tuple, Dict, Union
+from dataclasses import dataclass, field
+from typing import Optional, Literal, Tuple, Dict, Union, Any
 from pathlib import Path
 from datetime import datetime
 
@@ -1684,6 +1685,248 @@ async def _drain_skip_back(control_state, replay_cursor: int) -> int:
         # On a transport interrupt (a further press) the loop consumes it next.
 
 
+# ---------------------------------------------------------------------------
+# VM-1775 / VM-1832: listen_and_transcribe() -- the named listen-and-transcribe
+# seam, extracted from the three inline chime->record->chime->STT copies that
+# used to live inline in converse() (the single-message listen path, plus the
+# `should_repeat` and `should_wait` re-listens). Slice 0 of VM-1775; the future
+# ask-turn survey loop (impl-002) will also call this once per ask turn.
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ListenResult:
+    """Classified result of one listen exchange.
+
+    ``listen_and_transcribe()`` performs exactly one
+    chime(listening) -> record_audio_with_silence_detection (control-aware) ->
+    chime(finished) -> STT pass and classifies the outcome. A caller that wants
+    a replay-then-relisten loop (the main listen path's CD-style skip_back
+    handling) owns that loop and calls this function once per iteration.
+
+    Attributes:
+        outcome: one of "answered" (got transcribed text), "no_speech" (no
+            speech detected / STT reported no speech), "stopped" (a
+            control-channel stop ended the exchange -- see ``control``),
+            "skip_back" (a pending skip_back was detected post-recording --
+            the caller should replay then call again), or "stt_error" (empty
+            recording buffer or an STT connection failure -- see
+            ``error_message``).
+        text: transcribed reply text (set only when outcome == "answered").
+        stt_provider: the STT provider name, else "unknown".
+        timings: this exchange's own timing sub-dict (keys like "record",
+            "stt", "stt_request_ms", ...) -- callers merge/accumulate as
+            needed rather than this function mutating a shared dict.
+        control: the ``ControlSnapshot`` that caused a "stopped" outcome.
+        skip_forward_ended: True when a VM-1754 skip_forward ended the
+            recording early (whatever was captured is still transcribed).
+        error_message: set when outcome == "stt_error".
+    """
+    outcome: str
+    text: Optional[str] = None
+    stt_provider: Optional[str] = None
+    timings: Dict[str, float] = field(default_factory=dict)
+    control: Optional[Any] = None
+    skip_forward_ended: bool = False
+    error_message: Optional[str] = None
+    stt_attempted: bool = False
+
+
+async def listen_and_transcribe(
+    control_state,
+    *,
+    listen_duration_max: float,
+    listen_duration_min: float,
+    disable_silence_detection: bool,
+    vad_aggressiveness: Optional[int],
+    chime_enabled: Optional[bool],
+    chime_leading_silence: Optional[float],
+    chime_trailing_silence: Optional[float],
+    transport: str,
+    event_logger=None,
+    pre_listen_pause: float = 0.0,
+) -> ListenResult:
+    """One listen-and-transcribe exchange (VM-1775's extraction of VM-1832's
+    named seam): chime(listening) -> record_audio_with_silence_detection
+    (control-aware) -> chime(finished) -> STT -> classified ``ListenResult``.
+
+    Control-channel awareness (VM-1676/VM-1685/VM-1754), evaluated right after
+    recording:
+      * a ``stop`` ends the exchange with outcome "stopped" -- the caller
+        builds the normal control-marker return via ``_build_control_stop_result``.
+      * a ``skip_forward`` ends the recording early and we still transcribe
+        whatever was captured (``skip_forward_ended=True``).
+      * a pending ``skip_back`` ends the exchange with outcome "skip_back"
+        (peeked only, not consumed) so a replay-capable caller (the main
+        listen path's ``while True`` loop) can replay then call again.
+
+    ``pre_listen_pause`` reproduces the main listen path's "brief pause before
+    listening" (0.5s); repeat/wait re-listens pass no pause (0.0), matching
+    their pre-extraction behaviour.
+    """
+    timings: Dict[str, float] = {}
+
+    if pre_listen_pause:
+        await asyncio.sleep(pre_listen_pause)
+
+    # Play "listening" feedback sound
+    await play_audio_feedback(
+        "listening",
+        openai_clients,
+        chime_enabled,
+        "whisper",
+        chime_leading_silence=chime_leading_silence,
+        chime_trailing_silence=chime_trailing_silence
+    )
+
+    # Record response
+    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
+
+    if event_logger:
+        event_logger.log_event(event_logger.RECORDING_START)
+
+    record_start = time.perf_counter()
+    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
+    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
+    )
+    timings['record'] = time.perf_counter() - record_start
+
+    if event_logger:
+        event_logger.log_event(event_logger.RECORDING_END, {
+            "duration": timings['record'],
+            "samples": len(audio_data)
+        })
+
+    # VM-1676: a control-channel stop that arrived while we were listening ends
+    # the exchange cleanly -- skip STT, let the caller build the control marker.
+    control_snapshot = control_state.snapshot()
+    if control_snapshot.is_stopped:
+        logger.info("Converse stopped via control channel during recording")
+        return ListenResult(outcome="stopped", control=control_snapshot, timings=timings)
+
+    # VM-1754: a skip_forward pressed while listening is the manual "I'm done,
+    # go now" end-of-turn (and the VAD fallback when silence detection isn't
+    # firing). Consume the sticky-state edge and fall through to STT.
+    skip_forward_ended = False
+    if control_snapshot.is_skip_forward:
+        logger.info("skip_forward received during recording -- ending turn, transcribing captured audio")
+        control_state.reset()
+        skip_forward_ended = True
+    elif control_state.pending_transport == COMMAND_SKIP_BACK:
+        # VM-1685: a skip_back pressed while listening -- hand off to a
+        # replay-capable caller (peeked only; NOT consumed here).
+        logger.info("skip_back received during recording -- signalling caller to replay then re-listen")
+        return ListenResult(outcome="skip_back", timings=timings)
+
+    # Play "finished" feedback sound
+    await play_audio_feedback(
+        "finished",
+        openai_clients,
+        chime_enabled,
+        "whisper",
+        chime_leading_silence=chime_leading_silence,
+        chime_trailing_silence=chime_trailing_silence
+    )
+
+    if len(audio_data) == 0:
+        # VM-1754: under skip_forward an empty buffer is intentional -- the
+        # user pressed "go now" before any audio was captured (the
+        # VAD-fallback edge). Don't surface it as a recording error; fall
+        # through to the graceful no-speech path so the turn simply advances.
+        if not skip_forward_ended:
+            return ListenResult(
+                outcome="stt_error", timings=timings,
+                error_message="Error: Could not record audio",
+            )
+        logger.info("skip_forward ended recording before any audio was captured -- advancing with no speech")
+        speech_detected = False
+
+    stt_metrics = None
+    response_text = None
+    stt_provider = "unknown"
+    stt_attempted = False
+
+    if not speech_detected:
+        logger.info("No speech detected during recording - skipping STT processing")
+        timings['stt'] = 0.0
+
+        # Still save the audio if configured (skip an empty buffer -- e.g. a
+        # skip_forward fired before any audio was captured).
+        if SAVE_AUDIO and AUDIO_DIR and len(audio_data) > 0:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
+            write(audio_path, SAMPLE_RATE, audio_data)
+            logger.debug(f"Saved no-speech audio to: {audio_path}")
+    else:
+        stt_attempted = True
+        if event_logger:
+            event_logger.log_event(event_logger.STT_START)
+
+        stt_start = time.perf_counter()
+        stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
+        timings['stt'] = time.perf_counter() - stt_start
+
+        # Handle structured STT result
+        if isinstance(stt_result, dict):
+            stt_metrics = stt_result.get("metrics")
+            if stt_metrics:
+                timings['stt_request_ms'] = stt_metrics.get('request_time_ms', 0)
+                timings['stt_file_size_bytes'] = stt_metrics.get('file_size_bytes', 0)
+                timings['stt_is_local'] = stt_metrics.get('is_local', False)
+                logger.debug(f"STT metrics: request={stt_metrics.get('request_time_ms')}ms, "
+                           f"file_size={stt_metrics.get('file_size_bytes')/1024:.1f}KB, "
+                           f"is_local={stt_metrics.get('is_local')}")
+
+            if "error_type" in stt_result:
+                # Handle connection failures vs no speech
+                if stt_result["error_type"] == "connection_failed":
+                    error_lines = ["STT service connection failed:"]
+                    openai_error_shown = False
+
+                    for attempt in stt_result.get("attempted_endpoints", []):
+                        if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
+                            error_details = attempt['error_details']
+                            error_lines.append("")
+                            error_lines.append(error_details.get('title', 'OpenAI Error'))
+                            error_lines.append(error_details.get('message', ''))
+                            if error_details.get('suggestion'):
+                                error_lines.append(f"💡 {error_details['suggestion']}")
+                            if error_details.get('fallback'):
+                                error_lines.append(f"ℹ️ {error_details['fallback']}")
+                            openai_error_shown = True
+                        else:
+                            error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
+
+                    error_msg = "\n".join(error_lines)
+                    logger.error(error_msg)
+                    return ListenResult(outcome="stt_error", timings=timings, error_message=error_msg)
+
+                elif stt_result["error_type"] == "no_speech":
+                    # Genuine no speech detected
+                    response_text = None
+                    stt_provider = stt_result.get("provider", "unknown")
+            else:
+                # Successful transcription
+                response_text = stt_result.get("text")
+                stt_provider = stt_result.get("provider", "unknown")
+                if stt_provider != "unknown":
+                    logger.info(f"📡 STT Provider: {stt_provider}")
+        else:
+            # Should not happen with new code, but handle gracefully
+            response_text = None
+            stt_provider = "unknown"
+
+    outcome = "answered" if response_text else "no_speech"
+    return ListenResult(
+        outcome=outcome,
+        text=response_text,
+        stt_provider=stt_provider,
+        timings=timings,
+        skip_forward_ended=skip_forward_ended,
+        stt_attempted=stt_attempted,
+    )
+
+
 @mcp.tool()
 async def converse(
     message: Optional[str] = None,
@@ -2468,7 +2711,12 @@ consult the MCP resources listed above.
                 # press *during* recording loops us back to replay again. The cursor
                 # persists across the whole turn so successive presses step further
                 # back through the history buffer.
+                #
+                # VM-1775: the actual listen exchange (chime->record->chime->STT)
+                # is now the extracted listen_and_transcribe() seam (VM-1832);
+                # this loop only owns the skip_back replay-then-relisten control.
                 replay_cursor = 0
+                listen_result = None
                 while True:
                     # Replay any queued skip_back(s) before listening.
                     replay_cursor = await _drain_skip_back(control_state, replay_cursor)
@@ -2482,7 +2730,7 @@ consult the MCP resources listed above.
                     # Consume the edge HERE (reset, mirroring the playback consume at
                     # ~2066) and advance to the record/listen turn, instead of carrying
                     # the latched state into recording -- where it would otherwise defer
-                    # the turn-advance to the post-record consume at ~2197 and batch with
+                    # the turn-advance to the post-record consume and batch with
                     # the next press (the "first press dropped, second works" symptom).
                     # Checked BEFORE is_stopped: the two are mutually exclusive states,
                     # and a racing stop dominates the latch upstream (request_stop
@@ -2496,183 +2744,51 @@ consult the MCP resources listed above.
                         success = True
                         return _build_control_stop_result(control_snapshot, timings)
 
-                    # Brief pause before listening
-                    await asyncio.sleep(0.5)
-
-                    # Play "listening" feedback sound
-                    await play_audio_feedback(
-                        "listening",
-                        openai_clients,
-                        chime_enabled,
-                        "whisper",
+                    listen_result = await listen_and_transcribe(
+                        control_state,
+                        listen_duration_max=listen_duration_max,
+                        listen_duration_min=listen_duration_min,
+                        disable_silence_detection=disable_silence_detection,
+                        vad_aggressiveness=vad_aggressiveness,
+                        chime_enabled=chime_enabled,
                         chime_leading_silence=chime_leading_silence,
-                        chime_trailing_silence=chime_trailing_silence
+                        chime_trailing_silence=chime_trailing_silence,
+                        transport=transport,
+                        event_logger=event_logger,
+                        pre_listen_pause=0.5,
                     )
+                    timings.update(listen_result.timings)
 
-                    # Record response
-                    logger.info(f"🎤 Listening for {listen_duration_max} seconds...")
-
-                    # Log recording start
-                    if event_logger:
-                        event_logger.log_event(event_logger.RECORDING_START)
-
-                    record_start = time.perf_counter()
-                    logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-                    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                    )
-                    timings['record'] = time.perf_counter() - record_start
-
-                    # Log recording end
-                    if event_logger:
-                        event_logger.log_event(event_logger.RECORDING_END, {
-                            "duration": timings['record'],
-                            "samples": len(audio_data)
-                        })
-
-                    # VM-1676: a control-channel stop that arrived while we were
-                    # listening also ends the turn cleanly -- skip STT and return the
-                    # control marker normally (again, NOT the ESC/CancelledError path).
-                    control_snapshot = control_state.snapshot()
-                    if control_snapshot.is_stopped:
-                        logger.info("Converse stopped via control channel during recording")
-                        success = True
-                        return _build_control_stop_result(control_snapshot, timings)
-
-                    # VM-1754: a skip_forward pressed while listening is the manual
-                    # "I'm done, go now" end-of-turn (and the VAD fallback when
-                    # silence detection isn't firing). Consume the sticky-state edge
-                    # (reset, mirroring the playback consume above) and fall through
-                    # to the normal STT + return path: transcribe whatever was
-                    # captured and return it as the user's response. Distinct from
-                    # both siblings -- NOT a [control: stop] marker (stop) and NOT a
-                    # replay (skip_back). Checked before skip_back: skip_forward is a
-                    # sticky terminal STATE (softer than stop, but harder than the
-                    # one-shot skip_back transport), so a decisive "advance" wins
-                    # over a "replay" if both happened to be pressed. The
-                    # skip_forward_ended flag tells the empty-buffer guard below that
-                    # an empty capture here is intentional ("go now"), not an error.
-                    skip_forward_ended = False
-                    if control_snapshot.is_skip_forward:
-                        logger.info("skip_forward received during recording -- ending turn, transcribing captured audio")
-                        control_state.reset()
-                        skip_forward_ended = True
-                    # VM-1685: a skip_back pressed while listening -> replay the
-                    # cached audio, then listen again. Otherwise this recording is
-                    # the user's real response; proceed to STT.
-                    elif control_state.pending_transport == COMMAND_SKIP_BACK:
+                    if listen_result.outcome == "skip_back":
+                        # VM-1685: a skip_back pressed while listening -> replay
+                        # the cached audio, then listen again.
                         logger.info("skip_back received during recording -- replaying then re-listening")
                         continue
+                    if listen_result.outcome == "stopped":
+                        logger.info("Converse stopped via control channel during recording")
+                        success = True
+                        return _build_control_stop_result(listen_result.control, timings)
                     break
 
-                # Play "finished" feedback sound
-                await play_audio_feedback(
-                    "finished",
-                    openai_clients,
-                    chime_enabled,
-                    "whisper",
-                    chime_leading_silence=chime_leading_silence,
-                    chime_trailing_silence=chime_trailing_silence
-                )
-                
                 # Mark the end of recording - this is when user expects response to start
                 user_done_time = time.perf_counter()
                 logger.info(f"Recording finished at {user_done_time - tts_start:.1f}s from start")
-                
-                if len(audio_data) == 0:
-                    # VM-1754: under skip_forward an empty buffer is intentional --
-                    # the user pressed "go now" before any audio was captured (the
-                    # VAD-fallback edge). Don't surface it as a recording error;
-                    # fall through to the graceful no-speech path so the turn simply
-                    # advances (returns "No speech detected", success=True).
-                    if not skip_forward_ended:
-                        result = "Error: Could not record audio"
-                        return result
-                    logger.info("skip_forward ended recording before any audio was captured -- advancing with no speech")
-                    speech_detected = False
-                
+
+                if listen_result.outcome == "stt_error":
+                    # Empty recording buffer (not a skip_forward "go now") or an
+                    # STT connection failure -- both returned immediately pre-extraction.
+                    result = listen_result.error_message
+                    return result
+
+                skip_forward_ended = listen_result.skip_forward_ended
+                response_text = listen_result.text
+                stt_provider = listen_result.stt_provider
                 # Track STT-specific metrics (defined here to be in scope for event logging later)
-                stt_metrics = None
-
-                # Check if no speech was detected
-                if not speech_detected:
-                    logger.info("No speech detected during recording - skipping STT processing")
-                    response_text = None
-                    timings['stt'] = 0.0
-
-                    # Still save the audio if configured (skip an empty buffer --
-                    # e.g. a skip_forward fired before any audio was captured).
-                    if SAVE_AUDIO and AUDIO_DIR and len(audio_data) > 0:
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
-                        write(audio_path, SAMPLE_RATE, audio_data)
-                        logger.debug(f"Saved no-speech audio to: {audio_path}")
-                else:
-                    # Convert to text
-                    # Log STT start
-                    if event_logger:
-                        event_logger.log_event(event_logger.STT_START)
-
-                    stt_start = time.perf_counter()
-                    stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                    timings['stt'] = time.perf_counter() - stt_start
-
-                    # Handle structured STT result
-                    if isinstance(stt_result, dict):
-                        # Extract metrics if present
-                        stt_metrics = stt_result.get("metrics")
-                        if stt_metrics:
-                            # Store in timings for later use
-                            timings['stt_request_ms'] = stt_metrics.get('request_time_ms', 0)
-                            timings['stt_file_size_bytes'] = stt_metrics.get('file_size_bytes', 0)
-                            timings['stt_is_local'] = stt_metrics.get('is_local', False)
-                            logger.debug(f"STT metrics: request={stt_metrics.get('request_time_ms')}ms, "
-                                       f"file_size={stt_metrics.get('file_size_bytes')/1024:.1f}KB, "
-                                       f"is_local={stt_metrics.get('is_local')}")
-
-                        if "error_type" in stt_result:
-                            # Handle connection failures vs no speech
-                            if stt_result["error_type"] == "connection_failed":
-                                # Build helpful error message
-                                error_lines = ["STT service connection failed:"]
-                                openai_error_shown = False
-
-                                for attempt in stt_result.get("attempted_endpoints", []):
-                                    # Check if we have parsed OpenAI error details
-                                    if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
-                                        error_details = attempt['error_details']
-                                        error_lines.append("")
-                                        error_lines.append(error_details.get('title', 'OpenAI Error'))
-                                        error_lines.append(error_details.get('message', ''))
-                                        if error_details.get('suggestion'):
-                                            error_lines.append(f"💡 {error_details['suggestion']}")
-                                        if error_details.get('fallback'):
-                                            error_lines.append(f"ℹ️ {error_details['fallback']}")
-                                        openai_error_shown = True
-                                    else:
-                                        # Show raw error for non-OpenAI or if we already showed OpenAI error
-                                        error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
-
-                                error_msg = "\n".join(error_lines)
-                                logger.error(error_msg)
-
-                                # Return error immediately
-                                return error_msg
-
-                            elif stt_result["error_type"] == "no_speech":
-                                # Genuine no speech detected
-                                response_text = None
-                                stt_provider = stt_result.get("provider", "unknown")
-                        else:
-                            # Successful transcription
-                            response_text = stt_result.get("text")
-                            stt_provider = stt_result.get("provider", "unknown")
-                            if stt_provider != "unknown":
-                                logger.info(f"📡 STT Provider: {stt_provider}")
-                    else:
-                        # Should not happen with new code, but handle gracefully
-                        response_text = None
-                        stt_provider = "unknown"
+                stt_metrics = {
+                    'request_time_ms': timings.get('stt_request_ms'),
+                    'file_size_bytes': timings.get('stt_file_size_bytes'),
+                    'is_local': timings.get('stt_is_local'),
+                } if 'stt_request_ms' in timings else None
 
                 # Check for repeat phrase - if detected, replay the audio and listen again
                 if response_text and should_repeat(response_text):
@@ -2729,49 +2845,38 @@ consult the MCP resources listed above.
                             if not tts_success:
                                 logger.error("Failed to replay audio via TTS regeneration")
 
-                        # Listen again for response - reuse the recording logic
+                        # Listen again for response (VM-1775: onto the
+                        # listen_and_transcribe seam -- gains control-channel
+                        # awareness this re-listen previously lacked entirely: a
+                        # control stop now ends the turn with the normal control
+                        # marker instead of silently falling through).
                         logger.info("Listening for response after repeat...")
 
-                        # Play "listening" feedback sound
-                        await play_audio_feedback(
-                            "listening",
-                            openai_clients,
-                            chime_enabled,
-                            "whisper",
+                        listen_result = await listen_and_transcribe(
+                            control_state,
+                            listen_duration_max=listen_duration_max,
+                            listen_duration_min=listen_duration_min,
+                            disable_silence_detection=disable_silence_detection,
+                            vad_aggressiveness=vad_aggressiveness,
+                            chime_enabled=chime_enabled,
                             chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence
+                            chime_trailing_silence=chime_trailing_silence,
+                            transport=transport,
+                            event_logger=event_logger,
                         )
+                        timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
+                        timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
 
-                        # Record audio
-                        record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                        )
-                        record_time = time.perf_counter() - record_start
-                        timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
-
-                        # Play "finished" feedback sound
-                        await play_audio_feedback(
-                            "finished",
-                            openai_clients,
-                            chime_enabled,
-                            "whisper",
-                            chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence
-                        )
-
-                        if len(audio_data) > 0 and speech_detected:
-                            # Transcribe the audio
-                            stt_start = time.perf_counter()
-                            stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                            stt_time = time.perf_counter() - stt_start
-                            timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
-
-                            # Process result
-                            if isinstance(stt_result, dict) and not stt_result.get("error"):
-                                response_text = stt_result.get("text")
-                                stt_provider = stt_result.get("provider", "unknown")
-                                logger.info(f"New response after repeat: {response_text}")
+                        if listen_result.outcome == "stopped":
+                            success = True
+                            return _build_control_stop_result(listen_result.control, timings)
+                        elif listen_result.stt_attempted:
+                            # Matches the pre-extraction guard (len(audio_data) > 0
+                            # and speech_detected): only overwrite the response once
+                            # STT actually ran.
+                            response_text = listen_result.text
+                            stt_provider = listen_result.stt_provider
+                            logger.info(f"New response after repeat: {response_text}")
 
                 # Check for wait phrase - if detected, pause for configured duration
                 if response_text and should_wait(response_text):
@@ -2785,49 +2890,33 @@ consult the MCP resources listed above.
                     # Play system message when ready to listen again
                     await play_system_audio("ready-to-listen", fallback_text="Ready to listen")
 
-                    # After waiting, listen again
+                    # After waiting, listen again (VM-1775: onto the
+                    # listen_and_transcribe seam -- same control-channel gain as
+                    # the repeat re-listen above).
                     logger.info("Wait period ended. Listening for response...")
                     if transport == "local":
-                        # Play "listening" feedback sound
-                        await play_audio_feedback(
-                            "listening",
-                            openai_clients,
-                            chime_enabled,
-                            "whisper",
+                        listen_result = await listen_and_transcribe(
+                            control_state,
+                            listen_duration_max=listen_duration_max,
+                            listen_duration_min=listen_duration_min,
+                            disable_silence_detection=disable_silence_detection,
+                            vad_aggressiveness=vad_aggressiveness,
+                            chime_enabled=chime_enabled,
                             chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence
+                            chime_trailing_silence=chime_trailing_silence,
+                            transport=transport,
+                            event_logger=event_logger,
                         )
+                        timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
+                        timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
 
-                        # Record audio
-                        record_start = time.perf_counter()
-                        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-                            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-                        )
-                        record_time = time.perf_counter() - record_start
-                        timings['record'] = timings.get('record', 0) + record_time  # Accumulate timing
-
-                        # Play "finished" feedback sound
-                        await play_audio_feedback(
-                            "finished",
-                            openai_clients,
-                            chime_enabled,
-                            "whisper",
-                            chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence
-                        )
-
-                        if len(audio_data) > 0 and speech_detected:
-                            # Transcribe the audio
-                            stt_start = time.perf_counter()
-                            stt_result = await speech_to_text(audio_data, SAVE_AUDIO, AUDIO_DIR if SAVE_AUDIO else None, transport)
-                            stt_time = time.perf_counter() - stt_start
-                            timings['stt'] = timings.get('stt', 0) + stt_time  # Accumulate timing
-
-                            # Process result
-                            if isinstance(stt_result, dict) and not stt_result.get("error"):
-                                response_text = stt_result.get("text")
-                                stt_provider = stt_result.get("provider", "unknown")
-                                logger.info(f"New response after wait: {response_text}")
+                        if listen_result.outcome == "stopped":
+                            success = True
+                            return _build_control_stop_result(listen_result.control, timings)
+                        elif listen_result.stt_attempted:
+                            response_text = listen_result.text
+                            stt_provider = listen_result.stt_provider
+                            logger.info(f"New response after wait: {response_text}")
 
                 # Log STT complete with metrics
                 if event_logger:
