@@ -1,6 +1,7 @@
 """Conversation tools for interactive voice interactions."""
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -2198,9 +2199,17 @@ async def _ask_turns_pipeline(
     results: list = [None] * n
     stopped_at: Optional[dict] = None
     idx = 0
+    # Tracks which phase turn `idx` is currently in, purely so the
+    # CancelledError / generic-exception handlers below (which fire from an
+    # `await` anywhere in the loop body) can report an accurate
+    # stopped_at.phase without re-deriving it from scratch. Reset to
+    # "speaking" at the top of every turn; flipped to "listening" only for
+    # the LISTEN phase of an `ask` turn.
+    current_phase = "speaking"
 
     try:
         while idx < n:
+            current_phase = "speaking"
             # A stop (or an unconsumed skip_forward) latched during the
             # PREVIOUS turn's inter-turn pause is noticed here, before this
             # turn's audio ever plays -- skip_forward is transport-only (just
@@ -2276,6 +2285,7 @@ async def _ask_turns_pipeline(
             # through to LISTEN below (the normal, non-barge-in case).
 
             # --- LISTEN phase (verb == "ask") --------------------------------
+            current_phase = "listening"
             cached_samples = item.get("samples")
             cached_rate = item.get("sample_rate")
             aborted = False
@@ -2367,11 +2377,30 @@ async def _ask_turns_pipeline(
             if idx < n and turn["pause_after_ms"] > 0:
                 await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
     except asyncio.CancelledError:
-        raise
+        # VM-1775 impl-003: the MCP client (ESC / tool-call cancel) can land
+        # here from an `await` anywhere in the loop body above. Unlike a
+        # generic leaf coroutine, this pipeline is NOT the top of the
+        # cancellation boundary -- converse() itself already swallows
+        # CancelledError at its own top level (see the rationale on that
+        # `except` block: leaf coroutine, no outer task needs to observe it,
+        # FastMCP stdio would otherwise tear down the whole server on an
+        # uncaught cancel). Swallowing it HERE instead is what fulfils the
+        # return-contract's guarantee that survey mode NEVER discards
+        # collected replies on cancellation: every reply gathered so far was
+        # already persisted to the conversation log at capture time, but the
+        # tool's return VALUE would be lost if this propagated past
+        # `_format_survey_result` uncaught. `results`/`stopped_at` are local
+        # to this function, so this is the one place that can attach them to
+        # a normal return instead of an unwind.
+        logger.info(f"Survey pipeline cancelled by client at turn {idx} ({current_phase})")
+        if stopped_at is None:
+            stopped_at = {"turn": idx, "phase": current_phase, "reason": "cancelled"}
+        if idx < n and results[idx] is None:
+            results[idx] = _not_reached_turn_result(turns[idx], idx)
     except Exception as e:
         logger.error(f"Survey pipeline aborted by an unexpected error at turn {idx}: {e}")
         if stopped_at is None:
-            stopped_at = {"turn": idx, "phase": "speaking", "reason": "error"}
+            stopped_at = {"turn": idx, "phase": current_phase, "reason": "error"}
         if idx < n and results[idx] is None:
             results[idx] = _not_reached_turn_result(turns[idx], idx)
     finally:
@@ -2393,6 +2422,67 @@ async def _ask_turns_pipeline(
             results[j] = _not_reached_turn_result(turns[j], j)
 
     return results, stopped_at
+
+
+def _format_survey_result(
+    results: list,
+    stopped_at: Optional[dict],
+    n_ask: int,
+    metrics_level: str,
+) -> Tuple[str, bool]:
+    """Build the survey JSON return contract (README ## Design / Return
+    contract) from ``_ask_turns_pipeline``'s output.
+
+    ``json.dumps(payload, ensure_ascii=False, indent=2)`` -- a single JSON
+    object as the WHOLE return string (no prose prefix/suffix), so an agent
+    can detect survey mode by the leading ``{``. ``results`` is passed
+    through unchanged from the pipeline: it is ALWAYS length N and
+    index-aligned (the alignment invariant), including every abort path
+    (stop/skip/break/failure/cancellation) -- this function does not need to
+    re-derive or defend that invariant, only serialize it.
+
+    Returns ``(json_string, success)``. ``success`` mirrors ``completed`` in
+    spirit but is never a hard failure: a partial survey (break/abort) still
+    returns a fully-formed, parseable JSON payload -- that IS the success
+    case for survey mode (the "never a bare error string once >=1 reply is
+    held" guarantee), it just also reports where it stopped via
+    ``stopped_at``. ``success`` is only False when the survey never
+    delivered anything at all (aborted at turn 0 before any reply/spoken
+    turn was recorded) so callers/statistics can distinguish "a real survey
+    that got interrupted partway" from "nothing happened".
+    """
+    n_answered = sum(1 for r in results if r["status"] == "answered")
+    completed = stopped_at is None
+    any_progress = any(r["status"] != "not_reached" for r in results)
+    success = completed or any_progress
+
+    turns_payload = []
+    for r in results:
+        entry = {"turn": r["index"], "verb": r["verb"], "status": r["status"]}
+        if r["verb"] == "ask":
+            entry["reply"] = r.get("reply")
+        turns_payload.append(entry)
+
+    survey: Dict[str, Any] = {
+        "completed": completed,
+        "asked": n_ask,
+        "answered": n_answered,
+        "stopped_at": stopped_at,
+        "turns": turns_payload,
+    }
+
+    if metrics_level != "minimal":
+        total_gen = sum(r.get("generation", 0.0) for r in results)
+        total_play = sum(r.get("playback", 0.0) for r in results)
+        total_record = sum(r.get("record", 0.0) for r in results)
+        total_stt = sum(r.get("stt", 0.0) for r in results)
+        total = total_gen + total_play + total_record + total_stt
+        survey["timing"] = (
+            f"gen {total_gen:.1f}s, play {total_play:.1f}s, "
+            f"record {total_record:.1f}s, stt {total_stt:.1f}s, total {total:.1f}s"
+        )
+
+    return json.dumps({"survey": survey}, ensure_ascii=False, indent=2), success
 
 
 @mcp.tool()
@@ -2972,6 +3062,60 @@ consult the MCP resources listed above.
             # serialized with all other audio ops; ``control_state`` is the shared
             # singleton the streaming loops + record loop poll for pause/stop.
             async with audio_operation_lock, _control_listener_scope() as control_state:
+                # VM-1775 impl-003: dispatch on whether ANY turn asks. No-ask
+                # turns[] calls fall through to the untouched VM-1772
+                # speak-only pipeline below (byte-identical return, per the
+                # README's back-compat requirement); any-ask calls take the
+                # survey pipeline + JSON return contract instead.
+                if normalized_turns is not None and any(t["verb"] == "ask" for t in normalized_turns):
+                    n_ask = sum(1 for t in normalized_turns if t["verb"] == "ask")
+                    with DJDucker():
+                        survey_results, stopped_at = await _ask_turns_pipeline(
+                            normalized_turns,
+                            tts_model=tts_model,
+                            tts_provider=tts_provider,
+                            audio_format=audio_format,
+                            resolved_ref_text=resolved_ref_text,
+                            should_skip_tts=should_skip_tts,
+                            control_state=control_state,
+                            disable_silence_detection=disable_silence_detection,
+                            chime_enabled=chime_enabled,
+                            chime_leading_silence=chime_leading_silence,
+                            chime_trailing_silence=chime_trailing_silence,
+                            transport=transport,
+                            event_logger=event_logger,
+                        )
+                    result, success = _format_survey_result(
+                        survey_results, stopped_at, n_ask, effective_metrics_level,
+                    )
+
+                    n_answered = sum(1 for r in survey_results if r["status"] == "answered")
+                    timing_str = ", ".join(
+                        f"turn{r['index'] + 1} gen {r['generation']:.1f}s play {r['playback']:.1f}s"
+                        + (f" record {r['record']:.1f}s stt {r['stt']:.1f}s" if r["verb"] == "ask" else "")
+                        for r in survey_results
+                    )
+                    track_voice_interaction(
+                        message=f"[survey x{len(survey_results)}, {n_ask} ask] "
+                                + " | ".join(t["say"][:40] for t in normalized_turns),
+                        response=f"[survey: {n_answered}/{n_ask} answered]",
+                        timing_str=timing_str,
+                        transport="survey",
+                        voice_provider=tts_provider,
+                        voice_name=voice,
+                        model=tts_model,
+                        success=success,
+                        error_message=(
+                            None if stopped_at is None
+                            else f"stopped at turn {stopped_at['turn']} ({stopped_at['reason']})"
+                        ),
+                    )
+                    logger.info(
+                        f"Survey result: completed={stopped_at is None}, "
+                        f"answered={n_answered}/{n_ask}"
+                    )
+                    return result
+
                 # VM-1772: multi-utterance turns[] pipeline (speak-only, P1).
                 # The conch is already held for the whole call (acquired above,
                 # released in the finally), so the sequence plays in order under
