@@ -18,7 +18,7 @@ Coverage:
 
 import asyncio
 import threading
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
@@ -639,3 +639,121 @@ class TestPipelineSkipTts:
         assert len(play_fn.calls) == 0  # skipped samples never call playback
         assert results[0]["status"] == "spoken"
         assert results[1]["status"] == "answered" and results[1]["reply"] == "an answer"
+
+
+# ---------------------------------------------------------------------------
+# _ask_turns_pipeline -- S8 (fable progress review): per-exchange
+# conversation logging, so a killed/cancelled call still leaves every
+# already-answered reply in the conversation logs (Decision 7).
+# ---------------------------------------------------------------------------
+
+class TestPipelineConversationLogging:
+    async def test_each_ask_reply_is_logged_at_capture_time(self):
+        """Every resolved ask-turn (answered or no_speech) calls
+        conversation_logger.log_stt the moment it's captured, not batched at
+        the end of the survey."""
+        turns = _norm([{"ask": "Q1"}, {"say": "thanks"}, {"ask": "Q2"}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        stt_calls = {"n": 0}
+
+        async def fake_stt(*_a, **_k):
+            stt_calls["n"] += 1
+            texts = ["blue", "a swallow"]
+            return {"text": texts[stt_calls["n"] - 1], "provider": "whisper-local"}
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at is None
+        assert fake_logger.log_stt.call_count == 2  # one per ask turn, not per survey
+        logged_texts = [c.kwargs.get("text") for c in fake_logger.log_stt.call_args_list]
+        assert logged_texts == ["blue", "a swallow"]
+
+    async def test_reply_logged_before_a_later_abort_survives(self):
+        """The whole point: if the survey aborts on turn 1, turn 0's reply
+        was already persisted to the conversation log before the abort --
+        crash-persistence doesn't depend on the survey ever finishing."""
+        turns = _norm([{"ask": "Q1"}, {"ask": "Q2"}])
+
+        call_n = {"n": 0}
+
+        def fake_record(*_a, **_k):
+            call_n["n"] += 1
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            if call_n["n"] == 1:
+                return {"text": "first answer", "provider": "whisper-local"}
+            return {
+                "error_type": "connection_failed",
+                "attempted_endpoints": [{"endpoint": "http://x", "error": "refused"}],
+            }
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at == {"turn": 1, "phase": "listening", "reason": "stt_connection_failed"}
+        assert results[0]["status"] == "answered" and results[0]["reply"] == "first answer"
+        assert results[1]["status"] == "stt_failed"
+        # Only turn 0's reply was ever logged -- turn 1 aborted before
+        # resolving, but turn 0's reply is already durably logged.
+        assert fake_logger.log_stt.call_count == 1
+        assert fake_logger.log_stt.call_args_list[0].kwargs.get("text") == "first answer"
+
+    async def test_no_speech_reply_is_logged_as_no_speech_marker(self):
+        turns = _norm([{"ask": "Q1"}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(10, dtype=np.int16), False)  # no speech
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert results[0]["status"] == "no_speech"
+        fake_logger.log_stt.assert_called_once()
+        assert fake_logger.log_stt.call_args.kwargs.get("text") == "[no speech detected]"
+
+    async def test_logging_failure_does_not_break_the_survey(self):
+        """A conversation-log write failure must not abort the survey or
+        lose the reply from the return value -- only the durability side
+        effect is best-effort."""
+        turns = _norm([{"ask": "Q1"}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "an answer", "provider": "whisper-local"}
+
+        fake_logger = MagicMock()
+        fake_logger.log_stt.side_effect = OSError("disk full")
+        with patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at is None
+        assert results[0]["status"] == "answered" and results[0]["reply"] == "an answer"

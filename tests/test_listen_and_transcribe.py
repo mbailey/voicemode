@@ -81,7 +81,7 @@ class TestListenAndTranscribe:
         assert result.outcome == "answered"
         assert result.text == "hello there"
         assert result.stt_provider == "whisper-local"
-        assert result.stt_attempted is True
+        assert result.stt_classified is True
         assert "record" in result.timings and "stt" in result.timings
 
     async def test_no_speech_vad_level_skips_stt(self):
@@ -98,7 +98,7 @@ class TestListenAndTranscribe:
 
         assert result.outcome == "no_speech"
         assert result.text is None
-        assert result.stt_attempted is False
+        assert result.stt_classified is False
         stt_spy.assert_not_called()
 
     async def test_no_speech_stt_level(self):
@@ -116,7 +116,7 @@ class TestListenAndTranscribe:
 
         assert result.outcome == "no_speech"
         assert result.text is None
-        assert result.stt_attempted is True
+        assert result.stt_classified is True
 
     async def test_stt_connection_failure(self):
         def _record(*_a, **_k):
@@ -136,6 +136,13 @@ class TestListenAndTranscribe:
         assert result.outcome == "stt_error"
         assert "connection failed" in result.error_message.lower()
         assert "refused" in result.error_message
+        # S2 (fable progress review): a stable machine-readable classifier,
+        # not string-sniffed from the human-readable message.
+        assert result.error_kind == "stt_connection_failed"
+        # S3: STT genuinely ran here, but stt_classified is False because it
+        # never produced a classification (connection failure, not a
+        # text-or-no-speech verdict) -- the rename documents this precisely.
+        assert result.stt_classified is False
 
     async def test_empty_buffer_without_skip_forward_is_stt_error(self):
         def _record(*_a, **_k):
@@ -147,6 +154,9 @@ class TestListenAndTranscribe:
 
         assert result.outcome == "stt_error"
         assert result.error_message == "Error: Could not record audio"
+        # S2: distinct error_kind from the STT-connection-failure case above --
+        # this is a record-side failure, STT was never even reached.
+        assert result.error_kind == "record_failed"
 
     async def test_control_stop_after_recording(self):
         def _record(*_a, **_k):
@@ -438,3 +448,148 @@ class TestRepeatWaitGainControlAwareness:
         # re-listen (VAD reported no speech).
         assert stt_calls["n"] == 1
         assert result == "Voice response: repeat"
+
+    # -----------------------------------------------------------------------
+    # S4/S5/S6 (fable progress review, impl-003b): skip_back is no longer
+    # silently swallowed on a repeat/wait re-listen; the re-listen no longer
+    # emits its own event-log entries; an STT failure on a re-listen is
+    # surfaced instead of hidden behind the prior "repeat"/"wait" utterance.
+    # -----------------------------------------------------------------------
+
+    async def test_repeat_relisten_skip_back_replays_then_relistens(self):
+        """S4: a skip_back arriving during the repeat re-listen used to be
+        silently swallowed (no replay, capture discarded, pending latched,
+        "repeat" returned as the answer). Now it replays via the same
+        shared history-buffer helper the main loop uses, then re-listens."""
+        calls = {"n": 0}
+
+        async def _fake_listen(*_a, **_k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Initial listen -- captures "repeat".
+                return ListenResult(outcome="answered", text="repeat",
+                                     stt_provider="whisper-local", stt_classified=True)
+            if calls["n"] == 2:
+                # First repeat re-listen -- a skip_back arrives.
+                return ListenResult(outcome="skip_back")
+            # Second repeat re-listen (post skip_back replay) -- real answer.
+            return ListenResult(outcome="answered", text="forty two",
+                                 stt_provider="whisper-local", stt_classified=True)
+
+        drain_spy = AsyncMock(side_effect=lambda cs, cursor: cursor)
+
+        with patch("voice_mode.tools.converse.listen_and_transcribe", new=_fake_listen), \
+             patch("voice_mode.tools.converse._drain_skip_back", new=drain_spy), \
+             patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.play_system_audio", new=AsyncMock()), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="Long explanation...",
+                wait_for_response=True,
+                metrics_level="minimal",
+                skip_conch=True,
+            )
+
+        # 1 main listen + 2 repeat re-listens (skip_back, then the real answer).
+        assert calls["n"] == 3
+        # _drain_skip_back is consulted once per loop iteration (main loop's
+        # own iteration, then each repeat re-listen iteration) -- mirroring
+        # the main loop's replay-then-relisten shape.
+        assert drain_spy.await_count == 3
+        assert result == "Voice response: forty two"
+
+    async def test_repeat_relisten_does_not_emit_its_own_events(self):
+        """S5: the repeat re-listen must NOT emit its own
+        RECORDING_START/RECORDING_END/STT_START -- restoring master's
+        event-log cardinality (previously: 2 STT_START for 1 STT_COMPLETE)."""
+
+        class _FakeEventLogger:
+            RECORDING_START = "RECORDING_START"
+            RECORDING_END = "RECORDING_END"
+            STT_START = "STT_START"
+            STT_COMPLETE = "STT_COMPLETE"
+            STT_NO_SPEECH = "STT_NO_SPEECH"
+
+            def __init__(self):
+                self.events = []
+
+            def log_event(self, event_type, data=None):
+                self.events.append(event_type)
+
+            def start_session(self, session_id=None):
+                return session_id or "fake-session"
+
+            def end_session(self):
+                return None
+
+        fake_event_logger = _FakeEventLogger()
+        record_calls = {"n": 0}
+
+        def _record(*_a, **_k):
+            record_calls["n"] += 1
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            if record_calls["n"] == 1:
+                return {"text": "repeat", "provider": "whisper-local"}
+            return {"text": "forty two", "provider": "whisper-local"}
+
+        with patch("voice_mode.tools.converse.get_event_logger", return_value=fake_event_logger), \
+             patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.play_system_audio", new=AsyncMock()), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="Long explanation...",
+                wait_for_response=True,
+                metrics_level="minimal",
+                skip_conch=True,
+            )
+
+        assert record_calls["n"] == 2
+        assert result == "Voice response: forty two"
+        # Only ONE RECORDING_START/END/STT_START -- from the initial listen;
+        # the repeat re-listen contributes none of its own.
+        assert fake_event_logger.events.count("RECORDING_START") == 1
+        assert fake_event_logger.events.count("RECORDING_END") == 1
+        assert fake_event_logger.events.count("STT_START") == 1
+
+    async def test_repeat_relisten_stt_error_is_surfaced_not_hidden(self):
+        """S6: an STT failure during the repeat re-listen must surface the
+        STT error (matching the main listen path's behaviour), not silently
+        present the "repeat" utterance itself as the user's answer."""
+        calls = {"n": 0}
+
+        async def _fake_listen(*_a, **_k):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return ListenResult(outcome="answered", text="repeat",
+                                     stt_provider="whisper-local", stt_classified=True)
+            return ListenResult(
+                outcome="stt_error",
+                error_message="STT service connection failed:\n  - http://x: refused",
+                error_kind="stt_connection_failed",
+            )
+
+        with patch("voice_mode.tools.converse.listen_and_transcribe", new=_fake_listen), \
+             patch("voice_mode.tools.converse._drain_skip_back",
+                   new=AsyncMock(side_effect=lambda cs, cursor: cursor)), \
+             patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.play_system_audio", new=AsyncMock()), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="Long explanation...",
+                wait_for_response=True,
+                metrics_level="minimal",
+                skip_conch=True,
+            )
+
+        assert result.startswith("STT service connection failed:")
+        assert "repeat" not in result

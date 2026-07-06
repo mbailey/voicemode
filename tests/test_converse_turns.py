@@ -354,6 +354,52 @@ async def test_turns_take_precedence_over_message():
 
 
 @pytest.mark.asyncio
+async def test_turns_with_call_level_wait_for_response_default_true_stays_speak_only():
+    """S7a (fable progress review): the back-compat invariant of Decision 1
+    rule 4 -- turns present + call-level ``wait_for_response`` left at its
+    default ``True`` must still be speak-only when no turn asks. Every other
+    turns-mode test in this module passes ``wait_for_response=False``
+    explicitly; this is the one that actually exercises the True default
+    (the commit message that first claimed this coverage overclaimed it --
+    the peer review caught it, this test closes the gap)."""
+    synth = AsyncMock(return_value=(True, _samples(), 24000, {"generation": 0.0}, {}))
+    stt_spy = AsyncMock(side_effect=AssertionError("must never listen -- no turn asks"))
+    with patch("voice_mode.tools.converse.synthesize_turn_with_failover", new=synth), \
+         patch("voice_mode.tools.converse._play_samples_blocking"), \
+         patch("voice_mode.tools.converse.asyncio.sleep", new=AsyncMock()), \
+         patch("voice_mode.tools.converse.listen_and_transcribe", new=stt_spy):
+        result = await getattr(converse, "fn", converse)(
+            turns=[{"say": "one"}, {"say": "two"}],
+            skip_conch=True,
+            metrics_level="minimal",
+            # wait_for_response deliberately OMITTED -- exercises the True default,
+            # not an explicit False.
+        )
+    assert result == "✓ Spoke 2/2 turns"
+    stt_spy.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_speak_only_turns_summary_is_byte_exact():
+    """S7b (fable progress review): this module's own turns-summary tests
+    (``TestFormatTurnsResult`` above) asserted substrings only ("1/1",
+    "failed"); the requirement is byte-for-byte, since impl-003's dispatch
+    ("no-ask turns[] calls fall through byte-identical") needs exactly this
+    net to prove it changed nothing."""
+    synth = AsyncMock(return_value=(True, _samples(), 24000, {"generation": 0.0}, {}))
+    with patch("voice_mode.tools.converse.synthesize_turn_with_failover", new=synth), \
+         patch("voice_mode.tools.converse._play_samples_blocking"), \
+         patch("voice_mode.tools.converse.asyncio.sleep", new=AsyncMock()):
+        result = await getattr(converse, "fn", converse)(
+            turns=[{"say": "one"}, {"say": "two"}],
+            wait_for_response=False,
+            skip_conch=True,
+            metrics_level="minimal",
+        )
+    assert result == "✓ Spoke 2/2 turns"
+
+
+@pytest.mark.asyncio
 async def test_converse_errors_with_neither_message_nor_turns():
     result = await getattr(converse, "fn", converse)(
         wait_for_response=False, skip_conch=True,
@@ -368,6 +414,45 @@ async def test_converse_rejects_malformed_turn():
         wait_for_response=False, skip_conch=True,
     )
     assert "Error" in result and "say" in result
+
+
+@pytest.mark.asyncio
+async def test_converse_rejects_neither_verb_with_exactly_one_of_message():
+    """N2 (fable progress review): a turn with NEITHER 'say' nor 'ask' reports
+    the actual requirement, not the misleading P1-era "'say' is required"."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"voice": "nova"}],
+        wait_for_response=False, skip_conch=True,
+    )
+    assert "exactly one of 'say' or 'ask'" in result
+
+
+@pytest.mark.asyncio
+async def test_converse_unknown_turn_key_lists_allowed_keys():
+    """N2 (fable progress review): the unknown-key error names the allowed
+    keys (Decision 1 rule 5), instead of just naming the bad one."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi", "typo_field": 1}],
+        wait_for_response=False, skip_conch=True,
+    )
+    assert "unknown key 'typo_field'" in result
+    assert "allowed:" in result
+    assert "ask" in result and "vad_aggressiveness" in result
+
+
+@pytest.mark.asyncio
+async def test_call_level_vad_aggressiveness_error_not_blamed_on_turn_zero():
+    """N4 (fable progress review): an out-of-range CALL-LEVEL
+    vad_aggressiveness with turns present must be reported as a call-level
+    error, not misattributed to "turn 0" by the per-turn inheritance
+    validation running first."""
+    result = await getattr(converse, "fn", converse)(
+        turns=[{"say": "hi"}],
+        vad_aggressiveness=9,  # out of range (0-3)
+        wait_for_response=False, skip_conch=True,
+    )
+    assert "vad_aggressiveness must be an integer between 0 and 3" in result
+    assert "turn 0" not in result
 
 
 # ---------------------------------------------------------------------------

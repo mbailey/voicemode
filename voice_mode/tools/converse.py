@@ -732,10 +732,16 @@ def _normalize_turns(
 
         # Hard-reject anything else not in the known turn schema — typo
         # protection, and explicitly closes off nesting a full converse call
-        # (message/turns/conch/session) inside a turn.
+        # (message/turns/conch/session) inside a turn. N2 (fable progress
+        # review): list the allowed keys in the error, as Decision 1 rule 5
+        # specified.
         for key in raw:
             if key not in _TURN_KNOWN_KEYS:
-                raise ValueError(f"turn {i}: unknown key '{key}' is not supported inside a turn.")
+                allowed = ", ".join(sorted(_TURN_KNOWN_KEYS))
+                raise ValueError(
+                    f"turn {i}: unknown key '{key}' is not supported inside a turn "
+                    f"(allowed: {allowed})."
+                )
 
         has_say = "say" in raw
         has_ask = "ask" in raw
@@ -748,6 +754,13 @@ def _normalize_turns(
                 f"turn {i}: 'wait_for_response' cannot be used alongside 'ask' "
                 f"(redundant/ambiguous — 'ask' already means listen for a reply)."
             )
+        # N2 (fable progress review): a turn with NEITHER verb key present at
+        # all gets a message naming the actual requirement ("exactly one of
+        # 'say' or 'ask'") rather than the generic "'say' is required" below,
+        # which is accurate for P1 callers but misleading now that 'ask' is
+        # an equally valid verb.
+        if not has_say and not has_ask:
+            raise ValueError(f"turn {i}: a turn must have exactly one of 'say' or 'ask'.")
 
         wfr = raw.get("wait_for_response")
         if wfr is not None and not isinstance(wfr, bool):
@@ -1820,7 +1833,7 @@ class ListenResult:
             "skip_back" (a pending skip_back was detected post-recording --
             the caller should replay then call again), or "stt_error" (empty
             recording buffer or an STT connection failure -- see
-            ``error_message``).
+            ``error_message`` / ``error_kind``).
         text: transcribed reply text (set only when outcome == "answered").
         stt_provider: the STT provider name, else "unknown".
         timings: this exchange's own timing sub-dict (keys like "record",
@@ -1829,7 +1842,25 @@ class ListenResult:
         control: the ``ControlSnapshot`` that caused a "stopped" outcome.
         skip_forward_ended: True when a VM-1754 skip_forward ended the
             recording early (whatever was captured is still transcribed).
-        error_message: set when outcome == "stt_error".
+        error_message: set when outcome == "stt_error" -- human-readable, for
+            display/logging. Do NOT string-match this for control flow (fable
+            progress review S2); use ``error_kind`` instead.
+        error_kind: set when outcome == "stt_error" -- a stable machine
+            classification: "record_failed" (empty recording buffer, not a
+            skip_forward "go now") or "stt_connection_failed" (STT service
+            unreachable). ``None`` for every other outcome.
+        stt_classified: True iff STT actually ran AND returned a definitive
+            classification of the capture -- i.e. outcome is "answered", or
+            outcome is "no_speech" *because STT itself* reported no speech
+            (not because VAD never detected speech in the first place, which
+            skips STT entirely). False for "stopped"/"skip_back"/"stt_error"
+            and for a VAD-level "no_speech" where STT was never invoked.
+            Renamed from the original ``stt_attempted`` (fable progress
+            review S3): the old name was misleading because a "stt_error"
+            connection-failure outcome DID attempt STT but reported
+            ``stt_attempted=False`` -- the new name states what the field
+            actually certifies (a usable classification), and callers that
+            need "did STT even run" should branch on ``outcome`` instead.
     """
     outcome: str
     text: Optional[str] = None
@@ -1838,7 +1869,8 @@ class ListenResult:
     control: Optional[Any] = None
     skip_forward_ended: bool = False
     error_message: Optional[str] = None
-    stt_attempted: bool = False
+    error_kind: Optional[str] = None
+    stt_classified: bool = False
 
 
 async def listen_and_transcribe(
@@ -1947,6 +1979,7 @@ async def listen_and_transcribe(
             return ListenResult(
                 outcome="stt_error", timings=timings,
                 error_message="Error: Could not record audio",
+                error_kind="record_failed",
             )
         logger.info("skip_forward ended recording before any audio was captured -- advancing with no speech")
         speech_detected = False
@@ -1954,7 +1987,7 @@ async def listen_and_transcribe(
     stt_metrics = None
     response_text = None
     stt_provider = "unknown"
-    stt_attempted = False
+    stt_classified = False
 
     if not speech_detected:
         logger.info("No speech detected during recording - skipping STT processing")
@@ -1968,7 +2001,7 @@ async def listen_and_transcribe(
             write(audio_path, SAMPLE_RATE, audio_data)
             logger.debug(f"Saved no-speech audio to: {audio_path}")
     else:
-        stt_attempted = True
+        stt_classified = True
         if event_logger:
             event_logger.log_event(event_logger.STT_START)
 
@@ -2009,7 +2042,10 @@ async def listen_and_transcribe(
 
                     error_msg = "\n".join(error_lines)
                     logger.error(error_msg)
-                    return ListenResult(outcome="stt_error", timings=timings, error_message=error_msg)
+                    return ListenResult(
+                        outcome="stt_error", timings=timings, error_message=error_msg,
+                        error_kind="stt_connection_failed",
+                    )
 
                 elif stt_result["error_type"] == "no_speech":
                     # Genuine no speech detected
@@ -2033,7 +2069,7 @@ async def listen_and_transcribe(
         stt_provider=stt_provider,
         timings=timings,
         skip_forward_ended=skip_forward_ended,
-        stt_attempted=stt_attempted,
+        stt_classified=stt_classified,
     )
 
 
@@ -2151,6 +2187,14 @@ async def _ask_turns_pipeline(
       with partials (the failure will recur on every later ask).
     * Any other unexpected exception is caught at the loop level -> abort with
       partials (collected replies are never thrown away).
+
+    Per-exchange conversation logging (VM-1775 impl-003b, fable progress
+    review S8): every resolved ask-turn reply (answered or no_speech) is
+    logged via ``get_conversation_logger().log_stt(...)`` the moment it's
+    captured -- not batched at the end -- so a killed/cancelled call still
+    leaves every already-answered reply in the conversation logs even though
+    the tool's own JSON return value is lost (Decision 7's crash-persistence
+    guarantee).
 
     Returns ``(results, stopped_at)``:
 
@@ -2333,9 +2377,13 @@ async def _ask_turns_pipeline(
                     break
 
                 if listen_result.outcome == "stt_error":
+                    # S2 (fable progress review): classify off the seam's own
+                    # stable ``error_kind`` field, not a substring match on the
+                    # human-readable ``error_message`` (a rewording there used
+                    # to be able to silently misclassify survey aborts).
                     reason = (
                         "stt_connection_failed"
-                        if "connection failed" in (listen_result.error_message or "").lower()
+                        if listen_result.error_kind == "stt_connection_failed"
                         else "audio_device_error"
                     )
                     stopped_at = {"turn": idx, "phase": "listening", "reason": reason}
@@ -2368,6 +2416,26 @@ async def _ask_turns_pipeline(
                 else:
                     entry["status"] = "no_speech"
                     entry["reply"] = None
+
+                # S8 (fable progress review): persist this reply to the
+                # conversation log AT CAPTURE TIME, not deferred to the end
+                # of the survey. Decision 7's crash-persistence guarantee is
+                # "a killed call loses the tool-result JSON, never the
+                # replies" -- that only holds if each reply lands on disk the
+                # moment it's captured, so a break/kill mid-survey still
+                # leaves every prior reply in the logs. Mirrors the
+                # single-message listen path's log_stt call, scoped per ask
+                # turn instead of once per converse() call.
+                try:
+                    get_conversation_logger().log_stt(
+                        text=text if text else "[no speech detected]",
+                        provider=listen_result.stt_provider,
+                        transport=transport,
+                        timing=f"record {listen_result.timings.get('record', 0.0):.1f}s, "
+                               f"stt {listen_result.timings.get('stt', 0.0):.1f}s",
+                    )
+                except Exception as log_err:
+                    logger.error(f"Survey turn {idx}: failed to log conversation STT: {log_err}")
                 break
 
             results[idx] = entry
@@ -2783,6 +2851,16 @@ consult the MCP resources listed above.
     # Determine effective metrics level (parameter overrides config)
     effective_metrics_level = metrics_level if metrics_level else METRICS_LEVEL
 
+    # Validate vad_aggressiveness parameter (call-level). N4 (fable progress
+    # review): this must run BEFORE _normalize_turns below -- with turns
+    # present, an out-of-range call-level vad_aggressiveness used to be
+    # caught by the per-turn inheritance validation first, so the error
+    # misleadingly read "turn 0: 'vad_aggressiveness' must be…", blaming
+    # turn 0 for a call-level argument.
+    if vad_aggressiveness is not None:
+        if not isinstance(vad_aggressiveness, int) or vad_aggressiveness < 0 or vad_aggressiveness > 3:
+            return f"Error: vad_aggressiveness must be an integer between 0 and 3 (got {vad_aggressiveness})"
+
     # VM-1772/VM-1775: normalize the optional turns[] list (speak-only P1 +
     # ask/collect-response P2). When present it takes precedence over the
     # scalar `message` (precedence is resolved here, not in the schema —
@@ -2823,12 +2901,7 @@ consult the MCP resources listed above.
         message = ""
 
     logger.info(f"Converse: '{message[:50]}{'...' if len(message) > 50 else ''}' (wait_for_response: {wait_for_response})")
-    
-    # Validate vad_aggressiveness parameter
-    if vad_aggressiveness is not None:
-        if not isinstance(vad_aggressiveness, int) or vad_aggressiveness < 0 or vad_aggressiveness > 3:
-            return f"Error: vad_aggressiveness must be an integer between 0 and 3 (got {vad_aggressiveness})"
-    
+
     # Validate duration parameters
     if wait_for_response:
         if listen_duration_min < 0:
@@ -3400,7 +3473,6 @@ consult the MCP resources listed above.
                     result = listen_result.error_message
                     return result
 
-                skip_forward_ended = listen_result.skip_forward_ended
                 response_text = listen_result.text
                 stt_provider = listen_result.stt_provider
                 # Track STT-specific metrics (defined here to be in scope for event logging later)
@@ -3472,28 +3544,51 @@ consult the MCP resources listed above.
                         # marker instead of silently falling through).
                         logger.info("Listening for response after repeat...")
 
-                        listen_result = await listen_and_transcribe(
-                            control_state,
-                            listen_duration_max=listen_duration_max,
-                            listen_duration_min=listen_duration_min,
-                            disable_silence_detection=disable_silence_detection,
-                            vad_aggressiveness=vad_aggressiveness,
-                            chime_enabled=chime_enabled,
-                            chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence,
-                            transport=transport,
-                            event_logger=event_logger,
-                        )
-                        timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
-                        timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
+                        # S4/S5/S6 (fable progress review): a skip_back during
+                        # THIS re-listen used to be silently swallowed (no
+                        # replay, capture discarded, pending latched); now it
+                        # replays + re-listens, mirroring the main listen
+                        # path's loop (via the same shared history-buffer
+                        # helper). event_logger=None restores master's
+                        # event-log cardinality for this re-listen (no
+                        # unpaired STT_START / undisclosed no_speech_*.wav
+                        # saves). An stt_error is now surfaced explicitly
+                        # instead of silently leaving the "repeat" utterance
+                        # presented as the answer.
+                        replay_cursor = 0
+                        while True:
+                            replay_cursor = await _drain_skip_back(control_state, replay_cursor)
+                            listen_result = await listen_and_transcribe(
+                                control_state,
+                                listen_duration_max=listen_duration_max,
+                                listen_duration_min=listen_duration_min,
+                                disable_silence_detection=disable_silence_detection,
+                                vad_aggressiveness=vad_aggressiveness,
+                                chime_enabled=chime_enabled,
+                                chime_leading_silence=chime_leading_silence,
+                                chime_trailing_silence=chime_trailing_silence,
+                                transport=transport,
+                                event_logger=None,
+                            )
+                            timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
+                            timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
+
+                            if listen_result.outcome == "skip_back":
+                                continue
+                            break
 
                         if listen_result.outcome == "stopped":
                             success = True
                             return _build_control_stop_result(listen_result.control, timings)
-                        elif listen_result.stt_attempted:
+                        if listen_result.outcome == "stt_error":
+                            # Surface the STT failure, matching the main
+                            # listen path's behaviour, instead of silently
+                            # keeping the "repeat" utterance as the answer.
+                            return listen_result.error_message
+                        elif listen_result.stt_classified:
                             # Matches the pre-extraction guard (len(audio_data) > 0
                             # and speech_detected): only overwrite the response once
-                            # STT actually ran.
+                            # STT actually ran and classified the capture.
                             response_text = listen_result.text
                             stt_provider = listen_result.stt_provider
                             logger.info(f"New response after repeat: {response_text}")
@@ -3515,25 +3610,41 @@ consult the MCP resources listed above.
                     # the repeat re-listen above).
                     logger.info("Wait period ended. Listening for response...")
                     if transport == "local":
-                        listen_result = await listen_and_transcribe(
-                            control_state,
-                            listen_duration_max=listen_duration_max,
-                            listen_duration_min=listen_duration_min,
-                            disable_silence_detection=disable_silence_detection,
-                            vad_aggressiveness=vad_aggressiveness,
-                            chime_enabled=chime_enabled,
-                            chime_leading_silence=chime_leading_silence,
-                            chime_trailing_silence=chime_trailing_silence,
-                            transport=transport,
-                            event_logger=event_logger,
-                        )
-                        timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
-                        timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
+                        # S4/S5/S6 (fable progress review): same fix as the
+                        # repeat re-listen above -- replay+re-listen on
+                        # skip_back (mirroring the main loop) instead of
+                        # swallowing it, event_logger=None to restore
+                        # master's event-log cardinality, and an stt_error is
+                        # surfaced explicitly instead of leaving the "wait"
+                        # utterance presented as the answer.
+                        replay_cursor = 0
+                        while True:
+                            replay_cursor = await _drain_skip_back(control_state, replay_cursor)
+                            listen_result = await listen_and_transcribe(
+                                control_state,
+                                listen_duration_max=listen_duration_max,
+                                listen_duration_min=listen_duration_min,
+                                disable_silence_detection=disable_silence_detection,
+                                vad_aggressiveness=vad_aggressiveness,
+                                chime_enabled=chime_enabled,
+                                chime_leading_silence=chime_leading_silence,
+                                chime_trailing_silence=chime_trailing_silence,
+                                transport=transport,
+                                event_logger=None,
+                            )
+                            timings['record'] = timings.get('record', 0) + listen_result.timings.get('record', 0)
+                            timings['stt'] = timings.get('stt', 0) + listen_result.timings.get('stt', 0)
+
+                            if listen_result.outcome == "skip_back":
+                                continue
+                            break
 
                         if listen_result.outcome == "stopped":
                             success = True
                             return _build_control_stop_result(listen_result.control, timings)
-                        elif listen_result.stt_attempted:
+                        if listen_result.outcome == "stt_error":
+                            return listen_result.error_message
+                        elif listen_result.stt_classified:
                             response_text = listen_result.text
                             stt_provider = listen_result.stt_provider
                             logger.info(f"New response after wait: {response_text}")
