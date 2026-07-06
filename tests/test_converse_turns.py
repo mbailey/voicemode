@@ -561,3 +561,171 @@ def test_cli_script_not_a_list_errors(patched_converse):
     )
     assert result.exit_code != 0
     assert "array" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# CLI --ask (VM-1775, impl-004)
+# ---------------------------------------------------------------------------
+
+from voice_mode.cli import _survey_exit_code
+
+
+def test_cli_ask_builds_turns_in_order(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "nova:one", "--ask", "two"],
+    )
+    assert result.exit_code == 0, result.output
+    turns = patched_converse.await_args.kwargs["turns"]
+    assert turns == [
+        {"ask": "one", "voice": "nova"},
+        {"ask": "two", "voice": None},   # no VOICE: prefix, no --voice -> default
+    ]
+
+
+def test_cli_ask_first_colon_only(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "nova:what time is it? 5:30-ish?"],
+    )
+    assert result.exit_code == 0, result.output
+    turns = patched_converse.await_args.kwargs["turns"]
+    assert turns == [{"ask": "what time is it? 5:30-ish?", "voice": "nova"}]
+
+
+def test_cli_ask_uses_voice_flag_as_default(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--voice", "shimmer", "--ask", "how did the demo land?"],
+    )
+    assert result.exit_code == 0, result.output
+    turns = patched_converse.await_args.kwargs["turns"]
+    assert turns == [{"ask": "how did the demo land?", "voice": "shimmer"}]
+
+
+def test_cli_ask_passes_call_level_listen_fields(patched_converse):
+    """Ask turns inherit listen_duration_max/min + vad_aggressiveness from the
+    CLI's --duration/--min-duration/--vad-aggressiveness flags (call-level
+    defaults per README ## Design)."""
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "one", "--duration", "20", "--min-duration", "3", "--vad-aggressiveness", "1"],
+    )
+    assert result.exit_code == 0, result.output
+    kwargs = patched_converse.await_args.kwargs
+    assert kwargs["listen_duration_max"] == 20
+    assert kwargs["listen_duration_min"] == 3
+    assert kwargs["vad_aggressiveness"] == 1
+
+
+def test_cli_say_and_ask_conflict(patched_converse):
+    """Mixing --say and --ask errors -- click can't preserve interleaving
+    order across two repeatable options; --script is the mixed surface."""
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--say", "one", "--ask", "two"],
+    )
+    assert result.exit_code != 0
+    assert "both" in result.output.lower()
+    assert "--script" in result.output
+    assert patched_converse.await_count == 0
+
+
+def test_cli_ask_and_script_conflict(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "one", "--script", "-"],
+        input="[]",
+    )
+    assert result.exit_code != 0
+    assert "not both" in result.output.lower()
+
+
+def test_cli_ask_with_positional_message_conflict(patched_converse):
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "hello", "--ask", "one"],
+    )
+    assert result.exit_code != 0
+
+
+def test_cli_script_gains_ask_turns_for_free(patched_converse):
+    """--script's JSON turn schema already accepts "ask" (impl-001); the CLI
+    doesn't need any extra plumbing for the mixed say/ask surface."""
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--script", "-"],
+        input='[{"say":"hi","voice":"nova"},{"ask":"how are you?"}]',
+    )
+    assert result.exit_code == 0, result.output
+    turns = patched_converse.await_args.kwargs["turns"]
+    assert turns == [
+        {"say": "hi", "voice": "nova"},
+        {"ask": "how are you?"},  # no default --voice to backfill with
+    ]
+
+
+class TestSurveyExitCode:
+    """Unit tests for `_survey_exit_code` (VM-1775): exit 0 completed / 3
+    partial for a survey JSON result; None (default exit code) for a
+    speak-only (non-JSON) result."""
+
+    def test_speak_only_summary_is_not_survey(self):
+        assert _survey_exit_code("✓ Spoke 2/2 turns") is None
+
+    def test_empty_result_is_not_survey(self):
+        assert _survey_exit_code("") is None
+        assert _survey_exit_code(None) is None
+
+    def test_non_json_non_dict_result_is_not_survey(self):
+        assert _survey_exit_code("[]") is None
+        assert _survey_exit_code("not json at all") is None
+
+    def test_completed_survey_exits_zero(self):
+        result = '{"survey": {"completed": true, "turns": []}}'
+        assert _survey_exit_code(result) == 0
+
+    def test_partial_survey_exits_three(self):
+        result = '{"survey": {"completed": false, "stopped_at": {"turn": 1, "phase": "listening", "reason": "stop"}, "turns": []}}'
+        assert _survey_exit_code(result) == 3
+
+
+def test_cli_ask_survey_json_to_stdout_and_exit_zero_on_completion(patched_converse):
+    """Full completion: the survey JSON is the only stdout output, exit 0."""
+    survey_json = (
+        '{\n  "survey": {\n    "completed": true,\n    "asked": 1,\n    '
+        '"answered": 1,\n    "stopped_at": null,\n    "turns": [\n      '
+        '{"turn": 0, "verb": "ask", "status": "answered", "reply": "Great."}\n    ]\n  }\n}'
+    )
+    patched_converse.return_value = survey_json
+    runner = CliRunner()
+    result = runner.invoke(voice_mode_main_cli, ["converse", "--ask", "how did it go?"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == survey_json
+
+
+def test_cli_ask_survey_exit_three_on_partial(patched_converse):
+    """A break/abort mid-survey still prints the partial JSON, but exits 3
+    so scripts can branch on the exit code without parsing."""
+    survey_json = (
+        '{\n  "survey": {\n    "completed": false,\n    "asked": 2,\n    '
+        '"answered": 1,\n    "stopped_at": {"turn": 1, "phase": "listening", "reason": "stop"},\n'
+        '    "turns": [\n      {"turn": 0, "verb": "ask", "status": "answered", "reply": "Fine."},\n'
+        '      {"turn": 1, "verb": "ask", "status": "no_speech", "reply": null}\n    ]\n  }\n}'
+    )
+    patched_converse.return_value = survey_json
+    runner = CliRunner()
+    result = runner.invoke(
+        voice_mode_main_cli,
+        ["converse", "--ask", "one", "--ask", "two"],
+    )
+    assert result.exit_code == 3, result.output
+    assert result.output.strip() == survey_json

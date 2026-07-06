@@ -2102,11 +2102,21 @@ Multi-voice (speak a gap-free sequence in one call; synth overlaps playback):
   # --say 'VOICE:TEXT' (VOICE: optional → falls back to --voice/default).
   # Repeat --say to build the sequence; order is preserved.
 \b
-  # --script reads a JSON array of turns (same schema as the MCP tool). Use it
-  # for text containing ':' . '-' = stdin (heredoc-friendly):
+Survey (speak each turn, listen for and collect a reply, aligned in the
+returned JSON; --ask is exactly parallel to --say):
+  voicemode converse --ask 'nova:How did the demo land?' \\
+                     --ask 'nova:Anything you would change?'
+  # Prints the survey JSON to stdout; exit 0 if completed, exit 3 if the
+  # survey stopped early (break/error). Mixing --say and --ask in one
+  # command errors -- click can't preserve interleaving order across two
+  # repeatable options; use --script for a mixed say/ask sequence.
+\b
+  # --script reads a JSON array of turns (same schema as the MCP tool),
+  # including "ask" turns -- the mixed-sequence surface. Use it for text
+  # containing ':'. '-' = stdin (heredoc-friendly):
   voicemode converse --script - <<'JSON'
   [ {"say":"My milkshake brings all the boys to the yard.", "voice":"sandy"},
-    {"say":"So! You still want a milkshake?", "voice":"monkey", "pause_after_ms":400} ]
+    {"ask":"So! You still want a milkshake?", "voice":"monkey", "pause_after_ms":400} ]
   JSON
 """
 
@@ -2125,14 +2135,33 @@ def _parse_say_item(say_str, default_voice):
     return {'say': say_str, 'voice': default_voice}
 
 
-def _build_turns_from_cli(say_items, script, default_voice):
-    """Build the ``turns`` list from the CLI's --say / --script surfaces.
+def _parse_ask_item(ask_str, default_voice):
+    """Parse a single --ask 'VOICE:TEXT' value into a turn dict (VM-1775).
 
-    Returns ``None`` when neither is supplied (scalar message path). Raises
+    Mirrors ``_parse_say_item`` exactly, except the turn asks (speaks, then
+    listens and collects the reply) instead of just speaking.
+    """
+    if ':' in ask_str:
+        voice_part, text_part = ask_str.split(':', 1)
+        voice_part = voice_part.strip()
+        return {'ask': text_part, 'voice': voice_part or default_voice}
+    return {'ask': ask_str, 'voice': default_voice}
+
+
+def _build_turns_from_cli(say_items, ask_items, script, default_voice):
+    """Build the ``turns`` list from the CLI's --say / --ask / --script surfaces.
+
+    Returns ``None`` when none is supplied (scalar message path). Raises
     ``click.UsageError`` on conflicting/invalid input.
     """
-    if say_items and script:
-        raise click.UsageError("Use either --say (repeatable) or --script, not both.")
+    if say_items and ask_items:
+        raise click.UsageError(
+            "Use either --say or --ask (repeatable), not both -- click can't "
+            "preserve interleaving order across two repeatable options. Use "
+            "--script for a mixed say/ask sequence."
+        )
+    if (say_items or ask_items) and script:
+        raise click.UsageError("Use either --say/--ask (repeatable) or --script, not both.")
 
     if script:
         import json
@@ -2164,7 +2193,32 @@ def _build_turns_from_cli(say_items, script, default_voice):
     if say_items:
         return [_parse_say_item(s, default_voice) for s in say_items]
 
+    if ask_items:
+        return [_parse_ask_item(a, default_voice) for a in ask_items]
+
     return None
+
+
+def _survey_exit_code(result):
+    """Process exit code for a --ask/--script survey result (VM-1775).
+
+    Survey mode (>=1 ask turn) returns a JSON string whose top level is
+    ``{"survey": {...}}`` (see README ## Design's return contract).
+    Speak-only turns (no ask) return the plain VM-1772 summary string --
+    that isn't JSON, so this returns ``None`` and the default exit code (0)
+    applies. For a survey: exit 0 when it completed, exit 3 on a partial
+    (break/abort) so scripts can branch on the exit code without parsing.
+    """
+    if not result:
+        return None
+    import json
+    try:
+        payload = json.loads(result)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict) or "survey" not in payload:
+        return None
+    return 0 if payload["survey"].get("completed") else 3
 
 
 @voice_mode_main_cli.command(epilog=_CONVERSE_EPILOG)
@@ -2195,38 +2249,47 @@ def _build_turns_from_cli(say_items, script, default_voice):
 @click.option('--say', 'say_items', multiple=True, metavar="'VOICE:TEXT'",
               help="Speak a turn in a multi-voice sequence. Repeatable; order preserved. "
                    "'VOICE:' prefix optional (falls back to --voice/default). Speak-only.")
+@click.option('--ask', 'ask_items', multiple=True, metavar="'VOICE:TEXT'",
+              help="Speak a turn, then listen for and collect a spoken reply, aligned "
+                   "to this turn in the returned survey JSON. Repeatable; order preserved. "
+                   "'VOICE:' prefix optional (falls back to --voice/default). Mixing --say "
+                   "and --ask errors -- use --script for a mixed sequence.")
 @click.option('--script', 'script', default=None, metavar='FILE|-',
-              help="Read a JSON array of turns (same schema as the MCP tool). "
-                   "'-' reads stdin (heredoc-friendly). Use this for text containing ':'.")
+              help="Read a JSON array of turns (same schema as the MCP tool, including "
+                   "\"ask\" turns). '-' reads stdin (heredoc-friendly). Use this for text "
+                   "containing ':' or a mixed say/ask sequence.")
 @click.option('--pause-after-ms', 'pause_after_ms', type=int, default=150, show_default=True,
-              help='Silence (ms) inserted after each turn in a --say/--script sequence.')
+              help='Silence (ms) inserted after each turn in a --say/--ask/--script sequence.')
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
 def converse(message_args, message, wait, skip_stt, duration, min_duration, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
-            speed, vad_aggressiveness, skip_tts, skip_conch, say_items, script, pause_after_ms,
-            continuous):
+            speed, vad_aggressiveness, skip_tts, skip_conch, say_items, ask_items, script,
+            pause_after_ms, continuous):
     """Have a voice conversation directly from the command line.
 
     The MESSAGE to speak can be passed as a positional argument or via
     -m/--message. Use `--` to pass a message that starts with a dash.
 
     For a multi-voice sequence spoken gap-free in one call, use repeatable
-    --say 'VOICE:TEXT' or --script FILE|- (a JSON array of turns).
+    --say 'VOICE:TEXT' (speak-only) or --ask 'VOICE:TEXT' (speak, then listen
+    and collect a reply -- a paced survey), or --script FILE|- (a JSON array
+    of turns, the mixed say/ask surface).
     """
-    # VM-1772: build the optional multi-voice turns[] sequence from --say /
-    # --script. Speak-only; mutually exclusive with a scalar message and with
-    # continuous mode.
-    turns = _build_turns_from_cli(say_items, script, voice)
+    # VM-1772/VM-1775: build the optional turns[] sequence from --say / --ask /
+    # --script. --say is speak-only; --ask collects a reply per turn (returns
+    # the survey JSON instead of the speak-only summary). Mutually exclusive
+    # with a scalar message and with continuous mode.
+    turns = _build_turns_from_cli(say_items, ask_items, script, voice)
     if turns is not None:
         if message_args or message is not None:
             raise click.UsageError(
-                "--say/--script speak a turns sequence; don't combine them with a "
+                "--say/--ask/--script speak a turns sequence; don't combine them with a "
                 "positional message or --message/-m."
             )
         if continuous:
-            raise click.UsageError("--say/--script are speak-only and can't be used with --continuous.")
+            raise click.UsageError("--say/--ask/--script can't be used with --continuous.")
         if not turns:
-            raise click.UsageError("--say/--script produced no turns to speak.")
+            raise click.UsageError("--say/--ask/--script produced no turns to speak.")
 
     # Resolve the message source:
     #   - positional MESSAGE wins when given
@@ -2283,24 +2346,37 @@ def converse(message_args, message, wait, skip_stt, duration, min_duration, voic
 
         try:
             if turns is not None:
-                # VM-1772: multi-voice turns[] sequence (speak-only). One call,
-                # synth pipelined behind playback.
+                # VM-1772/VM-1775: turns[] sequence -- speak-only (--say) or a
+                # survey (--ask/--script with an ask turn: speak, listen,
+                # collect the reply). One call, synth pipelined behind
+                # playback/listening. listen_duration_max/min and
+                # vad_aggressiveness are the call-level defaults an ask turn
+                # inherits (harmless when there is no ask turn).
                 result = await getattr(converse_fn, 'fn', converse_fn)(
                     turns=turns,
                     pause_after_ms=pause_after_ms,
                     wait_for_response=False,
+                    listen_duration_max=duration,
+                    listen_duration_min=min_duration,
                     voice=voice,
                     tts_provider=tts_provider,
                     tts_model=tts_model,
                     tts_instructions=tts_instructions,
                     chime_enabled=audio_feedback,
                     audio_format=audio_format,
+                    disable_silence_detection=disable_silence_detection,
                     speed=speed,
+                    vad_aggressiveness=vad_aggressiveness,
                     skip_tts=skip_tts,
                     skip_conch=skip_conch,
                 )
+                # Survey JSON to stdout only (no other stdout chatter); exit
+                # 0 completed / 3 partial so scripts can branch on exit code.
                 if result:
                     click.echo(result)
+                exit_code = _survey_exit_code(result)
+                if exit_code:
+                    sys.exit(exit_code)
                 return
 
             if continuous:
