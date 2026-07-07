@@ -957,6 +957,50 @@ async def play_chime_end(
         return False
 
 
+async def play_chime_captured(
+    sample_rate: int = SAMPLE_RATE,
+    leading_silence: Optional[float] = None,
+    trailing_silence: Optional[float] = None
+) -> bool:
+    """Play the survey "answer captured" confirmation cue (VM-1859).
+
+    A short, content-free two-tone cue played on a survey ask turn ONLY when a
+    reply was actually transcribed -- the "heard you → advancing" signal that
+    lets the user distinguish a captured answer from a timeout/no-hear during a
+    pipelined multi-turn survey. Deliberately distinct in pitch and contour from
+    both the listen-start chime (ascending 800→1000) and the listen-finished
+    chime (descending 1000→800): a brighter, higher rising fourth (1175→1568,
+    D6→G6) so it is recognisable as a separate "got it" event rather than a
+    slide up or down. Content-free, so it needs no per-answer synthesis and the
+    survey pipeline's no-dead-air guarantee is preserved.
+
+    Args:
+        sample_rate: Sample rate for audio
+        leading_silence: Optional override for leading silence duration (seconds)
+        trailing_silence: Optional override for trailing silence duration (seconds)
+
+    Returns:
+        True if cue played successfully, False otherwise
+    """
+    try:
+        chime = generate_chime(
+            [1175, 1568],
+            duration=0.08,
+            sample_rate=sample_rate,
+            leading_silence=leading_silence,
+            trailing_silence=trailing_silence
+        )
+        # Convert int16 to float32 normalized to [-1, 1] for NonBlockingAudioPlayer
+        chime_float = chime.astype(np.float32) / 32768.0
+        # Use non-blocking audio player to avoid interference with concurrent playback
+        player = NonBlockingAudioPlayer()
+        player.play(chime_float, sample_rate, blocking=True)
+        return True
+    except Exception as e:
+        logger.debug(f"Could not play captured cue: {e}")
+        return False
+
+
 async def play_system_audio(message_key: str, fallback_text: Optional[str] = None, soundfont: str = "default") -> bool:
     """Play a pre-recorded system audio message with fallback to TTS.
 

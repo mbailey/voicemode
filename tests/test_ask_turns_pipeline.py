@@ -982,3 +982,175 @@ class TestPipelineEventLogCardinality:
         # -- now it emits none of the single-message path's per-listen events
         # from the survey pipeline at all.
         assert fake_event_logger.events == []
+
+
+# ---------------------------------------------------------------------------
+# _normalize_turns -- ack opt-in surface (VM-1859 R4)
+# ---------------------------------------------------------------------------
+
+class TestNormalizeAck:
+    def test_ack_defaults_off(self):
+        """No `ack` key and no call-level default => cue opt-in is False."""
+        turns = _norm([{"ask": "q"}])
+        assert turns[0]["ack"] is False
+
+    def test_per_turn_ack_true(self):
+        turns = _norm([{"ask": "q", "ack": True}])
+        assert turns[0]["ack"] is True
+
+    def test_call_level_default_switches_all_ask_turns_on(self):
+        turns = _normalize_turns(
+            [{"ask": "q1"}, {"say": "s"}, {"ask": "q2"}],
+            default_voice="default", default_pause_after_ms=0,
+            default_tts_instructions=None, default_speed=None,
+            default_ack=True,
+        )
+        assert [t["ack"] for t in turns] == [True, True, True]
+
+    def test_per_turn_ack_overrides_call_level_default(self):
+        turns = _normalize_turns(
+            [{"ask": "q1", "ack": False}, {"ask": "q2"}],
+            default_voice="default", default_pause_after_ms=0,
+            default_tts_instructions=None, default_speed=None,
+            default_ack=True,
+        )
+        assert [t["ack"] for t in turns] == [False, True]
+
+    def test_non_bool_ack_rejected(self):
+        with pytest.raises(ValueError, match="'ack' must be a boolean"):
+            _norm([{"ask": "q", "ack": "yes"}])
+
+
+# ---------------------------------------------------------------------------
+# _ask_turns_pipeline -- ack capture cue (VM-1859 R4)
+# ---------------------------------------------------------------------------
+
+class TestPipelineAckCue:
+    """The opt-in, content-free "heard you" cue: fires on a captured answer,
+    stays silent on timeout/no_speech, and is absent unless opted in."""
+
+    async def _run(self, turns, *, record, stt=None):
+        cue = AsyncMock(return_value=True)
+        patches = [
+            patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth),
+            patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()),
+            patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback),
+            patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=record),
+            patch("voice_mode.tools.converse.play_chime_captured", new=cue),
+        ]
+        if stt is not None:
+            patches.append(patch("voice_mode.tools.converse.speech_to_text", new=stt))
+        from contextlib import ExitStack
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+        return results, stopped_at, cue
+
+    async def test_cue_fires_on_captured_answer_when_ack_on(self):
+        turns = _norm([{"ask": "q", "ack": True}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "an answer", "provider": "whisper-local"}
+
+        results, stopped_at, cue = await self._run(turns, record=fake_record, stt=fake_stt)
+        assert results[0]["status"] == "answered"
+        assert cue.await_count == 1
+
+    async def test_cue_absent_on_timeout_even_when_ack_on(self):
+        """SC3: a no_speech/timeout must NOT play the cue -- that silence IS
+        the "didn't hear" signal that distinguishes it from a capture."""
+        turns = _norm([{"ask": "q", "ack": True}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(10, dtype=np.int16), False)  # no speech
+
+        results, stopped_at, cue = await self._run(turns, record=fake_record)
+        assert results[0]["status"] == "no_speech"
+        assert cue.await_count == 0
+
+    async def test_cue_not_fired_by_default_when_ack_off(self):
+        """SC4: default OFF -- an answered turn plays no cue when ack absent."""
+        turns = _norm([{"ask": "q"}])  # ack defaults False
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "an answer", "provider": "whisper-local"}
+
+        results, stopped_at, cue = await self._run(turns, record=fake_record, stt=fake_stt)
+        assert results[0]["status"] == "answered"
+        assert cue.await_count == 0
+
+    async def test_cue_fires_once_per_captured_answer_not_on_no_speech_turn(self):
+        """Mixed survey: cue count tracks the captured answers only."""
+        turns = _norm([
+            {"ask": "q1", "ack": True},
+            {"ask": "q2", "ack": True},
+            {"ask": "q3", "ack": True},
+        ])
+        record_calls = {"n": 0}
+
+        def fake_record(*_a, **_k):
+            record_calls["n"] += 1
+            # turn 2 (index 1) times out; the others capture.
+            if record_calls["n"] == 2:
+                return (np.zeros(10, dtype=np.int16), False)
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "reply", "provider": "whisper-local"}
+
+        results, stopped_at, cue = await self._run(turns, record=fake_record, stt=fake_stt)
+        assert [r["status"] for r in results] == ["answered", "no_speech", "answered"]
+        assert cue.await_count == 2
+
+    async def test_cue_preserves_pipelining_no_synth_dead_air(self):
+        """R5/SC5 (headless proxy for bench-turns.sh): turning the cue ON must
+        NOT reintroduce synth dead-air. The cue is content-free, so the producer
+        keeps synthesizing the NEXT turn ahead of need even with ack enabled --
+        the same pipelining invariant TestPipelineBasic asserts without a cue.
+
+        Proven by holding turn 0's recording open until the producer has
+        synthesized turn 1: if the cue had forced a per-answer synth barrier,
+        turn 1's synthesis would not yet have happened.
+        """
+        turns = _norm([{"ask": "Q1", "ack": True}, {"say": "Q2 followup"}])
+        synth_calls = []
+        next_turn_synthesized = threading.Event()
+
+        async def tracking_synth(*, message, voice, **_kw):
+            synth_calls.append(message)
+            if message == "Q2 followup":
+                next_turn_synthesized.set()
+            return (True, _samples(), 24000, {"generation": 0.0}, {})
+
+        def fake_record(*_a, **_k):
+            # The producer must already be synthesizing the next turn while we
+            # are still recording turn 0's answer -- no synth barrier at the
+            # ack'd ask turn.
+            got = next_turn_synthesized.wait(timeout=2.0)
+            assert got, "producer did not synthesize the next turn during the listen"
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "an answer", "provider": "whisper-local"}
+
+        cue = AsyncMock(return_value=True)
+        with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=tracking_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.play_chime_captured", new=cue), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at is None
+        assert synth_calls == ["Q1", "Q2 followup"]
+        assert results[0]["status"] == "answered"
+        assert results[1]["status"] == "spoken"
+        assert cue.await_count == 1  # the cue still fired on the captured answer

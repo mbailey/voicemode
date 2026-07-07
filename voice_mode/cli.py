@@ -2260,11 +2260,15 @@ def _survey_exit_code(result):
                    "containing ':' or a mixed say/ask sequence.")
 @click.option('--pause-after-ms', 'pause_after_ms', type=int, default=150, show_default=True,
               help='Silence (ms) inserted after each turn in a --say/--ask/--script sequence.')
+@click.option('--ack', is_flag=True, default=False,
+              help="Survey capture cue: play a short content-free confirmation sound "
+                   "when — and only when — an --ask turn captures a reply (silent on a "
+                   "timeout), so you can tell 'heard you' from 'didn't hear'. Default off.")
 @click.option('--continuous', '-c', is_flag=True, help='Continuous conversation mode')
 def converse(message_args, message, wait, skip_stt, duration, min_duration, voice, tts_provider,
             tts_model, tts_instructions, audio_feedback, audio_format, disable_silence_detection,
             speed, vad_aggressiveness, skip_tts, skip_conch, say_items, ask_items, script,
-            pause_after_ms, continuous):
+            pause_after_ms, ack, continuous):
     """Have a voice conversation directly from the command line.
 
     The MESSAGE to speak can be passed as a positional argument or via
@@ -2369,6 +2373,7 @@ def converse(message_args, message, wait, skip_stt, duration, min_duration, voic
                     vad_aggressiveness=vad_aggressiveness,
                     skip_tts=skip_tts,
                     skip_conch=skip_conch,
+                    ack=ack,
                 )
                 # Survey JSON to stdout only (no other stdout chatter); exit
                 # 0 completed / 3 partial so scripts can branch on exit code.

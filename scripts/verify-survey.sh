@@ -6,7 +6,7 @@
 #   * VOICEMODE_CONTROL_CHANNEL_ENABLED=true (for the barge-in / stop drills)
 #   * a live human respondent standing by at the mic
 #
-# Drives a fixed 3-question survey FOUR ways:
+# Drives a fixed 3-question survey FIVE ways:
 #   1. full        — respondent answers all three questions normally
 #   2. barge-in    — skip_forward during Q1's SPEAKING phase (answer-early,
 #                    jumps straight to listening) + skip_forward again during
@@ -14,6 +14,10 @@
 #   3. stop        — `voicemode control stop` fired mid-LISTEN on Q2
 #   4. break       — respondent says a spoken break phrase ("break") instead
 #                    of answering Q2
+#   5. ack         — --ack capture cue (VM-1859): a content-free "heard you"
+#                    sound plays on a captured answer (Q1, Q3) and is SILENT on
+#                    a timeout (Q2 left unanswered) — the audible contrast that
+#                    tells "heard you → advancing" from "didn't hear → advancing"
 #
 # skip_forward/stop are driven via `voicemode control` (the same CLI a Stream
 # Deck button or media key would invoke — see docs/reference/control-channel.md)
@@ -285,6 +289,53 @@ run_break() {
   check_convo_log "run4-break" "$OUT_DIR/run4.json" "$since"
 }
 
+# assert_turn_statuses RUN_NAME JSON_FILE STATUS0 STATUS1 STATUS2
+#
+# Asserts the survey JSON's per-turn `status` sequence matches the expected
+# capture pattern. Used by the ack drill: the capture cue is gated on
+# status=="answered", so pinning the statuses proves the run really exercised
+# a captured turn AND a timed-out turn (the cue-present vs cue-absent contrast
+# the human confirms audibly).
+assert_turn_statuses() {
+  local name="$1" file="$2"; shift 2
+  python3 - "$name" "$file" "$@" <<'PY'
+import json, sys
+name, path = sys.argv[1], sys.argv[2]
+expected = sys.argv[3:]
+try:
+    survey = json.loads(open(path).read()).get("survey") or {}
+except Exception as e:
+    print(f"ASSERT FAIL [{name}]: could not parse {path} ({e})")
+    sys.exit(1)
+got = [t.get("status") for t in (survey.get("turns") or [])]
+if got != expected:
+    print(f"ASSERT FAIL [{name}]: turn statuses {got} != expected {expected}")
+    sys.exit(1)
+print(f"ASSERT PASS [{name}]: turn statuses {got}")
+PY
+}
+
+run_ack() {
+  echo "=== RUN 5: capture cue (--ack) across captured-vs-timeout turns ==="
+  say "Run 5 of 5: capture cue. Answer question one normally and listen for a short confirmation sound right after. On question two, stay completely silent until it times out -- you should hear NO confirmation sound. Answer question three normally and you should hear the sound again."
+  local since; since="$(date +%s)"
+  # --ack switches the content-free capture cue on for every ask turn. Q2 is
+  # left to time out (respondent stays silent) so the run contains both a
+  # captured turn (cue plays) and a no_speech turn (cue silent) -- SC3.
+  uv run voicemode converse --skip-conch --ack \
+    --ask "$VOICE:$Q1" --ask "$VOICE:$Q2" --ask "$VOICE:$Q3" \
+    >"$OUT_DIR/run5.json" 2>"$OUT_DIR/run5.log"
+  local rc=$?
+  echo "exit=$rc -- see $OUT_DIR/run5.json"
+  cat "$OUT_DIR/run5.json"
+  assert_survey "run5-ack" "$OUT_DIR/run5.json" "$rc" true
+  # Q1 + Q3 captured (cue plays), Q2 timed out (cue silent). If the respondent
+  # accidentally answered Q2, this assertion catches the un-exercised contrast.
+  assert_turn_statuses "run5-ack" "$OUT_DIR/run5.json" answered no_speech answered
+  check_convo_log "run5-ack" "$OUT_DIR/run5.json" "$since"
+  echo "  (LISTEN CHECK: a short cue should have followed Q1 and Q3 answers, and NOT Q2's timeout)"
+}
+
 # Incident guard (2026-07-06, reported to foreman.VM-1775/worker.VM-1775):
 # `source scripts/verify-survey.sh` (e.g. to reuse a helper function in a
 # subshell) used to fall straight through to this dispatcher with no arg
@@ -302,13 +353,15 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     bargein) run_bargein ;;
     stop) run_stop ;;
     break) run_break ;;
+    ack) run_ack ;;
     all)
       run_full
       run_bargein
       run_stop
       run_break
+      run_ack
       ;;
-    *) echo "usage: $0 [full|bargein|stop|break|all]"; exit 2 ;;
+    *) echo "usage: $0 [full|bargein|stop|break|ack|all]"; exit 2 ;;
   esac
 
   echo

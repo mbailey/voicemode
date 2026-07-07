@@ -87,6 +87,7 @@ from voice_mode.core import (
     get_audio_path,
     play_chime_start,
     play_chime_end,
+    play_chime_captured,
     play_system_audio
 )
 from voice_mode.audio_player import NonBlockingAudioPlayer
@@ -684,6 +685,7 @@ _TURN_KNOWN_KEYS = {
     "say", "ask", "wait_for_response",
     "voice", "pause_after_ms", "tts_instructions", "speed",
     "listen_duration_max", "listen_duration_min", "vad_aggressiveness",
+    "ack",
 } | _TURN_RESERVED_KEYS
 
 
@@ -697,6 +699,7 @@ def _normalize_turns(
     default_listen_duration_max: float = DEFAULT_LISTEN_DURATION,
     default_listen_duration_min: float = 2.0,
     default_vad_aggressiveness: Optional[int] = None,
+    default_ack: bool = False,
 ) -> list:
     """Validate and normalize the raw ``turns`` argument into a flat list.
 
@@ -842,6 +845,14 @@ def _normalize_turns(
         voice = raw.get("voice") or default_voice
         instructions = raw.get("tts_instructions") or default_tts_instructions
 
+        # ack (VM-1859): opt-in per-answer capture cue. Per-turn override, else
+        # the call-level default (survey-level flag). Meaningful only on `ask`
+        # turns -- a `say` turn captures nothing, so the cue never fires there.
+        # Normalized uniformly (harmless on `say` turns) like the listen params.
+        turn_ack = raw.get("ack", default_ack)
+        if not isinstance(turn_ack, bool):
+            raise ValueError(f"turn {i}: 'ack' must be a boolean (got {turn_ack!r}).")
+
         normalized.append({
             "say": text,
             "verb": verb,
@@ -852,6 +863,7 @@ def _normalize_turns(
             "listen_duration_max": listen_max,
             "listen_duration_min": listen_min,
             "vad_aggressiveness": turn_vad,
+            "ack": turn_ack,
         })
 
     return normalized
@@ -2638,6 +2650,24 @@ async def _ask_turns_pipeline(
                     entry["status"] = "answered"
                     entry["reply"] = text
                     answered_so_far += 1
+                    # VM-1859 (R4): opt-in, content-free "heard you" cue. Fires
+                    # ONLY here -- on a captured answer -- and is ABSENT on the
+                    # no_speech/timeout branch below; that contrast is what lets
+                    # the user tell "heard you → advancing" from "didn't hear →
+                    # advancing" during a pipelined survey. Content-free, so no
+                    # per-answer synth and the no-dead-air guarantee holds; the
+                    # producer keeps synthesizing the next turn during this short
+                    # blocking play. Default OFF (turn["ack"] is False unless the
+                    # caller opts in per-turn or survey-wide), so existing
+                    # surveys are byte-for-byte unchanged.
+                    if turn.get("ack"):
+                        try:
+                            await play_chime_captured(
+                                leading_silence=chime_leading_silence,
+                                trailing_silence=chime_trailing_silence,
+                            )
+                        except Exception as cue_err:
+                            logger.debug(f"Survey turn {idx}: capture cue failed: {cue_err}")
                 else:
                     entry["status"] = "no_speech"
                     entry["reply"] = None
@@ -2810,7 +2840,12 @@ _TURNS_PARAM_DESCRIPTION = (
     "defaults to the call-level argument of the same name): \"voice\", "
     "\"speed\", \"tts_instructions\", \"pause_after_ms\"; and, meaningful on "
     "ask turns: \"listen_duration_max\", \"listen_duration_min\", "
-    "\"vad_aggressiveness\". (\"wait_for_response\": true on a say turn is an "
+    "\"vad_aggressiveness\", \"ack\". \"ack\" (bool, default false, or set the "
+    "call-level \"ack\" to switch every ask turn on) plays a short content-free "
+    "confirmation cue when — and only when — a reply is captured, so the user "
+    "can tell \"heard you → advancing\" from \"didn't hear → advancing\"; it "
+    "stays silent on a timeout/no-speech and keeps the survey pipelined (no "
+    "synth). (\"wait_for_response\": true on a say turn is an "
     "accepted alias for \"ask\".) The call-level wait_for_response is IGNORED "
     "when turns is present — listening happens only for ask turns. If NO turn "
     "asks, the call speaks the sequence and returns a text summary. If ANY "
@@ -2822,7 +2857,14 @@ _TURNS_PARAM_DESCRIPTION = (
     "\"not_reached\", \"reply\": str|null}, ...]}} — entries for no_speech / "
     "tts_failed / not_reached can simply be re-asked in a follow-up call. "
     "Keep surveys short (≤ ~7 ask turns) and give each ask turn a sensible "
-    "\"listen_duration_max\" (30–45s for normal questions). During a survey "
+    "\"listen_duration_max\" (30–45s for normal questions). Because turns "
+    "advance automatically without reacting to each answer, make the survey "
+    "legible to the user: OPEN with a leading say turn announcing how many "
+    "questions there are (e.g. \"I've got 3 quick questions\") so they know a "
+    "multi-turn survey is running, and at the TOP of your NEXT converse call "
+    "acknowledge the answers you just collected — content-aware acknowledgment "
+    "can't be pipelined mid-survey, so it belongs at the next call. During a "
+    "survey "
     "the user can: answer early or finish answering with skip-forward, hear "
     "the question again with skip-back or by saying \"repeat\", pause with "
     "\"wait\", and abandon the survey with the stop control or by saying only "
@@ -2862,6 +2904,7 @@ async def converse(
     skip_conch: Union[bool, str] = False,
     session_id: Optional[str] = None,
     ref_text: Optional[str] = None,
+    ack: Union[bool, str] = False,
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -3019,6 +3062,8 @@ consult the MCP resources listed above.
         chime_enabled = chime_enabled.lower() in ('true', '1', 'yes', 'on')
     if skip_tts is not None and isinstance(skip_tts, str):
         skip_tts = skip_tts.lower() in ('true', '1', 'yes', 'on')
+    if isinstance(ack, str):
+        ack = ack.lower() in ('true', '1', 'yes', 'on')
     # wait_for_conch accepts bool | str | number. A positive number means
     # "wait at most that many seconds" (and implies waiting); truthy strings
     # use the configured default timeout.
@@ -3182,6 +3227,7 @@ consult the MCP resources listed above.
                 default_listen_duration_max=listen_duration_max,
                 default_listen_duration_min=listen_duration_min,
                 default_vad_aggressiveness=vad_aggressiveness,
+                default_ack=bool(ack),
             )
         except ValueError as e:
             return f"❌ Error: {e}"
