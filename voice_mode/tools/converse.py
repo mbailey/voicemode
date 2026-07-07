@@ -2090,8 +2090,8 @@ consult the MCP resources listed above.
     # Track execution time and resources
     start_time = time.time()
     if DEBUG:
-        import resource
-        start_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # psutil, not resource.getrusage: the resource module is Unix-only
+        start_memory = psutil.Process().memory_info().rss // 1024
         logger.debug(f"Starting converse - Memory: {start_memory} KB")
     
     result = None
@@ -3071,9 +3071,9 @@ consult the MCP resources listed above.
         logger.info(f"Converse completed in {elapsed:.2f}s")
         
         if DEBUG:
-            import resource
             import gc
-            end_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # psutil, not resource.getrusage: the resource module is Unix-only
+            end_memory = psutil.Process().memory_info().rss // 1024
             memory_delta = end_memory - start_memory
             logger.debug(f"Memory delta: {memory_delta} KB (start: {start_memory}, end: {end_memory})")
             
