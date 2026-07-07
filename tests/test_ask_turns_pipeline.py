@@ -1108,3 +1108,49 @@ class TestPipelineAckCue:
         results, stopped_at, cue = await self._run(turns, record=fake_record, stt=fake_stt)
         assert [r["status"] for r in results] == ["answered", "no_speech", "answered"]
         assert cue.await_count == 2
+
+    async def test_cue_preserves_pipelining_no_synth_dead_air(self):
+        """R5/SC5 (headless proxy for bench-turns.sh): turning the cue ON must
+        NOT reintroduce synth dead-air. The cue is content-free, so the producer
+        keeps synthesizing the NEXT turn ahead of need even with ack enabled --
+        the same pipelining invariant TestPipelineBasic asserts without a cue.
+
+        Proven by holding turn 0's recording open until the producer has
+        synthesized turn 1: if the cue had forced a per-answer synth barrier,
+        turn 1's synthesis would not yet have happened.
+        """
+        turns = _norm([{"ask": "Q1", "ack": True}, {"say": "Q2 followup"}])
+        synth_calls = []
+        next_turn_synthesized = threading.Event()
+
+        async def tracking_synth(*, message, voice, **_kw):
+            synth_calls.append(message)
+            if message == "Q2 followup":
+                next_turn_synthesized.set()
+            return (True, _samples(), 24000, {"generation": 0.0}, {})
+
+        def fake_record(*_a, **_k):
+            # The producer must already be synthesizing the next turn while we
+            # are still recording turn 0's answer -- no synth barrier at the
+            # ack'd ask turn.
+            got = next_turn_synthesized.wait(timeout=2.0)
+            assert got, "producer did not synthesize the next turn during the listen"
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "an answer", "provider": "whisper-local"}
+
+        cue = AsyncMock(return_value=True)
+        with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=tracking_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.play_chime_captured", new=cue), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at is None
+        assert synth_calls == ["Q1", "Q2 followup"]
+        assert results[0]["status"] == "answered"
+        assert results[1]["status"] == "spoken"
+        assert cue.await_count == 1  # the cue still fired on the captured answer
