@@ -77,10 +77,34 @@ For all parameters, see [Converse Parameters](../../docs/reference/converse-para
 ## Best Practices
 
 1. **Narrate without waiting** - Use `wait_for_response=False` when announcing actions
-2. **One question at a time** - Don't bundle multiple questions in voice mode
+2. **One question at a time** - Don't bundle multiple questions into a *single* spoken turn. The exception is a **survey** (the `turns` param): it asks several questions in one call but still delivers them one turn at a time, listening after each — see [Surveys (multi-turn asks)](#surveys-multi-turn-asks).
 3. **Check status first** - Verify services are running before starting conversations
 4. **Let VoiceMode auto-select** - Don't hardcode providers unless user has preference
 5. **First run is slow** - Model downloads happen on first start (2-5 min), then instant
+
+## Surveys (multi-turn asks)
+
+The `converse` `turns` param runs a **survey**: several questions asked in a
+single call, delivered one turn at a time (speak, listen, record, advance),
+pipelined so turn N+1 is synthesized while turn N plays — no synth dead-air.
+This is the sanctioned exception to "one question at a time": you're still
+asking one question per spoken turn, just scripting the whole sequence up
+front.
+
+Because the survey advances to the next scripted question **automatically,
+without reacting to each answer**, the user can't otherwise tell whether they
+were heard or the script just moved on. Make multi-turn legible:
+
+1. **Announce the count up front.** Open the survey with a leading `say` turn
+   that states how many questions are coming — e.g. *"I've got 3 quick
+   questions."* This is the signal that a multi-turn survey is running.
+2. **Acknowledge at the top of the NEXT call.** Content-aware acknowledgment
+   ("got it — chicken, twice a week, no allergies") can't be pipelined
+   mid-survey without reintroducing dead-air, so it belongs at the **top of
+   your next `converse` call**, before you move on. Recap the answers you
+   collected so the user knows they landed.
+3. **Keep it short.** ≤ ~7 ask turns per survey; give each a sensible
+   `listen_duration_max` (30–45s for normal questions).
 
 ## Voicemode echo (default ON)
 
