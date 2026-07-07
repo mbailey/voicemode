@@ -24,12 +24,13 @@ Usage:
         print("Someone is in a voice conversation")
 """
 
-import fcntl
 import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+from voice_mode.file_lock import lock_exclusive, unlock
 
 # Import config for lock expiry - deferred to avoid circular import
 def _get_lock_expiry() -> float:
@@ -312,7 +313,8 @@ class Conch:
     ) -> bool:
         """Atomically try to acquire the conch.
 
-        Uses fcntl.flock() for true atomic locking across processes.
+        Uses an exclusive file lock (flock/msvcrt via voice_mode.file_lock)
+        for true atomic locking across processes.
         Also handles stale locks: a lock whose holder PID is dead, or that is
         older than its expiry window (CONCH_LOCK_EXPIRY for active locks,
         CONCH_HOLD_EXPIRY for between-turns holds), is forcibly cleared.
@@ -359,7 +361,7 @@ class Conch:
             self._fd = os.open(str(self.LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
 
             # Try to get exclusive lock (non-blocking)
-            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_exclusive(self._fd)
 
             # Got lock - write our info (held=False: we hold the flock now)
             self._acquire_time = datetime.now()
@@ -506,7 +508,7 @@ class Conch:
             except OSError:
                 pass
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                unlock(self._fd)
                 os.close(self._fd)
             except OSError:
                 pass
@@ -519,7 +521,7 @@ class Conch:
 
         if self._fd is not None:
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                unlock(self._fd)
                 os.close(self._fd)
             except OSError:
                 pass
