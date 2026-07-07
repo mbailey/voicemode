@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+import psutil
 import sounddevice as sd
 from scipy.io.wavfile import write
 from pydub import AudioSegment
@@ -3111,12 +3112,15 @@ async def pause_conversation(
     if holder:
         holder_pid = holder.get("pid")
         if holder_pid not in (None, os.getpid()):
+            holder_alive = False
             try:
-                os.kill(holder_pid, 0)
+                # Portable liveness probe (os.kill(pid, 0) kills on Windows).
+                holder_alive = psutil.pid_exists(holder_pid)
+            except (TypeError, ValueError):
+                pass  # unknown pid — safe to take the floor
+            if holder_alive:
                 return (f"Cannot pause: {holder.get('agent', 'another agent')} "
                         f"(pid {holder_pid}) currently holds the conch.")
-            except (ProcessLookupError, PermissionError, TypeError, OSError):
-                pass  # holder dead/unknown — safe to take the floor
 
     resolved_session_id = (
         os.environ.get("VOICEMODE_SESSION_ID")

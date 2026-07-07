@@ -44,6 +44,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+import psutil
+
 from voice_mode.conch import Conch
 from voice_mode.file_lock import lock_exclusive, unlock
 
@@ -187,20 +189,18 @@ class ConchQueue:
     def _is_live(cls, data: dict) -> bool:
         """Is this waiter still alive?
 
-        Local waiter (``pid`` set): liveness by PID (signal 0). A
-        ``PermissionError`` means the process exists but is owned by another
-        user -- treat as alive. Remote waiter (``pid`` is ``None``): liveness
+        Local waiter (``pid`` set): liveness by PID probe (psutil; os.kill
+        with signal 0 is not portable -- it terminates the target on
+        Windows). A process that exists but is owned by another user is
+        treated as alive. Remote waiter (``pid`` is ``None``): liveness
         by the ``expires`` heartbeat TTL. A remote waiter with no TTL is kept
         (we cannot prove it dead).
         """
         pid = data.get("pid")
         if pid is not None:
             try:
-                os.kill(pid, 0)
-                return True
-            except PermissionError:
-                return True
-            except (ProcessLookupError, TypeError, OSError):
+                return psutil.pid_exists(pid)
+            except (TypeError, ValueError):
                 return False
         expires = data.get("expires")
         if not expires:
