@@ -685,6 +685,112 @@ def service_install(service_name, force):
         click.echo(f"❌ Unknown service: {service_name}")
 
 
+def _teardown_serve_service(base_dir):
+    """Stop, disable, and remove on-disk state for the ``voicemode`` HTTP MCP
+    server ("serve") service (VM-1874 R11).
+
+    The service group's install/start/stop/enable/disable verbs already
+    cover whisper/kokoro/mlx-audio uninstall via their own ``*_uninstall``
+    tool fns, but the 4th service -- ``voicemode`` a.k.a. "serve" -- has no
+    such fn. Left alone, an enabled launchd/systemd unit relaunches a
+    deleted ``voicemode`` binary at every login after ``uninstall``/`` uv
+    tool uninstall`` removes it. Shared by the top-level ``uninstall``
+    command and ``voicemode service uninstall voicemode``.
+
+    Returns (removed_items, errors) -- never raises.
+    """
+    from voice_mode.tools.service import stop_service, disable_service
+
+    removed_items = []
+    errors = []
+
+    try:
+        asyncio.run(stop_service('voicemode'))
+    except Exception as e:  # noqa: BLE001 -- collect and continue
+        errors.append(f"Failed to stop voicemode (serve) service: {e}")
+
+    try:
+        disable_msg = asyncio.run(disable_service('voicemode'))
+        if isinstance(disable_msg, str) and disable_msg.startswith("✅"):
+            removed_items.append("voicemode (serve) service disabled + unit removed")
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"Failed to disable voicemode (serve) service: {e}")
+
+    serve_dir = base_dir / "services" / "voicemode"
+    if serve_dir.exists():
+        try:
+            shutil.rmtree(serve_dir)
+            removed_items.append(f"Removed {serve_dir}")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"Failed to remove {serve_dir}: {e}")
+
+    return removed_items, errors
+
+
+@service.command('uninstall')
+@click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
+@click.option('--remove-models', is_flag=True, help='Also remove downloaded models for this service')
+@click.option('--remove-all-data', is_flag=True, help='Remove all data for this service (logs, cache, and service-specific transcriptions/audio)')
+@click.confirmation_option('-y', '--yes', prompt='Are you sure you want to uninstall this service?')
+@click.help_option('-h', '--help')
+def service_uninstall(service_name, remove_models, remove_all_data):
+    """Uninstall a voice service (VM-1874 D2).
+
+    \b
+    Stops, disables, and removes the installed service software:
+      whisper    whisper.cpp speech-to-text server
+      kokoro     Kokoro text-to-speech server
+      voicemode  HTTP MCP server ("serve") -- launchd/systemd unit + start script
+      mlx-audio  Apple Silicon: unified Whisper STT + Kokoro TTS + Qwen3-TTS
+
+    \b
+    To remove VoiceMode entirely (all services + MCP registration + package),
+    use `voicemode uninstall` instead.
+
+    \b
+    Examples:
+      voicemode service uninstall whisper
+      voicemode service uninstall kokoro --remove-models
+    """
+    normalized = _normalize_service_name(service_name)
+
+    if normalized == 'voicemode':
+        from voice_mode.config import BASE_DIR
+        removed_items, errors = _teardown_serve_service(BASE_DIR)
+        if errors:
+            click.echo("⚠️  VoiceMode (serve) service uninstall completed with errors:")
+            for err in errors:
+                click.echo(f"   - {err}")
+        else:
+            click.echo("✅ VoiceMode (serve) service uninstalled successfully!")
+        for item in removed_items:
+            click.echo(f"   - {item}")
+        return
+
+    if normalized == 'whisper':
+        from voice_mode.tools.whisper.uninstall import whisper_uninstall as fn
+    elif normalized == 'kokoro':
+        from voice_mode.tools.kokoro.uninstall import kokoro_uninstall as fn
+    elif normalized == 'mlx_audio':
+        from voice_mode.tools.mlx_audio.uninstall import mlx_audio_uninstall as fn
+    else:
+        click.echo(f"❌ Unknown service: {service_name}")
+        return
+
+    result = asyncio.run(getattr(fn, 'fn', fn)(
+        remove_models=remove_models,
+        remove_all_data=remove_all_data,
+    ))
+    if result.get('success'):
+        click.echo(f"✅ {service_name.capitalize()} uninstalled successfully!")
+    else:
+        click.echo(f"⚠️  {service_name.capitalize()} uninstall completed with errors")
+    for item in result.get('removed_items', []):
+        click.echo(f"   - {item}")
+    for err in result.get('errors', []):
+        click.echo(f"   ⚠️  {err}")
+
+
 # ============================================================================
 # Legacy Service Groups (Deprecated)
 # ============================================================================
@@ -2855,31 +2961,69 @@ def completions(shell, install):
 # itself (last, since it deletes the running binary). Built by calling the
 # three existing *_uninstall tool functions directly (mirroring cli.py:851)
 # plus the teardown steps nothing else currently owns.
-@voice_mode_main_cli.command()
+#
+# Data policy (D1, README "Review Outcome" R10): default removes package +
+# services + MCP registration; BACKS UP ~/.voicemode/voicemode.env (renamed
+# to voicemode.env.uninstalled) rather than deleting it outright; PRESERVES
+# voice clones, recordings, conversations, transcriptions, and models,
+# reporting them as left behind. --remove-models additionally deletes
+# downloaded models. --remove-all-data removes the entire ~/.voicemode/
+# EXCEPT voices/ + voices.json -- voice clones are sacred and are never
+# auto-deleted by this command; remove them manually if that's really wanted.
+#
+# NOTE (Fable review Issue 12 / R16): no new imports are permitted after
+# step 6 (package self-removal) -- `uv tool uninstall voice-mode` rmtree's
+# the uv-managed site-packages venv this process is still running from.
+# Only pure `click.echo` / already-imported-at-module-scope code may run
+# after that point (subprocess/shutil/asyncio/click/sys are module-level
+# imports at the top of this file).
+def _named(items, base_dir):
+    """Format a BASE_DIR-relative item for the residual-footprint report."""
+    try:
+        return str(items.relative_to(base_dir))
+    except ValueError:
+        return str(items)
+
+
+@voice_mode_main_cli.command('uninstall')
 @click.help_option('-h', '--help')
 @click.option('--remove-models', is_flag=True,
-              help='Also remove downloaded models (Whisper, mlx-audio)')
+              help='Also remove downloaded models (Whisper, Kokoro, mlx-audio)')
 @click.option('--remove-all-data', is_flag=True,
-              help='Remove all VoiceMode data (logs, transcriptions, audio, voice profiles). '
-                   'Without this flag, ~/.voicemode/voices/ is preserved.')
+              help='Remove ALL VoiceMode data under ~/.voicemode (logs, transcriptions, '
+                   'audio, conversations, cache, models, config backup) EXCEPT voice '
+                   'clones (voices/ + voices.json), which are never auto-deleted by this '
+                   'command -- remove them manually if you really want them gone.')
 @click.confirmation_option(
     '-y', '--yes',
-    prompt='This will uninstall VoiceMode: stop and remove the Whisper/Kokoro/mlx-audio '
-           'services, remove the Claude MCP registration, delete ~/.voicemode/voicemode.env, '
-           'and remove the voice-mode package. Voice profiles are kept unless '
-           '--remove-all-data is given. Continue?'
+    prompt='This will uninstall VoiceMode: stop and remove the Whisper/Kokoro/mlx-audio/'
+           'serve services, remove the Claude MCP registration, back up '
+           '~/.voicemode/voicemode.env, and remove the voice-mode package. Voice clones, '
+           'recordings, conversations, transcriptions, and models are preserved (even with '
+           '--remove-all-data). Continue?'
 )
-def uninstall(remove_models, remove_all_data):
+def voicemode_uninstall(remove_models, remove_all_data):
     """Uninstall VoiceMode: services, MCP registration, config, and the package.
 
     Cleanly reverses install.sh, in order: stop + remove the Whisper, Kokoro,
-    and mlx-audio services; remove the Claude Code MCP registration (`claude
-    mcp remove voicemode`); delete ~/.voicemode/voicemode.env; and finally
-    remove the voice-mode uv tool itself (last, since it deletes the running
-    binary). Voice profiles under ~/.voicemode/voices/ are always preserved
-    unless --remove-all-data is given. Errors are collected rather than
-    aborting the run, and a residual-footprint report is printed at the end.
+    mlx-audio, and voicemode ("serve") services; remove the Claude Code MCP
+    registration (`claude mcp remove voicemode`, tried at both user and
+    local/default scope); back up ~/.voicemode/voicemode.env (rather than
+    deleting it); and finally remove the voice-mode uv tool itself (last,
+    since it deletes the running binary -- skipped if any earlier step
+    errored, so `uninstall` can be re-run to finish the job). Voice clones
+    under ~/.voicemode/voices/ (+ voices.json) are never auto-deleted, even
+    with --remove-all-data. Errors are collected rather than aborting the
+    run; the command exits non-zero if any were collected. A
+    residual-footprint report is printed at the end.
     """
+    # INVARIANT (Fable review Issue 9 / R16): BASE_DIR is imported HERE,
+    # inside the command body, not at module scope -- that's what lets
+    # tests `patch("voice_mode.config.BASE_DIR", tmp_path)` redirect every
+    # destructive call below to an isolated directory. If a future refactor
+    # hoists this import to module scope, the patch silently stops applying
+    # and this command's destructive calls (rmtree/unlink on step 5's full
+    # sweep) would hit the developer's REAL ~/.voicemode. Keep it local.
     from voice_mode.config import BASE_DIR
     from voice_mode.tools.whisper.uninstall import whisper_uninstall
     from voice_mode.tools.kokoro.uninstall import kokoro_uninstall
@@ -2891,7 +3035,9 @@ def uninstall(remove_models, remove_all_data):
 
     click.echo("Uninstalling VoiceMode...\n")
 
-    # 1. Stop + remove services (forward remove_models/remove_all_data).
+    # 1. Stop + remove whisper/kokoro/mlx-audio services (forward
+    #    remove_models/remove_all_data -- each fn only touches its own
+    #    service-scoped data; the full ~/.voicemode sweep is step 5).
     for label, fn in (
         ("Whisper", whisper_uninstall),
         ("Kokoro", kokoro_uninstall),
@@ -2912,64 +3058,156 @@ def uninstall(remove_models, remove_all_data):
             errors.append(f"{label} uninstall failed: {e}")
             click.echo(f"❌ {label} uninstall failed: {e}")
 
-    # 2. Remove the Claude MCP registration. Tolerate "not registered" --
-    #    this step must be idempotent.
-    try:
-        result = subprocess.run(
-            ["claude", "mcp", "remove", "voicemode", "--scope", "user"],
-            capture_output=True, text=True,
-        )
-        combined = f"{result.stdout}\n{result.stderr}".lower()
-        if result.returncode == 0:
-            removed_items.append("Claude MCP registration (voicemode)")
-            click.echo("✅ Removed Claude MCP registration")
-        elif (
-            "not found" in combined
-            or "no such" in combined
-            or "not registered" in combined
-            or "no mcp server found" in combined
-        ):
-            click.echo("ℹ️  Claude MCP registration not found (already removed)")
-        else:
-            errors.append(
-                f"claude mcp remove failed: {(result.stderr or result.stdout).strip()}"
-            )
-            click.echo("⚠️  Could not remove Claude MCP registration")
-    except FileNotFoundError:
-        click.echo("ℹ️  'claude' CLI not found -- skipping MCP registration removal")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"claude mcp remove failed: {e}")
-        click.echo(f"⚠️  Could not remove Claude MCP registration: {e}")
+    # 2. Tear down the 4th service: voicemode ("serve", the HTTP MCP
+    #    server) -- BEFORE package removal (R11), so no enabled
+    #    launchd/systemd unit relaunches a deleted binary at next login.
+    serve_removed, serve_errors = _teardown_serve_service(BASE_DIR)
+    removed_items.extend(serve_removed)
+    errors.extend(serve_errors)
+    if serve_errors:
+        click.echo("⚠️  voicemode (serve) service uninstall completed with errors")
+    else:
+        click.echo("✅ voicemode (serve) service uninstalled")
 
-    # 3. Remove config (current + legacy filename).
+    # 3. Remove the Claude MCP registration -- try BOTH user scope and the
+    #    default/local scope (R13), since `claude mcp add` without
+    #    --scope user registers locally; tolerate "not registered" at
+    #    either scope so this step is idempotent.
+    mcp_removed_any = False
+    mcp_errors = []
+    claude_cli_missing = False
+    for scope_label, scope_args in (("user", ["--scope", "user"]), ("local", [])):
+        if claude_cli_missing:
+            break
+        try:
+            result = subprocess.run(
+                ["claude", "mcp", "remove", "voicemode", *scope_args],
+                capture_output=True, text=True,
+            )
+            combined = f"{result.stdout}\n{result.stderr}".lower()
+            if result.returncode == 0:
+                removed_items.append(f"Claude MCP registration (voicemode, {scope_label} scope)")
+                mcp_removed_any = True
+            elif (
+                "not found" in combined
+                or "no such" in combined
+                or "not registered" in combined
+                or "no mcp server found" in combined
+            ):
+                pass  # not registered at this scope -- fine
+            else:
+                mcp_errors.append(
+                    f"claude mcp remove ({scope_label}) failed: "
+                    f"{(result.stderr or result.stdout).strip()}"
+                )
+        except FileNotFoundError:
+            claude_cli_missing = True
+        except Exception as e:  # noqa: BLE001
+            mcp_errors.append(f"claude mcp remove ({scope_label}) failed: {e}")
+
+    if claude_cli_missing:
+        click.echo("ℹ️  'claude' CLI not found -- skipping MCP registration removal")
+    else:
+        if mcp_removed_any:
+            click.echo("✅ Removed Claude MCP registration")
+        elif not mcp_errors:
+            click.echo("ℹ️  Claude MCP registration not found (already removed)")
+        if mcp_errors:
+            errors.extend(mcp_errors)
+            click.echo("⚠️  Could not remove Claude MCP registration")
+
+    # 3b. Detect a Claude Code PLUGIN install (R12) -- `claude mcp remove`
+    #     cannot unregister the plugin path, and the plugin re-spawns
+    #     voicemode next session (uvx re-downloads the package). Best-effort
+    #     detection; report an explicit manual step rather than guessing at
+    #     an uninstall the user didn't necessarily ask for.
+    if not claude_cli_missing:
+        try:
+            plugin_result = subprocess.run(
+                ["claude", "plugin", "list"],
+                capture_output=True, text=True,
+            )
+            if plugin_result.returncode == 0 and "voicemode" in plugin_result.stdout.lower():
+                kept_items.append(
+                    "Claude Code PLUGIN registration for voicemode -- this command cannot "
+                    "remove it; run `claude plugin uninstall voicemode` to fully remove it "
+                    "(otherwise it re-installs voicemode next session)"
+                )
+        except FileNotFoundError:
+            pass
+        except Exception:  # noqa: BLE001 -- detection is best-effort, never fatal
+            pass
+
+    # 4. Config -- BACK UP rather than delete (D1): voicemode.env commonly
+    #    holds API keys and hand-tuned settings, which are user data under
+    #    the same philosophy that preserves voice clones by default.
     for env_path in (BASE_DIR / "voicemode.env", BASE_DIR / ".voicemode.env"):
         if env_path.exists():
+            backup_path = env_path.with_name(env_path.name + ".uninstalled")
             try:
-                env_path.unlink()
-                removed_items.append(f"Config file: {env_path}")
-                click.echo(f"✅ Removed {env_path}")
+                env_path.replace(backup_path)
+                removed_items.append(f"Config backed up: {env_path} -> {backup_path.name}")
+                click.echo(f"✅ Backed up {env_path} -> {backup_path.name}")
             except Exception as e:  # noqa: BLE001
-                errors.append(f"Failed to remove {env_path}: {e}")
+                errors.append(f"Failed to back up {env_path}: {e}")
 
-    # 4. Voice profiles -- always preserved unless --remove-all-data.
+    # 5. --remove-all-data: sweep every BASE_DIR entry EXCEPT voices/ and
+    #    voices.json (voice clones are sacred -- R10). Otherwise, report
+    #    what's preserved so the user knows the residual footprint.
     voices_dir = BASE_DIR / "voices"
-    if voices_dir.exists():
-        if remove_all_data:
-            try:
-                shutil.rmtree(voices_dir)
-                removed_items.append(f"Voice profiles: {voices_dir}")
-                click.echo(f"✅ Removed {voices_dir}")
-            except Exception as e:  # noqa: BLE001
-                errors.append(f"Failed to remove {voices_dir}: {e}")
-        else:
-            kept_items.append(f"Voice profiles: {voices_dir} (use --remove-all-data to remove)")
+    voices_json = BASE_DIR / "voices.json"
+    preserved_names = {"voices", "voices.json"}
 
-    if BASE_DIR.exists() and any(BASE_DIR.iterdir()):
-        kept_items.append(f"Remaining VoiceMode data: {BASE_DIR}")
+    if remove_all_data:
+        if BASE_DIR.exists():
+            for entry in sorted(BASE_DIR.iterdir()):
+                if entry.name in preserved_names:
+                    continue
+                try:
+                    if entry.is_dir():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink()
+                    removed_items.append(f"Removed: {entry}")
+                except Exception as e:  # noqa: BLE001
+                    errors.append(f"Failed to remove {entry}: {e}")
+            click.echo("✅ Removed all VoiceMode data except voice clones")
+    else:
+        if BASE_DIR.exists():
+            for entry in sorted(BASE_DIR.iterdir()):
+                if entry.name in preserved_names:
+                    continue
+                kept_items.append(
+                    f"{_named(entry, BASE_DIR)} (use --remove-all-data to remove; "
+                    "voice clones are never auto-removed)"
+                )
 
-    # 5. Remove the package itself -- LAST, since it deletes the running
-    #    `voicemode` binary. Guard installs that aren't uv-tool-managed.
-    if shutil.which("uv"):
+    if voices_dir.exists() or voices_json.exists():
+        kept_items.append(
+            "Voice clones (voices/, voices.json) -- never auto-deleted; "
+            "remove ~/.voicemode/voices/ manually if you really want them gone"
+        )
+
+    if BASE_DIR.exists() and remove_all_data and not any(BASE_DIR.iterdir()):
+        # Only rmdir when truly empty -- if voices/ or voices.json survived
+        # (the common case), BASE_DIR is intentionally left in place.
+        try:
+            BASE_DIR.rmdir()
+            removed_items.append(f"Removed empty {BASE_DIR}")
+        except OSError:
+            pass  # not empty or in-use -- leave it
+
+    # 6. Remove the package itself -- LAST, since it deletes the running
+    #    `voicemode` binary, and ONLY if nothing has errored yet (R14):
+    #    amputating the re-run path (`voicemode uninstall`) when earlier
+    #    steps failed would strand the user. Guard non-uv-tool installs.
+    if errors:
+        click.echo(
+            "\n⚠️  Earlier steps had errors -- skipping package removal so you can "
+            "re-run `voicemode uninstall` after resolving them. To remove the "
+            "package manually: uv tool uninstall voice-mode"
+        )
+    elif shutil.which("uv"):
         try:
             result = subprocess.run(
                 ["uv", "tool", "uninstall", "voice-mode"],
@@ -2992,7 +3230,8 @@ def uninstall(remove_models, remove_all_data):
             "(remove manually if installed via pip/pipx)"
         )
 
-    # Residual-footprint report.
+    # Residual-footprint report. NO NEW IMPORTS BELOW THIS LINE (see the
+    # module-no-new-imports-after-package-removal note above this command).
     click.echo("\n📋 Uninstall summary")
     if removed_items:
         click.echo("  Removed:")
@@ -3002,11 +3241,18 @@ def uninstall(remove_models, remove_all_data):
         click.echo("  Kept:")
         for item in kept_items:
             click.echo(f"    - {item}")
+    click.echo("  Not touched (shared tools, not VoiceMode-specific):")
+    click.echo("    - uv itself (~/.local/bin/uv, ~/.local/share/uv)")
+    click.echo("    - Homebrew + portaudio/ffmpeg, and the brew shellenv line in your shell profile")
+    click.echo("    - rustup (~/.cargo, ~/.rustup) -- only installed on ARM64 Linux")
+    click.echo("    - the uv/uvx package cache (~/.cache/uv)")
+    click.echo("    - the Hugging Face hub cache (~/.cache/huggingface/hub), unless --remove-models")
     if errors:
         click.echo("  Errors:")
         for err in errors:
             click.echo(f"    - {err}")
         click.echo("\n⚠️  VoiceMode uninstall completed with errors.")
+        sys.exit(1)
     else:
         click.echo("\n✅ VoiceMode uninstalled.")
 
