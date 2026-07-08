@@ -81,4 +81,9 @@ This install process assumes:
 
 The VoiceMode installer will install Homebrew if missing on macOS.
 
+## Uninstalling
+
+Want to remove VoiceMode instead? See `/voicemode:uninstall` (or run
+`voicemode uninstall -y` directly).
+
 For complete documentation, load the `voicemode` skill.

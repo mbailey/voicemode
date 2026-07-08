@@ -296,6 +296,44 @@ voicemode service install kokoro
 
 See [Getting Started](../../docs/tutorials/getting-started.md) for detailed steps.
 
+## Uninstalling
+
+To cleanly remove VoiceMode -- services, MCP registration, config, and the
+package itself -- run:
+
+```
+/voicemode:uninstall
+```
+
+or directly:
+
+```bash
+voicemode uninstall -y
+```
+
+This stops and removes the Whisper, Kokoro, mlx-audio, and voicemode
+("serve") services; removes the Claude Code MCP registration (both user and
+local scope); backs up `~/.voicemode/voicemode.env` (renamed, not deleted);
+and removes the `voice-mode` package last. Voice clones, recordings,
+conversations, transcriptions, and models are **never** removed
+automatically -- even with `--remove-all-data` -- and are listed in the
+printed report. Flags: `-y`/`--yes`, `--remove-models`, `--remove-all-data`.
+
+**Installed via the Claude Code plugin?** (Quick Start Option 1 --
+`claude plugin install voicemode@voicemode`) `claude mcp remove` cannot see a
+plugin-managed MCP registration, so `voicemode uninstall` alone will not
+fully remove it. Also run:
+
+```bash
+claude plugin uninstall voicemode
+```
+
+To remove a single service instead of everything: `voicemode service
+uninstall whisper|kokoro|mlx-audio|voicemode`.
+
+Full manual-removal reference (every path VoiceMode writes to disk):
+[docs/reference/uninstall.md](../../docs/reference/uninstall.md).
+
 ## Service Management
 
 ```python
@@ -513,6 +551,7 @@ When local voice isn't an option -- no mic/speaker on the machine, can't install
 | ------------------- | ------------------------------------------------------------- |
 | Converse Parameters | [All Parameters](../../docs/reference/converse-parameters.md) |
 | Installation        | [Getting Started](../../docs/tutorials/getting-started.md)    |
+| Uninstallation      | [Uninstall Reference](../../docs/reference/uninstall.md)      |
 | Configuration       | [Configuration Guide](../../docs/guides/configuration.md)     |
 | Claude Code Plugin  | [Plugin Guide](../../docs/guides/claude-code-plugin.md)       |
 | Whisper STT         | [Whisper Setup](../../docs/guides/whisper-setup.md)           |
