@@ -29,9 +29,43 @@ Environment variables are processed in this order (highest to lowest priority):
 | `VOICEMODE_TTS_BASE_URLS` | Comma-separated TTS service URLs | `http://127.0.0.1:8880/v1,https://api.openai.com/v1` | `http://localhost:8880/v1` |
 | `VOICEMODE_VOICES` | Comma-separated voice preferences | `af_sky,alloy` | `nova,shimmer` |
 | `VOICEMODE_TTS_VOICE` | Default TTS voice | First from VOICES | `nova` |
-| `VOICEMODE_TTS_MODELS` | Comma-separated TTS models | `tts-1-hd,tts-1` | `gpt-4o-mini-tts,tts-1` |
+| `VOICEMODE_TTS_MODELS` | Comma-separated global TTS models (preference list) | `tts-1-hd,tts-1` | `gpt-4o-mini-tts,tts-1` |
+| `VOICEMODE_TTS_MODELS_<PROVIDER>` | Per-provider TTS model override (see below) | Built-in per provider | `mlx-community/Kokoro-82M-bf16` |
 | `VOICEMODE_TTS_MODEL` | Default TTS model | First from MODELS | `tts-1-hd` |
 | `VOICEMODE_TTS_SPEED` | Speech speed (0.25-4.0) | `1.0` | `1.5` |
+
+#### Per-provider TTS model resolution
+
+When `VOICEMODE_TTS_BASE_URLS` lists providers that need **different** model
+identifiers, VoiceMode picks the right model for each provider automatically as
+it fails over the chain — no single global override forces one name onto all of
+them. This makes the common Apple-Silicon chain
+`kokoro-fastapi → mlx-audio → openai` work out of the box: kokoro-fastapi and
+OpenAI receive `tts-1`, while mlx-audio (which loads Hugging Face repos on
+demand) receives `mlx-community/Kokoro-82M-bf16`.
+
+The dispatcher detects the provider it is about to call and resolves the model
+in this order:
+
+1. **Explicit caller model** (`converse(model=...)`) — sent as-is.
+2. **`VOICEMODE_TTS_MODELS_<PROVIDER>`** — the suffix is the provider type,
+   uppercased with `-` → `_`: `MLX_AUDIO`, `KOKORO`, `OPENAI`, `LOCAL`.
+3. **First compatible entry of the global `VOICEMODE_TTS_MODELS`** — mlx-audio
+   requires an HF repo id (contains `/`); kokoro/openai require a plain id.
+4. **Built-in per-provider default** — mlx-audio → `mlx-community/Kokoro-82M-bf16`,
+   everything else → `tts-1`.
+
+```bash
+# Explicit per-provider overrides (rarely needed — defaults already work)
+VOICEMODE_TTS_MODELS_MLX_AUDIO=mlx-community/Kokoro-82M-bf16
+VOICEMODE_TTS_MODELS_KOKORO=tts-1
+VOICEMODE_TTS_MODELS_OPENAI=tts-1
+```
+
+If you previously worked around mixed-chain failover with a global
+`VOICEMODE_TTS_MODELS=mlx-community/Kokoro-82M-bf16`, you can now delete it:
+per-provider resolution makes every provider in the chain usable. Clone voices
+are unaffected — they always use their profile's pinned model.
 
 ### Speech-to-Text (STT)
 

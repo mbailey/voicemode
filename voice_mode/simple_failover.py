@@ -17,7 +17,7 @@ from .config import (
     STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX,
 )
 from .provider_discovery import detect_provider_type, EndpointInfo
-from .providers import _select_stt_model_for_endpoint
+from .providers import _select_stt_model_for_endpoint, _select_tts_model_for_endpoint
 
 logger = logging.getLogger("voicemode")
 
@@ -66,32 +66,39 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
     provider_type = detect_provider_type(base_url)
     api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
 
-    selected_model = model
     if clone_profile:
         # Clone voice: use profile's model and pass voice name through
-        # (mlx-audio server accepts any voice string)
+        # (mlx-audio server accepts any voice string). The per-provider model
+        # resolver deliberately does NOT run for clones (VM-1390).
         selected_voice = voice
         selected_model = clone_profile.model
         logger.info(f"Clone voice '{voice}': model={selected_model}")
-    elif provider_type == "openai":
-        # Map Kokoro voices to OpenAI equivalents, or use OpenAI default
-        openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
-        if voice in openai_voices:
-            selected_voice = voice
-        else:
-            voice_mapping = {
-                "af_sky": "nova",
-                "af_sarah": "nova",
-                "af_alloy": "alloy",
-                "am_adam": "onyx",
-                "am_echo": "echo",
-                "am_onyx": "onyx",
-                "bm_fable": "fable"
-            }
-            selected_voice = voice_mapping.get(voice, "alloy")  # Default to alloy
-            logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
     else:
-        selected_voice = voice  # Use original voice for Kokoro
+        # Per-provider model resolution (VM-1390): pick the model id this
+        # provider actually understands so a mixed TTS_BASE_URLS chain can fail
+        # over (e.g. HF repo id to mlx-audio, "tts-1" to kokoro/openai). An
+        # explicit caller model still wins inside the resolver.
+        selected_model = _select_tts_model_for_endpoint(provider_type, model)
+        if provider_type == "openai":
+            # Map Kokoro voices to OpenAI equivalents, or use OpenAI default
+            openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+            if voice in openai_voices:
+                selected_voice = voice
+            else:
+                voice_mapping = {
+                    "af_sky": "nova",
+                    "af_sarah": "nova",
+                    "af_alloy": "alloy",
+                    "am_adam": "onyx",
+                    "am_echo": "echo",
+                    "am_onyx": "onyx",
+                    "bm_fable": "fable"
+                }
+                selected_voice = voice_mapping.get(voice, "alloy")  # Default to alloy
+                logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
+        else:
+            selected_voice = voice  # Use original voice for Kokoro
+    logger.info(f"Endpoint {base_url} ({provider_type}): model={selected_model}")
 
     # Disable retries for local endpoints - they either work or don't
     max_retries = 0 if is_local_provider(base_url) else 2
@@ -107,7 +114,7 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
 async def simple_tts_failover(
     text: str,
     voice: str,
-    model: str,
+    model: Optional[str] = None,
     **kwargs
 ) -> Tuple[bool, Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """
@@ -173,7 +180,7 @@ async def simple_tts_failover(
                     'base_url': base_url,
                     'provider': provider_type,
                     'voice': selected_voice,  # Return the voice actually used
-                    'model': model,
+                    'model': selected_model,
                     'endpoint': f"{base_url}/audio/speech"
                 }
                 logger.info(f"TTS succeeded with {base_url} using voice {selected_voice}")
@@ -207,7 +214,7 @@ async def simple_tts_failover(
                 'endpoint': f"{base_url}/audio/speech",
                 'provider': provider_type,
                 'voice': selected_voice,
-                'model': model,
+                'model': selected_model,
                 'error': error_message,
                 'error_details': error_details  # Include parsed error details
             })
@@ -227,7 +234,7 @@ async def simple_tts_failover(
 async def simple_tts_synthesize(
     text: str,
     voice: str,
-    model: str,
+    model: Optional[str] = None,
     **kwargs
 ) -> Tuple[bool, Optional[Any], Optional[int], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """Synth-only TTS failover - decode audio without playing it (VM-1772).
@@ -284,7 +291,7 @@ async def simple_tts_synthesize(
                     'base_url': base_url,
                     'provider': provider_type,
                     'voice': selected_voice,
-                    'model': model,
+                    'model': selected_model,
                     'endpoint': f"{base_url}/audio/speech"
                 }
                 logger.info(f"TTS(synth) succeeded with {base_url} using voice {selected_voice}")
@@ -307,7 +314,7 @@ async def simple_tts_synthesize(
                 'endpoint': f"{base_url}/audio/speech",
                 'provider': provider_type,
                 'voice': selected_voice,
-                'model': model,
+                'model': selected_model,
                 'error': error_message,
                 'error_details': error_details
             })

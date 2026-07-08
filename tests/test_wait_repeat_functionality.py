@@ -65,7 +65,12 @@ class TestPlaySystemAudio:
             call_args = mock_tts.call_args
             assert call_args.kwargs['text'] == "Waiting one minute"
             assert call_args.kwargs['voice'] == "af_sky"
-            assert call_args.kwargs['model'] == "tts-1"  # Critical: model parameter must be present
+            # VM-1390: the system-message fallback passes model=None (not a
+            # hardcoded "tts-1"), so the per-provider resolver picks a model the
+            # active endpoint understands (a literal "tts-1" wedges mlx-audio).
+            # The kwarg must still be present.
+            assert 'model' in call_args.kwargs
+            assert call_args.kwargs['model'] is None
 
     @pytest.mark.asyncio
     async def test_play_system_audio_no_fallback_text(self):

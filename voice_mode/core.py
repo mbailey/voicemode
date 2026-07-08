@@ -1057,7 +1057,7 @@ async def play_system_audio(message_key: str, fallback_text: Optional[str] = Non
         success, metrics, config = await simple_tts_failover(
             text=fallback_text,
             voice="af_sky",  # Use AF Sky for system messages
-            model="tts-1"  # Use standard TTS model for system messages
+            model=None  # Let the per-provider resolver pick (VM-1390); "tts-1" wedges mlx-audio
         )
         return success
 

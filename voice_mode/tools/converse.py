@@ -619,7 +619,7 @@ async def text_to_speech_with_failover(
     return await simple_tts_failover(
         text=message,
         voice=voice or TTS_VOICES[0],
-        model=model or TTS_MODELS[0],
+        model=model,  # None when caller didn't choose -> per-provider resolver picks (VM-1390)
         instructions=instructions,
         audio_format=audio_format,
         debug=DEBUG,
@@ -658,7 +658,7 @@ async def synthesize_turn_with_failover(
     return await simple_tts_synthesize(
         text=message,
         voice=voice or TTS_VOICES[0],
-        model=model or TTS_MODELS[0],
+        model=model,  # None when caller didn't choose -> per-provider resolver picks (VM-1390)
         instructions=instructions,
         audio_format=audio_format,
         debug=DEBUG,
