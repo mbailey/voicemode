@@ -168,6 +168,18 @@ VOICEMODE_VOICES=af_sky
 # Comma-separated list of preferred models
 # VOICEMODE_TTS_MODELS=tts-1,tts-1-hd,gpt-4o-mini-tts
 
+# Per-provider TTS model overrides (VM-1390). When VOICEMODE_TTS_BASE_URLS
+# lists providers that need DIFFERENT model ids, set the model per provider so
+# failover across the chain works without a global override. The dispatcher
+# detects the provider it is about to call and picks the matching model.
+# Suffix = the provider type (uppercased, '-' -> '_'): MLX_AUDIO, KOKORO, OPENAI, LOCAL.
+# Without these, mlx-audio already defaults to mlx-community/Kokoro-82M-bf16 and
+# kokoro/openai to tts-1, so the common kokoro-fastapi -> mlx-audio -> openai
+# chain works out of the box.
+# VOICEMODE_TTS_MODELS_MLX_AUDIO=mlx-community/Kokoro-82M-bf16
+# VOICEMODE_TTS_MODELS_KOKORO=tts-1
+# VOICEMODE_TTS_MODELS_OPENAI=tts-1
+
 # Prefer local providers over cloud (true/false)
 # VOICEMODE_PREFER_LOCAL=true
 
@@ -719,6 +731,33 @@ def parse_comma_list(env_var: str, fallback: str) -> list:
     value = os.getenv(env_var, fallback)
     return [item.strip() for item in value.split(",") if item.strip()]
 
+
+def parse_provider_models(prefix: str) -> dict:
+    """Scan the environment for per-provider model overrides (VM-1390).
+
+    Collects every ``<prefix>_<PROVIDER>`` env var into a
+    ``{provider_type: [models]}`` dict. The provider suffix is normalised to a
+    canonical ``detect_provider_type`` name by lowercasing and mapping ``_`` to
+    ``-`` -- e.g. ``VOICEMODE_TTS_MODELS_MLX_AUDIO`` -> ``"mlx-audio"``,
+    ``VOICEMODE_TTS_MODELS_KOKORO`` -> ``"kokoro"``. The bare ``<prefix>`` (no
+    suffix) is the global list and is intentionally NOT matched here.
+
+    Parsing is generic (prefix scan), so new provider types need no config code.
+    """
+    result: dict = {}
+    scan_prefix = prefix + "_"
+    for key, value in os.environ.items():
+        if not key.startswith(scan_prefix):
+            continue
+        suffix = key[len(scan_prefix):]
+        if not suffix:
+            continue
+        provider_type = suffix.lower().replace("_", "-")
+        models = [item.strip() for item in value.split(",") if item.strip()]
+        if models:
+            result[provider_type] = models
+    return result
+
 # New provider endpoint lists configuration
 TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
 STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
@@ -726,6 +765,18 @@ TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
 STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
 STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
+
+# Per-provider TTS model overrides (VM-1390). Maps a provider_type (as returned
+# by detect_provider_type) to its preferred model list, parsed from
+# VOICEMODE_TTS_MODELS_<PROVIDER> env vars. Lets a single TTS_BASE_URLS failover
+# chain send the right model id to each provider (e.g. an HF repo id to
+# mlx-audio, "tts-1" to kokoro-fastapi/openai). See providers._select_tts_model_for_endpoint.
+TTS_MODELS_BY_PROVIDER = parse_provider_models("VOICEMODE_TTS_MODELS")
+# Built-in per-provider defaults, used when neither an explicit caller model,
+# a per-provider env override, nor a compatible global TTS_MODELS entry applies.
+# Everything not listed falls back to "tts-1".
+TTS_MODEL_PROVIDER_DEFAULTS = {"mlx-audio": "mlx-community/Kokoro-82M-bf16"}
+TTS_MODEL_DEFAULT = "tts-1"
 
 # STT prompt for vocabulary biasing (helps with specialized terminology)
 # See: https://platform.openai.com/docs/guides/speech-to-text#prompting
@@ -792,11 +843,13 @@ def reload_configuration():
     
     # Update global configuration variables
     global TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS
+    global TTS_MODELS_BY_PROVIDER
     global STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX
     TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
     STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
     TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
     TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
+    TTS_MODELS_BY_PROVIDER = parse_provider_models("VOICEMODE_TTS_MODELS")
     STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
     STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
     STT_RETRY_ATTEMPTS = int(os.getenv("VOICEMODE_STT_RETRY_ATTEMPTS", "2"))

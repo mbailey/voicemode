@@ -9,7 +9,11 @@ import logging
 from typing import Dict, Optional, List, Any, Tuple
 from openai import AsyncOpenAI
 
-from .config import TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS, OPENAI_API_KEY, get_voice_preferences
+from .config import (
+    TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS,
+    TTS_MODELS_BY_PROVIDER, TTS_MODEL_PROVIDER_DEFAULTS, TTS_MODEL_DEFAULT,
+    OPENAI_API_KEY, get_voice_preferences,
+)
 from .provider_discovery import provider_registry, EndpointInfo, is_local_provider
 
 logger = logging.getLogger("voicemode")
@@ -245,8 +249,58 @@ def _select_model_for_endpoint(endpoint_info: EndpointInfo, requested_model: Opt
     if endpoint_info.models:
         return endpoint_info.models[0]
 
-    # Fallback
-    return "tts-1"
+    # Fallback: provider-aware default (VM-1390) instead of a hardcoded "tts-1",
+    # so the registry path converges on the same resolver as the failover path.
+    return _select_tts_model_for_endpoint(
+        endpoint_info.provider_type or "unknown", requested_model
+    )
+
+
+def _model_compatible(provider_type: str, model_id: str) -> bool:
+    """Whether ``model_id`` is a plausible model identifier for ``provider_type``.
+
+    A small, documented heuristic (VM-1390): mlx-audio loads Hugging Face repos
+    on demand, so it needs a repo id (``"/"`` in the id); kokoro and openai use
+    OpenAI-style ids (no ``"/"``). Every other provider type (local, unknown,
+    cartesia, ...) accepts anything, which preserves today's behaviour. The
+    per-provider env override (VOICEMODE_TTS_MODELS_<PROVIDER>) is the explicit
+    escape hatch when this heuristic is wrong.
+    """
+    if provider_type == "mlx-audio":
+        return "/" in model_id
+    if provider_type in ("kokoro", "openai"):
+        return "/" not in model_id
+    return True
+
+
+def _select_tts_model_for_endpoint(provider_type: str, requested_model: Optional[str] = None) -> str:
+    """Select the TTS model id to send to an endpoint of ``provider_type`` (VM-1390).
+
+    Resolution order (non-clone; clone voices bypass this entirely and use their
+    profile's pinned model):
+
+      1. Explicit caller model (``converse(model=...)``) -> sent as-is. Trust the
+         caller; impression/clone flows already pass raw repo ids.
+      2. Per-provider env ``VOICEMODE_TTS_MODELS_<PROVIDER>`` (first entry).
+      3. First global ``TTS_MODELS`` entry compatible with this provider type
+         (see :func:`_model_compatible`).
+      4. Built-in per-provider default (mlx-audio -> Kokoro repo id; else "tts-1").
+
+    This makes a single ``TTS_BASE_URLS`` failover chain work across providers
+    that require different model ids, without any global override.
+    """
+    if requested_model is not None:
+        return requested_model
+
+    per_provider = TTS_MODELS_BY_PROVIDER.get(provider_type)
+    if per_provider:
+        return per_provider[0]
+
+    for model in TTS_MODELS:
+        if _model_compatible(provider_type, model):
+            return model
+
+    return TTS_MODEL_PROVIDER_DEFAULTS.get(provider_type, TTS_MODEL_DEFAULT)
 
 
 def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model: Optional[str] = None) -> str:

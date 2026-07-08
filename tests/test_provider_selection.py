@@ -9,6 +9,8 @@ from voice_mode.providers import (
     get_tts_client_and_voice,
     _select_model_for_endpoint,
     _select_stt_model_for_endpoint,
+    _select_tts_model_for_endpoint,
+    _model_compatible,
 )
 
 
@@ -205,9 +207,14 @@ class TestModelSelection:
             last_check="",
             last_error=None
         )
-        
-        # No models at all, fallback to tts-1
-        assert _select_model_for_endpoint(endpoint) == "tts-1"
+
+        # No advertised models: fall back via the provider-aware resolver
+        # (VM-1390). A generic provider accepts any model, so it lands on the
+        # first global TTS_MODELS entry. Pin the config so this is deterministic
+        # regardless of the ambient VOICEMODE_TTS_MODELS.
+        with patch('voice_mode.providers.TTS_MODELS', ['tts-1', 'tts-1-hd', 'gpt-4o-mini-tts']), \
+             patch('voice_mode.providers.TTS_MODELS_BY_PROVIDER', {}):
+            assert _select_model_for_endpoint(endpoint) == "tts-1"
 
 
 class TestSttModelSelection:
@@ -316,3 +323,112 @@ class TestSttModelSelection:
         ):
             cpp = self._make_endpoint("http://127.0.0.1:2022/v1", "whisper")
             assert _select_stt_model_for_endpoint(cpp) == "global-default"
+
+DEFAULT_TTS_MODELS = ["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
+
+
+class TestModelCompatible:
+    """Tests for the _model_compatible provider/model heuristic (VM-1390)."""
+
+    def test_mlx_audio_requires_repo_id(self):
+        assert _model_compatible("mlx-audio", "mlx-community/Kokoro-82M-bf16")
+        assert not _model_compatible("mlx-audio", "tts-1")
+
+    def test_kokoro_and_openai_require_plain_id(self):
+        for pt in ("kokoro", "openai"):
+            assert _model_compatible(pt, "tts-1")
+            assert not _model_compatible(pt, "some/repo-id")
+
+    def test_local_unknown_cartesia_accept_anything(self):
+        for pt in ("local", "unknown", "cartesia"):
+            assert _model_compatible(pt, "tts-1")
+            assert _model_compatible(pt, "some/repo-id")
+
+
+class TestTtsModelSelection:
+    """Tests for _select_tts_model_for_endpoint resolution order (VM-1390)."""
+
+    def test_defaults_per_provider(self):
+        """With the default global TTS_MODELS and no per-provider env,
+        each provider type resolves to the right model."""
+        with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}
+        ):
+            assert _select_tts_model_for_endpoint("kokoro") == "tts-1"
+            assert _select_tts_model_for_endpoint("openai") == "tts-1"
+            assert (
+                _select_tts_model_for_endpoint("mlx-audio")
+                == "mlx-community/Kokoro-82M-bf16"
+            )
+            assert _select_tts_model_for_endpoint("local") == "tts-1"
+            assert _select_tts_model_for_endpoint("unknown") == "tts-1"
+
+    def test_global_set_to_mlx_repo_id_mikes_env(self):
+        """Global TTS_MODELS set to an mlx repo id (Mike's env workaround):
+        mlx-audio gets that repo via step 3; kokoro skips the incompatible
+        repo id and falls to its built-in default 'tts-1'."""
+        with patch(
+            "voice_mode.providers.TTS_MODELS",
+            ["mlx-community/Kokoro-82M-bf16"],
+        ), patch("voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}):
+            assert (
+                _select_tts_model_for_endpoint("mlx-audio")
+                == "mlx-community/Kokoro-82M-bf16"
+            )
+            assert _select_tts_model_for_endpoint("kokoro") == "tts-1"
+            assert _select_tts_model_for_endpoint("openai") == "tts-1"
+
+    def test_per_provider_env_beats_global_and_default(self):
+        """VOICEMODE_TTS_MODELS_<PROVIDER> (parsed into TTS_MODELS_BY_PROVIDER)
+        wins over the compatible-global-entry and built-in-default steps."""
+        by_provider = {
+            "mlx-audio": ["mlx-community/Other-Repo"],
+            "kokoro": ["tts-1-hd"],
+            "openai": ["gpt-4o-mini-tts"],
+        }
+        with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", by_provider
+        ):
+            assert (
+                _select_tts_model_for_endpoint("mlx-audio")
+                == "mlx-community/Other-Repo"
+            )
+            assert _select_tts_model_for_endpoint("kokoro") == "tts-1-hd"
+            assert _select_tts_model_for_endpoint("openai") == "gpt-4o-mini-tts"
+
+    def test_explicit_requested_model_wins_for_every_provider(self):
+        """Step 1: an explicit caller model is sent as-is, over per-provider
+        env, compatible-global, and built-in default -- for every provider."""
+        by_provider = {"mlx-audio": ["mlx-community/Other-Repo"]}
+        with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", by_provider
+        ):
+            for pt in ("kokoro", "openai", "mlx-audio", "local", "unknown"):
+                assert (
+                    _select_tts_model_for_endpoint(pt, "caller-choice")
+                    == "caller-choice"
+                )
+
+    def test_select_model_for_endpoint_fallback_is_provider_aware(self):
+        """The registry path's _select_model_for_endpoint fallback (no advertised
+        models) now yields the provider-aware default, not a hardcoded 'tts-1'."""
+        with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}
+        ):
+            mlx = EndpointInfo(
+                base_url="http://127.0.0.1:8890/v1",
+                models=[],
+                voices=[],
+                provider_type="mlx-audio",
+            )
+            assert (
+                _select_model_for_endpoint(mlx)
+                == "mlx-community/Kokoro-82M-bf16"
+            )
+            kokoro = EndpointInfo(
+                base_url="http://127.0.0.1:8880/v1",
+                models=[],
+                voices=[],
+                provider_type="kokoro",
+            )
+            assert _select_model_for_endpoint(kokoro) == "tts-1"
