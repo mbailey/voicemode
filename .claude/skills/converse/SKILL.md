@@ -56,6 +56,19 @@ If the MCP server isn't connected or the tool isn't available:
    ```
 
 4. **Reconnect MCP server after install:**
-   Run `/mcp`, select voicemode, click "Reconnect" (or restart Claude Code)
+
+   ```bash
+   voicemode reconnect
+   ```
+
+   One Bash call drives the whole `/mcp` reconnect dance on your own pane —
+   survives the drop because Bash and tmux stay up when the MCP tools vanish.
+   After it prints `RESULT: reconnected`, run the `ToolSearch select:…` line it
+   echoes to reload the tool schema, then resume conversing. (Manual fallback:
+   run `/mcp`, select voicemode, click "Reconnect", or restart Claude Code.)
+
+**Mid-session drop** (voice was working, then `-32000 Connection closed`): you
+don't need to reinstall — just run `voicemode reconnect`. See the `voicemode`
+skill's "Reconnecting after a mid-session drop" section.
 
 For complete documentation, load the `voicemode` skill.
