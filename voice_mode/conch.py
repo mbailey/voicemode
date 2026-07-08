@@ -643,8 +643,11 @@ class Conch:
                         return False
 
             return True
-        except (json.JSONDecodeError, ProcessLookupError, PermissionError, OSError, ValueError):
-            # JSON invalid, process dead, no permission to signal, or invalid timestamp
+        except (json.JSONDecodeError, TypeError, ValueError, OSError):
+            # JSON invalid, pid not an int (TypeError), invalid timestamp/pid
+            # value (ValueError), or file unreadable (OSError). psutil.pid_exists
+            # no longer raises ProcessLookupError/PermissionError -- it returns a
+            # bool -- so those are dropped to match the other liveness probes.
             return False
 
     @classmethod

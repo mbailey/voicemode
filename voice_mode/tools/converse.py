@@ -1296,12 +1296,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         recording_duration = 0
         speech_detected = False
         stop_recording = False
-        # Wall-clock cap: recording_duration only advances when audio chunks
-        # arrive, so a stream that goes quiet (device lost, backend delivering
-        # no callbacks) would otherwise spin the loop forever. The wall clock
-        # is the cap the caller actually asked for.
-        wall_start = time.monotonic()
-        
+
         # Use a queue for thread-safe communication
         import queue
         audio_queue = queue.Queue()
@@ -1351,9 +1346,20 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                                blocksize=chunk_samples):
                 
                 logger.debug("Started continuous audio stream")
-                
+
+                # Stall backstop: recording_duration only advances when audio
+                # chunks arrive, so a stream that goes silent (device lost, no
+                # callbacks) would otherwise spin the loop forever. If no chunk
+                # arrives for AUDIO_STALL_TIMEOUT seconds we treat the stream as
+                # dead and stop. This is a dead-stream safety net, NOT a cap on
+                # recording length: last_audio_time is bumped on every chunk, so
+                # a healthy (even slow) recording is never truncated -- length is
+                # still governed by recording_duration < max_duration.
+                AUDIO_STALL_TIMEOUT = 5.0
+                last_audio_time = time.monotonic()
+
                 while (recording_duration < max_duration and not stop_recording
-                       and time.monotonic() - wall_start < max_duration):
+                       and time.monotonic() - last_audio_time < AUDIO_STALL_TIMEOUT):
                     # VM-1676: honour a control-channel stop while listening, so a
                     # stop that arrives mid-record returns cleanly (converse then
                     # builds the normal control-marker result). Cheap snapshot;
@@ -1394,7 +1400,11 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                             logger.error("Audio device error detected - stopping recording")
                             # Raise an exception to trigger recovery logic
                             raise sd.PortAudioError("Audio device disconnected or unavailable")
-                        
+
+                        # A real chunk arrived -- the stream is alive; reset the
+                        # stall backstop timer.
+                        last_audio_time = time.monotonic()
+
                         # Flatten for consistency
                         chunk_flat = chunk.flatten()
                         chunks.append(chunk_flat)
