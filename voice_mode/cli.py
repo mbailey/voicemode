@@ -2850,6 +2850,167 @@ def completions(shell, install):
         click.echo(completion_script)
 
 
+# Uninstall command (VM-1874, gh #497) -- a single, no-think command that
+# reverses install.sh: services, MCP registration, config, then the package
+# itself (last, since it deletes the running binary). Built by calling the
+# three existing *_uninstall tool functions directly (mirroring cli.py:851)
+# plus the teardown steps nothing else currently owns.
+@voice_mode_main_cli.command()
+@click.help_option('-h', '--help')
+@click.option('--remove-models', is_flag=True,
+              help='Also remove downloaded models (Whisper, mlx-audio)')
+@click.option('--remove-all-data', is_flag=True,
+              help='Remove all VoiceMode data (logs, transcriptions, audio, voice profiles). '
+                   'Without this flag, ~/.voicemode/voices/ is preserved.')
+@click.confirmation_option(
+    '-y', '--yes',
+    prompt='This will uninstall VoiceMode: stop and remove the Whisper/Kokoro/mlx-audio '
+           'services, remove the Claude MCP registration, delete ~/.voicemode/voicemode.env, '
+           'and remove the voice-mode package. Voice profiles are kept unless '
+           '--remove-all-data is given. Continue?'
+)
+def uninstall(remove_models, remove_all_data):
+    """Uninstall VoiceMode: services, MCP registration, config, and the package.
+
+    Cleanly reverses install.sh, in order: stop + remove the Whisper, Kokoro,
+    and mlx-audio services; remove the Claude Code MCP registration (`claude
+    mcp remove voicemode`); delete ~/.voicemode/voicemode.env; and finally
+    remove the voice-mode uv tool itself (last, since it deletes the running
+    binary). Voice profiles under ~/.voicemode/voices/ are always preserved
+    unless --remove-all-data is given. Errors are collected rather than
+    aborting the run, and a residual-footprint report is printed at the end.
+    """
+    from voice_mode.config import BASE_DIR
+    from voice_mode.tools.whisper.uninstall import whisper_uninstall
+    from voice_mode.tools.kokoro.uninstall import kokoro_uninstall
+    from voice_mode.tools.mlx_audio.uninstall import mlx_audio_uninstall
+
+    removed_items = []
+    kept_items = []
+    errors = []
+
+    click.echo("Uninstalling VoiceMode...\n")
+
+    # 1. Stop + remove services (forward remove_models/remove_all_data).
+    for label, fn in (
+        ("Whisper", whisper_uninstall),
+        ("Kokoro", kokoro_uninstall),
+        ("mlx-audio", mlx_audio_uninstall),
+    ):
+        try:
+            result = asyncio.run(getattr(fn, 'fn', fn)(
+                remove_models=remove_models,
+                remove_all_data=remove_all_data,
+            ))
+            removed_items.extend(result.get('removed_items', []))
+            errors.extend(result.get('errors', []))
+            if result.get('success'):
+                click.echo(f"✅ {label} uninstalled")
+            else:
+                click.echo(f"⚠️  {label} uninstall completed with errors")
+        except Exception as e:  # noqa: BLE001 -- collect and continue
+            errors.append(f"{label} uninstall failed: {e}")
+            click.echo(f"❌ {label} uninstall failed: {e}")
+
+    # 2. Remove the Claude MCP registration. Tolerate "not registered" --
+    #    this step must be idempotent.
+    try:
+        result = subprocess.run(
+            ["claude", "mcp", "remove", "voicemode", "--scope", "user"],
+            capture_output=True, text=True,
+        )
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        if result.returncode == 0:
+            removed_items.append("Claude MCP registration (voicemode)")
+            click.echo("✅ Removed Claude MCP registration")
+        elif (
+            "not found" in combined
+            or "no such" in combined
+            or "not registered" in combined
+            or "no mcp server found" in combined
+        ):
+            click.echo("ℹ️  Claude MCP registration not found (already removed)")
+        else:
+            errors.append(
+                f"claude mcp remove failed: {(result.stderr or result.stdout).strip()}"
+            )
+            click.echo("⚠️  Could not remove Claude MCP registration")
+    except FileNotFoundError:
+        click.echo("ℹ️  'claude' CLI not found -- skipping MCP registration removal")
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"claude mcp remove failed: {e}")
+        click.echo(f"⚠️  Could not remove Claude MCP registration: {e}")
+
+    # 3. Remove config (current + legacy filename).
+    for env_path in (BASE_DIR / "voicemode.env", BASE_DIR / ".voicemode.env"):
+        if env_path.exists():
+            try:
+                env_path.unlink()
+                removed_items.append(f"Config file: {env_path}")
+                click.echo(f"✅ Removed {env_path}")
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"Failed to remove {env_path}: {e}")
+
+    # 4. Voice profiles -- always preserved unless --remove-all-data.
+    voices_dir = BASE_DIR / "voices"
+    if voices_dir.exists():
+        if remove_all_data:
+            try:
+                shutil.rmtree(voices_dir)
+                removed_items.append(f"Voice profiles: {voices_dir}")
+                click.echo(f"✅ Removed {voices_dir}")
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"Failed to remove {voices_dir}: {e}")
+        else:
+            kept_items.append(f"Voice profiles: {voices_dir} (use --remove-all-data to remove)")
+
+    if BASE_DIR.exists() and any(BASE_DIR.iterdir()):
+        kept_items.append(f"Remaining VoiceMode data: {BASE_DIR}")
+
+    # 5. Remove the package itself -- LAST, since it deletes the running
+    #    `voicemode` binary. Guard installs that aren't uv-tool-managed.
+    if shutil.which("uv"):
+        try:
+            result = subprocess.run(
+                ["uv", "tool", "uninstall", "voice-mode"],
+                capture_output=True, text=True,
+            )
+            stderr = (result.stderr or "").strip()
+            if result.returncode == 0:
+                removed_items.append("uv tool: voice-mode")
+                click.echo("✅ Removed voice-mode uv tool")
+            elif "is not installed" in stderr.lower() or "not found" in stderr.lower():
+                click.echo("ℹ️  voice-mode not installed as a uv tool -- skipping package removal")
+            else:
+                errors.append(f"`uv tool uninstall voice-mode` failed: {stderr}")
+                click.echo("⚠️  Could not remove the voice-mode uv tool")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"uv tool uninstall voice-mode failed: {e}")
+    else:
+        click.echo(
+            "ℹ️  'uv' not found on PATH -- skipping package removal "
+            "(remove manually if installed via pip/pipx)"
+        )
+
+    # Residual-footprint report.
+    click.echo("\n📋 Uninstall summary")
+    if removed_items:
+        click.echo("  Removed:")
+        for item in removed_items:
+            click.echo(f"    - {item}")
+    if kept_items:
+        click.echo("  Kept:")
+        for item in kept_items:
+            click.echo(f"    - {item}")
+    if errors:
+        click.echo("  Errors:")
+        for err in errors:
+            click.echo(f"    - {err}")
+        click.echo("\n⚠️  VoiceMode uninstall completed with errors.")
+    else:
+        click.echo("\n✅ VoiceMode uninstalled.")
+
+
 # Connect (VoiceMode Connect auth) command group
 @voice_mode_main_cli.group(epilog="""\b
 Examples:
