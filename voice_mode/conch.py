@@ -24,12 +24,15 @@ Usage:
         print("Someone is in a voice conversation")
 """
 
-import fcntl
 import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+
+import psutil
+
+from voice_mode.file_lock import lock_exclusive, unlock
 
 # Import config for lock expiry - deferred to avoid circular import
 def _get_lock_expiry() -> float:
@@ -223,12 +226,12 @@ class Conch:
         pid = data.get("pid")
         if pid is None or pid == os.getpid():
             return False
-        # Holder process alive?
+        # Holder process alive? (psutil probe: os.kill(pid, 0) is NOT a
+        # portable liveness check — on Windows signal 0 TERMINATES the target.)
         try:
-            os.kill(pid, 0)
-        except PermissionError:
-            pass  # exists but not signalable by us — treat as alive
-        except (ProcessLookupError, TypeError, OSError):
+            if not psutil.pid_exists(pid):
+                return False
+        except (TypeError, ValueError):
             return False
         # Hold not idle-expired? Honour the holder's stamped per-hold TTL
         # (payload ``expires``) ahead of the global default (VM-1649).
@@ -312,7 +315,8 @@ class Conch:
     ) -> bool:
         """Atomically try to acquire the conch.
 
-        Uses fcntl.flock() for true atomic locking across processes.
+        Uses an exclusive file lock (flock/msvcrt via voice_mode.file_lock)
+        for true atomic locking across processes.
         Also handles stale locks: a lock whose holder PID is dead, or that is
         older than its expiry window (CONCH_LOCK_EXPIRY for active locks,
         CONCH_HOLD_EXPIRY for between-turns holds), is forcibly cleared.
@@ -359,7 +363,7 @@ class Conch:
             self._fd = os.open(str(self.LOCK_FILE), os.O_CREAT | os.O_RDWR, 0o644)
 
             # Try to get exclusive lock (non-blocking)
-            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            lock_exclusive(self._fd)
 
             # Got lock - write our info (held=False: we hold the flock now)
             self._acquire_time = datetime.now()
@@ -408,10 +412,16 @@ class Conch:
         # Fast-fail on dead holder -- no need to wait for timestamp expiry.
         pid = data.get("pid")
         if pid is not None:
+            holder_dead = False
             try:
-                os.kill(pid, 0)
-                # Process is alive -- fall through to timestamp check.
-            except ProcessLookupError:
+                # Portable liveness probe (os.kill(pid, 0) kills on Windows).
+                # A process that exists but is not signalable counts as alive.
+                holder_dead = not psutil.pid_exists(pid)
+            except (TypeError, ValueError):
+                # PID isn't a valid int -- skip dead-PID path,
+                # fall through to timestamp check.
+                pass
+            if holder_dead:
                 # Holder is dead -- clear the lock immediately.
                 stale_agent = data.get("agent", "unknown")
                 try:
@@ -431,13 +441,6 @@ class Conch:
                 except Exception:
                     pass
                 return
-            except PermissionError:
-                # Process exists but we can't signal it -- treat as alive.
-                pass
-            except (TypeError, OSError):
-                # PID isn't a valid int or other OS error -- skip dead-PID path,
-                # fall through to timestamp check.
-                pass
 
         # Timestamp-based stale clearance.
         if data.get("held"):
@@ -506,7 +509,7 @@ class Conch:
             except OSError:
                 pass
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                unlock(self._fd)
                 os.close(self._fd)
             except OSError:
                 pass
@@ -519,7 +522,7 @@ class Conch:
 
         if self._fd is not None:
             try:
-                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                unlock(self._fd)
                 os.close(self._fd)
             except OSError:
                 pass
@@ -623,8 +626,10 @@ class Conch:
             if pid is None:
                 return False
 
-            # Check if process is alive (signal 0 doesn't actually send a signal)
-            os.kill(pid, 0)
+            # Check if process is alive (portable probe; os.kill(pid, 0)
+            # would TERMINATE the target on Windows)
+            if not psutil.pid_exists(pid):
+                return False
 
             # Check if lock is stale based on timestamp
             lock_expiry = _get_lock_expiry()
@@ -638,8 +643,11 @@ class Conch:
                         return False
 
             return True
-        except (json.JSONDecodeError, ProcessLookupError, PermissionError, OSError, ValueError):
-            # JSON invalid, process dead, no permission to signal, or invalid timestamp
+        except (json.JSONDecodeError, TypeError, ValueError, OSError):
+            # JSON invalid, pid not an int (TypeError), invalid timestamp/pid
+            # value (ValueError), or file unreadable (OSError). psutil.pid_exists
+            # no longer raises ProcessLookupError/PermissionError -- it returns a
+            # bool -- so those are dropped to match the other liveness probes.
             return False
 
     @classmethod

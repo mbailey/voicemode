@@ -76,7 +76,7 @@ For manual setup, see the [Getting Started Guide](docs/tutorials/getting-started
 
 ## Compatibility
 
-**Platforms:** Linux, macOS, Windows (WSL), NixOS
+**Platforms:** Linux, macOS, Windows (native or WSL), NixOS
 **Python:** 3.10-3.14
 
 ## Configuration

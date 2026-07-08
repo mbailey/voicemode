@@ -11,10 +11,13 @@ the isolated lock path explicitly and re-pin it (see ``_pin_lock_file``).
 import json
 import multiprocessing
 import os
+import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+import psutil
 import pytest
 
 from voice_mode.conch import Conch
@@ -55,14 +58,14 @@ def _write_entry(seq, session_id, *, pid=-1, expires=None, agent="other",
 
 
 def _dead_pid():
-    """Fork a child, let it exit, reap it -> a genuinely dead PID."""
-    pid = os.fork()
-    if pid == 0:
-        os._exit(0)
-    os.waitpid(pid, 0)
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
-    return pid
+    """Spawn a child, let it exit, reap it -> a genuinely dead PID.
+
+    subprocess instead of os.fork() so it also works on Windows.
+    """
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    assert not psutil.pid_exists(proc.pid)
+    return proc.pid
 
 
 # --------------------------------------------------------------------------- #

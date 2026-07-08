@@ -3,14 +3,29 @@
 import json
 import multiprocessing
 import os
+import subprocess
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+import psutil
 import pytest
 
 from voice_mode.conch import Conch
+
+
+def _dead_pid():
+    """Spawn a child, let it exit, reap it -> a genuinely dead PID.
+
+    subprocess instead of os.fork() so it also works on Windows. Avoids the
+    flaky "PID 999999" pattern -- high-PID systems may have it in use.
+    """
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    assert not psutil.pid_exists(proc.pid)
+    return proc.pid
 
 
 def _idle_child():
@@ -438,22 +453,10 @@ class TestConchAtomicLocking:
     def test_try_acquire_clears_dead_holder_lock(self):
         """try_acquire() unlinks a lock owned by a dead PID and acquires.
 
-        Uses the fork-and-reap pattern: spawn a child, wait for it to exit,
-        then write a lock file with the reaped (now dead) PID. Avoids the
-        flaky "PID 999999" pattern -- high-PID systems may have it in use.
+        Uses the spawn-and-reap pattern: run a child to completion, then
+        write a lock file with the reaped (now dead) PID.
         """
-        # Fork a child that exits immediately, then reap it so the PID is
-        # genuinely dead.
-        pid = os.fork()
-        if pid == 0:
-            # Child -- exit immediately
-            os._exit(0)
-        # Parent -- reap the child
-        os.waitpid(pid, 0)
-
-        # Sanity check: signal 0 against the reaped PID should now raise.
-        with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+        pid = _dead_pid()
 
         # Write a lock file with the dead PID and a fresh timestamp
         # (so timestamp-based expiry would NOT fire).
@@ -484,10 +487,7 @@ class TestConchAtomicLocking:
         Operators may opt out of timestamp-based expiry, but a dead holder
         is unambiguously stale and must still be cleared.
         """
-        pid = os.fork()
-        if pid == 0:
-            os._exit(0)
-        os.waitpid(pid, 0)
+        pid = _dead_pid()
 
         Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
         from datetime import datetime
@@ -548,11 +548,13 @@ class TestConchAtomicLocking:
 
         new_conch.release()
 
-    def test_check_and_clear_handles_permission_error(self):
-        """PermissionError from os.kill is treated as 'alive' -- lock preserved.
+    def test_holder_owned_by_another_user_is_treated_as_alive(self):
+        """A holder that exists but is not signalable by us must NOT be cleared.
 
-        If os.kill raises PermissionError, the process exists but is owned
-        by another user. We must NOT clear the lock in that case.
+        psutil.pid_exists() returns True for a process owned by another user
+        (on POSIX that is the kill(pid, 0) -> EPERM/PermissionError case:
+        the kernel refuses the signal, which itself proves the process is
+        alive). Clearing the lock would steal the floor from a live holder.
         """
         # Write a lock file with a fresh timestamp and some PID.
         Conch.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -565,8 +567,8 @@ class TestConchAtomicLocking:
         }
         Conch.LOCK_FILE.write_text(json.dumps(data))
 
-        # Mock os.kill to raise PermissionError.
-        with patch("voice_mode.conch.os.kill", side_effect=PermissionError):
+        # Mock the liveness probe: process exists (though we couldn't signal it).
+        with patch("voice_mode.conch.psutil.pid_exists", return_value=True):
             conch = Conch(agent_name="probe")
             conch._check_and_clear_stale_lock()
 

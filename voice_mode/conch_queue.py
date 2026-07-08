@@ -37,7 +37,6 @@ import) so they honour runtime home resolution (VM-1502) and test isolation
 (VM-1224), both of which re-point the conch's base directory.
 """
 
-import fcntl
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -45,7 +44,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
+import psutil
+
 from voice_mode.conch import Conch
+from voice_mode.file_lock import lock_exclusive, unlock
 
 # Sentinel: register() defaults ``pid`` to the caller's own PID. Resolved at
 # call time (not as a default-arg value) so the PID is never frozen at import.
@@ -187,20 +189,18 @@ class ConchQueue:
     def _is_live(cls, data: dict) -> bool:
         """Is this waiter still alive?
 
-        Local waiter (``pid`` set): liveness by PID (signal 0). A
-        ``PermissionError`` means the process exists but is owned by another
-        user -- treat as alive. Remote waiter (``pid`` is ``None``): liveness
+        Local waiter (``pid`` set): liveness by PID probe (psutil; os.kill
+        with signal 0 is not portable -- it terminates the target on
+        Windows). A process that exists but is owned by another user is
+        treated as alive. Remote waiter (``pid`` is ``None``): liveness
         by the ``expires`` heartbeat TTL. A remote waiter with no TTL is kept
         (we cannot prove it dead).
         """
         pid = data.get("pid")
         if pid is not None:
             try:
-                os.kill(pid, 0)
-                return True
-            except PermissionError:
-                return True
-            except (ProcessLookupError, TypeError, OSError):
+                return psutil.pid_exists(pid)
+            except (TypeError, ValueError):
                 return False
         expires = data.get("expires")
         if not expires:
@@ -223,7 +223,7 @@ class ConchQueue:
         seq_file.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(seq_file), os.O_CREAT | os.O_RDWR, 0o644)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)  # blocking: serialise the bump
+            lock_exclusive(fd, blocking=True)  # blocking: serialise the bump
             os.lseek(fd, 0, os.SEEK_SET)
             raw = os.read(fd, 64).decode().strip()
             current = int(raw) if raw else 0
@@ -235,7 +235,7 @@ class ConchQueue:
             return nxt
         finally:
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                unlock(fd)
             finally:
                 os.close(fd)
 

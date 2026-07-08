@@ -13,6 +13,7 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+import psutil
 import sounddevice as sd
 from scipy.io.wavfile import write
 from pydub import AudioSegment
@@ -1436,7 +1437,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         recording_duration = 0
         speech_detected = False
         stop_recording = False
-        
+
         # Use a queue for thread-safe communication
         import queue
         audio_queue = queue.Queue()
@@ -1486,8 +1487,20 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                                blocksize=chunk_samples):
                 
                 logger.debug("Started continuous audio stream")
-                
-                while recording_duration < max_duration and not stop_recording:
+
+                # Stall backstop: recording_duration only advances when audio
+                # chunks arrive, so a stream that goes silent (device lost, no
+                # callbacks) would otherwise spin the loop forever. If no chunk
+                # arrives for AUDIO_STALL_TIMEOUT seconds we treat the stream as
+                # dead and stop. This is a dead-stream safety net, NOT a cap on
+                # recording length: last_audio_time is bumped on every chunk, so
+                # a healthy (even slow) recording is never truncated -- length is
+                # still governed by recording_duration < max_duration.
+                AUDIO_STALL_TIMEOUT = 5.0
+                last_audio_time = time.monotonic()
+
+                while (recording_duration < max_duration and not stop_recording
+                       and time.monotonic() - last_audio_time < AUDIO_STALL_TIMEOUT):
                     # VM-1676: honour a control-channel stop while listening, so a
                     # stop that arrives mid-record returns cleanly (converse then
                     # builds the normal control-marker result). Cheap snapshot;
@@ -1528,7 +1541,11 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                             logger.error("Audio device error detected - stopping recording")
                             # Raise an exception to trigger recovery logic
                             raise sd.PortAudioError("Audio device disconnected or unavailable")
-                        
+
+                        # A real chunk arrived -- the stream is alive; reset the
+                        # stall backstop timer.
+                        last_audio_time = time.monotonic()
+
                         # Flatten for consistency
                         chunk_flat = chunk.flatten()
                         chunks.append(chunk_flat)
@@ -3302,8 +3319,8 @@ consult the MCP resources listed above.
     # Track execution time and resources
     start_time = time.time()
     if DEBUG:
-        import resource
-        start_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # psutil, not resource.getrusage: the resource module is Unix-only
+        start_memory = psutil.Process().memory_info().rss // 1024
         logger.debug(f"Starting converse - Memory: {start_memory} KB")
     
     result = None
@@ -4198,9 +4215,9 @@ consult the MCP resources listed above.
         logger.info(f"Converse completed in {elapsed:.2f}s")
         
         if DEBUG:
-            import resource
             import gc
-            end_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # psutil, not resource.getrusage: the resource module is Unix-only
+            end_memory = psutil.Process().memory_info().rss // 1024
             memory_delta = end_memory - start_memory
             logger.debug(f"Memory delta: {memory_delta} KB (start: {start_memory}, end: {end_memory})")
             
@@ -4245,12 +4262,15 @@ async def pause_conversation(
     if holder:
         holder_pid = holder.get("pid")
         if holder_pid not in (None, os.getpid()):
+            holder_alive = False
             try:
-                os.kill(holder_pid, 0)
+                # Portable liveness probe (os.kill(pid, 0) kills on Windows).
+                holder_alive = psutil.pid_exists(holder_pid)
+            except (TypeError, ValueError):
+                pass  # unknown pid — safe to take the floor
+            if holder_alive:
                 return (f"Cannot pause: {holder.get('agent', 'another agent')} "
                         f"(pid {holder_pid}) currently holds the conch.")
-            except (ProcessLookupError, PermissionError, TypeError, OSError):
-                pass  # holder dead/unknown — safe to take the floor
 
     resolved_session_id = (
         os.environ.get("VOICEMODE_SESSION_ID")
