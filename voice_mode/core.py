@@ -835,8 +835,13 @@ def generate_chime(
         if default_output is not None:
             devices = sd.query_devices()
             device_name = devices[default_output]['name'].lower()
-            # Check for Bluetooth devices (AirPods, Bluetooth headphones, etc)
-            if 'airpod' in device_name or 'bluetooth' in device_name or 'bt' in device_name:
+            # Check for Bluetooth devices (AirPods, Bluetooth headphones, etc).
+            # macOS reports many Bluetooth headphones by model name only,
+            # e.g. Sony "WH-1000XM4" / "WF-1000XM5", so also match those
+            # model-number prefixes. Matched as a substring, not with startswith:
+            # the name may arrive bare or as "Sony WH-1000XM4".
+            if ('airpod' in device_name or 'bluetooth' in device_name or 'bt' in device_name
+                    or 'wh-' in device_name or 'wf-' in device_name):
                 amplitude = 0.15  # Higher amplitude for Bluetooth devices
                 logger.debug(f"Bluetooth device detected ({devices[default_output]['name']}), using amplitude {amplitude}")
             else:
