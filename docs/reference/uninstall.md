@@ -201,6 +201,6 @@ rm -rf ~/.cargo ~/.rustup
 
 ## See also
 
-- [README — Uninstall](../../README.md#uninstall)
+- [README — Uninstall](../README.md#uninstall)
 - [CLI Commands — `uninstall` / `service uninstall`](cli.md)
 - [Claude Code Plugin guide](../guides/claude-code-plugin.md)
