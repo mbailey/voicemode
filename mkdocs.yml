@@ -100,6 +100,7 @@ nav:
   - Reference:
     - CLI Commands: reference/cli.md
     - Service Commands: reference/cli/service-commands.md
+    - Uninstall: reference/uninstall.md
     - Control Channel: reference/control-channel.md
     - Converse Parameters: reference/converse-parameters.md
     - Environment Variables: reference/environment.md

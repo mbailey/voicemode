@@ -179,6 +179,49 @@ environment.systemPackages = [
 
 </details>
 
+## Uninstall
+
+```bash
+voicemode uninstall
+```
+
+This one command reverses the install: it stops and removes the Whisper,
+Kokoro, mlx-audio, and voicemode ("serve") services; removes the Claude Code
+MCP registration (both user and local scope); backs up
+`~/.voicemode/voicemode.env` (renamed, not deleted); and removes the
+`voice-mode` package itself (`uv tool uninstall voice-mode` — done last,
+since it's the running binary). **Voice clones, recordings, conversations,
+transcriptions, and models are never removed automatically** — even with
+`--remove-all-data` — and are listed in the printed report so you know
+what's still on disk.
+
+Flags:
+
+- `-y`, `--yes` — skip the confirmation prompt (non-interactive use)
+- `--remove-models` — also delete downloaded Whisper/Kokoro/mlx-audio models
+- `--remove-all-data` — also delete everything else under `~/.voicemode/`
+  (logs, transcriptions, audio, conversations, cache, config backup)
+  **except** voice clones (`voices/`, `voices.json`), which stay put no
+  matter what
+
+**Both install paths:**
+
+- **Claude Code plugin** (Quick Start Option 1) — `voicemode uninstall`
+  still tears down the services, config, and package, but `claude mcp
+  remove` cannot see a plugin-managed MCP registration. Also run `claude
+  plugin uninstall voicemode` to remove the plugin itself (the command
+  detects the plugin and reminds you of this step).
+- **Python installer package** (Quick Start Option 2) — `voicemode
+  uninstall` is the complete reversal; no extra step needed.
+
+Need to remove just one service instead of everything? `voicemode service
+uninstall whisper|kokoro|mlx-audio|voicemode` uninstalls a single service.
+
+For a complete manual-removal reference — every path VoiceMode and its
+installer write to disk, including shared tools like `uv` and Homebrew that
+this command intentionally leaves alone — see
+[docs/reference/uninstall.md](docs/reference/uninstall.md).
+
 ## Troubleshooting
 
 
@@ -203,6 +246,7 @@ export VOICEMODE_SAVE_AUDIO=true
 - [Configuration](docs/guides/configuration.md) - All environment variables
 - [Whisper Setup](docs/guides/whisper-setup.md) - Local speech-to-text
 - [Kokoro Setup](docs/guides/kokoro-setup.md) - Local text-to-speech
+- [Uninstall](docs/reference/uninstall.md) - Complete manual removal reference
 - [Development Setup](docs/tutorials/development-setup.md) - Contributing guide
 
 Full documentation: [voicemode.dev](https://voicemode.dev)
