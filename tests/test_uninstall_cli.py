@@ -679,6 +679,40 @@ class TestUninstallMcpBothScopes:
         assert "Errors:" not in result.output
         assert "local scope" in result.output
 
+    def test_mcp_both_scopes_erroring_is_collected_not_raised(self, runner, base_dir):
+        """A real failure (not "not found") at BOTH scopes must be
+        collected into `errors` (surfacing as a non-zero exit, R14) rather
+        than crashing the command or being silently swallowed."""
+        mock_whisper = _make_tool_mock()
+        mock_kokoro = _make_tool_mock()
+        mock_mlx = _make_tool_mock()
+
+        def run_side_effect(args, **kwargs):
+            if args[:2] == ["claude", "mcp"]:
+                return _completed(returncode=1, stderr="internal error: config corrupt")
+            if args[:2] == ["claude", "plugin"]:
+                return _completed(returncode=0, stdout="")
+            return _completed(returncode=0)
+
+        with patch(
+            "voice_mode.tools.whisper.uninstall.whisper_uninstall", mock_whisper
+        ), patch(
+            "voice_mode.tools.kokoro.uninstall.kokoro_uninstall", mock_kokoro
+        ), patch(
+            "voice_mode.tools.mlx_audio.uninstall.mlx_audio_uninstall", mock_mlx
+        ), patch(
+            "subprocess.run", side_effect=run_side_effect
+        ), patch(
+            "shutil.which", return_value="/usr/bin/uv"
+        ), patch(
+            "voice_mode.config.BASE_DIR", base_dir
+        ):
+            result = runner.invoke(voice_mode_main_cli, ["uninstall", "-y"])
+
+        assert result.exit_code == 1, result.output
+        assert result.output.count("config corrupt") == 2  # both scopes' errors surfaced
+        assert "skipping package removal" in result.output.lower()
+
 
 class TestUninstallPluginDetection:
     """R12 (Fable review Issue 3): `claude mcp remove` cannot unregister a
