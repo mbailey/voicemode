@@ -200,6 +200,11 @@ these to physical buttons so the human can pause/barge/replay without typing:
    they just do nothing). A working Stream Deck with dead media keys = Hammerspoon
    isn't running. Quick check: `pgrep -x Hammerspoon`.
 
+**Setting this up for a user?** Use the
+[media keys agent runbook](references/media-keys.md) — a step-by-step
+procedure for the assistant to do the setup end-to-end, flagging the one step
+(the Accessibility grant) that needs the human.
+
 Full reference (ownership model, skip-back history buffer, raw-socket protocol):
 [docs/reference/control-channel.md](../../docs/reference/control-channel.md).
 
@@ -517,6 +522,7 @@ When local voice isn't an option -- no mic/speaker on the machine, can't install
 | Claude Code Plugin  | [Plugin Guide](../../docs/guides/claude-code-plugin.md)       |
 | Whisper STT         | [Whisper Setup](../../docs/guides/whisper-setup.md)           |
 | Kokoro TTS          | [Kokoro Setup](../../docs/guides/kokoro-setup.md)             |
+| macOS Media Keys    | [Media Keys Guide](../../docs/guides/macos-media-keys.md)     |
 | Pronunciation       | [Pronunciation Guide](../../docs/guides/pronunciation.md)     |
 | Troubleshooting     | [Troubleshooting](../../docs/troubleshooting/index.md)        |
 | Soundfonts          | [Soundfonts Guide](../../docs/guides/soundfonts.md)           |

@@ -83,6 +83,7 @@ nav:
   - Guides:
     - Selecting Voices: guides/selecting-voices.md
     - Pronunciation: guides/pronunciation.md
+    - macOS Media Keys: guides/macos-media-keys.md
     - MacBook Portable Mode: guides/macbook-portable.md
     - Claude Code Plugin: guides/claude-code-plugin.md
     - Selective Tool Loading: guides/selective-tool-loading.md
