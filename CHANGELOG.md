@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The MCP server, `converse`, and the CLI now run natively on Windows 11: portable file
   locking (`voice_mode/file_lock.py`), safe PID liveness probes via psutil, a dead-stream
   stall backstop in the recording loop, and a Windows-safe `VOICEMODE_DEBUG`. No behavior
-  change on Linux/macOS; works with any OpenAI-compatible local STT/TTS endpoints.
+  change on Linux/macOS; works with local or remote OpenAI-compatible STT/TTS endpoints.
 
 #### Multi-voice sequences and voice surveys — `converse` grows `turns[]`
 
