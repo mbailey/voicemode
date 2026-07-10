@@ -75,6 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **STT exchange-log records now carry `audio_file`, matching TTS (VM-4)** — the saved
+  recording's filename was computed but dropped before logging, so no STT record named
+  its audio (0 of ~11k on a long-lived install). The log→audio join is now an exact
+  match for both directions; no schema change.
 - **Mixed-provider TTS failover resolves the model per endpoint (VM-1390)** —
   kokoro-fastapi/OpenAI get `tts-1`, mlx-audio gets `mlx-community/Kokoro-82M-bf16`, so
   failover in a mixed chain speaks instead of hanging. Per-provider override:
