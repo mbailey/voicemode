@@ -22,7 +22,8 @@
 ---       – converse live (or override=always-me) → VoiceMode owns:
 ---           Next = barge (`voicemode control skip-forward` — cut the current
 ---           utterance AND advance straight to my record/listen turn, VM-1739);
----           Previous = replay (STUB, pending VM-1685) — the event is swallowed
+---           Previous = replay (`voicemode control skip-back`, VM-1685/VM-1919 —
+---           re-hear the current/previous utterance); the event is swallowed
 ---           so music never sees it.
 ---       – no converse (or override=always-music) → pass through to the media app
 ---           (normal next / previous track).
@@ -219,14 +220,12 @@ local function handle_next_voicemode()
     alert("VoiceMode ⏭ barge")
 end
 
---- Previous, with VoiceMode owning → replay last utterance. STUB: there is no
---- `replay` control command yet — it is owned by VM-1685. Swallow the key and
---- tell the user, so it does not silently skip the music track. Swap the body for
---- `voicemode_control("replay")` (or similar) when VM-1685 lands.
+--- Previous, with VoiceMode owning → replay (`skip-back`, VM-1685): first press
+--- restarts the current utterance, further presses step back through the history
+--- buffer. Cached audio only — no new agent turn. Wired by VM-1919.
 local function handle_previous_voicemode()
-    -- TODO(VM-1685): replace with the real replay/skip-back control command.
-    hs.printf("[voicemode-media-keys] Previous: replay not yet available (VM-1685 stub)")
-    hs.alert.show("VoiceMode ⏮ replay not yet available (VM-1685)", 1.2)
+    voicemode_control("skip-back")
+    alert("VoiceMode ⏮ replay")
 end
 
 -- ---------------------------------------------------------------------------

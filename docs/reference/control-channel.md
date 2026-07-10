@@ -496,7 +496,7 @@ media app, unchanged:
 |-----|------------------|--------------------------------|
 | **Play/Pause** | toggles music (pass-through) | pauses/resumes **VoiceMode only** — key swallowed, media untouched *(default)*; set `pauseEverything = true` to also toggle music |
 | **Next** | next track | **barge** — cuts the utterance and hands you the mic (`control skip-forward`, VM-1742); music does **not** skip |
-| **Previous** | previous track | replay last utterance — server side now works (`control skip-back`, VM-1685); the **shipped Hammerspoon binding is still a stub** (no-op + notice) pending a wire-up |
+| **Previous** | previous track | replay last utterance (`control skip-back`, VM-1685; key binding wired by VM-1919); music does **not** skip |
 
 **Play/Pause scope (`pauseEverything`).** By default, while a converse is live
 Play/Pause controls **only VoiceMode** and the key is *swallowed*, so your media

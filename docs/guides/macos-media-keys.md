@@ -112,14 +112,13 @@ keys is the tell-tale sign Hammerspoon isn't running.)*
    luajit scripts/hammerspoon/test_voicemode_media_keys.lua
    ```
 
-## Known limitation: skip-back is a stub
+## Skip-back (Previous)
 
-**Previous** (skip-back) is currently a no-op in the shipped Hammerspoon
-binding — pressing it while a converse is live shows a notice but doesn't
-replay anything yet. The server-side replay command
-(`voicemode control skip-back`) already works; only the Hammerspoon key
-binding's wire-up is pending. If you need skip-back today, drive it from the
-CLI directly: `voicemode control skip-back`.
+**Previous** replays what the assistant just said: the first press restarts
+the current utterance, further presses step back through recent ones. It
+replays cached audio only — no new agent turn, no model call. (Wired to
+`voicemode control skip-back` since VM-1919; on older checkouts it was a
+notice-only stub.)
 
 ## Troubleshooting
 

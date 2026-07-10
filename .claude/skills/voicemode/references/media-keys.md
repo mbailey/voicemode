@@ -123,12 +123,12 @@ Live check, if the user is willing: ask them to start a converse, then press
 music track. Check the Hammerspoon Console for a logged `barge` line to
 confirm server-side, without relying on the user's report alone.
 
-## Known limitation — tell the user honestly
+## Version note
 
-The shipped **Previous** (skip-back) key binding is still a stub: pressing it
-mid-converse shows a notice but doesn't replay anything yet, even though the
-server-side command works. If the user wants skip-back today, point them at
-the CLI directly: `voicemode control skip-back`.
+The **Previous** (skip-back) key binding replays the assistant's recent
+utterances (wired since VM-1919). If the user's checkout predates that, the
+key shows a "replay not yet available" notice instead — update the checkout,
+or fall back to the CLI: `voicemode control skip-back`.
 
 ## Troubleshooting
 
