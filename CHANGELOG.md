@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Media-key Next now barges instead of stopping (VM-1742)** — the Hammerspoon binding
   sends `skip-forward`: cut the assistant *and* take the mic. Point
   `~/.hammerspoon/init.lua` at `scripts/hammerspoon/voicemode-media-keys.lua`.
+- **Previous media key now replays (VM-1919)** — the Hammerspoon binding's Previous
+  handler is wired to `voicemode control skip-back` (it was a notice-only stub pending
+  VM-1685): first press restarts the current utterance, further presses step back.
 - **Held `pause` self-heals after 5 minutes, not 30 seconds (VM-1853)** —
   pause-and-walk-away now survives; tune with `VOICEMODE_CONTROL_PAUSE_TIMEOUT`.
 
