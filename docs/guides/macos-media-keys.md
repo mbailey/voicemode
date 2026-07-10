@@ -1,6 +1,6 @@
 # macOS Media Keys Setup
 
-Use your keyboard's media keys (▶❙❙ / ⏭ / ⏮) to control VoiceMode — pause,
+Use your keyboard's media keys ( ⏮  / ▶❙❙ / ⏭  ) to control VoiceMode — pause,
 barge in, or replay — without touching your music. This guide covers the
 [Hammerspoon](https://www.hammerspoon.org/)-based setup on macOS: install →
 configure → grant permission → verify.
