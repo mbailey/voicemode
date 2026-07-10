@@ -100,6 +100,10 @@ class TestListenAndTranscribe:
         assert result.text is None
         assert result.stt_classified is False
         stt_spy.assert_not_called()
+        # VM-4: speech_to_text() was never called, so there is no STT-path
+        # audio_path to carry (a separate, unrelated no-speech dump file may
+        # exist, out of scope for this task -- see design.md).
+        assert result.audio_path is None
 
     async def test_no_speech_stt_level(self):
         """VAD detected speech but STT classifies it as no_speech."""
@@ -117,6 +121,70 @@ class TestListenAndTranscribe:
         assert result.outcome == "no_speech"
         assert result.text is None
         assert result.stt_classified is True
+
+    async def test_no_speech_stt_level_still_carries_audio_path(self):
+        """VM-4: speech_to_text() saves the file unconditionally (before the
+        STT outcome is known), so an STT-level "no_speech" result -- provider
+        ran, reported silence -- must still carry the saved audio_path, or
+        this exact class of unlinked-audio-file defect reappears for this
+        sub-case (design.md edge case 3)."""
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            return {
+                "error_type": "no_speech",
+                "provider": "whisper-local",
+                "audio_path": "/tmp/audio/2026/07/20260710_stt.wav",
+            }
+
+        with patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt):
+            result = await listen_and_transcribe(**_listen_kwargs())
+
+        assert result.outcome == "no_speech"
+        assert result.stt_classified is True
+        assert result.audio_path == "/tmp/audio/2026/07/20260710_stt.wav"
+
+    async def test_answered_threads_audio_path(self):
+        """VM-4: a normal STT turn threads speech_to_text()'s saved path
+        through onto the returned ListenResult."""
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            return {
+                "text": "hello there",
+                "provider": "whisper-local",
+                "audio_path": "/tmp/audio/2026/07/20260710_stt.wav",
+            }
+
+        with patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt):
+            result = await listen_and_transcribe(**_listen_kwargs())
+
+        assert result.outcome == "answered"
+        assert result.audio_path == "/tmp/audio/2026/07/20260710_stt.wav"
+
+    async def test_answered_audio_path_none_when_stt_omits_it(self):
+        """SAVE_AUDIO off (or no file written): speech_to_text() returns no
+        "audio_path" key at all -- ListenResult.audio_path stays None, no
+        exception."""
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            return {"text": "hello there", "provider": "whisper-local"}
+
+        with patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt):
+            result = await listen_and_transcribe(**_listen_kwargs())
+
+        assert result.outcome == "answered"
+        assert result.audio_path is None
 
     async def test_stt_connection_failure(self):
         def _record(*_a, **_k):
@@ -374,6 +442,71 @@ class TestGoldenSingleMessageListenPath:
 
         assert result.startswith("STT service connection failed:")
         assert "refused" in result
+
+
+# ---------------------------------------------------------------------------
+# VM-4: the single-message listen path's log_stt() call (converse.py :4017
+# area) must pass audio_file=<basename>, matching TTS's existing convention
+# and the survey path's own log_stt call (test_ask_turns_pipeline.py) --
+# nothing else in the suite exercises this call site directly.
+# ---------------------------------------------------------------------------
+
+class TestSingleMessageListenPathLogsAudioFile:
+    async def test_logs_audio_file_basename_on_answered(self):
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            return {
+                "text": "forty two",
+                "provider": "whisper-local",
+                "audio_path": "/home/user/.voicemode/audio/2026/07/20260710_stt.wav",
+            }
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt), \
+             patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="What is the answer?",
+                wait_for_response=True,
+                skip_conch=True,
+            )
+
+        assert result.startswith("Voice response: forty two")
+        fake_logger.log_stt.assert_called_once()
+        assert fake_logger.log_stt.call_args.kwargs.get("audio_file") == "20260710_stt.wav"
+
+    async def test_logs_audio_file_none_when_stt_omits_path(self):
+        """SAVE_AUDIO off (or nothing saved): audio_file must be None, no
+        exception."""
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            return {"text": "forty two", "provider": "whisper-local"}
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt), \
+             patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="What is the answer?",
+                wait_for_response=True,
+                skip_conch=True,
+            )
+
+        assert result.startswith("Voice response: forty two")
+        fake_logger.log_stt.assert_called_once()
+        assert fake_logger.log_stt.call_args.kwargs.get("audio_file") is None
 
 
 # ---------------------------------------------------------------------------

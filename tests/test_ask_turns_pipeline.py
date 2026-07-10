@@ -935,6 +935,60 @@ class TestPipelineConversationLogging:
         fake_logger.log_stt.assert_called_once()
         assert fake_logger.log_stt.call_args.kwargs.get("transport") == "survey"
 
+    async def test_ask_reply_logs_audio_file_basename(self):
+        """VM-4: the survey/turns log_stt call (:2714 in converse.py) must
+        pass audio_file=<basename>, matching TTS's existing convention,
+        so an ask-turn reply is joinable to the audio file actually saved
+        for it."""
+        turns = _norm([{"ask": "Q1"}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {
+                "text": "blue",
+                "provider": "whisper-local",
+                "audio_path": "/home/user/.voicemode/audio/2026/07/20260710_stt.wav",
+            }
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at is None
+        fake_logger.log_stt.assert_called_once()
+        assert fake_logger.log_stt.call_args.kwargs.get("audio_file") == "20260710_stt.wav"
+
+    async def test_ask_reply_logs_audio_file_none_when_stt_omits_path(self):
+        """SAVE_AUDIO off (or nothing saved): speech_to_text() returns no
+        "audio_path" -- audio_file must be None, not raise."""
+        turns = _norm([{"ask": "Q1"}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {"text": "blue", "provider": "whisper-local"}
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at is None
+        fake_logger.log_stt.assert_called_once()
+        assert fake_logger.log_stt.call_args.kwargs.get("audio_file") is None
+
 
 # ---------------------------------------------------------------------------
 # F4 (fable pre-merge audit): survey mode must not emit unpaired STT_START

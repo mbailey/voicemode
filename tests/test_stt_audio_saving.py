@@ -71,6 +71,12 @@ async def test_stt_audio_saved_with_simple_failover():
                     # Verify file exists and has content
                     assert stt_files[0].stat().st_size > 0
 
+                    # VM-4: the saved path must be surfaced on the result dict
+                    # (previously dropped at `return result`), matching the
+                    # actual file written to disk exactly -- no timestamp
+                    # recomputation drift.
+                    assert result.get("audio_path") == str(stt_files[0])
+
 
 @pytest.mark.asyncio
 async def test_stt_audio_not_saved_when_disabled():
@@ -103,6 +109,10 @@ async def test_stt_audio_not_saved_when_disabled():
             # Verify no audio files were saved (check for both wav and mp3)
             audio_files = list(test_audio_dir.rglob("*.*"))
             assert len(audio_files) == 0, f"Expected no audio files, found: {audio_files}"
+
+            # VM-4: SAVE_AUDIO off (save_audio=False here) -- audio_path must
+            # be None on the result, exactly like TTS's existing guard.
+            assert result.get("audio_path") is None
 
 
 @pytest.mark.asyncio

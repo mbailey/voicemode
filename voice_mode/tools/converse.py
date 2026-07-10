@@ -1144,6 +1144,7 @@ async def speech_to_text(
     file_extension = stt_format if stt_format in ["mp3", "wav", "flac", "m4a", "ogg"] else "mp3"
 
     # Determine if we should save the file permanently or use a temp file
+    audio_path: Optional[str] = None
     if save_audio and audio_dir:
         # Save files for debugging/analysis
         conversation_logger = get_conversation_logger()
@@ -1158,6 +1159,7 @@ async def speech_to_text(
         # Save recording in configured format (default: wav for full quality)
         save_filename = get_debug_filename("stt", STT_SAVE_FORMAT, conversation_id)
         save_file_path = month_dir / save_filename
+        audio_path = str(save_file_path)
 
         if STT_SAVE_FORMAT == "wav":
             # Save as uncompressed WAV for full quality archival
@@ -1213,6 +1215,8 @@ async def speech_to_text(
             except OSError:
                 pass
 
+    if isinstance(result, dict):
+        result["audio_path"] = audio_path
     return result
 
 
@@ -1895,6 +1899,12 @@ class ListenResult:
             ``stt_attempted=False`` -- the new name states what the field
             actually certifies (a usable classification), and callers that
             need "did STT even run" should branch on ``outcome`` instead.
+        audio_path: full path to the saved STT audio file (VM-4), else
+            ``None`` when ``SAVE_AUDIO`` is off or no file was written.
+            Set whenever ``speech_to_text()`` ran (including the STT-level
+            "no_speech" outcome, since the file is saved before STT is
+            called) -- callers log ``os.path.basename(audio_path)``,
+            matching TTS's existing convention.
     """
     outcome: str
     text: Optional[str] = None
@@ -1905,6 +1915,7 @@ class ListenResult:
     error_message: Optional[str] = None
     error_kind: Optional[str] = None
     stt_classified: bool = False
+    audio_path: Optional[str] = None
 
 
 async def listen_and_transcribe(
@@ -2022,6 +2033,11 @@ async def listen_and_transcribe(
     response_text = None
     stt_provider = "unknown"
     stt_classified = False
+    # Note: named stt_audio_path, not audio_path, to avoid shadowing the
+    # unrelated `audio_path` local used below for the VAD no-speech dump
+    # file (:2045) -- that file is a separate, out-of-scope save path
+    # (VM-4 design.md "Reject: wire the no-speech audio dump").
+    stt_audio_path = None
 
     if not speech_detected:
         logger.info("No speech detected during recording - skipping STT processing")
@@ -2045,6 +2061,11 @@ async def listen_and_transcribe(
 
         # Handle structured STT result
         if isinstance(stt_result, dict):
+            # Extract unconditionally, before branching on error_type: the
+            # file is saved (when SAVE_AUDIO) before STT is called, so an
+            # STT-level "no_speech" result still has a file on disk that
+            # must be logged too (VM-4 design.md).
+            stt_audio_path = stt_result.get("audio_path")
             stt_metrics = stt_result.get("metrics")
             if stt_metrics:
                 timings['stt_request_ms'] = stt_metrics.get('request_time_ms', 0)
@@ -2104,6 +2125,7 @@ async def listen_and_transcribe(
         timings=timings,
         skip_forward_ended=skip_forward_ended,
         stt_classified=stt_classified,
+        audio_path=stt_audio_path,
     )
 
 
@@ -2717,6 +2739,7 @@ async def _ask_turns_pipeline(
                         transport="survey",
                         timing=f"record {listen_result.timings.get('record', 0.0):.1f}s, "
                                f"stt {listen_result.timings.get('stt', 0.0):.1f}s",
+                        audio_file=os.path.basename(listen_result.audio_path) if listen_result.audio_path else None,
                     )
                 except Exception as log_err:
                     logger.error(f"Survey turn {idx}: failed to log conversation STT: {log_err}")
@@ -4021,6 +4044,7 @@ consult the MCP resources listed above.
                         provider_url=stt_config.get('base_url'),
                         provider_type=stt_config.get('provider_type'),
                         audio_format='mp3',
+                        audio_file=os.path.basename(listen_result.audio_path) if listen_result.audio_path else None,
                         transport=transport,
                         timing=stt_timing_str,
                         silence_detection={
