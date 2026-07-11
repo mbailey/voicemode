@@ -7,16 +7,12 @@ This module provides middleware to restrict access to the VoiceMode server:
    is checked against the direct TCP peer; X-Forwarded-For is only honored
    when the peer is a configured trusted proxy (GHSA-2qvv-vjq9-g5r4).
 
-2. SecretPathMiddleware - Require a secret path segment for access.
-   Provides simple authentication by requiring a pre-shared secret in the URL.
-
-3. TokenAuthMiddleware - Bearer token authentication via Authorization header.
+2. TokenAuthMiddleware - Bearer token authentication via Authorization header.
    Validates Bearer tokens for API-style authentication.
 
 Usage:
     from voice_mode.serve_middleware import (
         IPAllowlistMiddleware,
-        SecretPathMiddleware,
         TokenAuthMiddleware,
         ANTHROPIC_CIDRS,
         LOCAL_CIDRS,
@@ -25,9 +21,6 @@ Usage:
     # Allow localhost + Anthropic IPs
     allowed = LOCAL_CIDRS + ANTHROPIC_CIDRS
     app.add_middleware(IPAllowlistMiddleware, allowed_cidrs=allowed)
-
-    # Require secret path: /sse/my-secret-uuid
-    app.add_middleware(SecretPathMiddleware, secret="my-secret-uuid", base_path="/sse")
 
     # Require Bearer token authentication
     app.add_middleware(TokenAuthMiddleware, token="my-secret-token")
@@ -292,111 +285,6 @@ class IPAllowlistMiddleware:
             return
 
         # IP is allowed, pass through to app
-        await self.app(scope, receive, send)
-
-
-class SecretPathMiddleware:
-    """Pure ASGI middleware to require a secret path segment for access.
-
-    This middleware validates that requests include the correct secret
-    in the URL path. If the secret is incorrect or missing, a 404 Not Found
-    response is returned (not 403, to avoid revealing that the endpoint exists).
-
-    Uses pure ASGI style instead of BaseHTTPMiddleware to support SSE
-    streaming without response buffering issues.
-
-    The secret acts as a pre-shared key in the URL. For example:
-    - Without secret: /sse
-    - With secret: /sse/my-secret-uuid
-
-    Attributes:
-        app: The wrapped ASGI application.
-        secret: The required secret path segment, or None to disable.
-        base_path: The base path that requires authentication (e.g., "/sse").
-
-    Example:
-        # Enable secret path authentication
-        app.add_middleware(
-            SecretPathMiddleware,
-            secret="my-secret-uuid",
-            base_path="/sse"
-        )
-
-        # Disabled mode (allows all requests)
-        app.add_middleware(
-            SecretPathMiddleware,
-            secret=None,
-            base_path="/sse"
-        )
-    """
-
-    def __init__(
-        self,
-        app: ASGIApp,
-        secret: Optional[str],
-        base_path: str = "/sse",
-    ) -> None:
-        """Initialize the secret path middleware.
-
-        Args:
-            app: The ASGI application to wrap.
-            secret: The required secret path segment, or None to disable auth.
-            base_path: The base path that requires authentication.
-        """
-        self.app = app
-        self.secret = secret
-        self.base_path = base_path.rstrip("/")  # Normalize: remove trailing slash
-
-    async def __call__(
-        self, scope: Scope, receive: Receive, send: Send
-    ) -> None:
-        """Process ASGI requests and validate the secret path.
-
-        Args:
-            scope: The ASGI connection scope.
-            receive: The receive callable.
-            send: The send callable.
-        """
-        if scope["type"] != "http":
-            # Pass through non-HTTP requests (websocket, lifespan, etc.)
-            await self.app(scope, receive, send)
-            return
-
-        # If no secret configured, allow all requests
-        if self.secret is None:
-            await self.app(scope, receive, send)
-            return
-
-        request_path = scope.get("path", "")
-
-        # Check if request is for the protected base path
-        if request_path == self.base_path or request_path.startswith(self.base_path + "/"):
-            # Expected path with secret: {base_path}/{secret} or {base_path}/{secret}/...
-            expected_prefix = f"{self.base_path}/{self.secret}"
-
-            # Path must match exactly or start with expected_prefix followed by /
-            if request_path == expected_prefix or request_path.startswith(expected_prefix + "/"):
-                # Rewrite path to strip the secret segment before forwarding
-                # e.g., /sse/secret -> /sse, /sse/secret/foo -> /sse/foo
-                new_path = self.base_path + request_path[len(expected_prefix):]
-                # Ensure we have at least the base path
-                if not new_path:
-                    new_path = self.base_path
-                scope["path"] = new_path
-                await self.app(scope, receive, send)
-                return
-
-            # Wrong secret or no secret - return 404 to avoid revealing endpoint
-            # Note: We intentionally don't log the actual secret value
-            response = Response(
-                content="Not Found",
-                status_code=404,
-                media_type="text/plain",
-            )
-            await response(scope, receive, send)
-            return
-
-        # Request is not for the protected path, allow it through
         await self.app(scope, receive, send)
 
 

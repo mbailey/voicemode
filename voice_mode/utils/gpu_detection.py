@@ -101,19 +101,9 @@ def detect_gpu() -> Tuple[bool, Optional[str]]:
 
 def has_gpu_support() -> bool:
     """Simple check if GPU is available and usable.
-    
+
     Returns:
         True if a supported GPU is available, False otherwise
     """
     has_gpu, gpu_type = detect_gpu()
     return has_gpu and gpu_type != "cpu"
-
-
-def get_gpu_type() -> Optional[str]:
-    """Get the type of GPU available.
-    
-    Returns:
-        GPU type string ("metal", "cuda", "rocm") or None
-    """
-    _, gpu_type = detect_gpu()
-    return gpu_type if gpu_type != "cpu" else None

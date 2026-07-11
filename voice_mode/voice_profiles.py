@@ -498,10 +498,3 @@ def list_profiles() -> Dict[str, VoiceProfile]:
     if not _loaded:
         load_profiles()
     return _profiles
-
-
-def reload_profiles() -> Dict[str, VoiceProfile]:
-    """Force a reload of voice profiles (clears the cache)."""
-    global _loaded
-    _loaded = False
-    return load_profiles()

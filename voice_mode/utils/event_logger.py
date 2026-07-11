@@ -232,12 +232,7 @@ class EventLogger:
             metrics["session_duration"] = (session_end - session_start).total_seconds()
         
         return metrics
-    
-    def get_session_events(self) -> List[VoiceEvent]:
-        """Get all events from the current session."""
-        with self._lock:
-            return list(self.session_events)
-    
+
     def _writer_loop(self) -> None:
         """Background thread for writing events to file."""
         while True:
