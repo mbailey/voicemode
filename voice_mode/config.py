@@ -901,13 +901,8 @@ MLX_AUDIO_PORT = int(os.getenv("VOICEMODE_MLX_AUDIO_PORT", "8890"))
 # doesn't pin a model. 1.7B-Base-4bit is the chosen default from the
 # Apr 2026 quant matrix bench: ~2× realtime on M-series, clean audio,
 # ~2.2GB on disk.
-#
-# VOICEMODE_CLONE_MODEL is honoured for one release with a deprecation
-# warning (VM-1174). Removal in 8.8.0.
-from voice_mode._env_deprecation import get_env_with_deprecation as _get_env_with_deprecation
-CLONE_MODEL = _get_env_with_deprecation(
+CLONE_MODEL = os.environ.get(
     "VOICEMODE_IMPRESSIONS_MODEL",
-    "VOICEMODE_CLONE_MODEL",
     "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit",
 )
 

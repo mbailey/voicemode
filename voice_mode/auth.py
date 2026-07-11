@@ -18,7 +18,6 @@ import urllib.parse
 import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Callable
 
 import httpx
@@ -34,10 +33,6 @@ AUTH0_AUDIENCE = "https://voicemode.dev/api"
 CALLBACK_PORT_START = 8765
 CALLBACK_PORT_END = 8769
 CALLBACK_TIMEOUT_SECONDS = 300  # 5 minutes
-
-# Credentials file path
-CREDENTIALS_DIR = Path.home() / ".voicemode"
-CREDENTIALS_FILE = CREDENTIALS_DIR / "credentials"
 
 
 @dataclass
