@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **~2,300 lines of confirmed-dead code removed (VM-1811)** — a maintainability
+  pass deleted code with zero live callers, verified by AST import-map +
+  caller-grep across the whole package (epic VM-1808). No behaviour change.
+  Highlights: 7 orphan modules (829 LOC, incl. all of `tools/sound_fonts/`),
+  the 458-line dead string-literal block in `cli.py` plus the unused legacy
+  `cli` click group, ~450 LOC of confirmed-dead functions (deprecated Whisper
+  helpers/shims, dead version-info/gpu/event-logger/voice-profile helpers),
+  the unused `AudioStreamPlayer` class, `SecretPathMiddleware` (+ its tests),
+  dead `install_service`/`uninstall_service` and `providers.py` compat shims,
+  the expired `_env_deprecation.py` machinery (its one-release deprecation
+  window closed several versions ago), and a handful of unused imports plus
+  the direct `websockets` dependency (verified still available transitively
+  via fastmcp; `voicemode serve` re-tested at runtime after the drop).
+
 ## [8.11.0] - 2026-07-10
 
 ### Added
