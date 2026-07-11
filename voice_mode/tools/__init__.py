@@ -140,17 +140,6 @@ def load_tool(tool_name: str) -> bool:
 
         # If not found and contains underscore, try as a subdirectory tool
         if "_" in tool_name:
-            # Special case for sound_fonts directory (has underscore in name)
-            if tool_name.startswith("sound_fonts_"):
-                tool_file = tool_name.replace("sound_fonts_", "")
-                module_path = f".sound_fonts.{tool_file}"
-                try:
-                    logger.debug(f"Loading sound_fonts tool: {tool_name}")
-                    importlib.import_module(module_path, package=__name__)
-                    return True
-                except ImportError:
-                    pass
-
             # Standard subdirectory pattern
             parts = tool_name.split("_", 1)
             if len(parts) == 2:
