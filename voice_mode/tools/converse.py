@@ -44,10 +44,8 @@ from voice_mode.config import (
     SAVE_AUDIO,
     AUDIO_DIR,
     OPENAI_API_KEY,
-    PREFER_LOCAL,
     AUDIO_FEEDBACK_ENABLED,
     service_processes,
-    HTTP_CLIENT_CONFIG,
     save_transcription,
     SAVE_TRANSCRIPTIONS,
     DISABLE_SILENCE_DETECTION,
@@ -80,11 +78,8 @@ import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
 from voice_mode.core import (
     get_openai_clients,
-    text_to_speech,
-    cleanup as cleanup_clients,
     save_debug_file,
     get_debug_filename,
-    get_audio_path,
     play_chime_start,
     play_chime_end,
     play_chime_captured,
