@@ -196,6 +196,18 @@ media-key / keyword examples.
 | `VOICEMODE_CONTROL_SOCKET` | Path to the control Unix domain socket | `~/.voicemode/control.sock` | `/tmp/vm-control.sock` |
 | `VOICEMODE_HISTORY_BUFFER_SIZE` | How many recent utterances `skip_back` can replay (history ring-buffer depth, ≥1) | `8` | `16` |
 
+### Result Widgets
+
+`converse()` results can carry small, non-spoken, agent-facing one-liners in a
+trailing ` | Widgets: ...` segment — text-only, never passed to TTS. The wall-
+clock time is the first widget (VM-1961); see the `time_in_response`
+parameter in the [Converse Parameters reference](converse-parameters.md) for
+the per-call override.
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `VOICEMODE_TIME_IN_RESPONSE` | Append the current local wall-clock time (`HH:MM:SS`) to every `converse()` result | `false` | `true` |
+
 ### Serve Command
 
 | Variable | Description | Default | Example |

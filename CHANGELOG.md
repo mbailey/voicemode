@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
+  `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default
+  off) appends the current local time (`HH:MM:SS`) to every `converse()`
+  return — including error paths — as a trailing ` | Widgets: time HH:MM:SS`
+  segment. Text-only, never spoken by TTS; gives the agent an in-band clock
+  instead of confabulating the time under conversational pressure. First
+  inhabitant of a general `Widgets:` slot other one-liners (e.g. pending
+  notifications) can ride later. See
+  [docs/reference/environment.md](docs/reference/environment.md#result-widgets)
+  and
+  [docs/reference/converse-parameters.md](docs/reference/converse-parameters.md#time_in_response).
+
 ## [8.11.0] - 2026-07-10
 
 ### Added
