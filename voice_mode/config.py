@@ -581,6 +581,10 @@ TTS_SPEED = float(os.getenv("VOICEMODE_TTS_SPEED")) if os.getenv("VOICEMODE_TTS_
 _metrics_level = os.getenv("VOICEMODE_METRICS_LEVEL", "summary").lower()
 METRICS_LEVEL = _metrics_level if _metrics_level in ("minimal", "summary", "verbose") else "summary"
 
+# Time widget: append local wall-clock time to converse() results (VM-1961).
+# Off by default -- opt in via env or the per-call `time_in_response` arg.
+TIME_IN_RESPONSE = os.getenv("VOICEMODE_TIME_IN_RESPONSE", "false").lower() in ("true", "1", "yes", "on")
+
 # Local provider preference configuration
 PREFER_LOCAL = os.getenv("VOICEMODE_PREFER_LOCAL", "true").lower() in ("true", "1", "yes", "on")
 

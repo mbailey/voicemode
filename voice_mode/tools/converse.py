@@ -68,6 +68,7 @@ from voice_mode.config import (
     WAIT_DURATION,
     SURVEY_BREAK_PHRASES,
     METRICS_LEVEL,
+    TIME_IN_RESPONSE,
     STT_AUDIO_FORMAT,
     STT_SAVE_FORMAT,
     MP3_BITRATE,
@@ -1758,6 +1759,28 @@ def _format_control_timing(timings: Dict) -> str:
     if 'record' in timings:
         parts.append(f"record {timings['record']:.1f}s")
     return ", ".join(parts)
+
+
+def _build_widgets_segment(effective_time_in_response: bool) -> str:
+    """Build the trailing ` | Widgets: ...` segment for a converse() result.
+
+    General slot for cheap, non-spoken, agent-facing one-liners (VM-1961).
+    Time is the first inhabitant; future widgets append to the same
+    comma-joined list. Deliberately independent of ``Timing:`` (which is
+    metrics-gated and semantically about elapsed durations, not
+    point-in-time state) so it still appears at ``metrics_level=minimal``
+    and on error returns. Returns "" when no widget is active (never
+    appends a dangling ` | Widgets:` with nothing after it).
+
+    Applied at a single choke point -- the thin ``converse()`` wrapper --
+    so every current and future return path from ``_converse_core`` gets
+    it uniformly, without enumerating individual return sites.
+    """
+    parts = []
+    if effective_time_in_response:
+        parts.append(f"time {datetime.now().strftime('%H:%M:%S')}")
+    # future: pending-notification count, etc. -> parts.append(...)
+    return f" | Widgets: {', '.join(parts)}" if parts else ""
 
 
 def _build_control_stop_result(snapshot, timings: Dict) -> str:
@@ -4279,6 +4302,7 @@ async def converse(
     session_id: Optional[str] = None,
     ref_text: Optional[str] = None,
     ack: Union[bool, str] = False,
+    time_in_response: Optional[Union[bool, str]] = None,
 ) -> str:
     """Have an ongoing voice conversation - speak a message and optionally listen for response.
 
@@ -4349,6 +4373,11 @@ KEY PARAMETERS:
   - minimal: Just response text (saves tokens)
   - summary: Response + compact timing (default)
   - verbose: Response + detailed metrics breakdown
+• time_in_response (bool, default: VOICEMODE_TIME_IN_RESPONSE, itself false):
+  Append the current local wall-clock time to the result as a trailing
+  ` | Widgets: time HH:MM:SS` segment. Text-only — never spoken by TTS.
+  Off by default; set true (per-call or via the env var) so you have an
+  accurate in-band answer if asked what time it is, instead of guessing.
 • wait_for_conch (bool|number, default: false): Multi-agent coordination — the
   GATE for whether a busy conch puts you in the waiter queue at all.
   - false: If another agent is speaking, return a status immediately WITHOUT
@@ -4427,6 +4456,10 @@ VOICEMODE ECHO (default ON): Some hosts (e.g. newer Claude Code) collapse MCP
 For complete parameter list, advanced options, and detailed examples,
 consult the MCP resources listed above.
     """
+    if isinstance(time_in_response, str):
+        time_in_response = time_in_response.lower() in ("true", "1", "yes", "on")
+    effective_time_in_response = time_in_response if time_in_response is not None else TIME_IN_RESPONSE
+
     result = await _converse_core(
         message=message,
         turns=turns,
@@ -4457,7 +4490,7 @@ consult the MCP resources listed above.
         ref_text=ref_text,
         ack=ack,
     )
-    return result
+    return result + _build_widgets_segment(effective_time_in_response)
 
 
 @mcp.tool()
