@@ -33,10 +33,8 @@ from voice_mode.conch_queue import ConchQueue
 from voice_mode import conch_ops
 from voice_mode.conch_ops import (
     ConchResolveError,
-    age_seconds as _age_seconds,
     force_clear_lock as _force_clear_lock,
     notify_granted_session as _notify_granted,
-    parse_ts as _parse_ts,
     short as _short,
     status_payload as _status_payload,
 )

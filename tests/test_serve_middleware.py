@@ -2,7 +2,6 @@
 
 Tests for:
 - IPAllowlistMiddleware - IP-based access control with CIDR support
-- SecretPathMiddleware - Path-based secret authentication
 - TokenAuthMiddleware - Bearer token authentication
 - Helper functions: get_client_ip, ip_in_cidrs
 """
@@ -16,7 +15,6 @@ from starlette.testclient import TestClient
 
 from voice_mode.serve_middleware import (
     IPAllowlistMiddleware,
-    SecretPathMiddleware,
     TokenAuthMiddleware,
     get_client_ip,
     ip_in_cidrs,
@@ -400,145 +398,6 @@ class TestIPAllowlistMiddleware:
 
 
 # =============================================================================
-# Tests for SecretPathMiddleware
-# =============================================================================
-
-
-class TestSecretPathMiddleware:
-    """Tests for secret path middleware."""
-
-    def test_correct_secret_allows_access(self):
-        """Test that correct secret in path allows access."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret="my-secret-uuid",
-            base_path="/sse"
-        )
-        client = TestClient(app)
-
-        response = client.get("/sse/my-secret-uuid")
-        assert response.status_code == 200
-        assert response.text == "OK"
-
-    def test_correct_secret_with_subpath(self):
-        """Test that correct secret with additional path segments works."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret="my-secret-uuid",
-            base_path="/sse"
-        )
-        client = TestClient(app)
-
-        response = client.get("/sse/my-secret-uuid/messages")
-        assert response.status_code == 200
-
-    def test_wrong_secret_returns_404(self):
-        """Test that wrong secret returns 404 (not 403!)."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret="correct-secret",
-            base_path="/sse"
-        )
-        client = TestClient(app)
-
-        response = client.get("/sse/wrong-secret")
-        assert response.status_code == 404
-        assert "Not Found" in response.text
-
-    def test_base_path_without_secret_returns_404(self):
-        """Test that base path without secret returns 404."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret="my-secret",
-            base_path="/sse"
-        )
-        client = TestClient(app)
-
-        response = client.get("/sse")
-        assert response.status_code == 404
-
-    def test_no_secret_configured_allows_all(self):
-        """Test that None secret allows all requests."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret=None,
-            base_path="/sse"
-        )
-        client = TestClient(app)
-
-        response = client.get("/sse")
-        assert response.status_code == 200
-
-        response = client.get("/sse/anything")
-        assert response.status_code == 200
-
-    def test_paths_not_under_base_path_pass_through(self):
-        """Test that paths not under base_path pass through without auth."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret="my-secret",
-            base_path="/sse"
-        )
-        client = TestClient(app)
-
-        # Other paths should work without secret
-        response = client.get("/")
-        assert response.status_code == 200
-
-        response = client.get("/other")
-        assert response.status_code == 200
-
-    def test_partial_secret_match_fails(self):
-        """Test that partial secret match returns 404."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret="my-secret-uuid",
-            base_path="/sse"
-        )
-        client = TestClient(app)
-
-        # Partial match should fail
-        response = client.get("/sse/my-secret")
-        assert response.status_code == 404
-
-        response = client.get("/sse/my-secret-uuid-extra")
-        assert response.status_code == 404
-
-    def test_secret_as_prefix_of_another_path(self):
-        """Test that secret must match exactly, not be a prefix."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret="secret",
-            base_path="/sse"
-        )
-        client = TestClient(app)
-
-        # Exact match works
-        response = client.get("/sse/secret")
-        assert response.status_code == 200
-
-        # Secret followed by slash and path works
-        response = client.get("/sse/secret/more")
-        assert response.status_code == 200
-
-        # Secret as prefix of longer word fails
-        response = client.get("/sse/secretword")
-        assert response.status_code == 404
-
-    def test_base_path_trailing_slash_normalized(self):
-        """Test that base_path with trailing slash is normalized."""
-        app = create_app_with_middleware(
-            SecretPathMiddleware,
-            secret="mysecret",
-            base_path="/sse/"  # Trailing slash
-        )
-        client = TestClient(app)
-
-        response = client.get("/sse/mysecret")
-        assert response.status_code == 200
-
-
-# =============================================================================
 # Tests for TokenAuthMiddleware
 # =============================================================================
 
@@ -684,42 +543,3 @@ class TestMiddlewareCombinations:
 
         response = client.get("/", headers={"Authorization": "Bearer my-token"})
         assert response.status_code == 403
-
-    def test_ip_allowlist_and_secret_path(self):
-        """Test IP allowlist combined with secret path."""
-        def make_client(peer):
-            app = create_app_with_multiple_middleware([
-                (IPAllowlistMiddleware, {"allowed_cidrs": ["10.0.0.0/8"]}),
-                (SecretPathMiddleware, {"secret": "my-secret", "base_path": "/sse"}),
-            ])
-            return TestClient(app, client=(peer, 12345))
-
-        # Both valid
-        assert make_client("10.1.2.3").get("/sse/my-secret").status_code == 200
-
-        # IP valid, wrong secret
-        assert make_client("10.1.2.3").get("/sse/wrong-secret").status_code == 404
-
-        # Secret valid, IP denied
-        assert make_client("8.8.8.8").get("/sse/my-secret").status_code == 403
-
-    def test_all_three_middlewares(self):
-        """Test all three middlewares together."""
-        def make_client(peer):
-            app = create_app_with_multiple_middleware([
-                (IPAllowlistMiddleware, {"allowed_cidrs": LOCAL_CIDRS}),
-                (SecretPathMiddleware, {"secret": "secret123", "base_path": "/sse"}),
-                (TokenAuthMiddleware, {"token": "token456"}),
-            ])
-            return TestClient(app, client=(peer, 12345))
-
-        auth = {"Authorization": "Bearer token456"}
-
-        # All valid
-        assert make_client("127.0.0.1").get("/sse/secret123", headers=auth).status_code == 200
-
-        # Non-protected path still needs IP and token
-        assert make_client("127.0.0.1").get("/", headers=auth).status_code == 200
-
-        # Protected path without secret
-        assert make_client("127.0.0.1").get("/sse", headers=auth).status_code == 404

@@ -38,7 +38,6 @@ dependencies = [
     "audioop-lts; python_version >= '3.13'",
     "simpleaudio",
     "httpx",
-    "websockets>=12.0",  # Required for voicemode connect command
     "aiohttp",  # Required for Whisper and Kokoro service installers
     "psutil>=5.9.0",
     "webrtcvad-wheels>=2.0.14",  # Maintained fork with importlib.metadata (no pkg_resources)

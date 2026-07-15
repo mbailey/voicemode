@@ -44,10 +44,8 @@ from voice_mode.config import (
     SAVE_AUDIO,
     AUDIO_DIR,
     OPENAI_API_KEY,
-    PREFER_LOCAL,
     AUDIO_FEEDBACK_ENABLED,
     service_processes,
-    HTTP_CLIENT_CONFIG,
     save_transcription,
     SAVE_TRANSCRIPTIONS,
     DISABLE_SILENCE_DETECTION,
@@ -60,7 +58,6 @@ from voice_mode.config import (
     INITIAL_SILENCE_GRACE_PERIOD,
     DEFAULT_LISTEN_DURATION,
     TTS_VOICES,
-    TTS_MODELS,
     REPEAT_PHRASES,
     WAIT_PHRASES,
     REPEAT_MAX_LEADING_WORDS,
@@ -82,11 +79,8 @@ import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
 from voice_mode.core import (
     get_openai_clients,
-    text_to_speech,
-    cleanup as cleanup_clients,
     save_debug_file,
     get_debug_filename,
-    get_audio_path,
     play_chime_start,
     play_chime_end,
     play_chime_captured,
@@ -486,55 +480,6 @@ async def startup_initialization():
     
     # Log initial status
     logger.info("Service initialization complete")
-
-
-async def get_tts_config(provider: Optional[str] = None, voice: Optional[str] = None, model: Optional[str] = None, instructions: Optional[str] = None):
-    """Get TTS configuration - simplified to use direct config"""
-    from voice_mode.provider_discovery import detect_provider_type
-    from voice_mode.voice_profiles import is_clone_voice, get_profile
-
-    # Check if this is a clone voice — override provider/model/base_url
-    if voice and is_clone_voice(voice):
-        profile = get_profile(voice)
-        logger.info(f"Voice '{voice}' is a clone profile: {profile.description}")
-        return {
-            'base_url': profile.base_url,
-            'model': profile.model,
-            'voice': voice,
-            'instructions': None,
-            'provider_type': 'clone'
-        }
-
-    # Validate instructions usage
-    if instructions and model != "gpt-4o-mini-tts":
-        logger.warning(f"Instructions parameter is only supported with gpt-4o-mini-tts model, ignoring for model: {model}")
-        instructions = None
-
-    # Map provider names to base URLs
-    provider_urls = {
-        'openai': 'https://api.openai.com/v1',
-        'kokoro': 'http://127.0.0.1:8880/v1'
-    }
-
-    # Convert provider name to URL if it's a known provider
-    base_url = None
-    if provider:
-        base_url = provider_urls.get(provider, provider)
-
-    # Use first available endpoint from config
-    if not base_url:
-        base_url = TTS_BASE_URLS[0] if TTS_BASE_URLS else 'https://api.openai.com/v1'
-
-    provider_type = detect_provider_type(base_url)
-
-    # Return simplified configuration
-    return {
-        'base_url': base_url,
-        'model': model or TTS_MODELS[0] if TTS_MODELS else 'tts-1',
-        'voice': voice or TTS_VOICES[0] if TTS_VOICES else 'alloy',
-        'instructions': instructions,
-        'provider_type': provider_type
-    }
 
 
 async def get_stt_config(provider: Optional[str] = None):
