@@ -122,11 +122,16 @@ async def conch(
 
     Returns:
         A JSON-serialisable dict. ``status`` returns ``{ok, action, holder,
-        queue}``; register actions return ``{ok, registered, session_id, mode,
-        position, expires, message, …}``; ``give``/``bump``/``release`` return
-        ``{ok, message, …}``. Every ``message`` states plainly whether the turn
-        was taken or merely queued. Invalid input returns ``{ok: False,
-        message}`` — never a traceback.
+        queue, free}`` — ``free`` (VM-1967) is ``True`` only when there is
+        neither a live holder NOR an outstanding-but-unclaimed grant; a
+        queued waiter with ``granted: true`` and no live ``holder`` means the
+        conch is momentarily deadlocked-looking (grant issued, not yet
+        claimed), not actually free. Register actions return ``{ok,
+        registered, session_id, mode, position, expires, message, …}``;
+        ``give``/``bump``/``release`` return ``{ok, message, …}``. Every
+        ``message`` states plainly whether the turn was taken or merely
+        queued. Invalid input returns ``{ok: False, message}`` — never a
+        traceback.
     """
     action = (action or "").strip().lower()
     if action not in VALID_ACTIONS:

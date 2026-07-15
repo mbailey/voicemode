@@ -13,7 +13,7 @@ On-disk layout (siblings of the holder lock under ``~/.voicemode/``)::
     conch.queue.d/              # one file per waiter
         000017-<session>.json   # <seq zero-padded>-<session>.json
     conch.queue.seq             # flock-guarded monotonic counter
-    conch.grant                 # grant hint: {"session_id": ..., "seq": ...}
+    conch.grant                 # grant hint: {"session_id", "seq", "granted_at"}
 
 Design notes:
 
@@ -31,6 +31,14 @@ Design notes:
   ``try_acquire`` on release and FIFO order would be lost (thundering herd).
   A grant is only valid while its grantee remains a live waiter, so a
   dead/deregistered grantee invalidates the grant automatically.
+- **Grant claim TTL (VM-1967)**: the grant also carries ``granted_at``. A
+  WAIT-mode grantee is expected to self-acquire within one poll cycle; if it
+  hasn't claimed within ``CONCH_GRANT_TTL`` seconds, the grant self-heals
+  (``ConchQueue._current_grant``): the stuck grantee is evicted and the next
+  live waiter is promoted, so a single missed claim (e.g. an orphaned entry
+  left by a cancelled ``converse()`` call, VM-1967's root cause) can never
+  wedge the queue forever. CALLBACK-mode grants are exempt (claimed
+  out-of-band, at agent/human pace).
 
 Paths are resolved at call time from ``Conch.LOCK_FILE.parent`` (NOT frozen at
 import) so they honour runtime home resolution (VM-1502) and test isolation
@@ -52,6 +60,21 @@ from voice_mode.file_lock import lock_exclusive, unlock
 # Sentinel: register() defaults ``pid`` to the caller's own PID. Resolved at
 # call time (not as a default-arg value) so the PID is never frozen at import.
 _SELF_PID = object()
+
+
+def _get_grant_ttl() -> float:
+    """Get the grant claim safety-net TTL (seconds) from config, with fallback.
+
+    Deferred import mirrors ``Conch._get_lock_expiry`` / ``_get_hold_expiry``
+    (avoids freezing the value at import time, so env-var overrides and test
+    monkeypatching both take effect). See ``VOICEMODE_CONCH_GRANT_TTL`` in
+    config.py for the safety net this guards (VM-1967).
+    """
+    try:
+        from voice_mode.config import CONCH_GRANT_TTL
+        return CONCH_GRANT_TTL
+    except ImportError:
+        return 30.0
 
 
 @dataclass
@@ -503,7 +526,14 @@ class ConchQueue:
 
         cls._atomic_write_json(
             cls._grant_file(),
-            {"session_id": target.session_id, "seq": target.seq},
+            {
+                "session_id": target.session_id,
+                "seq": target.seq,
+                # VM-1967 safety net: stamp when this grant was issued so a
+                # WAIT-mode grant that never gets claimed can self-heal past
+                # CONCH_GRANT_TTL (see ``_grant_wedged`` / ``_current_grant``).
+                "granted_at": datetime.now().isoformat(),
+            },
         )
         return target
 
@@ -549,17 +579,61 @@ class ConchQueue:
             if e.session_id == session_id:
                 cls._atomic_write_json(
                     cls._grant_file(),
-                    {"session_id": e.session_id, "seq": e.seq},
+                    {
+                        "session_id": e.session_id,
+                        "seq": e.seq,
+                        # VM-1967 safety net -- see grant_next().
+                        "granted_at": datetime.now().isoformat(),
+                    },
                 )
                 return True
         return False
 
     @classmethod
-    def granted_to(cls) -> Optional[str]:
-        """The session id of the current live grantee, or ``None``.
+    def _grant_wedged(cls, grant: dict, entry: "WaiterEntry") -> bool:
+        """True if a WAIT-mode grant has sat unclaimed past ``CONCH_GRANT_TTL``.
+
+        Only WAIT-mode grantees are safety-netted: a WAIT waiter is expected
+        to self-acquire within one poll cycle of being granted (the
+        ``converse()`` WAIT loop polls ``try_acquire()`` every
+        ``CONCH_CHECK_INTERVAL``), so "still unclaimed after
+        ``CONCH_GRANT_TTL``" means the claim was missed -- exactly VM-1967's
+        root cause (a cancelled WAIT caller's orphaned, still-"live" queue
+        entry gets granted and nothing ever claims it, and with no TTL the
+        grant blocked the whole queue forever). A CALLBACK grantee is
+        claimed out-of-band at agent/human pace (VM-1625) -- unclaimed for a
+        while is normal there, not stuck, so it is exempt.
+        """
+        if entry.mode != "wait":
+            return False
+        ttl = _get_grant_ttl()
+        if not ttl or ttl <= 0:
+            return False
+        granted_at = cls._parse_iso(grant.get("granted_at"))
+        if granted_at is None:
+            # No timestamp (grant predates VM-1967, or was written by
+            # something else) -- can't judge age, so don't guess stuck. The
+            # next grant_next()/grant() call stamps one.
+            return False
+        now = datetime.now(granted_at.tzinfo) if granted_at.tzinfo is not None else datetime.now()
+        return (now - granted_at).total_seconds() > ttl
+
+    @classmethod
+    def _current_grant(cls) -> Optional[dict]:
+        """The current grant record (``session_id``/``seq``/``granted_at``), or ``None``.
 
         A grant is only valid while its grantee is still a live waiter; a
-        dead or deregistered grantee leaves the grant stale, which this clears.
+        dead or deregistered grantee leaves the grant stale, which this
+        clears (pre-VM-1967 behaviour, unchanged). VM-1967 safety net: a
+        WAIT-mode grant nobody ever claims within ``CONCH_GRANT_TTL`` is ALSO
+        treated as stale here -- the stuck grantee is evicted from the queue
+        and the next live waiter is promoted (mirroring the manual
+        ``conch give`` recovery an operator would otherwise have to do), so
+        one missed claim can never wedge the queue permanently. This runs as
+        a side effect of every read (``granted_to`` / ``_queue_grant_blocks``
+        / status), mirroring ``_scan``'s existing prune-on-read pattern -- in
+        practice it self-heals the moment any other queued waiter's poll
+        loop (or a status check) next asks "who is granted?".
         """
         gf = cls._grant_file()
         try:
@@ -572,9 +646,42 @@ class ConchQueue:
             return None
         for e in cls._scan(clean=True):
             if e.session_id == sid:
-                return sid
+                if cls._grant_wedged(g, e):
+                    cls.deregister(sid)
+                    cls.grant_next(notify_block=False)
+                    return cls._current_grant()
+                return g
         cls._unlink(gf)  # grantee gone -- stale grant
         return None
+
+    @classmethod
+    def granted_to(cls) -> Optional[str]:
+        """The session id of the current live grantee, or ``None``.
+
+        A grant is only valid while its grantee is still a live waiter, or
+        (VM-1967) while a WAIT-mode grant remains within its claim TTL --
+        see ``_current_grant``.
+        """
+        g = cls._current_grant()
+        return g.get("session_id") if g else None
+
+    @classmethod
+    def grant_age_seconds(cls) -> Optional[float]:
+        """Seconds since the current grant was issued, or ``None``.
+
+        ``None`` when there is no live grant, or the grant predates VM-1967
+        and carries no ``granted_at`` timestamp. Used by status front ends
+        (``conch_ops.status_payload``) to surface how long a grant has gone
+        unclaimed.
+        """
+        g = cls._current_grant()
+        if g is None:
+            return None
+        granted_at = cls._parse_iso(g.get("granted_at"))
+        if granted_at is None:
+            return None
+        now = datetime.now(granted_at.tzinfo) if granted_at.tzinfo is not None else datetime.now()
+        return max(0.0, (now - granted_at).total_seconds())
 
     @classmethod
     def is_granted(cls, session_id: str) -> bool:

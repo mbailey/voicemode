@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and
   [docs/reference/converse-parameters.md](docs/reference/converse-parameters.md#time_in_response).
 
+### Fixed
+
+- **Conch grant→claim deadlock: a granted queue head that never took the
+  floor could wedge every waiter forever (VM-1967)** — a WAIT-mode
+  `converse()` call cancelled mid-wait (MCP client disconnect / ESC /
+  tool-call cancel) left its waiter-queue entry registered forever (only the
+  poll loop's own normal-timeout exit cleaned it up); once granted, with no
+  claim TTL, it blocked every subsequent waiter indefinitely while
+  `voicemode conch status` misleadingly reported the conch as free. Fixed
+  three ways: (1) the queue entry is now deregistered on every exit path,
+  including cancellation; (2) a WAIT-mode grant nobody claims within
+  `VOICEMODE_CONCH_GRANT_TTL` (default 30s) now self-heals — the stuck
+  grantee is evicted and the next waiter promoted; (3) `voicemode conch
+  status` (and the underlying `free` field returned by the CLI/MCP JSON
+  payload) now distinguishes "genuinely free" from "grant outstanding but
+  unclaimed" instead of reporting free either way.
+
 ### Removed
 
 - **~2,300 lines of confirmed-dead code removed (VM-1811)** — a maintainability

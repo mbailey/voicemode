@@ -94,7 +94,7 @@ class TestStatus:
         result = runner.invoke(conch, ["status", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
-        assert data == {"holder": None, "queue": []}
+        assert data == {"holder": None, "queue": [], "free": True}
 
     def test_holder_and_queue_json(self, runner):
         _make_holder(agent="cora", sid="cora-sess-abcdef")
@@ -109,6 +109,29 @@ class TestStatus:
         assert [q["position"] for q in data["queue"]] == [1, 2]
         assert data["queue"][0]["session_id"] == "waiter-1-aaa"
         assert data["queue"][1]["mode"] == "callback"
+
+    def test_grant_outstanding_and_unclaimed_is_not_reported_free(self, runner):
+        """VM-1967: no live holder but a live WAIT-mode grant stands unclaimed
+        -- the "Holder: none" status must NOT claim the conch is free (the
+        field report this fixes: "the status line seems to be lying").
+        """
+        _register("stuck-head-111", agent="stuck")
+        ConchQueue.grant_next()  # promotes stuck-head-111, never claimed
+
+        result = runner.invoke(conch, ["status"])
+        assert result.exit_code == 0
+        out = result.output.lower()
+        assert "holder: none" in out
+        assert "not free" in out
+        assert "stuck" in out
+
+        result_json = runner.invoke(conch, ["status", "--json"])
+        data = json.loads(result_json.output)
+        assert data["holder"] is None
+        assert data["free"] is False
+        granted_entry = next(q for q in data["queue"] if q["granted"])
+        assert granted_entry["session_id"] == "stuck-head-111"
+        assert granted_entry["granted_seconds"] is not None
 
     def test_holder_human_render(self, runner):
         _make_holder(agent="cora", sid="cora-sess")

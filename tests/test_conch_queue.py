@@ -332,6 +332,110 @@ class TestGrant:
         assert granted.session_id == "a"
         assert ConchQueue.granted_to() == "a"
 
+    def test_grant_next_stamps_granted_at(self):
+        ConchQueue.register("a")
+        ConchQueue.grant_next()
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("granted_at") is not None
+
+    def test_grant_stamps_granted_at(self):
+        ConchQueue.register("a")
+        ConchQueue.grant("a")
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("granted_at") is not None
+
+
+# --------------------------------------------------------------------------- #
+# VM-1967: grant claim TTL safety net -- a WAIT-mode grant nobody ever claims
+# self-heals past CONCH_GRANT_TTL instead of wedging the queue forever.
+# --------------------------------------------------------------------------- #
+
+class TestGrantTTLSafetyNet:
+    def _backdate_grant(self, seconds):
+        """Rewrite the on-disk grant with ``granted_at`` ``seconds`` in the past."""
+        gf = ConchQueue._grant_file()
+        g = json.loads(gf.read_text())
+        g["granted_at"] = (datetime.now() - timedelta(seconds=seconds)).isoformat()
+        ConchQueue._atomic_write_json(gf, g)
+
+    def test_stale_wait_grant_self_heals_and_promotes_next(self, monkeypatch):
+        """The exact VM-1967 deadlock shape: a WAIT-mode grant that is never
+        claimed must NOT wedge the queue forever -- past CONCH_GRANT_TTL it is
+        treated as abandoned, the stuck grantee is evicted, and the next live
+        waiter is promoted, matching the manual `conch give` recovery an
+        operator would otherwise have to perform.
+        """
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("stuck-head", mode="wait")
+        ConchQueue.register("next-in-line", mode="wait")
+        ConchQueue.grant_next()  # promotes stuck-head, never claimed
+        assert ConchQueue.granted_to() == "stuck-head"
+
+        self._backdate_grant(11)  # past the 10s TTL
+
+        # A single read (mirroring any other waiter's poll, or a status
+        # check) self-heals: the stuck head is evicted and the next waiter
+        # promoted -- no manual intervention required.
+        assert ConchQueue.granted_to() == "next-in-line"
+        assert [e.session_id for e in ConchQueue.list()] == ["next-in-line"]
+
+    def test_stale_wait_grant_with_no_other_waiters_clears_to_free(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("stuck-head", mode="wait")
+        ConchQueue.grant_next()
+        self._backdate_grant(11)
+
+        assert ConchQueue.granted_to() is None
+        assert ConchQueue.list() == []
+
+    def test_fresh_wait_grant_within_ttl_is_not_disturbed(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("head", mode="wait")
+        ConchQueue.grant_next()
+        self._backdate_grant(5)  # within the 10s TTL
+
+        assert ConchQueue.granted_to() == "head"
+        assert "head" in [e.session_id for e in ConchQueue.list()]
+
+    def test_callback_grant_is_exempt_from_ttl(self, monkeypatch):
+        """A CALLBACK grantee is claimed out-of-band, at agent/human pace
+        (VM-1625) -- unclaimed for a long time is normal there, not stuck, so
+        it must never be evicted by the TTL safety net."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("idle-callback", mode="callback")
+        ConchQueue.grant_next()  # only-callback case -> grants head unchanged
+        assert ConchQueue.granted_to() == "idle-callback"
+
+        self._backdate_grant(9999)  # ancient -- would trip a WAIT-mode TTL
+
+        assert ConchQueue.granted_to() == "idle-callback"
+        assert "idle-callback" in [e.session_id for e in ConchQueue.list()]
+
+    def test_ttl_disabled_when_zero(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
+        ConchQueue.register("stuck-head", mode="wait")
+        ConchQueue.grant_next()
+        self._backdate_grant(9999)
+
+        assert ConchQueue.granted_to() == "stuck-head"
+
+    def test_legacy_grant_with_no_granted_at_is_not_treated_as_wedged(self, monkeypatch):
+        """A grant written before VM-1967 (or by any other writer) carries no
+        ``granted_at`` -- can't judge its age, so don't guess it's stuck."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("a", mode="wait")
+        ConchQueue._atomic_write_json(
+            ConchQueue._grant_file(), {"session_id": "a", "seq": 1})
+        assert ConchQueue.granted_to() == "a"
+
+    def test_grant_age_seconds(self, monkeypatch):
+        ConchQueue.register("a", mode="wait")
+        assert ConchQueue.grant_age_seconds() is None  # no grant yet
+        ConchQueue.grant_next()
+        self._backdate_grant(5)
+        age = ConchQueue.grant_age_seconds()
+        assert age is not None and 4.5 <= age <= 6.0
+
 
 # --------------------------------------------------------------------------- #
 # grant_next skips leading callback waiters (VM-1625, F1)
