@@ -3322,6 +3322,15 @@ consult the MCP resources listed above.
         voice=resolved_voice,
         hold_timeout=resolved_hold_timeout,  # VM-1649 per-call hold TTL override
     )
+    # VM-1967: set when this call commits to the blocking WAIT-mode poll loop
+    # (below), so the outer `finally` can deregister the ConchQueue entry on
+    # EVERY exit path from that loop -- including cancellation, which
+    # previously skipped cleanup entirely (see the `finally` block for the
+    # full explanation). Deliberately NOT set for a CALLBACK-mode
+    # registration, which must stay registered after this call returns (its
+    # whole point is out-of-band delivery later, VM-1625).
+    queue_session_id = None
+    wait_mode_registered = False
 
     try:
         # Try to acquire conch atomically (no race condition)
@@ -3413,6 +3422,11 @@ consult the MCP resources listed above.
                 # granted head acquires when the floor frees (FIFO; no steal),
                 # and it consumes the grant + deregisters us on success. It also
                 # fast-fails a dead holder and waits through a live hold.
+                #
+                # VM-1967: from here on, a cancellation must not orphan this
+                # registration -- flag it so the outer `finally` cleans up on
+                # every exit path, not just this loop's own normal-timeout exit.
+                wait_mode_registered = True
                 if event_logger:
                     event_logger.log_event("CONCH_WAIT_START", {
                         "pid": os.getpid(),
@@ -4176,6 +4190,34 @@ consult the MCP resources listed above.
         return result
 
     finally:
+        # VM-1967: deregister a WAIT-mode queue entry on EVERY exit path,
+        # not just the poll loop's own normal-timeout exit (which already
+        # deregisters and returns, above -- this is a harmless no-op repeat
+        # in that case, ConchQueue.deregister is idempotent). Root cause:
+        # when this coroutine is instead CANCELLED (MCP client disconnect /
+        # ESC / tool-call cancel) while parked in the WAIT loop's
+        # asyncio.sleep, control jumps straight to the `except
+        # asyncio.CancelledError` handler above and neither it nor the old
+        # version of this `finally` block ever called
+        # ConchQueue.deregister() -- the queue entry (keyed on this
+        # long-lived MCP server pid) was orphaned forever, because
+        # pid-liveness can never prove a merely-abandoned entry dead. The
+        # next holder release would then grant_next() that same orphaned
+        # entry and, with no TTL, wedge every other waiter behind it
+        # permanently. Guarded on `not conch._acquired`: a successful
+        # acquire already deregisters via `_queue_on_acquired()` inside
+        # `try_acquire()`, so this only ever fires for a call that
+        # registered but never actually took the floor. Also guarded on
+        # `wait_mode_registered`: a CALLBACK-mode registration must NOT be
+        # touched here -- it is deliberately left registered for
+        # out-of-band delivery (VM-1625), so this only applies once we
+        # actually committed to the blocking WAIT poll.
+        if queue_session_id is not None and wait_mode_registered and not conch._acquired:
+            try:
+                ConchQueue.deregister(queue_session_id)
+            except Exception:
+                pass
+
         # Release the conch to signal voice conversation has ended. With
         # hold_conch=true, keep the floor between turns (re-stamped hold,
         # flock dropped, file left) instead of a full release.

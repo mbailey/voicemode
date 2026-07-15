@@ -72,10 +72,28 @@ def short(session_id: Optional[str], n: int = 8) -> str:
 def status_payload() -> dict:
     """Build the structured status snapshot used by every front end.
 
-    Returns a JSON-serialisable dict ``{"holder": <holder|None>, "queue":
-    [<waiter>, ...]}`` where the queue is in FIFO order and each waiter carries
-    its 1-based ``position`` and whether it is the current ``granted`` session.
-    Runs the queue's stale-cleanup as a side effect of ``ConchQueue.list()``.
+    Returns a JSON-serialisable dict::
+
+        {
+            "holder": <holder|None>,
+            "queue": [<waiter>, ...],
+            "free": <bool>,
+        }
+
+    where the queue is in FIFO order and each waiter carries its 1-based
+    ``position``, whether it is the current ``granted`` session, and (when
+    granted) how long ago (``granted_seconds``). Runs the queue's
+    stale-cleanup, and the VM-1967 grant-TTL self-heal, as a side effect of
+    ``ConchQueue.granted_to()`` / ``list()``.
+
+    ``free`` (VM-1967) is the single unambiguous "is the conch actually
+    usable right now" signal: ``holder is None`` alone is NOT sufficient --
+    a live WAIT-mode grant can be outstanding-but-unclaimed (nobody holds the
+    flock, yet every other acquirer is gated behind that grant), which
+    ``holder`` reports as free while the conch is, in fact, deadlocked
+    (the "status line seems to be lying" field report this fixes). ``free``
+    is only ``True`` when there is neither a live holder NOR an outstanding
+    grant.
     """
     holder = Conch.get_holder()
     holder_out = None
@@ -91,7 +109,9 @@ def status_payload() -> dict:
         }
     queue = []
     granted = ConchQueue.granted_to()
+    granted_age = ConchQueue.grant_age_seconds() if granted is not None else None
     for i, e in enumerate(ConchQueue.list()):
+        is_granted = e.session_id == granted
         queue.append({
             "position": i + 1,
             "session_id": e.session_id,
@@ -100,10 +120,15 @@ def status_payload() -> dict:
             "voice": e.voice,
             "mode": e.mode,
             "pid": e.pid,
-            "granted": e.session_id == granted,
+            "granted": is_granted,
+            "granted_seconds": granted_age if is_granted else None,
             "waiting_seconds": age_seconds(e.requested_at),
         })
-    return {"holder": holder_out, "queue": queue}
+    return {
+        "holder": holder_out,
+        "queue": queue,
+        "free": holder_out is None and granted is None,
+    }
 
 
 # --------------------------------------------------------------------------- #

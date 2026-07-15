@@ -92,8 +92,24 @@ def _render_status_human(snap: dict) -> None:
             f"(session {_short(holder.get('session_id'))}, project {proj})  "
             f"voice {voice}  {flag} for {_fmt_duration(holder.get('held_seconds'))}"
         )
-    else:
+    elif snap["free"]:
         click.echo("Holder: none — the conch is free.")
+    else:
+        # VM-1967: no live holder, but a grant is outstanding and unclaimed
+        # -- every other waiter is gated behind it, so "free" would be a
+        # lie (the field report this fixes: "the status line seems to be
+        # lying"). Surface the grantee and how long the grant has stood.
+        granted = next((e for e in queue if e.get("granted")), None)
+        if granted:
+            click.echo(
+                f"Holder: none — but the conch is NOT free: granted to "
+                f"{granted.get('agent') or 'unknown'} "
+                f"(session {_short(granted.get('session_id'))}), unclaimed for "
+                f"{_fmt_duration(granted.get('granted_seconds'))}. Every other "
+                f"waiter is blocked behind this grant."
+            )
+        else:
+            click.echo("Holder: none — the conch is free.")
 
     if queue:
         click.echo(f"Queue ({len(queue)}):")
