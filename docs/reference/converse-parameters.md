@@ -217,6 +217,28 @@ Skip text-to-speech, show text only.
 - When voice isn't needed
 - Text-only mode
 
+## Result Widgets
+
+`converse()` results can carry small, non-spoken, agent-facing one-liners in a
+trailing ` | Widgets: ...` segment appended to every return path (including
+error returns) — text-only, never passed to TTS/synthesis. See
+[Environment Variables](environment.md#result-widgets) for the underlying
+`VOICEMODE_*` toggles.
+
+### time_in_response
+**Type:** boolean | string (optional)
+Include the current local wall-clock time (`HH:MM:SS`) in the result's
+`Widgets:` segment, so you have an in-band answer if asked what time it is
+instead of confabulating one.
+
+**Values:**
+- `true` - Always include the time widget for this call
+- `false` - Never include it for this call
+- `null` (default) - Follow `VOICEMODE_TIME_IN_RESPONSE` env var (itself `false`)
+
+**Default:** Uses `VOICEMODE_TIME_IN_RESPONSE` env var, mirrors the
+`metrics_level`/`skip_tts` per-call-override-of-config-default pattern.
+
 ## Endpoint Requirements
 
 STT/TTS services must expose OpenAI-compatible endpoints:
