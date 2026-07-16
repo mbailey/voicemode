@@ -1,32 +1,18 @@
 """Test suite for the `awaiting_human_response` Conch state
 (feat(conch): add awaiting_human_response priority-override state).
 
-Ported from Thessary's scratch-dir patch validation suite
-(docs/KB/phase2-3-4-design-2026-07-14.md section 2.1) onto the CURRENT
-upstream package structure -- adapted for real differences found by
-reading the actual current code rather than assuming the original
-scratch-copy API still applies:
+Covers the new `Conch.mark_awaiting_human_response`/
+`awaiting_human_response_active`/`resolve_awaiting_human_response`
+classmethods, the module-level `_process_start_time`/`_is_same_process`
+helpers, the new branches in `_held_by_other()`/`_check_and_clear_stale_lock()`,
+and the `skip_conch` hard-no-op guard in `converse.py`.
 
-- The original scratch conch.py used `import fcntl` and was Unix-only;
-  this repo's current `voice_mode/conch.py` has since been made portable
-  (`psutil.pid_exists` + `voice_mode.file_lock.lock_exclusive`/`unlock`
-  instead of `fcntl`/`os.kill`), so this suite runs on native Windows
-  Python too, not just WSL/Linux -- no `import fcntl` requirement to work
-  around.
-- Imports the real installed `voice_mode.conch` module directly (it's a
-  real package in this repo/venv), rather than sys.path-inserting a
-  scratch copy.
-- `Conch.mark_awaiting_human_response`/`awaiting_human_response_active`/
-  `resolve_awaiting_human_response` and the module-level
-  `_process_start_time`/`_is_same_process` helpers match the scratch
-  design 1:1 (confirmed by direct diff review), so the test bodies below
-  are otherwise unchanged in intent from the original suite.
-- Fabricated "alive other process" scenarios use a real subprocess pid
-  rather than a hardcoded pid=1: `psutil.pid_exists(1)` is not guaranteed
-  true cross-platform (no pid 1 on native Windows), whereas the original
-  suite's own reasoning for pid=1 (a Unix `kill(1, 0)` PermissionError
-  quirk) no longer even applies here since `psutil.pid_exists` returns a
-  plain bool and never raises for a live-but-unsignalable pid.
+Runs on native Windows Python as well as Linux/macOS: `voice_mode/conch.py`
+uses `psutil.pid_exists`/`psutil.Process.create_time()` and
+`voice_mode.file_lock.lock_exclusive`/`unlock` rather than `fcntl`/`os.kill`,
+so nothing here requires WSL. Fabricated "alive other process" scenarios
+use a real subprocess pid rather than a hardcoded pid=1, since a fixed pid
+number is not guaranteed to exist across platforms.
 """
 
 from __future__ import annotations
@@ -41,8 +27,6 @@ import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-
-import pytest
 
 from voice_mode.conch import (
     Conch,
@@ -206,6 +190,30 @@ class TestAwaitingHumanResponseState(ConchIsolationMixin, unittest.TestCase):
         payload = self._read_raw()
         self.assertEqual(payload["agent"], "unknown")
         self.assertTrue(payload["awaiting_human_response"])
+
+    def test_mark_again_while_already_awaiting_extends_deadline_without_corruption(self):
+        """Calling mark_awaiting_human_response() a second time while
+        already in the awaiting state (e.g. a fresh question arrives before
+        the first one's deadline) must extend the deadline cleanly --
+        preserving pid/pid_start_time/agent identity, not duplicating or
+        corrupting the payload."""
+        c = Conch(agent_name="cora", session_id="sess-1")
+        self.assertTrue(c.try_acquire())
+        Conch.mark_awaiting_human_response(deadline_seconds=5)
+        first = self._read_raw()
+
+        Conch.mark_awaiting_human_response(deadline_seconds=60)
+        second = self._read_raw()
+
+        self.assertEqual(second["pid"], first["pid"])
+        self.assertEqual(second["pid_start_time"], first["pid_start_time"])
+        self.assertEqual(second["agent"], "cora")
+        self.assertEqual(second["session_id"], "sess-1")
+        self.assertTrue(second["awaiting_human_response"])
+        second_deadline = datetime.fromisoformat(second["response_deadline"])
+        first_deadline = datetime.fromisoformat(first["response_deadline"])
+        self.assertGreater(second_deadline, first_deadline)
+        self.assertEqual(second["expires"], second["response_deadline"])
 
     def test_mark_derives_pid_start_time_from_the_preserved_pid_not_the_caller(self):
         other_proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
