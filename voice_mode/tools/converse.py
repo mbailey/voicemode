@@ -3333,6 +3333,25 @@ consult the MCP resources listed above.
     wait_mode_registered = False
 
     try:
+        # A live awaiting_human_response state makes skip_conch a HARD
+        # no-op -- it must never be possible to talk over a pending safety
+        # confirmation, no matter what the caller passed.
+        #
+        # This deliberately checks Conch.awaiting_human_response_active(),
+        # NOT Conch.get_holder(): get_holder() depends on is_active()'s
+        # pid-liveness + CONCH_LOCK_EXPIRY staleness check, neither of which
+        # the awaiting_human_response mechanism is governed by (it's exempt
+        # from the refresh-TTL, precisely to handle a dropped-call/crashed-
+        # process case). A dead holder pid or an elapsed CONCH_LOCK_EXPIRY
+        # would make get_holder() return None, silently letting
+        # skip_conch=True bypass a still-live safety confirmation -- exactly
+        # backwards from the intent. awaiting_human_response_active() is
+        # pid-liveness-independent and mirrors _held_by_other()'s own
+        # unconditional semantics exactly.
+        if CONCH_ENABLED and skip_conch:
+            if Conch.awaiting_human_response_active() is not None:
+                skip_conch = False
+
         # Try to acquire conch atomically (no race condition)
         # skip_conch=true bypasses coordination entirely: don't acquire, don't
         # check the holder, don't release. Speak regardless of who else has it.
