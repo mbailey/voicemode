@@ -129,42 +129,39 @@ def _response_deadline_passed(data: dict) -> bool:
 
 def _process_start_time(pid: int) -> Optional[str]:
     """FIX (independent audit, round 3 -- MEDIUM finding): a pid NUMBER
-    alone is not a reliable process identity on Linux -- pids are reused.
-    Scenario the audit found: process A calls mark_awaiting_human_response()
-    then crashes; within the still-live response_deadline window (up to
-    300s by default), the OS reassigns A's old pid to a completely
-    unrelated process B; B's own awaiting_human_response_active()/
-    _held_by_other() check would then see ``pid == os.getpid()`` and
-    wrongly treat itself as "the original holder," silently exempting
-    itself from the very safety gate Theme 8/9 exist to enforce.
+    alone is not a reliable process identity -- pids are reused. Scenario
+    the audit found: process A calls mark_awaiting_human_response() then
+    crashes; within the still-live response_deadline window (up to 300s by
+    default), the OS reassigns A's old pid to a completely unrelated
+    process B; B's own awaiting_human_response_active()/_held_by_other()
+    check would then see ``pid == os.getpid()`` and wrongly treat itself as
+    "the original holder," silently exempting itself from the very safety
+    gate Theme 8/9 exist to enforce.
 
-    Reads /proc/<pid>/stat's ``starttime`` field (ticks since boot) as an
-    opaque, monotonically-assigned identity token that a pid alone can't
-    provide -- two DIFFERENT processes essentially never share both the
-    same pid AND the same start tick. Combined with the pid itself (see
-    call sites), this reliably distinguishes "truly the same process" from
-    "a different process that happens to have the inherited pid number."
+    Uses ``psutil.Process(pid).create_time()`` (seconds since epoch, at
+    float precision) as an opaque, monotonically-assigned identity token
+    that a pid alone can't provide -- two DIFFERENT processes essentially
+    never share both the same pid AND the same create_time. Combined with
+    the pid itself (see call sites), this reliably distinguishes "truly the
+    same process" from "a different process that happens to have the
+    inherited pid number." Portable across platforms (Windows/macOS/Linux),
+    matching this module's existing psutil-based liveness probes elsewhere
+    (``_held_by_other()``, ``_check_and_clear_stale_lock()``, ``is_active()``)
+    -- unlike an earlier draft of this function, which read Linux-only
+    ``/proc/<pid>/stat`` and silently returned None (failing the same-
+    process exemption closed) on every other platform, including the
+    Windows-native path this file's own liveness probes were already made
+    portable for.
 
-    Returns None if unavailable (process gone, /proc missing/malformed --
-    e.g. non-Linux, though this module already requires Unix via
-    ``import fcntl`` at the top of the file, so /proc is expected to exist
-    in practice). Callers MUST treat None as "cannot verify" and fail
-    CLOSED (i.e. do NOT grant a same-process exemption) rather than
+    Returns None if unavailable (process gone, permission denied, or a
+    malformed/negative pid). Callers MUST treat None as "cannot verify" and
+    fail CLOSED (i.e. do NOT grant a same-process exemption) rather than
     silently falling back to a pid-only comparison, which is exactly the
     weaker check this function exists to replace.
     """
     try:
-        with open(f"/proc/{pid}/stat", "r") as f:
-            content = f.read()
-        # comm (field 2) is parenthesized and may itself contain ')' or
-        # whitespace -- split on the LAST ')' to reliably locate the start
-        # of the remaining whitespace-separated fields (field 3 = state).
-        after_comm = content.rsplit(")", 1)[1]
-        fields = after_comm.split()
-        # fields[0] is field 3 (state); starttime is field 22, i.e. 19
-        # further along from state (3 + 19 = 22).
-        return fields[19]
-    except (OSError, IndexError, ValueError):
+        return str(psutil.Process(pid).create_time())
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, ValueError):
         return None
 
 
