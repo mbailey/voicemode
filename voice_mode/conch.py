@@ -99,6 +99,92 @@ def _hold_is_expired(data: dict) -> bool:
     return age > hold_expiry
 
 
+def _response_deadline_passed(data: dict) -> bool:
+    """True if an ``awaiting_human_response`` payload has passed its own
+    explicit ``response_deadline`` (Theme 8, added
+    docs/KB/phase2-3-4-design-2026-07-14.md §2.1).
+
+    Mirrors ``_hold_is_expired()`` above, but this new state has exactly
+    ONE timeout source -- the absolute ``response_deadline`` stamped by
+    ``Conch.mark_awaiting_human_response()`` -- deliberately NOT the normal
+    hold-expiry TTL (``CONCH_HOLD_EXPIRY``/``expires``) or the flock-lock
+    staleness window (``CONCH_LOCK_EXPIRY``). A SEPARATE function from
+    ``_hold_is_expired()`` on purpose, so a live safety-relevant wait for a
+    human reply is never accidentally coupled to the normal 10s hold-expiry
+    default -- that's the entire point of the new state (Theme 8: "exempt
+    from refresh-TTL").
+
+    Returns False (not passed / still live) when ``response_deadline`` is
+    missing or malformed -- same reasoning as ``_hold_is_expired()``: an
+    undecidable deadline is treated as still active rather than stolen.
+    """
+    deadline_str = data.get("response_deadline")
+    if not deadline_str:
+        return False
+    try:
+        return datetime.now() > datetime.fromisoformat(deadline_str)
+    except (ValueError, TypeError):
+        return False
+
+
+def _process_start_time(pid: int) -> Optional[str]:
+    """FIX (independent audit, round 3 -- MEDIUM finding): a pid NUMBER
+    alone is not a reliable process identity on Linux -- pids are reused.
+    Scenario the audit found: process A calls mark_awaiting_human_response()
+    then crashes; within the still-live response_deadline window (up to
+    300s by default), the OS reassigns A's old pid to a completely
+    unrelated process B; B's own awaiting_human_response_active()/
+    _held_by_other() check would then see ``pid == os.getpid()`` and
+    wrongly treat itself as "the original holder," silently exempting
+    itself from the very safety gate Theme 8/9 exist to enforce.
+
+    Reads /proc/<pid>/stat's ``starttime`` field (ticks since boot) as an
+    opaque, monotonically-assigned identity token that a pid alone can't
+    provide -- two DIFFERENT processes essentially never share both the
+    same pid AND the same start tick. Combined with the pid itself (see
+    call sites), this reliably distinguishes "truly the same process" from
+    "a different process that happens to have the inherited pid number."
+
+    Returns None if unavailable (process gone, /proc missing/malformed --
+    e.g. non-Linux, though this module already requires Unix via
+    ``import fcntl`` at the top of the file, so /proc is expected to exist
+    in practice). Callers MUST treat None as "cannot verify" and fail
+    CLOSED (i.e. do NOT grant a same-process exemption) rather than
+    silently falling back to a pid-only comparison, which is exactly the
+    weaker check this function exists to replace.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "r") as f:
+            content = f.read()
+        # comm (field 2) is parenthesized and may itself contain ')' or
+        # whitespace -- split on the LAST ')' to reliably locate the start
+        # of the remaining whitespace-separated fields (field 3 = state).
+        after_comm = content.rsplit(")", 1)[1]
+        fields = after_comm.split()
+        # fields[0] is field 3 (state); starttime is field 22, i.e. 19
+        # further along from state (3 + 19 = 22).
+        return fields[19]
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _is_same_process(data: dict) -> bool:
+    """True only if ``data``'s stamped pid AND process-start-time both
+    match the CURRENT process -- see ``_process_start_time()`` above for
+    why pid alone is not sufficient. Fails CLOSED (returns False, meaning
+    "not confirmed the same process," i.e. no exemption granted) whenever
+    either side's start time can't be read -- an unverifiable identity must
+    never be treated as a match for a safety-relevant exemption.
+    """
+    pid = data.get("pid")
+    if pid is None or pid != os.getpid():
+        return False
+    own_start = _process_start_time(os.getpid())
+    if own_start is None:
+        return False
+    return data.get("pid_start_time") == own_start
+
+
 class Conch:
     """Simple lock file for voice conversation coordination.
 
@@ -221,6 +307,36 @@ class Conch:
             data = json.loads(cls.LOCK_FILE.read_text())
         except (json.JSONDecodeError, OSError, ValueError):
             return False
+        # A live awaiting_human_response state is a PRIORITY OVERRIDE (Theme
+        # 8): it blocks ALL OTHER processes' floor-acquisition attempts
+        # unconditionally -- regardless of ``held``, regardless of whether
+        # the original holder's pid is even still alive -- until its own
+        # explicit response_deadline passes. The ORIGINAL holder's own pid is
+        # exempt (see the check below) so it can resume the instant Mike
+        # answers, mirroring the normal ``held`` path's own pid exemption.
+        # Checked first, ahead of (and independent of) the normal held/pid-
+        # liveness path below: a dropped call's cleanup is the CALLER's job
+        # (Thessary's approval_queue.py expiry composes with this same
+        # deadline), not a pid-liveness check here (design doc §2.1 item 5)
+        # -- conch itself has no concept of Thessary's approval queue and
+        # shouldn't gain one.
+        # FIX (independent audit, round 2): exempt the ORIGINAL holder's own
+        # process from this block, mirroring the normal ``held`` path's own
+        # pid exemption immediately below. Without this, the same process
+        # that called mark_awaiting_human_response() could never re-acquire
+        # even the instant Mike answers -- there was no resume path at all.
+        # FIX (independent audit, round 3): "own process" is verified via
+        # _is_same_process() (pid + /proc start-time), NOT a bare pid
+        # comparison -- a bare `pid == os.getpid()` check is fooled by pid
+        # reuse (a crashed original holder's pid reassigned to an unrelated
+        # process within the still-live response_deadline window), which
+        # would silently exempt that unrelated process from the safety gate.
+        if (
+            data.get("awaiting_human_response")
+            and not _response_deadline_passed(data)
+            and not _is_same_process(data)
+        ):
+            return True
         if not data.get("held"):
             return False
         pid = data.get("pid")
@@ -278,6 +394,164 @@ class Conch:
             "expires": expires,
         }
         cls.LOCK_FILE.write_text(json.dumps(data, indent=2))
+
+    @classmethod
+    def mark_awaiting_human_response(cls, deadline_seconds: float = 300.0) -> None:
+        """Re-stamp the lock file into the ``awaiting_human_response`` state
+        (Theme 8, docs/KB/phase2-3-4-design-2026-07-14.md §2.1) -- a live,
+        safety-relevant decision is pending a human reply. Called by the
+        CURRENT flock holder just before it yields the floor to wait; mirrors
+        ``write_hold()`` above in that it does NOT take the kernel flock (same
+        reasoning: this must not self-deadlock the same process's own later
+        ``try_acquire``).
+
+        Unlike a normal between-turns hold, this state is deliberately EXEMPT
+        from the standard ``CONCH_HOLD_EXPIRY`` idle-refresh window (a real
+        decision can take longer than 10s) -- it carries its own, explicit,
+        absolute ``response_deadline`` (now + ``deadline_seconds``), read by
+        ``_response_deadline_passed()`` above, a SEPARATE staleness function
+        from ``_hold_is_expired()`` on purpose (Theme 8: "exempt from
+        refresh-TTL", never accidentally coupled to the normal hold default).
+
+        This RE-STAMPS the existing lock-file payload (preserving whatever
+        ``agent``/``session_id``/``project_path``/``voice``/``pid`` the
+        current holder already wrote via ``acquire()``/``_write_locked_payload``)
+        rather than building a fresh one from scratch -- unlike ``write_hold()``,
+        which is called with no pre-existing holder payload to preserve. If no
+        lock file exists yet (called without an active hold), a minimal
+        self-contained marker is created instead of raising.
+
+        Also re-stamps the EXISTING ``expires`` field to this same deadline
+        (belt-and-suspenders, not just the new ``response_deadline`` field):
+        ``_hold_is_expired()`` (used by ``_check_and_clear_stale_lock()``'s
+        pre-existing timestamp-based clearance) reads ``expires`` first and
+        would otherwise fall back to ``acquired`` + the global
+        ``CONCH_HOLD_EXPIRY`` (10s default) -- silently deleting this marker
+        after only 10s if ``expires`` were left stale or unset, defeating the
+        whole point of a longer, explicit deadline. Stamping both fields to
+        the same value keeps the pre-existing stale-lock-clearance code path
+        aligned with the new one instead of racing it.
+        """
+        cls.LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(cls.LOCK_FILE.read_text())
+        except (json.JSONDecodeError, OSError, ValueError):
+            data = {}
+        now = datetime.now()
+        ttl = deadline_seconds if deadline_seconds and deadline_seconds > 0 else 300.0
+        deadline_iso = (now + timedelta(seconds=ttl)).isoformat()
+        data["pid"] = data.get("pid", os.getpid())
+        # FIX (independent audit, round 3): stamp a process-identity token
+        # alongside the pid so later same-process checks can't be fooled by
+        # pid reuse -- see _process_start_time()/_is_same_process() above.
+        # Only stamped when this call is the one ESTABLISHING the pid (i.e.
+        # no pre-existing pid_start_time in the file) -- if a payload already
+        # existed with a pid, its own start-time (if any) is preserved
+        # rather than overwritten, so a later re-stamp by the SAME original
+        # holder doesn't clobber it.
+        #
+        # FIX (independent audit, round 3, second pass -- MEDIUM finding):
+        # derive the start-time from data["pid"] (the pid actually being
+        # kept -- possibly PRESERVED from an existing payload written by a
+        # different process, e.g. via write_hold()), NOT from os.getpid()
+        # unconditionally. The earlier draft of this fix always used our own
+        # start-time even when the preserved pid belonged to someone else,
+        # which would make that OTHER, genuine holder fail its own later
+        # _is_same_process() check and get wrongly locked out of resuming --
+        # reproducing the exact "genuine holder can't resume" failure this
+        # whole mechanism exists to prevent, just via a different path.
+        if "pid_start_time" not in data:
+            data["pid_start_time"] = _process_start_time(data["pid"])
+        data.setdefault("agent", "unknown")
+        data.setdefault("session_id", None)
+        data.setdefault("project_path", None)
+        data.setdefault("voice", None)
+        data["acquired"] = now.isoformat()
+        data["held"] = True
+        data["expires"] = deadline_iso  # keeps _hold_is_expired() aligned -- see docstring
+        data["awaiting_human_response"] = True
+        data["response_deadline"] = deadline_iso
+        cls.LOCK_FILE.write_text(json.dumps(data, indent=2))
+
+    @classmethod
+    def awaiting_human_response_active(cls) -> Optional[dict]:
+        """ADDED (independent audit, round 2 -- CRITICAL finding): the correct,
+        unconditional way for a CALLER (e.g. converse.py's skip_conch guard)
+        to check "is a live awaiting_human_response state in effect right
+        now," mirroring the exact same check ``_held_by_other()`` already
+        uses internally -- NOT via ``get_holder()``/``is_active()``, which
+        depend on the ORIGINAL holder's pid still being alive and on the
+        unrelated ``CONCH_LOCK_EXPIRY`` staleness window. A dead holder or an
+        elapsed CONCH_LOCK_EXPIRY must NOT clear this state (see
+        ``_check_and_clear_stale_lock()``'s own guard for this same
+        reasoning) -- so a check built on ``is_active()`` silently stops
+        seeing the block at exactly the moment (a crashed questioning
+        process, or a long wait outliving the lock-staleness window) Theme 8
+        most needs to hold. Returns the lock-file payload dict while the
+        state is genuinely active (deadline not yet passed), else None --
+        deliberately NOT gated on pid liveness, matching the priority-
+        override semantics ``_held_by_other()`` already documents.
+
+        Returns None (not blocking) if the CURRENT process is itself the
+        holder that set this state -- mirrors ``_held_by_other()``'s own
+        exemption (verified via ``_is_same_process()``, round 3 -- NOT a
+        bare pid comparison, which pid reuse can fool), so the original
+        holder can resume once Mike answers.
+        """
+        try:
+            data = json.loads(cls.LOCK_FILE.read_text())
+        except (json.JSONDecodeError, OSError, ValueError):
+            return None
+        if not data.get("awaiting_human_response"):
+            return None
+        if _response_deadline_passed(data):
+            return None
+        if _is_same_process(data):
+            return None
+        return data
+
+    @classmethod
+    def resolve_awaiting_human_response(cls) -> bool:
+        """ADDED (independent audit, round 2 -- HIGH finding): explicit resume
+        path for once Mike has actually answered. Without this, nothing in
+        the original patch ever cleared ``awaiting_human_response`` on the
+        early-approved path -- design doc §2.1 item 5 only specified the
+        TIMEOUT-denial case (the caller's approval_queue-expiry composition),
+        leaving no way to resume immediately after a real, on-time answer
+        other than waiting out the full response_deadline. Unlinks the lock
+        file entirely (same effect as a normal ``release()``) so the next
+        ``try_acquire()`` -- by the original holder resuming, or by any other
+        process -- starts clean. Best-effort: a missing file is not an error
+        (nothing to resolve). Returns True if a file was actually removed.
+
+        FIX (independent audit, round 3 -- MEDIUM finding): added a
+        precondition guard -- this must never unlink a lock file that ISN'T
+        currently in the awaiting_human_response state. Without this guard,
+        calling it while an unrelated, genuinely active conversation holds
+        the file (e.g. the original holder already auto-resumed and is now
+        speaking normally) would delete THAT live holder's entry out from
+        under it -- the exact "stale flock on an unlinked inode" foot-gun
+        ``release()`` itself already guards against via its own ownership
+        check. No caller currently invokes this method (confirmed via grep
+        across this patch and the real approval_queue.py -- wiring it into
+        the actual approve/resolve flow is a SEPARATE, future integration
+        step per design doc §2.3/§3, not part of this patch), so this guard
+        only matters once something does call it -- but it must be correct
+        from the moment it has its first real caller, not retrofitted later.
+        """
+        try:
+            data = json.loads(cls.LOCK_FILE.read_text())
+        except (json.JSONDecodeError, OSError, ValueError):
+            return False
+        if not data.get("awaiting_human_response"):
+            return False
+        try:
+            cls.LOCK_FILE.unlink()
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
 
     def acquire(
         self,
@@ -407,6 +681,24 @@ class Conch:
         try:
             data = json.loads(self.LOCK_FILE.read_text())
         except (json.JSONDecodeError, OSError):
+            return
+
+        # NECESSARY ADDITION (discovered during Theme 8 implementation, not
+        # one of the design doc's 4 literal patch items -- documented here
+        # and in the scratch-dir report): a live awaiting_human_response
+        # state must never be cleared by this method's pre-existing
+        # dead-pid-fast-fail or timestamp-based paths below, even though
+        # neither knows about the new field. Without this guard, the very
+        # "process died mid-wait" scenario Theme 8/9 exists to handle safely
+        # would instead hit the dead-pid fast-fail path a few lines down and
+        # get unlinked immediately -- silently defeating _held_by_other()'s
+        # new "unconditional... regardless of pid" branch above, since
+        # try_acquire() calls this method BEFORE it ever consults
+        # _held_by_other(). Deferring cleanup to the caller's own
+        # approval_queue-driven expiry (design doc §2.1 item 5) requires
+        # this method to also leave the marker alone until its own
+        # response_deadline passes.
+        if data.get("awaiting_human_response") and not _response_deadline_passed(data):
             return
 
         # Fast-fail on dead holder -- no need to wait for timestamp expiry.
