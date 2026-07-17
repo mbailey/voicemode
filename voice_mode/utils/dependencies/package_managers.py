@@ -135,7 +135,19 @@ def get_package_manager() -> PackageManager:
     Raises:
         RuntimeError: If no supported package manager is found
     """
-    managers = [BrewManager(), DnfManager(), AptManager()]
+    import platform
+    import os
+
+    # platform.release() returns the kernel version string
+    def is_wsl2():
+        release = platform.release().lower()
+        return "microsoft" in release and "wsl2" in release
+
+    # WSL2 uses apt manager, trying to use brew will result in detecting packages as not installed
+    if is_wsl2():
+        managers = [AptManager(), BrewManager(), DnfManager()]
+    else:
+        managers = [BrewManager(), DnfManager(), AptManager()]
 
     for manager in managers:
         if manager.check_available():
