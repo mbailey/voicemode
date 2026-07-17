@@ -36,7 +36,7 @@ from voice_mode.conversation_logger import get_conversation_logger
 from voice_mode.config import (
     audio_operation_lock,
     BASE_DIR,
-    SAMPLE_RATE,
+    RECORDING_SAMPLE_RATE,
     CHANNELS,
     DEBUG,
     DEBUG_DIR,
@@ -974,10 +974,10 @@ def prepare_audio_for_stt(audio_data: np.ndarray, output_format: str = "mp3") ->
     import io
 
     # Create AudioSegment from raw data
-    # Audio is recorded at SAMPLE_RATE (24kHz), 16-bit mono
+    # Audio is recorded at RECORDING_SAMPLE_RATE, 16-bit mono
     audio = AudioSegment(
         audio_data.tobytes(),
-        frame_rate=SAMPLE_RATE,
+        frame_rate=RECORDING_SAMPLE_RATE,
         sample_width=2,  # 16-bit = 2 bytes
         channels=CHANNELS
     )
@@ -988,7 +988,7 @@ def prepare_audio_for_stt(audio_data: np.ndarray, output_format: str = "mp3") ->
     # Downsample to 16kHz (Whisper's native rate) for better compression
     # This also reduces size by ~33% even before compression
     whisper_sample_rate = 16000
-    if SAMPLE_RATE != whisper_sample_rate:
+    if RECORDING_SAMPLE_RATE != whisper_sample_rate:
         audio = audio.set_frame_rate(whisper_sample_rate)
 
     # Export to target format
@@ -1109,7 +1109,7 @@ async def speech_to_text(
 
         if STT_SAVE_FORMAT == "wav":
             # Save as uncompressed WAV for full quality archival
-            write(str(save_file_path), SAMPLE_RATE, audio_data)
+            write(str(save_file_path), RECORDING_SAMPLE_RATE, audio_data)
         else:
             # Save in configured compressed format
             saved_audio = prepare_audio_for_stt(audio_data, STT_SAVE_FORMAT)
@@ -1227,7 +1227,7 @@ def record_audio(duration: float) -> np.ndarray:
             devices = sd.query_devices()
             default_input = sd.default.device[0]
             logger.debug(f"Default input device: {default_input} - {devices[default_input]['name'] if default_input is not None else 'None'}")
-            logger.debug(f"Recording config - Sample rate: {SAMPLE_RATE}Hz, Channels: {CHANNELS}, dtype: int16")
+            logger.debug(f"Recording config - Sample rate: {RECORDING_SAMPLE_RATE}Hz, Channels: {CHANNELS}, dtype: int16")
         except Exception as dev_e:
             logger.error(f"Error querying audio devices: {dev_e}")
     
@@ -1238,12 +1238,12 @@ def record_audio(duration: float) -> np.ndarray:
     original_stderr = sys.stderr
     
     try:
-        samples_to_record = int(duration * SAMPLE_RATE)
+        samples_to_record = int(duration * RECORDING_SAMPLE_RATE)
         logger.debug(f"Recording {samples_to_record} samples...")
-        
+
         recording = sd.rec(
             samples_to_record,
-            samplerate=SAMPLE_RATE,
+            samplerate=RECORDING_SAMPLE_RATE,
             channels=CHANNELS,
             dtype=np.int16
         )
@@ -1262,7 +1262,7 @@ def record_audio(duration: float) -> np.ndarray:
         
     except Exception as e:
         logger.error(f"Recording failed: {e}")
-        logger.error(f"Audio config when error occurred - Sample rate: {SAMPLE_RATE}, Channels: {CHANNELS}")
+        logger.error(f"Audio config when error occurred - Sample rate: {RECORDING_SAMPLE_RATE}, Channels: {CHANNELS}")
         
         # Check if this is a device error that might be recoverable
         error_str = str(e).lower()
@@ -1372,11 +1372,11 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         vad = webrtcvad.Vad(effective_vad_aggressiveness)
         
         # Calculate chunk size (must be 10, 20, or 30ms worth of samples)
-        chunk_samples = int(SAMPLE_RATE * VAD_CHUNK_DURATION_MS / 1000)
+        chunk_samples = int(RECORDING_SAMPLE_RATE * VAD_CHUNK_DURATION_MS / 1000)
         chunk_duration_s = VAD_CHUNK_DURATION_MS / 1000
-        
+
         # WebRTC VAD only supports 8000, 16000, or 32000 Hz
-        # We'll tell VAD we're using 16kHz even though we're recording at 24kHz
+        # We'll tell VAD we're using 16kHz even though we're recording at RECORDING_SAMPLE_RATE
         # This requires adjusting our chunk size to match what VAD expects
         vad_sample_rate = 16000
         vad_chunk_samples = int(vad_sample_rate * VAD_CHUNK_DURATION_MS / 1000)
@@ -1410,7 +1410,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
             logger.info(f"[VAD_DEBUG]   effective_min_duration: {max(MIN_RECORDING_DURATION, min_duration)}s")
             logger.info(f"[VAD_DEBUG]   VAD aggressiveness: {effective_vad_aggressiveness}")
             logger.info(f"[VAD_DEBUG]   Silence threshold: {SILENCE_THRESHOLD_MS}ms")
-            logger.info(f"[VAD_DEBUG]   Sample rate: {SAMPLE_RATE}Hz (VAD using {vad_sample_rate}Hz)")
+            logger.info(f"[VAD_DEBUG]   Sample rate: {RECORDING_SAMPLE_RATE}Hz (VAD using {vad_sample_rate}Hz)")
             logger.info(f"[VAD_DEBUG]   Chunk duration: {VAD_CHUNK_DURATION_MS}ms")
         
         def audio_callback(indata, frames, time, status):
@@ -1430,7 +1430,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         
         try:
             # Create continuous input stream
-            with sd.InputStream(samplerate=SAMPLE_RATE,
+            with sd.InputStream(samplerate=RECORDING_SAMPLE_RATE,
                                channels=CHANNELS,
                                dtype=np.int16,
                                callback=audio_callback,
@@ -1500,11 +1500,11 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                         chunk_flat = chunk.flatten()
                         chunks.append(chunk_flat)
                         
-                        # For VAD, we need to downsample from 24kHz to 16kHz
+                        # For VAD, we need to downsample from RECORDING_SAMPLE_RATE to 16kHz
                         # Use scipy's resample for proper downsampling
                         from scipy import signal
                         # Calculate the number of samples we need after resampling
-                        resampled_length = int(len(chunk_flat) * vad_sample_rate / SAMPLE_RATE)
+                        resampled_length = int(len(chunk_flat) * vad_sample_rate / RECORDING_SAMPLE_RATE)
                         vad_chunk = signal.resample(chunk_flat, resampled_length)
                         # Take exactly the number of samples VAD expects
                         vad_chunk = vad_chunk[:vad_chunk_samples].astype(np.int16)
@@ -2016,7 +2016,7 @@ async def listen_and_transcribe(
         if SAVE_AUDIO and AUDIO_DIR and len(audio_data) > 0:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             audio_path = os.path.join(AUDIO_DIR, f"no_speech_{timestamp}.wav")
-            write(audio_path, SAMPLE_RATE, audio_data)
+            write(audio_path, RECORDING_SAMPLE_RATE, audio_data)
             logger.debug(f"Saved no-speech audio to: {audio_path}")
     else:
         stt_classified = True
@@ -3996,8 +3996,8 @@ consult the MCP resources listed above.
                             "request_time_ms": stt_metrics.get('request_time_ms', 0),
                             "is_local": stt_metrics.get('is_local', False),
                             "format": "wav",
-                            "sample_rate_hz": SAMPLE_RATE,
-                            "bitrate_kbps": (SAMPLE_RATE * 16 * CHANNELS) // 1000
+                            "sample_rate_hz": RECORDING_SAMPLE_RATE,
+                            "bitrate_kbps": (RECORDING_SAMPLE_RATE * 16 * CHANNELS) // 1000
                         }
                     if response_text:
                         event_logger.log_event(event_logger.STT_COMPLETE, stt_event_data)
