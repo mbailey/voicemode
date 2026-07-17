@@ -24,7 +24,7 @@ from ..config import (
     # Audio settings
     AUDIO_FORMAT, TTS_AUDIO_FORMAT, STT_AUDIO_FORMAT,
     TTS_TRAILING_SILENCE,
-    SAMPLE_RATE, CHANNELS,
+    SAMPLE_RATE, RECORDING_SAMPLE_RATE, CHANNELS,
     # Silence detection
     DISABLE_SILENCE_DETECTION, VAD_AGGRESSIVENESS, SILENCE_THRESHOLD_MS,
     MIN_RECORDING_DURATION, INITIAL_SILENCE_GRACE_PERIOD, DEFAULT_LISTEN_DURATION,
@@ -92,7 +92,8 @@ async def all_configuration() -> str:
     lines.append(f"  Format: {AUDIO_FORMAT}")
     lines.append(f"  TTS Format: {TTS_AUDIO_FORMAT}")
     lines.append(f"  STT Format: {STT_AUDIO_FORMAT}")
-    lines.append(f"  Sample Rate: {SAMPLE_RATE} Hz")
+    lines.append(f"  TTS Sample Rate: {SAMPLE_RATE} Hz")
+    lines.append(f"  Recording Sample Rate: {RECORDING_SAMPLE_RATE} Hz")
     lines.append(f"  Channels: {CHANNELS}")
     lines.append("")
     

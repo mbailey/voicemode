@@ -140,7 +140,11 @@ VOICEMODE_STT_AUDIO_FORMAT=mp3      # STT-specific
 VOICEMODE_OPUS_BITRATE=32000        # Opus bitrate (bps)
 VOICEMODE_MP3_BITRATE=64k           # MP3 bitrate
 VOICEMODE_AAC_BITRATE=64k           # AAC bitrate
-VOICEMODE_SAMPLE_RATE=24000         # Sample rate (Hz)
+
+# Microphone recording rate (independent of TTS, which is fixed at 24kHz).
+# Set this to your mic's native rate (e.g. 44100 or 48000) if recordings
+# sound wrong -- see https://github.com/mbailey/voicemode/issues/491
+VOICEMODE_RECORDING_SAMPLE_RATE=24000
 ```
 
 ### Audio Feedback
