@@ -26,7 +26,7 @@ jobs:
     - uses: actions/checkout@v7
     
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: '3.11'
     
@@ -86,7 +86,7 @@ jobs:
     - name: Install Go
       if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
       continue-on-error: true  # MCP-registry tail is best-effort — never fail a PyPI release (VM-1661)
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@v7
       with:
         go-version: 'stable'
 
