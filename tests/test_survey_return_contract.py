@@ -9,13 +9,19 @@ Slice 3 builds on impl-002's `_ask_turns_pipeline` (which returns plain
   * `converse()` turns-branch dispatch -- no-ask turns[] stays on the
     untouched VM-1772 speak-only path (byte-identical); any-ask turns[]
     goes through `_ask_turns_pipeline` + `_format_survey_result` instead.
-  * The partial-JSON-on-error guarantee, including `_ask_turns_pipeline`'s
-    own `asyncio.CancelledError` handler (impl-002 shipped a re-raise here;
-    this slice changes it to capture partial results/stopped_at and return
-    normally, per the README's "once >=1 reply held, every exit returns the
-    survey JSON" contract -- the review flagged that this had to happen
-    inside `_ask_turns_pipeline` itself, not just at its call site, because
-    `results`/`stopped_at` are locals lost on an uncaught re-raise).
+  * The partial-JSON-on-error guarantee for a plain (non-cancellation)
+    exception, including `_ask_turns_pipeline`'s own `except Exception`
+    handler, which still captures partial results/stopped_at and returns
+    normally.
+    NOTE (VM-2015): impl-003 originally gave `asyncio.CancelledError` the
+    same "capture and return normally" treatment. That was reverted by
+    VM-2015 -- swallowing cancellation there doesn't clear the anyio
+    CancelScope wrapping the request, so the pipeline's own cleanup
+    (`await producer_task` in its `finally`) got handed a fresh, uncaught
+    CancelledError, which is what actually wedged the server. See
+    `TestPipelineCancelledErrorGuarantee` below: on cancellation the
+    pipeline now re-raises (impl-002's original behaviour), same as
+    `_converse_core`/`converse()`.
 
 Golden-test note on the 3 worked examples (README ## Design / the Fable
 design report, reviews/2026-07-06-fable-design-report.md Decision 3): the
@@ -381,7 +387,22 @@ class TestConverseDispatch:
 # ---------------------------------------------------------------------------
 
 class TestPipelineCancelledErrorGuarantee:
-    async def test_cancelled_during_listen_returns_partial_not_raises(self):
+    """VM-2015 supersedes VM-1775 impl-003's "capture partial results and
+    return normally" guarantee. Swallowing CancelledError inside the
+    pipeline (instead of re-raising) doesn't clear the anyio CancelScope
+    wrapping the request -- it stays cancelled, so the very next `await`
+    (e.g. the `finally` block's own `await producer_task`) gets handed a
+    FRESH, uncaught CancelledError. That's what actually escaped the request
+    boundary and wedged the server (see the VM-2015 RCA). The correct
+    contract is now the opposite: `_ask_turns_pipeline` must let
+    CancelledError propagate, so the MCP SDK's own per-request cancel
+    handling absorbs it exactly once. Every already-collected reply is still
+    safe -- it was persisted to the conversation log at capture time -- only
+    the tool's partial-results return VALUE is no longer available on this
+    path (see test_converse_cancellation.py for the same contract at the
+    `converse()`/`_converse_core` level)."""
+
+    async def test_cancelled_during_listen_reraises(self):
         turns = _norm([{"ask": "q1"}, {"ask": "q2"}])
 
         listen_spy = AsyncMock(side_effect=asyncio.CancelledError())
@@ -389,30 +410,23 @@ class TestPipelineCancelledErrorGuarantee:
              patch("voice_mode.tools.converse._play_samples_controllable",
                    new=AsyncMock(return_value="played")), \
              patch("voice_mode.tools.converse.listen_and_transcribe", new=listen_spy):
-            # Must NOT raise -- this is the whole point of the fix.
-            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+            with pytest.raises(asyncio.CancelledError):
+                await _ask_turns_pipeline(turns, **_pipeline_kwargs())
 
-        assert stopped_at == {"turn": 0, "phase": "listening", "reason": "cancelled"}
-        assert len(results) == 2  # alignment invariant
-        assert results[0]["status"] == "not_reached"
-        assert results[1]["status"] == "not_reached"
-
-    async def test_cancelled_during_speaking_reports_speaking_phase(self):
+    async def test_cancelled_during_speaking_reraises(self):
         turns = _norm([{"say": "a"}, {"ask": "b"}])
 
         play_spy = AsyncMock(side_effect=asyncio.CancelledError())
         with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
              patch("voice_mode.tools.converse._play_samples_controllable", new=play_spy):
-            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+            with pytest.raises(asyncio.CancelledError):
+                await _ask_turns_pipeline(turns, **_pipeline_kwargs())
 
-        assert stopped_at == {"turn": 0, "phase": "speaking", "reason": "cancelled"}
-        assert len(results) == 2
-        assert results[0]["status"] == "not_reached"
-        assert results[1]["status"] == "not_reached"
-
-    async def test_cancelled_after_one_reply_already_held_preserves_it(self):
-        """Once >=1 reply is held, the guarantee is that it survives a later
-        cancellation -- not just that the abort is reported."""
+    async def test_cancelled_after_one_reply_already_held_still_reraises(self):
+        """Even once >=1 reply is already held (and durably logged), a later
+        cancellation must still propagate -- the reply's safety comes from
+        conversation-log persistence at capture time, not from converting
+        the cancellation into a normal return."""
         turns = _norm([{"ask": "q1"}, {"ask": "q2"}])
 
         def fake_record(*_a, **_k):
@@ -432,9 +446,5 @@ class TestPipelineCancelledErrorGuarantee:
              patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
              patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
              patch("voice_mode.tools.converse.speech_to_text", new=flaky_stt):
-            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
-
-        assert stopped_at == {"turn": 1, "phase": "listening", "reason": "cancelled"}
-        assert results[0]["status"] == "answered"
-        assert results[0]["reply"] == "first answer"
-        assert results[1]["status"] == "not_reached"
+            with pytest.raises(asyncio.CancelledError):
+                await _ask_turns_pipeline(turns, **_pipeline_kwargs())

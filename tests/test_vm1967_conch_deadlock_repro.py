@@ -97,9 +97,14 @@ class TestConchDeadlockFixedByDeregisterOnCancel:
         3. The MCP client cancels the call mid-wait (ESC / disconnect) — the
            coroutine is cancelled while parked in ``asyncio.sleep`` inside the
            WAIT loop, exactly as a real client cancellation would land.
-        4. converse() swallows the cancellation (VM-1026 contract) and
-           returns normally. FIXED: the outer ``finally`` now deregisters
-           sess-a's queue entry on this path too — the queue is empty again.
+        4. converse() lets the cancellation propagate (VM-2015 superseded
+           the VM-1026 "swallow and return normally" contract this test used
+           to assert here -- swallowing didn't clear the anyio CancelScope
+           and is what actually wedged the *server*, not the conch). Either
+           way the outer ``finally`` runs unconditionally: FIXED, it now
+           deregisters sess-a's queue entry on this path too — the queue is
+           empty again regardless of whether the exception is swallowed or
+           propagated.
         5. The real holder releases. FIXED: with no live waiters left,
            nothing is (falsely) promoted — the grant stays clear.
         6. The conch is genuinely free: no holder, no outstanding grant.
@@ -131,10 +136,15 @@ class TestConchDeadlockFixedByDeregisterOnCancel:
 
             # Step 3: client cancels the in-flight tool call mid-wait.
             task.cancel()
-            result = await asyncio.wait_for(task, timeout=5)
-
-        # converse() swallows CancelledError (VM-1026) rather than raising.
-        assert result == "Cancelled by user."
+            # VM-2015: converse() now lets CancelledError propagate (it no
+            # longer swallows it into a normal "Cancelled by user." return --
+            # that VM-1026 contract is what wedged the *server*, see
+            # test_converse_cancellation.py). The cleanup guarantee under
+            # test here is unaffected either way: the `finally` block runs
+            # regardless of whether the exception is swallowed or
+            # propagated.
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5)
 
         # FIXED (step 4): a cancelled WAIT-mode waiter that never claimed the
         # floor is deregistered on every exit path now, including
@@ -208,7 +218,9 @@ class TestConchDeadlockFixedByDeregisterOnCancel:
                 ))
                 await asyncio.sleep(0.03)
                 task.cancel()
-                await asyncio.wait_for(task, timeout=5)
+                # VM-2015: propagates now (see the other test in this class).
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=5)
 
             assert _sessions() == [], (
                 "REGRESSION: a repeated cancel from the same session left an "

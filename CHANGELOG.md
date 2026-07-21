@@ -23,6 +23,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ESC during `converse()` wedged the connection for the NEXT call, then
+  killed the server child ~`listen_duration_max` seconds later (VM-2015,
+  successor to VM-1026)** — pressing ESC looked clean (the cancel was logged,
+  the conch released) but the *next* `converse()` call got no server
+  response at all, not even a `TOOL_REQUEST_START`, and the MCP child then
+  exited on its own once the abandoned recording finished naturally. Root
+  cause: VM-1026's fix caught `CancelledError` inside `converse()` and
+  returned a normal string instead of letting it propagate — but catching it
+  there does not clear the anyio `CancelScope` wrapping the in-flight MCP
+  request, so the very next `await` (deep in cleanup) got a *second*,
+  uncaught `CancelledError` that unwound the whole server instead of just
+  the one request. Fixed three ways: (1) `converse()` now lets
+  `CancelledError` propagate instead of swallowing it, so the MCP SDK's own
+  per-request cancel handling absorbs it exactly once, at the boundary
+  anyio expects — cleanup (conch release, event logging) still runs via
+  `finally` either way; (2) the blocking audio recording (which ran on an
+  unabandonable executor thread, so cancelling the *await* never stopped the
+  *thread* — that orphaned thread is what stalled shutdown for the rest of
+  `listen_duration_max`) is now cooperatively cancellable via a
+  `threading.Event` checked each VAD chunk (~100ms), so it stops almost
+  immediately instead of running to the full duration; (3) restored the MCP
+  SDK's cancel-in-flight-handlers-on-transport-close semantics that
+  fastmcp's `LowLevelServer.run()` drops — so if your client goes away
+  mid-recording *without* cancelling (agent killed, terminal closed, broken
+  pipe), the voicemode process now stops and releases the **microphone**
+  within a second instead of recording on to `listen_duration_max` and
+  transcribing audio nobody asked for (measured: 0.4s vs 17.5s on a 20s
+  limit). Verified with the isolated repro at
+  `scripts/repro-vm2015.sh` (own `VOICEMODE_BASE_DIR`, conch disabled, no
+  cross-talk with a live session): a second `converse()` call now reaches
+  the server and returns `TOOL_REQUEST_START` after an ESC, every time.
+
 - **Conch grant→claim deadlock: a granted queue head that never took the
   floor could wedge every waiter forever (VM-1967)** — a WAIT-mode
   `converse()` call cancelled mid-wait (MCP client disconnect / ESC /
