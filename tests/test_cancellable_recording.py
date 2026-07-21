@@ -106,6 +106,90 @@ class TestStopEventUpfront:
         assert speech_detected is True
 
 
+class TestCancelledRecordingIsDiscarded:
+    """VM-2015 fix-001 review focus B: the stop flag makes the recording
+    thread return EARLY, i.e. with a PARTIAL buffer. That partial audio must
+    never reach STT -- trading a wedged connection for a phantom
+    half-sentence transcript is not a fix.
+
+    The guarantee comes from `listen_and_transcribe` re-raising out of the
+    `await`: the executor future's (partial) result is never bound, so every
+    line below it -- RECORDING_END, chimes, speech_to_text -- is skipped.
+    These tests pin that contract at the seam so a later refactor that
+    "helpfully" returns the partial buffer instead of propagating gets caught.
+    """
+
+    @pytest.mark.asyncio
+    async def test_partial_audio_never_reaches_stt_on_cancel(self):
+        import asyncio
+
+        from voice_mode.control_channel import get_control_state
+        from voice_mode.tools.converse import listen_and_transcribe
+
+        recorder_entered = threading.Event()
+        saw_stop_event = threading.Event()
+
+        def _record(max_duration, disable_silence_detection, min_duration,
+                    vad_aggressiveness, stop_event=None):
+            recorder_entered.set()
+            # Block like the real VAD loop, until the caller's cancellation
+            # sets the flag -- then hand back a PARTIAL buffer, exactly what
+            # the real recorder does when it breaks early.
+            assert stop_event is not None, "listen_and_transcribe must pass a stop_event"
+            stop_event.wait(timeout=5.0)
+            if stop_event.is_set():
+                saw_stop_event.set()
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _noop_feedback(*_a, **_k):
+            return None
+
+        stt_spy = MagicMock(side_effect=AssertionError(
+            "STT must never run on a cancelled recording (partial audio)"
+        ))
+
+        get_control_state().reset()
+        try:
+            with patch('voice_mode.tools.converse.play_audio_feedback', new=_noop_feedback), \
+                 patch('voice_mode.tools.converse.record_audio_with_silence_detection', new=_record), \
+                 patch('voice_mode.tools.converse.speech_to_text', new=stt_spy):
+                task = asyncio.ensure_future(listen_and_transcribe(
+                    control_state=get_control_state(),
+                    listen_duration_max=30.0,
+                    listen_duration_min=0.5,
+                    disable_silence_detection=False,
+                    vad_aggressiveness=None,
+                    chime_enabled=False,
+                    chime_leading_silence=None,
+                    chime_trailing_silence=None,
+                    transport="local",
+                    event_logger=None,
+                ))
+
+                # Wait until the recording thread is actually running, then
+                # cancel the awaiting coroutine (the ESC).
+                for _ in range(50):
+                    if recorder_entered.is_set():
+                        break
+                    await asyncio.sleep(0.05)
+                assert recorder_entered.is_set(), "recorder never started"
+
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+
+                # The cancellation reached the thread (fast return, no
+                # orphan stalling teardown) ...
+                assert saw_stop_event.wait(timeout=5.0), (
+                    "stop_event was not set on cancellation -- the recording "
+                    "thread would run on to max_duration (the VM-2015 wedge)"
+                )
+                # ... and its partial buffer went nowhere near STT.
+                stt_spy.assert_not_called()
+        finally:
+            get_control_state().reset()
+
+
 class TestStopEventMidRecording:
     """A stop_event set from another thread mid-recording (as the real
     listen_and_transcribe caller does from its `except CancelledError`) must

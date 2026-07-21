@@ -16,10 +16,39 @@ import anyio
 import pytest
 
 from voice_mode.mcp_shutdown_patch import (
+    TESTED_FASTMCP_VERSION,
     _CancelOnTransportCloseLowLevelServer,
     dispatch_until_closed,
     patch_cancel_on_transport_close,
+    upstream_run_drift,
 )
+
+
+class TestUpstreamDriftGuard:
+    """VM-2015 fix-001 review: subclassing fastmcp's private ``run()`` is
+    version-fragile and would otherwise fail SILENTLY on a fastmcp bump
+    (pyproject pins only ``fastmcp>=3.2.0,<4``). These two tests are the
+    loud failure -- they break in CI the moment upstream moves."""
+
+    def test_upstream_run_body_has_not_drifted(self):
+        drift = upstream_run_drift()
+        assert drift is None, drift
+
+    def test_upstream_still_lacks_the_cancel(self):
+        """If fastmcp restores the SDK's ``finally: tg.cancel_scope.cancel()``
+        itself, voice_mode/mcp_shutdown_patch.py is dead code and should be
+        deleted (along with these tests)."""
+        import inspect
+
+        from fastmcp.server.low_level import LowLevelServer
+
+        source = inspect.getsource(LowLevelServer.run)
+        assert "cancel_scope.cancel()" not in source, (
+            "fastmcp's LowLevelServer.run() now cancels in-flight handlers on "
+            "transport close by itself -- delete voice_mode/mcp_shutdown_patch.py "
+            f"and its wiring in server.py (patch was written against fastmcp "
+            f"{TESTED_FASTMCP_VERSION})."
+        )
 
 
 class TestPatchCancelOnTransportClose:
