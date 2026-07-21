@@ -25,6 +25,13 @@ logger = logging.getLogger("voicemode")
 
 mcp = FastMCP("voicemode")
 
+# VM-2015: restore the MCP SDK's cancel-in-flight-handlers-on-transport-close
+# semantics that fastmcp's LowLevelServer.run() drops -- see
+# mcp_shutdown_patch.py for the full rationale.
+from .mcp_shutdown_patch import patch_cancel_on_transport_close
+
+patch_cancel_on_transport_close(mcp)
+
 # Import shared configuration and utilities
 from . import config
 

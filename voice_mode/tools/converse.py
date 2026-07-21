@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import traceback
 from contextlib import asynccontextmanager
@@ -1331,18 +1332,32 @@ def record_audio(duration: float) -> np.ndarray:
             sys.stderr = original_stderr
 
 
-def record_audio_with_silence_detection(max_duration: float, disable_silence_detection: bool = False, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None) -> Tuple[np.ndarray, bool]:
+def record_audio_with_silence_detection(max_duration: float, disable_silence_detection: bool = False, min_duration: float = 0.0, vad_aggressiveness: Optional[int] = None, stop_event: Optional[threading.Event] = None) -> Tuple[np.ndarray, bool]:
     """Record audio from microphone with automatic silence detection.
-    
+
     Uses WebRTC VAD to detect when the user stops speaking and automatically
     stops recording after a configurable silence threshold.
-    
+
     Args:
         max_duration: Maximum recording duration in seconds
         disable_silence_detection: If True, disables silence detection and uses fixed duration recording
         min_duration: Minimum recording duration before silence detection can stop (default: 0.0)
         vad_aggressiveness: VAD aggressiveness level (0-3). If None, uses VAD_AGGRESSIVENESS from config
-        
+        stop_event: VM-2015 -- optional cooperative-cancel flag. This function
+            normally runs on the default ThreadPoolExecutor via
+            ``run_in_executor``; cancelling the awaiting coroutine abandons
+            that *future* but cannot stop the *thread* -- ``sd.rec``/``sd.wait``
+            would otherwise keep this thread alive for the full max_duration,
+            outliving the request that asked for it (see the VM-2015 RCA:
+            that orphaned thread is what stalls server teardown behind an
+            uncancellable ``executor.shutdown()`` join). The VAD path below is
+            already chunked on ``audio_queue.get(timeout=0.1)``, so checking
+            this flag each chunk lets the caller's ``except CancelledError``
+            set it and get a thread that returns in ~100ms instead of
+            ~max_duration seconds. Has no effect on the non-VAD
+            ``record_audio`` fallback (a single blocking ``sd.rec``/``sd.wait``
+            call with no chunk boundary to poll from) -- out of scope here.
+
     Returns:
         Tuple of (audio_data, speech_detected):
             - audio_data: Numpy array of recorded audio samples
@@ -1451,6 +1466,15 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
 
                 while (recording_duration < max_duration and not stop_recording
                        and time.monotonic() - last_audio_time < AUDIO_STALL_TIMEOUT):
+                    # VM-2015: the awaiting coroutine was cancelled (ESC) --
+                    # stop now instead of running to max_duration. Checked
+                    # first (cheaper than the control-channel snapshot below)
+                    # since a cancelled caller isn't going to read our return
+                    # value either way; getting the thread to exit fast is
+                    # the only thing that still matters.
+                    if stop_event is not None and stop_event.is_set():
+                        logger.info("🛑 Recording stopped: caller was cancelled")
+                        break
                     # VM-1676: honour a control-channel stop while listening, so a
                     # stop that arrives mid-record returns cleanly (converse then
                     # builds the normal control-marker result). Cheap snapshot;
@@ -1631,7 +1655,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                     
                     # Try recording again with the new device (recursive call in sync context)
                     logger.info("Retrying recording with new audio device...")
-                    return record_audio_with_silence_detection(max_duration, disable_silence_detection, min_duration, vad_aggressiveness)
+                    return record_audio_with_silence_detection(max_duration, disable_silence_detection, min_duration, vad_aggressiveness, stop_event)
                     
                 except Exception as reinit_error:
                     logger.error(f"Failed to reinitialize audio: {reinit_error}")
@@ -1941,9 +1965,23 @@ async def listen_and_transcribe(
 
     record_start = time.perf_counter()
     logger.debug(f"About to call record_audio_with_silence_detection with duration={listen_duration_max}, disable_silence_detection={disable_silence_detection}, min_duration={listen_duration_min}, vad_aggressiveness={vad_aggressiveness}")
-    audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
-        None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness
-    )
+    # VM-2015: record_audio_with_silence_detection runs on the default
+    # ThreadPoolExecutor. Cancelling THIS await (ESC) abandons the future but
+    # not the thread -- sd.rec/sd.wait keeps recording for the full
+    # listen_duration_max regardless, which is what stalls server teardown
+    # (see the RCA). stop_event is our side channel into the thread: set it
+    # the instant we're cancelled so the VAD loop's next 0.1s chunk poll sees
+    # it and returns, instead of running to max_duration. Nobody awaits the
+    # executor future again after that, so its eventual (now fast) result is
+    # simply discarded.
+    stop_event = threading.Event()
+    try:
+        audio_data, speech_detected = await asyncio.get_event_loop().run_in_executor(
+            None, record_audio_with_silence_detection, listen_duration_max, disable_silence_detection, listen_duration_min, vad_aggressiveness, stop_event
+        )
+    except asyncio.CancelledError:
+        stop_event.set()
+        raise
     timings['record'] = time.perf_counter() - record_start
 
     if event_logger:
@@ -2720,26 +2758,29 @@ async def _ask_turns_pipeline(
             if idx < n and turn["pause_after_ms"] > 0:
                 await asyncio.sleep(turn["pause_after_ms"] / 1000.0)
     except asyncio.CancelledError:
-        # VM-1775 impl-003: the MCP client (ESC / tool-call cancel) can land
-        # here from an `await` anywhere in the loop body above. Unlike a
-        # generic leaf coroutine, this pipeline is NOT the top of the
-        # cancellation boundary -- converse() itself already swallows
-        # CancelledError at its own top level (see the rationale on that
-        # `except` block: leaf coroutine, no outer task needs to observe it,
-        # FastMCP stdio would otherwise tear down the whole server on an
-        # uncaught cancel). Swallowing it HERE instead is what fulfils the
-        # return-contract's guarantee that survey mode NEVER discards
-        # collected replies on cancellation: every reply gathered so far was
-        # already persisted to the conversation log at capture time, but the
-        # tool's return VALUE would be lost if this propagated past
-        # `_format_survey_result` uncaught. `results`/`stopped_at` are local
-        # to this function, so this is the one place that can attach them to
-        # a normal return instead of an unwind.
+        # VM-1775 impl-003 swallowed this and fell through to a normal return
+        # so the survey's return-contract could still report every reply
+        # collected so far. VM-2015: that is exactly the anti-pattern that
+        # wedges the server. Catching-without-reraising does NOT clear the
+        # anyio CancelScope wrapping this request -- it stays cancelled, so
+        # the very next `await` (the `await producer_task` two lines into the
+        # `finally` below, or -- had that one not been isolated by its own
+        # try/except -- any await back in `_converse_core`) gets handed a
+        # FRESH CancelledError we are no longer positioned to catch cleanly.
+        # Every already-collected reply is safe regardless: it was persisted
+        # to the conversation log at capture time (see the per-turn log_stt
+        # call above), so re-raising only costs the tool's return VALUE
+        # (the partial-results JSON), never the data. Re-raise so
+        # mcp.server.lowlevel.server.Server._handle_request's own
+        # `except anyio.get_cancelled_exc_class(): if message.cancelled: ...
+        # return` absorbs the cancellation exactly once, at the request
+        # boundary anyio expects.
         logger.info(f"Survey pipeline cancelled by client at turn {idx} ({current_phase})")
         if stopped_at is None:
             stopped_at = {"turn": idx, "phase": current_phase, "reason": "cancelled"}
         if idx < n and results[idx] is None:
             results[idx] = _not_reached_turn_result(turns[idx], idx)
+        raise
     except Exception as e:
         logger.error(f"Survey pipeline aborted by an unexpected error at turn {idx}: {e}")
         if stopped_at is None:
@@ -4161,17 +4202,21 @@ consult the MCP resources listed above.
     except asyncio.CancelledError:
         # Tool call was cancelled by the MCP client (e.g. user pressed ESC).
         #
-        # We intentionally DO NOT re-raise. Under FastMCP 2.x stdio transport,
-        # an uncaught CancelledError escaping the tool handler tears down the
-        # MCP server process, leaving the client with a failed connection that
-        # requires `/mcp` reconnect. That surfaces to the user as VoiceMode
-        # "disappearing" after every ESC (see VM-1026 / GH issue #337).
-        #
-        # Swallowing cancellation here is safe because this function is a leaf
-        # coroutine invoked by FastMCP -- there is no outer task that needs to
-        # observe the cancellation signal. The `finally` block below still
-        # releases the conch, logs TOOL_REQUEST_END, and updates timing state,
-        # so cleanup invariants hold.
+        # VM-2015: this used to swallow the CancelledError and `return` a
+        # normal result instead. That looked safe (this is a leaf coroutine,
+        # no outer task "needs" to observe it) but it is not: the anyio
+        # CancelScope that the MCP SDK wraps around THIS request stays
+        # cancelled regardless of whether we catch the exception here, so the
+        # very next `await` anywhere in the `finally` block below gets handed
+        # a FRESH CancelledError -- one we are no longer positioned to catch.
+        # That second, unexpected CancelledError is what actually escaped the
+        # request boundary and unwound the whole server (control listener
+        # torn down, anyio.run() exiting) -- not this one. Re-raising here
+        # instead lets mcp.server.lowlevel.server.Server._handle_request's
+        # own `except anyio.get_cancelled_exc_class(): if message.cancelled:
+        # ... return` absorb it EXACTLY ONCE, at the request boundary anyio
+        # expects, which is what actually keeps the server alive and serving
+        # the next converse() call.
         logger.info("Converse cancelled by client (ESC or tool-call cancel)")
         if event_logger:
             event_logger.log_event("TOOL_CANCELLED", {
@@ -4180,7 +4225,7 @@ consult the MCP resources listed above.
             })
         result = "Cancelled by user."
         success = False
-        return result
+        raise
 
     except Exception as e:
         logger.error(f"Unexpected error in converse: {e}")

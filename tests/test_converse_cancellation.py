@@ -2,11 +2,31 @@
 
 Context: VM-1026 / GH issue #337 -- pressing ESC during a `converse` call
 used to disconnect the whole MCP server because `asyncio.CancelledError`
-escaped the tool handler and tore down FastMCP's stdio transport.
+escaped the tool handler and tore down FastMCP's stdio transport. The fix
+at the time was to catch `CancelledError` inside `converse()` and return a
+normal string result instead of letting it propagate.
 
-These tests verify that cancellation is caught inside the tool, cleanup
-runs, and a well-formed string result is returned instead of the
-exception escaping.
+VM-2015 (successor bug, same root symptom -- ESC wedges the connection):
+that "fix" was itself the bug. Catching a `CancelledError` inside a
+coroutine does NOT clear the anyio `CancelScope` wrapping the in-flight MCP
+request -- it stays cancelled, so the very next `await` anywhere further
+down that same call (e.g. in a `finally` block doing cleanup) gets handed a
+*fresh* `CancelledError` the code is no longer positioned to catch cleanly.
+That is what actually escaped the request boundary and tore the server
+down -- not the original one.
+
+The correct fix is the opposite of VM-1026's: let `CancelledError` PROPAGATE
+out of `converse()` uncaught. `mcp.server.lowlevel.server.Server._handle_request`
+(unmodified by fastmcp) already has an `except
+anyio.get_cancelled_exc_class(): if message.cancelled: ... return` that
+absorbs a client-cancelled request's `CancelledError` exactly once, at the
+correct boundary -- which is what actually keeps the stdio reader alive for
+the next request. `converse()` just needs to get out of the way and still
+run its cleanup (conch release, event logging) via `finally`.
+
+These tests verify: cleanup still runs on cancellation, but the
+`CancelledError` itself is allowed to propagate rather than being swallowed
+into a normal string return.
 """
 
 import asyncio
@@ -16,11 +36,12 @@ from unittest.mock import patch
 
 
 class TestConverseCancellation:
-    """CancelledError must be swallowed so the MCP server stays alive."""
+    """CancelledError must propagate so the MCP SDK's per-request cancel
+    boundary absorbs it -- not be swallowed inside converse() itself."""
 
     @pytest.mark.asyncio
-    async def test_cancelled_during_tts_returns_cancellation_message(self):
-        """If TTS raises CancelledError, converse must return cleanly."""
+    async def test_cancelled_during_tts_reraises(self):
+        """If TTS raises CancelledError, converse must let it propagate."""
         from voice_mode.tools.converse import converse
 
         with patch("voice_mode.core.text_to_speech") as mock_tts:
@@ -28,21 +49,16 @@ class TestConverseCancellation:
 
             with patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]):
                 with patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
-                    result = await getattr(converse, 'fn', converse)(
-                        message="Test message",
-                        wait_for_response=False,
-                    )
-
-        assert isinstance(result, str), (
-            "converse must return a string on cancellation, not raise"
-        )
-        assert "cancel" in result.lower(), (
-            f"Expected cancellation to be reflected in result, got: {result!r}"
-        )
+                    with pytest.raises(asyncio.CancelledError):
+                        await getattr(converse, 'fn', converse)(
+                            message="Test message",
+                            wait_for_response=False,
+                        )
 
     @pytest.mark.asyncio
     async def test_cancellation_releases_conch(self):
-        """After cancellation, the conch must be released so other agents can speak."""
+        """Even though CancelledError propagates, the finally block must
+        still run and release the conch so other agents can speak."""
         from voice_mode.tools.converse import converse
         from voice_mode.conch import Conch
 
@@ -51,10 +67,11 @@ class TestConverseCancellation:
 
             with patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]):
                 with patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
-                    await getattr(converse, 'fn', converse)(
-                        message="Test message",
-                        wait_for_response=False,
-                    )
+                    with pytest.raises(asyncio.CancelledError):
+                        await getattr(converse, 'fn', converse)(
+                            message="Test message",
+                            wait_for_response=False,
+                        )
 
         # No holder after cancellation — the finally block ran and released it.
         holder = Conch.get_holder()
@@ -63,8 +80,10 @@ class TestConverseCancellation:
         )
 
     @pytest.mark.asyncio
-    async def test_outer_task_cancel_is_swallowed(self):
-        """Cancelling the converse task from the outside must not raise past the await."""
+    async def test_outer_task_cancel_propagates(self):
+        """Cancelling the converse task from the outside must still surface
+        as CancelledError to the awaiter -- the tool must not convert it
+        into a normal string result (that conversion is the VM-2015 bug)."""
         from voice_mode.tools.converse import converse
 
         # Make TTS hang so we can cancel it cleanly.
@@ -84,15 +103,11 @@ class TestConverseCancellation:
                     await asyncio.sleep(0.1)
                     task.cancel()
 
-                    # awaiting a cancelled task normally raises CancelledError.
-                    # After our fix, converse catches it internally and returns,
-                    # so the task completes with a string result rather than
-                    # raising.
-                    try:
-                        result = await task
-                    except asyncio.CancelledError:
-                        pytest.fail(
-                            "converse leaked CancelledError — would tear down FastMCP stdio"
-                        )
-                    assert isinstance(result, str)
-                    assert "cancel" in result.lower()
+                    # Awaiting a cancelled task normally raises CancelledError.
+                    # VM-2015: it must keep doing so -- that is what lets the
+                    # MCP SDK's own per-request cancel handling absorb it at
+                    # the correct boundary instead of converse() faking a
+                    # normal return that leaves the anyio CancelScope
+                    # cancelled underneath it.
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
