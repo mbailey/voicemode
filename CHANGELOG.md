@@ -7,84 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
-  `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default
-  off) appends the current local time (`HH:MM:SS`) to every `converse()`
-  return — including error paths — as a trailing ` | Widgets: time HH:MM:SS`
-  segment. Text-only, never spoken by TTS; gives the agent an in-band clock
-  instead of confabulating the time under conversational pressure. First
-  inhabitant of a general `Widgets:` slot other one-liners (e.g. pending
-  notifications) can ride later. See
-  [docs/reference/environment.md](docs/reference/environment.md#result-widgets)
-  and
-  [docs/reference/converse-parameters.md](docs/reference/converse-parameters.md#time_in_response).
+## [8.12.0] - 2026-07-21
 
 ### Fixed
 
-- **ESC during `converse()` wedged the connection for the NEXT call, then
-  killed the server child ~`listen_duration_max` seconds later (VM-2015,
-  successor to VM-1026)** — pressing ESC looked clean (the cancel was logged,
-  the conch released) but the *next* `converse()` call got no server
-  response at all, not even a `TOOL_REQUEST_START`, and the MCP child then
-  exited on its own once the abandoned recording finished naturally. Root
-  cause: VM-1026's fix caught `CancelledError` inside `converse()` and
-  returned a normal string instead of letting it propagate — but catching it
-  there does not clear the anyio `CancelScope` wrapping the in-flight MCP
-  request, so the very next `await` (deep in cleanup) got a *second*,
-  uncaught `CancelledError` that unwound the whole server instead of just
-  the one request. Fixed three ways: (1) `converse()` now lets
-  `CancelledError` propagate instead of swallowing it, so the MCP SDK's own
-  per-request cancel handling absorbs it exactly once, at the boundary
-  anyio expects — cleanup (conch release, event logging) still runs via
-  `finally` either way; (2) the blocking audio recording (which ran on an
-  unabandonable executor thread, so cancelling the *await* never stopped the
-  *thread* — that orphaned thread is what stalled shutdown for the rest of
-  `listen_duration_max`) is now cooperatively cancellable via a
-  `threading.Event` checked each VAD chunk (~100ms), so it stops almost
-  immediately instead of running to the full duration; (3) restored the MCP
-  SDK's cancel-in-flight-handlers-on-transport-close semantics that
-  fastmcp's `LowLevelServer.run()` drops — so if your client goes away
-  mid-recording *without* cancelling (agent killed, terminal closed, broken
-  pipe), the voicemode process now stops and releases the **microphone**
-  within a second instead of recording on to `listen_duration_max` and
-  transcribing audio nobody asked for (measured: 0.4s vs 17.5s on a 20s
-  limit). Verified with the isolated repro at
-  `scripts/repro-vm2015.sh` (own `VOICEMODE_BASE_DIR`, conch disabled, no
-  cross-talk with a live session): a second `converse()` call now reaches
-  the server and returns `TOOL_REQUEST_START` after an ESC, every time.
+#### Cancelling voice no longer kills your session (VM-2015)
 
-- **Conch grant→claim deadlock: a granted queue head that never took the
-  floor could wedge every waiter forever (VM-1967)** — a WAIT-mode
-  `converse()` call cancelled mid-wait (MCP client disconnect / ESC /
-  tool-call cancel) left its waiter-queue entry registered forever (only the
-  poll loop's own normal-timeout exit cleaned it up); once granted, with no
-  claim TTL, it blocked every subsequent waiter indefinitely while
-  `voicemode conch status` misleadingly reported the conch as free. Fixed
-  three ways: (1) the queue entry is now deregistered on every exit path,
-  including cancellation; (2) a WAIT-mode grant nobody claims within
-  `VOICEMODE_CONCH_GRANT_TTL` (default 30s) now self-heals — the stuck
-  grantee is evicted and the next waiter promoted; (3) `voicemode conch
-  status` (and the underlying `free` field returned by the CLI/MCP JSON
-  payload) now distinguishes "genuinely free" from "grant outstanding but
-  unclaimed" instead of reporting free either way.
+Pressing ESC during a voice call used to leave everything broken behind you.
+This one has been with us for months and survived an earlier attempt at a fix
+(VM-1026) — it's properly fixed now.
+
+- **ESC wedged the connection, then killed the server** — the cancel looked
+  clean, but the *next* `converse()` call got no response at all and the MCP
+  server then exited on its own, taking voice down until you restarted it.
+  `CancelledError` is now handled at the boundary the MCP SDK expects, so a
+  cancel unwinds one request instead of the whole server.
+- **The microphone kept recording after a cancel** — recording ran on a thread
+  that couldn't be interrupted, so it ran on to `listen_duration_max` and
+  transcribed audio nobody asked for. It's now cooperatively cancellable and
+  releases the mic in under a second (measured 0.4s vs 17.5s on a 20s limit),
+  including when the client goes away without cancelling at all — agent
+  killed, terminal closed, broken pipe.
+
+#### Other fixes
+
+- **A stuck conch grant could block every waiter forever (VM-1967)** — a
+  WAIT-mode call cancelled mid-wait left its queue entry registered, and once
+  granted it deadlocked everyone behind it while `voicemode conch status`
+  still reported the conch free. Queue entries are now deregistered on every
+  exit path, an unclaimed grant self-heals after
+  `VOICEMODE_CONCH_GRANT_TTL` (default 30s), and `conch status` distinguishes
+  "free" from "granted but unclaimed".
+
+### Added
+
+- **Wall-clock time widget for `converse()` results (VM-1961)** — the opt-in
+  `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default
+  off) appends the local time to every `converse()` return as a trailing
+  ` | Widgets: time HH:MM:SS`, so the agent has a clock instead of guessing.
+  Text-only, never spoken. See
+  [converse-parameters.md](docs/reference/converse-parameters.md#time_in_response).
+
+- **Saved STT recordings are now linked from the conversation log (VM-4)** —
+  with `VOICEMODE_SAVE_AUDIO` on, `stt` log entries recorded `audio_file:
+  null`, so a transcript couldn't be tied back to its recording. The filename
+  is now logged for both single listens and survey turns, matching what TTS
+  entries already did. No schema change.
 
 ### Removed
 
-- **~2,300 lines of confirmed-dead code removed (VM-1811)** — a maintainability
-  pass deleted code with zero live callers, verified by AST import-map +
-  caller-grep across the whole package (epic VM-1808). No behaviour change.
-  Highlights: 7 orphan modules (829 LOC, incl. all of `tools/sound_fonts/`),
-  the 458-line dead string-literal block in `cli.py` plus the unused legacy
-  `cli` click group, ~450 LOC of confirmed-dead functions (deprecated Whisper
-  helpers/shims, dead version-info/gpu/event-logger/voice-profile helpers),
-  the unused `AudioStreamPlayer` class, `SecretPathMiddleware` (+ its tests),
-  dead `install_service`/`uninstall_service` and `providers.py` compat shims,
-  the expired `_env_deprecation.py` machinery (its one-release deprecation
-  window closed several versions ago), and a handful of unused imports plus
-  the direct `websockets` dependency (verified still available transitively
-  via fastmcp; `voicemode serve` re-tested at runtime after the drop).
+- **~2,300 lines of confirmed-dead code removed (VM-1811)** — code with zero
+  live callers, verified by AST import-map and caller-grep across the package.
+  No behaviour change. Includes 7 orphan modules (all of `tools/sound_fonts/`
+  among them), the legacy `cli` click group, the expired `_env_deprecation.py`
+  machinery, `SecretPathMiddleware`, assorted dead helpers and shims, and the
+  direct `websockets` dependency (still available transitively via fastmcp).
 
 ## [8.11.0] - 2026-07-10
 
