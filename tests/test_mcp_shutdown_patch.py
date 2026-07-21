@@ -84,6 +84,140 @@ class TestPatchCancelOnTransportClose:
         assert isinstance(mcp._mcp_server, _CancelOnTransportCloseLowLevelServer)
 
 
+async def _drive_until_transport_close(apply_patch: bool, settle: float = 3.0):
+    """Run a REAL fastmcp server over in-memory MCP streams, get a tool call
+    in flight, then close the client->server stream (the transport dying under
+    an in-flight handler) and report what happened.
+
+    Returns ``(server_run_returned, handler_was_cancelled)`` sampled *before*
+    any outer cancellation, so the two arms differ only by the patch.
+    """
+    from fastmcp import FastMCP
+    from mcp.shared.memory import create_client_server_memory_streams
+    from mcp.shared.message import SessionMessage
+    import mcp.types as types
+
+    handler_started = anyio.Event()
+    handler_cancelled = anyio.Event()
+    server_returned = anyio.Event()
+
+    mcp = FastMCP("vm2015-transport-close")
+
+    @mcp.tool
+    async def slow_tool() -> str:
+        """Stand-in for converse()'s long recording: in flight, not done."""
+        handler_started.set()
+        try:
+            await anyio.sleep(60)
+        except anyio.get_cancelled_exc_class():
+            handler_cancelled.set()
+            raise
+        return "never reached"  # pragma: no cover
+
+    if apply_patch:
+        patch_cancel_on_transport_close(mcp)
+
+    def _request(rid, method, params):
+        return SessionMessage(
+            types.JSONRPCMessage(
+                types.JSONRPCRequest(jsonrpc="2.0", id=rid, method=method, params=params)
+            )
+        )
+
+    def _notification(method):
+        return SessionMessage(
+            types.JSONRPCMessage(
+                types.JSONRPCNotification(jsonrpc="2.0", method=method, params={})
+            )
+        )
+
+    async with create_client_server_memory_streams() as (client_streams, server_streams):
+        client_read, client_write = client_streams
+        server_read, server_write = server_streams
+
+        async def _serve():
+            await mcp._mcp_server.run(
+                server_read,
+                server_write,
+                mcp._mcp_server.create_initialization_options(),
+            )
+            server_returned.set()
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(_serve)
+
+            await client_write.send(_request(1, "initialize", {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "vm2015-test", "version": "0"},
+            }))
+            with anyio.fail_after(10):
+                await client_read.receive()  # initialize result
+            await client_write.send(_notification("notifications/initialized"))
+            await client_write.send(_request(2, "tools/call", {
+                "name": "slow_tool", "arguments": {},
+            }))
+
+            with anyio.fail_after(10):
+                await handler_started.wait()
+
+            # THE EVENT UNDER TEST: the client vanishes mid-call. The server's
+            # incoming-message loop hits EOF with a handler still running.
+            await client_write.aclose()
+
+            with anyio.move_on_after(settle):
+                await server_returned.wait()
+
+            result = (server_returned.is_set(), handler_cancelled.is_set())
+            tg.cancel_scope.cancel()
+
+    return result
+
+
+class TestTransportCloseCancelsInFlightHandler:
+    """VM-2015 fix-001 round 2, question D -- what this module actually
+    defends, end to end through a real fastmcp server.
+
+    The per-request fix in converse.py closes VM-2015 itself (measured: the
+    repro passes with this module disabled). What it does NOT cover is the
+    client vanishing *without* cancelling first -- the agent is killed, the
+    terminal closes, the pipe breaks. Then nothing ever cancels the in-flight
+    handler, so the recording thread's stop flag is never set and the orphaned
+    server keeps the microphone for the rest of ``listen_duration_max``,
+    then spends an STT call transcribing audio nobody asked for.
+
+    Measured at process level with scripts/probe-transport-close.py (task dir,
+    listen_duration_max=20s): unpatched the process lived 17.5s past the close
+    and logged RECORDING_END -> STT_START -> STT_COMPLETE; patched it exited in
+    0.4s having logged TOOL_CANCELLED. These two tests pin that difference at
+    the dispatch-loop seam so it stays fixed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_patched_server_cancels_handler_and_returns(self):
+        returned, cancelled = await _drive_until_transport_close(apply_patch=True)
+
+        assert cancelled, (
+            "in-flight handler was not cancelled when the transport closed -- "
+            "a real recording thread would keep the mic for listen_duration_max"
+        )
+        assert returned, "LowLevelServer.run() did not return after transport close"
+
+    @pytest.mark.asyncio
+    async def test_unpatched_fastmcp_leaves_the_handler_running(self):
+        """The other half of the proof: stock fastmcp does NOT do this, so the
+        module is load-bearing rather than decorative. If this test starts
+        failing, upstream has fixed it -- delete this module (see
+        ``test_upstream_still_lacks_the_cancel``)."""
+        returned, cancelled = await _drive_until_transport_close(apply_patch=False)
+
+        assert not cancelled and not returned, (
+            "stock fastmcp cancelled the in-flight handler on transport close "
+            "-- voice_mode/mcp_shutdown_patch.py is now redundant and should "
+            "be deleted"
+        )
+
+
 class TestDispatchUntilClosed:
     """The extracted dispatch-loop-with-cancel-on-close behaviour, tested
     directly against a real anyio task group (no MCP session/transport

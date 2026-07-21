@@ -45,8 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `threading.Event` checked each VAD chunk (~100ms), so it stops almost
   immediately instead of running to the full duration; (3) restored the MCP
   SDK's cancel-in-flight-handlers-on-transport-close semantics that
-  fastmcp's `LowLevelServer.run()` drops, as defense in depth for shutdown
-  in general. Verified with the isolated repro at
+  fastmcp's `LowLevelServer.run()` drops — so if your client goes away
+  mid-recording *without* cancelling (agent killed, terminal closed, broken
+  pipe), the voicemode process now stops and releases the **microphone**
+  within a second instead of recording on to `listen_duration_max` and
+  transcribing audio nobody asked for (measured: 0.4s vs 17.5s on a 20s
+  limit). Verified with the isolated repro at
   `scripts/repro-vm2015.sh` (own `VOICEMODE_BASE_DIR`, conch disabled, no
   cross-talk with a live session): a second `converse()` call now reaches
   the server and returns `TOOL_REQUEST_START` after an ESC, every time.

@@ -22,8 +22,8 @@ transport's ``incoming_messages`` loop ends (or raises), the task group's
 ``__aexit__`` just joins whatever handler tasks are still running instead of
 cancelling them outright.
 
-That is a real, if secondary, contributor to the VM-2015 wedge: pair it with
-converse.py's "let CancelledError propagate instead of swallowing it" fix
+That is a real gap on the transport-close path (see "WHAT THIS MODULE IS FOR"
+below for the measurement): pair it with converse.py's "let CancelledError propagate instead of swallowing it" fix
 (the primary fix -- see converse.py's ``_converse_core``/``_ask_turns_pipeline``
 cancellation handling) and the recording-thread stop-flag (also converse.py)
 so that IF a handler is still in flight when the transport loop exits, the
@@ -54,11 +54,36 @@ instead of silent:
   When fastmcp fixes this itself, the test fails and this whole module should
   be deleted.
 
-Note the empirical scope of this patch, measured during review with
-``scripts/repro-vm2015.sh 30``: with the patch disabled the repro still
-PASSES (second converse after ESC reaches the server). The per-request fix in
-``converse.py`` is what closes VM-2015; this module is defence in depth for
-the *transport-close* path only.
+WHAT THIS MODULE IS FOR (measured, VM-2015 fix-001 round 2)
+-----------------------------------------------------------
+It does **not** fix VM-2015's ESC wedge -- with this module disabled
+``scripts/repro-vm2015.sh 30`` still PASSES. The per-request fix in
+``converse.py`` is what closes that bug.
+
+What it fixes is the neighbouring failure mode where the client vanishes
+*without* cancelling first -- the agent is killed, the terminal closes, the
+pipe breaks. Nothing then cancels the in-flight handler, so
+``listen_and_transcribe``'s ``except CancelledError`` never runs, the
+recording thread's stop flag is never set, and the orphaned server keeps the
+**microphone** for the rest of ``listen_duration_max`` before spending an STT
+call transcribing audio nobody asked for.
+
+Measured end to end with ``scripts/probe-transport-close.py 20`` (task dir),
+which drives a real stdio voicemode server, starts a recording, then closes
+its stdin:
+
+===========  ================================================================
+unpatched    process lived **17.5s** past the close (i.e. to
+             ``listen_duration_max``), logging RECORDING_END -> STT_START ->
+             STT_COMPLETE -- mic held, transcript of nobody
+patched      process exited in **0.4s**, logging TOOL_CANCELLED
+===========  ================================================================
+
+``tests/test_mcp_shutdown_patch.py::TestTransportCloseCancelsInFlightHandler``
+pins that difference at the dispatch-loop seam (real fastmcp server over
+in-memory MCP streams, no audio): one test asserts the patched server cancels
+the handler and returns, its twin asserts stock fastmcp does neither -- so
+this module cannot quietly become decorative.
 """
 
 from __future__ import annotations
