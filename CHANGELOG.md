@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A silently held voice channel could lock out every other agent, including the user's own assistant (VM-2045)** —
+  `converse(hold_conch=true)` re-stamped the hold's idle-expiry TTL on every
+  call, whether or not anything was actually said. An agent using it to
+  "wait" (calling it repeatedly without ever speaking) could hold the
+  channel indefinitely, silently refusing every other agent's `converse()`
+  calls. A hold is now only kept when the turn actually spoke; a silent
+  `hold_conch=true` call falls through to a full release instead.
+
 ## [8.12.0] - 2026-07-21
 
 ### Fixed
