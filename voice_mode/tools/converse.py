@@ -3356,6 +3356,15 @@ consult the MCP resources listed above.
     
     result = None
     success = False
+    # VM-2045: did THIS call actually produce speech (or otherwise
+    # legitimately use the floor)? Threaded into conch.release(spoke=...) in
+    # the `finally` block below so a hold_conch=true call that spoke nothing
+    # (TTS failed, or simply never reached a speaking branch) does not
+    # re-stamp/extend the hold's idle-expiry TTL. Deliberately independent of
+    # the pre-existing `success` var above, which is not set on every
+    # actually-spoke path (e.g. speak-only single-message success) and would
+    # be the wrong signal here.
+    spoke_this_turn = False
     conch = Conch(  # Named for event logging
         agent_name="converse",
         session_id=resolved_session_id,
@@ -3561,6 +3570,15 @@ consult the MCP resources listed above.
                     result, success = _format_survey_result(
                         survey_results, stopped_at, n_ask, effective_metrics_level,
                     )
+                    # VM-2045: every survey status except "not_reached" (never
+                    # started) and "tts_failed" (synthesis failed before any
+                    # audio played, `_ask_turns_pipeline`) is only reachable
+                    # AFTER that turn's prompt/statement actually played —
+                    # so this is exactly "spoke at least once this call".
+                    spoke_this_turn = any(
+                        r["status"] not in ("not_reached", "tts_failed")
+                        for r in survey_results
+                    )
 
                     n_answered = sum(1 for r in survey_results if r["status"] == "answered")
                     timing_str = ", ".join(
@@ -3607,6 +3625,11 @@ consult the MCP resources listed above.
                             should_skip_tts=should_skip_tts,
                         )
                     result, success = _format_turns_result(turn_results, effective_metrics_level)
+                    # VM-2045: r["success"] is True exactly when that turn's
+                    # audio actually played (or was an explicit skip_tts
+                    # no-op) — the same "did this call use the floor" signal
+                    # tts_success carries in the single-message path below.
+                    spoke_this_turn = any(r["success"] for r in turn_results)
 
                     n_ok = sum(1 for r in turn_results if r["success"])
                     timing_str = ", ".join(
@@ -3654,6 +3677,13 @@ consult the MCP resources listed above.
                             ref_text=resolved_ref_text
                         )
                 
+                # VM-2045: this is the actual "did this call use the floor"
+                # signal, threaded into conch.release(spoke=...) in the
+                # `finally` block below (root cause: it previously wasn't
+                # threaded anywhere, so a hold_conch=true call re-stamped the
+                # hold's idle-expiry TTL even when TTS produced nothing).
+                spoke_this_turn = tts_success
+
                 # Add TTS sub-metrics
                 if tts_metrics:
                     timings['ttfa'] = tts_metrics.get('ttfa', 0)
@@ -4265,14 +4295,21 @@ consult the MCP resources listed above.
 
         # Release the conch to signal voice conversation has ended. With
         # hold_conch=true, keep the floor between turns (re-stamped hold,
-        # flock dropped, file left) instead of a full release.
+        # flock dropped, file left) instead of a full release -- but ONLY
+        # when this turn actually spoke (VM-2045 fix-001): a hold_conch=true
+        # call that produced no speech (TTS failed, or no speaking branch was
+        # ever reached) falls through to a full release instead, so a caller
+        # cannot keep the floor indefinitely by calling converse(hold_conch=
+        # true) without ever saying anything -- closing rca-001's gap between
+        # "held the floor" and "used the floor".
         if CONCH_ENABLED and conch._acquired:
-            held_seconds = conch.release(hold=hold_conch)
+            held_seconds = conch.release(hold=hold_conch, spoke=spoke_this_turn)
             if event_logger:
                 event_logger.log_event("CONCH_RELEASE", {
                     "pid": os.getpid(),
                     "held_seconds": held_seconds,
-                    "hold_active": bool(hold_conch)
+                    "hold_active": bool(hold_conch and spoke_this_turn),
+                    "spoke": spoke_this_turn,
                 })
         else:
             # Don't call release() when not acquired — it would delete the lock

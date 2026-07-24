@@ -476,7 +476,7 @@ class Conch:
             except OSError:
                 pass
 
-    def release(self, hold: bool = False) -> float:
+    def release(self, hold: bool = False, spoke: bool = True) -> float:
         """Release the lock and return seconds held.
 
         Only removes the lock file if this instance actually acquired the lock.
@@ -491,6 +491,18 @@ class Conch:
                 process reclaims it on its next ``try_acquire`` (its own pid is
                 not "another" holder). If False, fully release: drop flock and
                 unlink (unchanged default behaviour).
+            spoke: VM-2045 — did THIS turn actually produce speech (or
+                otherwise legitimately use the floor)? Defaults to True so
+                every existing caller that never passes it keeps today's
+                behaviour. A hold is only re-stamped/extended when
+                ``hold and spoke`` — ``hold=True`` with ``spoke=False``
+                (nothing was said this turn: TTS failed, or the caller simply
+                didn't speak) falls through to a full release below instead
+                of refreshing the idle-expiry TTL. This is what closes the
+                unbounded-silent-hold gap (VM-2045 rca-001): "held the
+                floor" no longer re-stamps on its own — it must have been
+                "used" (spoken) this turn too, every turn, or the floor is
+                given up.
 
         Returns:
             Seconds the lock was held this turn, or 0.0 if not acquired
@@ -500,7 +512,7 @@ class Conch:
         if self._acquire_time:
             held_seconds = (datetime.now() - self._acquire_time).total_seconds()
 
-        if hold and self._acquired and self._fd is not None:
+        if hold and spoke and self._acquired and self._fd is not None:
             # Keep the floor: re-stamp + mark held while we still hold the
             # flock (atomic), then drop the flock but leave the file.
             self._acquire_time = datetime.now()
