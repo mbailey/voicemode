@@ -502,6 +502,55 @@ class ConchQueue:
         cls.list()
 
     @classmethod
+    def _write_grant_decision(
+        cls, entry: "WaiterEntry", *, claim_ttl: Optional[float] = None
+    ) -> None:
+        """Write a NEW grant to ``entry`` -- the single writer for both
+        grant-issuing DECISION points (VM-2078 fix-002 REFINE #2).
+
+        This module has four writes to the grant record that look identical
+        at a glance but split into two categories: **decisions** (this
+        method -- ``grant_next()``'s head-promotion and ``grant()``'s
+        named-waiter grant) derive ``claim_ttl`` from scratch for a *new*
+        grant; **refreshes** (``grant_next()``'s honour-an-existing-give
+        re-stamp, and ``_current_grant``'s granted_at-missing self-heal
+        stamp) preserve whatever ``claim_ttl`` a previous decision wrote,
+        verbatim, and must NOT re-derive it here -- doing so would quietly
+        turn a preserver into a decider and erase the split this method
+        exists to keep legible in code, not just in a comment (mirrors the
+        read-side split between ``_raw_grant``, unjudged, and
+        ``_current_grant``, judged).
+
+        Args:
+            entry: the waiter being granted to.
+            claim_ttl: an explicit, GRANTER-observed override (``grant()``'s
+                confirmed-delivered summon nudge) -- always wins over the
+                fallback below. If ``None`` and ``entry.pid is None``,
+                falls back to the bounded remote window
+                (``max(_get_grant_ttl(), _get_remote_ttl())``): a pid-less
+                waiter's claim is a heartbeat/status round trip, not a poll
+                loop, so the base window is structurally unwinnable for it,
+                whether it arrived here via ordinary head-promotion or an
+                explicit ``conch give`` with no delivery evidence to
+                report. ``max()``, never a replacement -- an
+                administratively widened ``CONCH_GRANT_TTL`` (e.g. for
+                debugging) must not be cut back to the remote default.
+        """
+        payload = {
+            "session_id": entry.session_id,
+            "seq": entry.seq,
+            # VM-1967 safety net: stamp when this grant was issued so a
+            # grant that never gets claimed can self-heal past
+            # CONCH_GRANT_TTL (see ``_grant_wedged`` / ``_current_grant``).
+            "granted_at": datetime.now().isoformat(),
+        }
+        if claim_ttl is not None:
+            payload["claim_ttl"] = claim_ttl
+        elif entry.pid is None:
+            payload["claim_ttl"] = max(_get_grant_ttl(), _get_remote_ttl())
+        cls._atomic_write_json(cls._grant_file(), payload)
+
+    @classmethod
     def grant_next(cls) -> Optional[WaiterEntry]:
         """Promote the next acquirer on release -- unless an explicit give stands.
 
@@ -574,35 +623,12 @@ class ConchQueue:
             return None
 
         target = waiters[0]
-        payload = {
-            "session_id": target.session_id,
-            "seq": target.seq,
-            # VM-1967 safety net: stamp when this grant was issued so a
-            # grant that never gets claimed can self-heal past
-            # CONCH_GRANT_TTL (see ``_grant_wedged`` / ``_current_grant``).
-            "granted_at": datetime.now().isoformat(),
-        }
-        if target.pid is None:
-            # REFINE #1 (fix-002): ordinary head-promotion is a SECOND
-            # grant-issuing path, distinct from ``grant()``'s summon carve-
-            # out -- and it was the one the settled delivery-evidence shape
-            # missed. A remote waiter's claim is a heartbeat/status ROUND
-            # TRIP, not a local poll loop, so the base (poll-cycle-sized)
-            # TTL is structurally unwinnable for it: tools/conch.py has it
-            # heartbeat on a ~CONCH_REMOTE_TTL cadence, so a base-TTL grant
-            # dies at almost exactly the moment it would first look.
-            # "Grantee has no local pid" is a fact the GRANTER observes
-            # right here at grant time -- exactly like an observed nudge
-            # delivery in the summon path -- so writing a wider window is
-            # the same delivery-evidence principle, not a new exemption.
-            # max(), never a replacement: an administratively widened
-            # CONCH_GRANT_TTL (e.g. for debugging) must not be cut back to
-            # the remote default. NO field on WaiterEntry -- this lives on
-            # the one-shot grant record only, same as ``grant()``'s
-            # ``claim_ttl``, so it says nothing about a *category* of
-            # waiter.
-            payload["claim_ttl"] = max(_get_grant_ttl(), _get_remote_ttl())
-        cls._atomic_write_json(cls._grant_file(), payload)
+        # A NEW grant decision (not a refresh) -- see ``_write_grant_decision``
+        # for why that distinction is written into the code, not left as a
+        # comment. No explicit ``claim_ttl``: this is ordinary head-promotion,
+        # not the summon carve-out, so the only evidence available is
+        # ``target.pid``, which the helper itself keys on.
+        cls._write_grant_decision(target)
         return target
 
     @classmethod
@@ -632,10 +658,17 @@ class ConchQueue:
                 one-shot grant record, not on ``WaiterEntry``, so it says
                 nothing about the *kind* of waiter, only about what was
                 observed for THIS grant. Callers that have no such evidence
-                must leave this ``None`` (base TTL applies) -- and a caller
-                that observed the nudge FAIL (or the target being remote,
-                where no nudge is even possible) must not call ``grant()``
-                at all, per the same ruling.
+                must leave this ``None`` -- and a caller that observed the
+                nudge FAIL (or the target being remote, where no nudge is
+                even possible) must not call ``grant()`` at all, per the
+                same ruling. ``None`` does not always mean "base TTL
+                applies" though: if the target waiter has no local ``pid``,
+                this method itself falls back to the same bounded remote
+                window ``grant_next()`` uses for ordinary head-promotion
+                (VM-2078 fix-002 REFINE #2) -- ``conch give`` to a remote
+                waiter is the same unwinnable poll-cycle arithmetic as an
+                ordinary remote promotion, through a different door, and a
+                caller-supplied ``claim_ttl`` still wins over it.
 
         Returns:
             ``True`` if the session was a live waiter and the grant was written;
@@ -645,15 +678,14 @@ class ConchQueue:
             return False
         for e in cls.list():  # runs cleanup; only live waiters
             if e.session_id == session_id:
-                payload = {
-                    "session_id": e.session_id,
-                    "seq": e.seq,
-                    # VM-1967 safety net -- see grant_next().
-                    "granted_at": datetime.now().isoformat(),
-                }
-                if claim_ttl is not None:
-                    payload["claim_ttl"] = claim_ttl
-                cls._atomic_write_json(cls._grant_file(), payload)
+                # A NEW grant decision -- see ``_write_grant_decision``. An
+                # explicit ``claim_ttl`` (this method's own summon carve-out)
+                # always wins; failing that, the helper still falls back to
+                # the bounded remote window if ``e.pid is None`` -- `conch
+                # give` to a remote waiter is the same unwinnable poll-cycle
+                # arithmetic as an ordinary remote head-promotion
+                # (``grant_next()``), through a different door.
+                cls._write_grant_decision(e, claim_ttl=claim_ttl)
                 return True
         return False
 

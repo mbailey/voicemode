@@ -713,6 +713,57 @@ class TestGrantClaimTTLOverride:
         self._backdate_grant(11)  # past the 10s base TTL
         assert ConchQueue.granted_to() is None  # evicted, same as always
 
+    def test_give_to_a_remote_waiter_with_no_explicit_claim_ttl_gets_the_remote_window(
+        self, monkeypatch
+    ):
+        """REFINE #2 (fix-002, retry 2/3): ``claim_ttl`` was previously only
+        ever defaulted by ``grant_next()``'s ordinary head-promotion
+        (REFINE #1). ``grant()`` -- the ``conch give`` / summon path -- still
+        wrote a BASE-TTL grant whenever its caller passed no ``claim_ttl``,
+        even when the target waiter has no local ``pid``: ``tools/conch.py``
+        ``_do_give`` and the CLI ``give`` both call ``grant()`` with no
+        ``claim_ttl``, so 'conch give' to a remote waiter was the same
+        unwinnable heartbeat-round-trip arithmetic as REFINE #1's bug,
+        through a different door.
+
+        The fix lives in ``grant()`` (via the shared ``_write_grant_decision``
+        writer), not in its call sites, so no caller has to remember it.
+        Asserts both halves of the bounded window: survives past the base
+        TTL, still eventually evicted past the remote one -- not a new
+        exemption."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("remote-waiter", pid=None)
+        assert ConchQueue.grant("remote-waiter") is True  # no explicit claim_ttl
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 60.0  # max(10, 60)
+
+        self._backdate_grant(30)  # past the 10s local TTL, within the 60s remote one
+        assert ConchQueue.granted_to() == "remote-waiter"  # survives -- can still claim
+
+        self._backdate_grant(9999)  # past the remote TTL too
+        assert ConchQueue.granted_to() is None  # still finite -- eventually evicted
+        assert ConchQueue.list() == []
+
+    def test_give_to_a_remote_waiter_with_an_explicit_claim_ttl_still_wins(
+        self, monkeypatch
+    ):
+        """The caller-supplied override must still win over the pid-based
+        fallback -- a summon carve-out that has real delivery evidence
+        should not be silently overridden by the structural pid-is-None
+        default."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("remote-waiter", pid=None)
+        assert ConchQueue.grant("remote-waiter", claim_ttl=5.0) is True
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 5.0  # explicit value, not max(10, 60)
+
+        self._backdate_grant(6)  # past the explicit 5s override
+        assert ConchQueue.granted_to() is None  # evicted per the explicit override
+
 
 # --------------------------------------------------------------------------- #
 # Conch <-> queue integration (try_acquire grant-respect, release promotion)
