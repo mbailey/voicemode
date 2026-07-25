@@ -358,6 +358,22 @@ class TestMouth4SampleBinDir:
         # and the error says so instead of quietly reaching Alloy.
         assert isinstance(exc, vp.Unresolvable)
 
+    def test_naming_a_sample_bin_dir_names_the_specific_cure(
+        self, sample_bin_voices_dir, monkeypatch
+    ):
+        """design.md §3.3: mouth 4 must be closed loudly at BOTH ends — the
+        load-time WARNING already names the cure (previous test); the
+        resolve-time error for directly naming the bin must too, not just a
+        generic "unresolvable" with nearest-matches noise."""
+        vp = _reload_voice_profiles(sample_bin_voices_dir, monkeypatch)
+        vp.load_profiles()
+        with pytest.raises(vp.Unresolvable) as exc_info:
+            vp.resolve_voice("mixtape")
+        message = str(exc_info.value)
+        assert "sample bin" in message
+        assert "default.wav" in message
+        assert "take-1.wav" in message  # the specific ln -s hint
+
 
 # ---------------------------------------------------------------------------
 # MOUTH 5 — out-of-range index: voice="name[99]"

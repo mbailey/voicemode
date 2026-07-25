@@ -251,9 +251,11 @@ class _Registry:
     """Internal load-time state — replaces the flat leaf-keyed dict."""
     profiles: Dict[str, VoiceProfile] = field(default_factory=dict)          # canonical id -> profile
     leaf_index: Dict[str, List[str]] = field(default_factory=dict)           # voice leaf -> [canonical id]
-    group_children: Dict[str, Dict[str, str]] = field(default_factory=dict)  # group canon -> {child_name: "voice"|"group"}
+    group_children: Dict[str, Dict[str, str]] = field(default_factory=dict)  # group canon -> {child_name: "voice"|"group"|"sample_bin"}
     group_default: Dict[str, Optional[str]] = field(default_factory=dict)    # group canon -> declared default leaf (or None)
     group_leaf_index: Dict[str, List[str]] = field(default_factory=dict)     # group leaf -> [group canonical id]
+    sample_bins: Dict[str, str] = field(default_factory=dict)                # sample-bin canon -> hint wav filename
+    sample_bin_leaf_index: Dict[str, List[str]] = field(default_factory=dict)  # sample-bin leaf -> [canonical id]
 
 
 _registry = _Registry()
@@ -290,6 +292,22 @@ def _resolve_default_wav(voice_dir: Path) -> Optional[Path]:
         f"to register it, e.g. `ln -s {wavs[0].name} default.wav`)."
     )
     return None
+
+
+def _sample_bin_hint(voice_dir: Path) -> Optional[str]:
+    """Return the first ``*.wav`` filename if ``voice_dir`` is a sample bin
+    (>= 2 WAVs, no ``default.wav``) — the same condition
+    :func:`_resolve_default_wav` already WARNs about at load time.
+
+    Used to register a resolve-time marker (design.md §3.3: mouth 4 must be
+    "closed loudly at both ends") so a caller who directly names a sample-bin
+    directory gets the specific cure in the *error*, not just in a load-time
+    log line they may never have seen.
+    """
+    if (voice_dir / "default.wav").exists():
+        return None
+    wavs = sorted(voice_dir.glob("*.wav"))
+    return wavs[0].name if len(wavs) >= 2 else None
 
 
 def _resolve_transcript(wav_path: Path) -> str:
@@ -539,7 +557,19 @@ def _load_dir_profiles() -> _Registry:
         except OSError:
             return
         if not children:
-            return  # empty dir, or an unregistered sample bin (already warned above)
+            # Either a genuinely empty dir, or a sample bin (>=2 WAVs, no
+            # default.wav — already WARNED about above). Register the latter
+            # so a direct resolve-time request for its name gets the same
+            # specific cure in the error, not just a generic "unresolvable"
+            # (design.md §3.3: mouth 4 closed loudly at BOTH ends).
+            bin_hint = _sample_bin_hint(dir_path)
+            if bin_hint is not None:
+                canon = _canonical_id(dir_path)
+                leaf = dir_path.name
+                reg.sample_bins[canon] = bin_hint
+                reg.sample_bin_leaf_index.setdefault(leaf, []).append(canon)
+                register_child(parent_canon, leaf, "sample_bin")
+            return
 
         this_canon = _canonical_id(dir_path)
         reg.group_default[this_canon] = _read_group_default(dir_path)
@@ -785,6 +815,21 @@ def _resolve_cast(expr: str, group_canon: str) -> VoiceResolution:
     )
 
 
+def _sample_bin_error(expr: str, canon: str) -> Unresolvable:
+    """The specific-cure error for naming a sample-bin dir directly.
+
+    design.md §3.3: mouth 4 must be closed loudly at BOTH ends — the
+    load-time WARNING already names the cure; this gives the resolve-time
+    error the same specific cure instead of a generic "unresolvable".
+    """
+    hint = _registry.sample_bins[canon]
+    return Unresolvable(
+        expr,
+        f"{canon!r} is a sample bin (multiple WAVs, no default.wav) — add a "
+        f"default.wav symlink to register it, e.g. `ln -s {hint} default.wav`",
+    )
+
+
 def _resolve_segment_walk(expr: str, body: str, index: Optional[int]) -> VoiceResolution:
     segments = body.split("/")
     cur_group = ""
@@ -801,6 +846,9 @@ def _resolve_segment_walk(expr: str, body: str, index: Optional[int]) -> VoiceRe
                 f"no {seg!r} under {where} — it has: {', '.join(existing) if existing else '(nothing)'}",
             )
         child_canon = f"{cur_group}/{seg}" if cur_group else seg
+
+        if child_kind == "sample_bin":
+            raise _sample_bin_error(expr, child_canon)
 
         if child_kind == "voice":
             if not remaining:
@@ -864,6 +912,13 @@ def _resolve_bare(expr: str, name: str, index: Optional[int]) -> VoiceResolution
         return _resolve_cast(expr, group_candidates[0])
     if len(group_candidates) > 1:
         raise AmbiguousLeaf(expr, name, sorted(group_candidates))
+
+    bin_candidates = _registry.sample_bin_leaf_index.get(name, [])
+    if bin_candidates:
+        # Terminal and unambiguous by construction for the common case (a
+        # top-level sample bin); if the same leaf names >1 bin, the first
+        # canonical id's cure still applies — say so via its own path.
+        raise _sample_bin_error(expr, bin_candidates[0])
 
     if index is None and _is_provider_native(name):
         return VoiceResolution(requested=expr, resolved=name, kind="provider", via="provider-native", profile=None)
