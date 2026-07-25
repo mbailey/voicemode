@@ -231,7 +231,8 @@ class _RecordingRun:
 
 class TestSummon:
     def test_summon_non_waiter_enqueues_grants_nudges(self, runner, monkeypatch):
-        """give a running non-waiter ⇒ auto-enqueue + grant + nudge (SC1)."""
+        """give a running non-waiter ⇒ auto-enqueue + nudge + grant-iff-
+        confirmed-delivered (SC1, VM-2078 D2)."""
         monkeypatch.setattr(conch_ops, "_list_running_sessions",
                             lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
         rec = _RecordingRun()
@@ -247,8 +248,40 @@ class TestSummon:
         assert entry.agent == "dora"
         assert entry.pid == os.getpid()
         assert ConchQueue.granted_to() == "run-1"
-        # The VM-1625 push fired (callback + local pid ⇒ tmux nudge).
+        # The VM-1625 push fired (summon path + local pid ⇒ tmux nudge; the
+        # target has no poll loop of its own).
         assert any(call and call[:2] == ["session", "send"] for call in rec.calls)
+
+    def test_summon_withholds_grant_when_nudge_fails(self, runner, monkeypatch):
+        """D2 amendment: an ATTEMPTED-but-failed nudge must NOT grant — the
+        target stays queued, not stranded, and the operator is told plainly
+        to tell it themselves."""
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
+        monkeypatch.setattr("subprocess.run", _RecordingRun(returncode=1))
+
+        result = runner.invoke(conch, ["give", "dora"])
+        assert result.exit_code == 0
+        assert "tell them yourself" in result.output.lower()
+        entry = next((e for e in ConchQueue.list() if e.session_id == "run-1"), None)
+        assert entry is not None  # still queued
+        assert ConchQueue.granted_to() is None  # NOT granted
+
+    def test_summon_withholds_grant_when_target_is_remote(self, runner, monkeypatch):
+        """D2 amendment: a remote target (no local pid) has no nudge path at
+        all — must not be silently upgraded to a delivered nudge."""
+        remote = conch_ops.RunningSession(
+            session_id="remote-run", pid=None, agent="dora", project_path=None,
+        )
+        monkeypatch.setattr(conch_ops, "_list_running_sessions", lambda: [remote])
+        rec = _RecordingRun()  # would report "delivered" if it were ever called
+        monkeypatch.setattr("subprocess.run", rec)
+
+        result = runner.invoke(conch, ["give", "dora"])
+        assert result.exit_code == 0
+        assert "remote" in result.output.lower()
+        assert ConchQueue.granted_to() is None
+        assert rec.calls == []  # no nudge attempted at all for a remote target
 
     def test_summon_by_session_id_prefix(self, runner, monkeypatch):
         monkeypatch.setattr(conch_ops, "_list_running_sessions",

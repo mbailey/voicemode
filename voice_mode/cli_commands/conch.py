@@ -164,10 +164,13 @@ def conch_give(session):
     Resolves SESSION against the waiter queue first: a matching waiter is made
     the designated next acquirer (it takes the floor when the current holder
     releases). If no waiter matches, SESSION is resolved against the *running*
-    sessions (``session list``) and **summoned** — auto-enqueued, granted, and
-    nudged to take the floor (VM-1637, since a summoned session has no poll
-    loop of its own). This does NOT evict the holder — use 'bump' for an
-    immediate hand-off.
+    sessions (``session list``) and **summoned** — auto-enqueued and nudged
+    (VM-1637, since a summoned session has no poll loop of its own). The
+    nudge's delivery is checked: only a CONFIRMED delivery grants the conch;
+    a failed or impossible (remote) nudge withholds the grant and tells you
+    to tell them yourself (VM-2078 D2) — never hands the floor to a target
+    just confirmed not to have been told. This does NOT evict the holder —
+    use 'bump' for an immediate hand-off.
     """
     waiters = ConchQueue.list()
     try:

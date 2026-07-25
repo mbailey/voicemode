@@ -12,8 +12,8 @@ single source of truth), the logic *both* need lives here, exactly once:
   prefix) to exactly one live waiter, for ``give``.
 - :func:`force_clear_lock` — unlink a stale/stuck holder lock, returning its
   last payload, for ``bump`` / ``release``.
-- :func:`notify_granted_session` — the notify-on-give push (VM-1625) keyed by
-  session id.
+- :func:`summon_and_grant` — the ``give``-to-a-non-waiter fallback (VM-1637),
+  including its D2 checked-and-surfaced operator nudge.
 - small ISO-timestamp / display helpers used by the snapshot.
 
 This module is deliberately UI-agnostic: it raises :class:`ConchResolveError`
@@ -358,35 +358,6 @@ def force_clear_lock() -> Optional[dict]:
 
 
 # --------------------------------------------------------------------------- #
-# Notify-on-give (VM-1625), keyed by session id
-# --------------------------------------------------------------------------- #
-
-def notify_granted_session(session_id: Optional[str]) -> None:
-    """Push a "your turn" nudge to ``session_id`` after a grant (VM-1625).
-
-    VM-2078 removed converse's callback mode (and with it the ordinary
-    give/bump nudges -- every ordinary waiter now polls and self-acquires, so
-    pinging it is redundant). The one caller left is
-    :func:`summon_and_grant` (VM-1637): an operator-summoned non-waiter has no
-    poll loop of its own, so it still needs telling. Resolves the grantee's
-    live queue entry and delegates to
-    :func:`voice_mode.conch_notify.notify_granted` for the local/remote
-    routing. Best-effort: a vanished waiter or any notify glitch is a silent
-    no-op and never breaks the command.
-    """
-    if not session_id:
-        return
-    try:
-        from voice_mode.conch_notify import notify_granted
-        entry = next(
-            (e for e in ConchQueue.list() if e.session_id == session_id), None
-        )
-        notify_granted(entry)
-    except Exception:
-        pass
-
-
-# --------------------------------------------------------------------------- #
 # Summon-and-grant (the `give` no-waiter fallback, VM-1637)
 # --------------------------------------------------------------------------- #
 
@@ -399,20 +370,31 @@ def summon_and_grant(token: str) -> dict:
        may raise :class:`ConchResolveError`),
     2. no-ops if that session is the **current holder** (it already has the
        floor — do not double-enqueue),
-    3. otherwise auto-enqueues it as an ordinary waiter carrying the
-       fields notify needs (``session_id``, ``pid``, ``project_path``, ``agent``),
-       grants it the conch (now a live waiter, so ``ConchQueue.grant`` succeeds
-       and the grant hint makes it the next acquirer), and pushes the VM-1625
-       nudge — a summoned session has no poll loop of its own, so unlike an
-       ordinary waiter it must still be told (VM-2078 carve-out),
+    3. otherwise auto-enqueues it as an ordinary waiter (so it is never a
+       stranger to the queue even if the rest of this fails), then attempts
+       an operator-path nudge (:func:`voice_mode.conch_notify.push_nudge`,
+       VM-1625) — a summoned session has no poll loop of its own, so unlike
+       an ordinary waiter it must still be told.
 
-    returning a structured outcome dict (``summoned``/``noop`` + identity +
-    ``message``) that each front end renders in its own style.
+    **D2 (VM-2078): the grant follows the nudge's CHECKED, SURFACED outcome —
+    never handed out on the strength of a delivery that did not happen.**
+
+    - nudge ``"delivered"`` ⇒ grant, with a bounded, LONGER claim window
+      (:meth:`ConchQueue.remote_claim_window`) — the target has no poll loop
+      of its own, so the ordinary poll-cycle window is unwinnable for it;
+    - nudge ``"failed"`` or ``"remote"`` (no local pid — no nudge is even
+      possible) ⇒ **do not grant at all**. The target stays queued as an
+      ordinary waiter (so it is still in line, not stranded) and the
+      response tells the operator plainly to tell it themselves.
+
+    Every outcome path returns a structured dict (``summoned``/``noop`` +
+    ``granted`` + ``nudge`` + identity + ``message``) designed to be acted on
+    **programmatically**, not just printed — each front end also renders
+    ``message`` in its own style.
 
     **No orphan entry (SC4):** the resolve — which can raise — happens *before*
     ``register``, so a failed or ambiguous resolve never leaves a half-enqueued
-    waiter. ``ConchQueue.grant()`` itself is unchanged: we satisfy its
-    live-waiter invariant by registering first.
+    waiter.
     """
     target = resolve_running_session(token)  # may raise — before any register
 
@@ -437,21 +419,57 @@ def summon_and_grant(token: str) -> dict:
         voice=None,
         pid=target.pid,
     )
-    granted = ConchQueue.grant(target.session_id)
-    notify_granted_session(target.session_id)
 
+    from voice_mode.conch_notify import push_nudge
+    nudge = push_nudge(target)  # "delivered" | "failed" | "remote"
+
+    if nudge != "delivered":
+        # D2 amendment: a failed/impossible nudge must WITHHOLD the grant —
+        # handing the floor to a target you just confirmed was not told is
+        # the original bug wearing a different hat. Left queued (above) so
+        # it still gets its ordinary turn instead of being stranded.
+        why = ("could not confirm the nudge was delivered" if nudge == "failed"
+               else "is remote — no nudge is possible at all")
+        return {
+            "action": "give",
+            "summoned": True,
+            "noop": False,
+            "granted": False,
+            "nudge": nudge,
+            "session_id": target.session_id,
+            "agent": target.label,
+            "message": (
+                f"Summoned {target.label} (session {short(target.session_id)}) but "
+                f"{why} — NOT granting the conch. Tell them yourself; they are "
+                f"queued and will acquire it in the ordinary order."
+            ),
+        }
+
+    granted = ConchQueue.grant(target.session_id, claim_ttl=ConchQueue.remote_claim_window())
     when = "now (the conch is free)" if holder is None else \
         f"when {holder.get('agent') or 'the holder'} releases"
+    if granted:
+        message = (
+            f"Summoned {target.label} (session {short(target.session_id)}); nudge "
+            f"delivered, and gave them the conch; they acquire {when}."
+        )
+    else:
+        # Race: the target vanished (dead pid / deregistered) between
+        # register() and grant() — the nudge landed against a target that no
+        # longer exists to claim anything. Report it plainly rather than
+        # claim a grant that was never written.
+        message = (
+            f"Nudged {target.label} (session {short(target.session_id)}), but they "
+            f"vanished from the queue before the conch could be granted."
+        )
     return {
         "action": "give",
         "summoned": True,
         "noop": False,
         "granted": granted,
+        "nudge": "delivered",
         "session_id": target.session_id,
         "agent": target.label,
         "when": when,
-        "message": (
-            f"Summoned {target.label} (session {short(target.session_id)}) and gave "
-            f"them the conch; they acquire {when}."
-        ),
+        "message": message,
     }

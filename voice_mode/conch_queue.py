@@ -547,8 +547,25 @@ class ConchQueue:
         if claim_ttl is not None:
             payload["claim_ttl"] = claim_ttl
         elif entry.pid is None:
-            payload["claim_ttl"] = max(_get_grant_ttl(), _get_remote_ttl())
+            payload["claim_ttl"] = cls.remote_claim_window()
         cls._atomic_write_json(cls._grant_file(), payload)
+
+    @classmethod
+    def remote_claim_window(cls) -> float:
+        """The bounded claim window (seconds) for a grantee with no poll loop
+        of its own -- ``max(_get_grant_ttl(), _get_remote_ttl())``.
+
+        The single source of truth for that value, used two ways: (1) as the
+        ``pid is None`` fallback in :meth:`_write_grant_decision` above, and
+        (2) as the explicit ``claim_ttl`` a caller with its OWN delivery
+        evidence passes to :meth:`grant` (e.g.
+        ``conch_ops.summon_and_grant``'s confirmed-delivered nudge, VM-2078
+        D2) -- a summoned *local*-pid target answered via a pane nudge claims
+        at human/agent reaction speed, the same order of magnitude as a
+        remote heartbeat round trip, not a poll cycle, so it needs the same
+        bounded widening even though it has a pid.
+        """
+        return max(_get_grant_ttl(), _get_remote_ttl())
 
     @classmethod
     def grant_next(cls) -> Optional[WaiterEntry]:
@@ -853,6 +870,31 @@ class ConchQueue:
         if session_id is None:
             return False
         return cls.granted_to() == session_id
+
+    @classmethod
+    def claim_window_remaining(cls, session_id: str) -> Optional[float]:
+        """Seconds left for ``session_id`` to claim its grant, or ``None``.
+
+        ``None`` when ``session_id`` is not the current live grantee, or the
+        grant carries no ``granted_at`` timestamp. Falls back to the base
+        ``CONCH_GRANT_TTL`` when the grant carries no ``claim_ttl`` override.
+
+        VM-2078 do-003: lets a passively-granted party discover it *on the
+        one call it was told to make regularly* -- e.g. the MCP
+        ``heartbeat`` action -- instead of needing a second, un-instructed
+        ``status`` call to find out it is even holding a grant at all.
+        """
+        g = cls._current_grant()
+        if g is None or g.get("session_id") != session_id:
+            return None
+        granted_at = cls._parse_iso(g.get("granted_at"))
+        if granted_at is None:
+            return None
+        ttl = g.get("claim_ttl")
+        if ttl is None or ttl <= 0:
+            ttl = _get_grant_ttl()
+        now = datetime.now(granted_at.tzinfo) if granted_at.tzinfo is not None else datetime.now()
+        return max(0.0, ttl - (now - granted_at).total_seconds())
 
     @classmethod
     def clear_grant(cls) -> None:

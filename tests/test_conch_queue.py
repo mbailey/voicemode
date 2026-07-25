@@ -766,6 +766,93 @@ class TestGrantClaimTTLOverride:
 
 
 # --------------------------------------------------------------------------- #
+# VM-2078 do-003: remote_claim_window / claim_window_remaining
+#
+# remote_claim_window() is the single source of truth _write_grant_decision's
+# pid-based fallback (tested above via TestGrantClaimTTLOverride) already
+# exercises indirectly; these tests cover it -- and the heartbeat-facing
+# claim_window_remaining() -- directly.
+# --------------------------------------------------------------------------- #
+
+class TestRemoteClaimWindow:
+    def test_is_max_of_base_and_remote_ttl(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        assert ConchQueue.remote_claim_window() == 60.0
+
+    def test_never_narrows_an_administratively_widened_base_ttl(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 300.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 90.0)
+        assert ConchQueue.remote_claim_window() == 300.0
+
+    def test_summon_confirmed_delivered_uses_it_as_the_explicit_claim_ttl(
+        self, monkeypatch
+    ):
+        """The exact do-003/fix-002 interlock: a LOCAL-pid summon target
+        (nudged, not polling) still needs the bounded window, via an
+        explicit ``claim_ttl`` -- ``grant()``'s own pid-based fallback would
+        NOT fire for it (it has a pid), so the caller must pass it."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("summoned-local")  # local pid -- nudged, not polling
+        assert ConchQueue.grant(
+            "summoned-local", claim_ttl=ConchQueue.remote_claim_window()
+        ) is True
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 60.0
+
+
+class TestClaimWindowRemaining:
+    def _backdate_grant(self, seconds):
+        gf = ConchQueue._grant_file()
+        payload = json.loads(gf.read_text())
+        past = datetime.now() - timedelta(seconds=seconds)
+        payload["granted_at"] = past.isoformat()
+        gf.write_text(json.dumps(payload))
+
+    def test_none_when_not_the_current_grantee(self):
+        ConchQueue.register("a")
+        ConchQueue.register("b")
+        ConchQueue.grant_next()  # grants "a"
+        assert ConchQueue.claim_window_remaining("b") is None
+
+    def test_none_when_no_grant_at_all(self):
+        ConchQueue.register("a")
+        assert ConchQueue.claim_window_remaining("a") is None
+
+    def test_full_window_right_after_grant(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 30.0)
+        ConchQueue.register("a")
+        ConchQueue.grant_next()
+        remaining = ConchQueue.claim_window_remaining("a")
+        assert remaining is not None
+        assert remaining == pytest.approx(30.0, abs=1.0)
+
+    def test_counts_down_and_reflects_a_claim_ttl_override(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("summoned")
+        assert ConchQueue.grant("summoned", claim_ttl=90.0) is True
+        self._backdate_grant(30)
+        remaining = ConchQueue.claim_window_remaining("summoned")
+        assert remaining == pytest.approx(60.0, abs=1.0)  # 90 - 30
+
+    def test_never_negative_once_past_the_window(self, monkeypatch):
+        """Past the window the grant is ordinarily self-healed away (evicted)
+        on the very next judged read, so there is no "stale but still
+        present" case to clamp -- UNLESS a live holder still gates the
+        judgement (fix-002's holder gate: a grant cannot be wedged while the
+        floor is still occupied). That is the one real case where
+        ``claim_window_remaining`` sees a grant whose TTL has already run out
+        and must clamp rather than go negative."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        Conch(session_id="holder-sess").acquire(agent_name="holder")
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a") is True
+        self._backdate_grant(9999)
+        assert ConchQueue.claim_window_remaining("a") == 0.0
+
+
+# --------------------------------------------------------------------------- #
 # Conch <-> queue integration (try_acquire grant-respect, release promotion)
 # --------------------------------------------------------------------------- #
 
