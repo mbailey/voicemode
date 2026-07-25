@@ -111,9 +111,14 @@ def test_indexed_with_matching_txt_uses_it(vp):
     assert p.ref_text == "angry transcript"
 
 
-def test_index_out_of_range_falls_back_to_default(vp):
-    p = vp.get_profile("samantha[99]")
-    assert p.ref_audio.endswith("/samantha/default.wav")
+def test_index_out_of_range_raises_loud(vp):
+    """VM-1901 mouth 5: an out-of-range index now raises IndexOutOfRange
+    (naming the count) instead of silently falling back to default.wav."""
+    with pytest.raises(vp.IndexOutOfRange):
+        vp.resolve_voice("samantha[99]")
+    # The back-compat get_profile() wrapper preserves its old "None on
+    # failure" contract rather than raising.
+    assert vp.get_profile("samantha[99]") is None
 
 
 # ---------- relative path selector ----------
@@ -331,33 +336,45 @@ def vp_grouped(grouped_voices_dir):
     return voice_profiles
 
 
-def test_grouped_voice_keyed_by_leaf_name(vp_grouped):
+def test_grouped_voice_keyed_by_canonical_id(vp_grouped):
+    """VM-1901: the registry is now keyed by CANONICAL id (relative path
+    from VOICES_DIR), not bare leaf name — this is what makes qualified
+    addressing and collision handling possible. Bare-name lookup still
+    works for unambiguous leaves via get_profile()/resolve_voice()."""
     profiles = vp_grouped.load_profiles()
-    assert "bob" in profiles
-    assert "linda" in profiles
-    assert profiles["bob"].ref_audio.endswith("/bobs-burgers/bob/default.wav")
+    assert "bobs-burgers/bob" in profiles
+    assert "bobs-burgers/linda" in profiles
+    assert "bob" not in profiles  # no longer leaf-keyed
+    assert profiles["bobs-burgers/bob"].ref_audio.endswith("/bobs-burgers/bob/default.wav")
+    # Bare-leaf lookup still resolves (unambiguous leaf -> canonical id).
+    assert vp_grouped.get_profile("bob").ref_audio.endswith("/bobs-burgers/bob/default.wav")
 
 
 def test_three_deep_nested_voice_loads(vp_grouped, grouped_voices_dir):
     profiles = vp_grouped.load_profiles()
-    assert "picard" in profiles
-    assert profiles["picard"].ref_audio.endswith(
+    assert "star-trek/tng/picard" in profiles
+    assert profiles["star-trek/tng/picard"].ref_audio.endswith(
+        "/star-trek/tng/picard/default.wav"
+    )
+    assert vp_grouped.get_profile("picard").ref_audio.endswith(
         "/star-trek/tng/picard/default.wav"
     )
 
 
 def test_flat_and_nested_coexist(vp_grouped):
     profiles = vp_grouped.load_profiles()
-    assert set(profiles.keys()) == {"alan", "bob", "linda", "picard"}
+    assert set(profiles.keys()) == {
+        "alan", "bobs-burgers/bob", "bobs-burgers/linda", "star-trek/tng/picard",
+    }
 
 
 def test_voice_dir_field_records_resolved_path(vp_grouped, grouped_voices_dir):
     profiles = vp_grouped.load_profiles()
     assert profiles["alan"].voice_dir == str(grouped_voices_dir / "alan")
-    assert profiles["bob"].voice_dir == str(
+    assert profiles["bobs-burgers/bob"].voice_dir == str(
         grouped_voices_dir / "bobs-burgers" / "bob"
     )
-    assert profiles["picard"].voice_dir == str(
+    assert profiles["star-trek/tng/picard"].voice_dir == str(
         grouped_voices_dir / "star-trek" / "tng" / "picard"
     )
 
@@ -386,14 +403,18 @@ def test_indexed_selector_works_for_grouped_voice(tmp_path, monkeypatch):
     assert p.ref_text == "angry"
 
 
-# ---------- collision detection ----------
+# ---------- collision detection (VM-1901 mouth 3: qualified forms now WORK) ----------
 
-def test_collision_drops_both_candidates(tmp_path, monkeypatch, caplog):
+def test_collision_registers_both_qualified_forms_bare_is_ambiguous(tmp_path, monkeypatch, caplog):
+    """VM-1901: leaf collisions no longer drop ALL candidates. Both qualified
+    forms register and resolve; only the bare, ambiguous name fails — loudly,
+    listing the qualified alternatives — instead of silently landing on
+    Alloy."""
     voices = tmp_path / "voices"
     voices.mkdir()
     _make_voice(voices, "bobs-burgers/bob")
     _make_voice(voices, "the-simpsons/bob")
-    _make_voice(voices, "alan")  # should still load
+    _make_voice(voices, "alan")  # unaffected control
 
     monkeypatch.setenv("VOICEMODE_VOICES_DIR", str(voices))
     monkeypatch.delenv("VOICEMODE_REMOTE_VOICES_DIR", raising=False)
@@ -405,18 +426,35 @@ def test_collision_drops_both_candidates(tmp_path, monkeypatch, caplog):
 
     importlib.reload(voice_profiles)
 
-    with caplog.at_level(logging.ERROR, logger="voicemode"):
+    with caplog.at_level(logging.WARNING, logger="voicemode"):
         profiles = voice_profiles.load_profiles()
 
-    assert "bob" not in profiles
+    assert "bobs-burgers/bob" in profiles
+    assert "the-simpsons/bob" in profiles
     assert "alan" in profiles
     assert any(
-        "collision" in rec.message.lower() and "bob" in rec.message
+        "ambiguous" in rec.message.lower() and "bob" in rec.message
         for rec in caplog.records
     )
 
+    # Bare "bob" is ambiguous -> loud, specific error naming both qualified
+    # forms (Mike's acceptance bar), not a silent drop.
+    with pytest.raises(voice_profiles.AmbiguousLeaf) as exc_info:
+        voice_profiles.resolve_voice("bob")
+    msg = str(exc_info.value)
+    assert "bobs-burgers/bob" in msg
+    assert "the-simpsons/bob" in msg
 
-def test_collision_three_way_drops_all(tmp_path, monkeypatch, caplog):
+    # Each qualified form resolves cleanly.
+    assert voice_profiles.get_profile("bobs-burgers/bob").ref_audio.endswith(
+        "/bobs-burgers/bob/default.wav"
+    )
+    assert voice_profiles.get_profile("the-simpsons/bob").ref_audio.endswith(
+        "/the-simpsons/bob/default.wav"
+    )
+
+
+def test_collision_three_way_all_qualified_forms_resolve(tmp_path, monkeypatch, caplog):
     voices = tmp_path / "voices"
     voices.mkdir()
     _make_voice(voices, "show-a/bob")
@@ -433,18 +471,15 @@ def test_collision_three_way_drops_all(tmp_path, monkeypatch, caplog):
 
     importlib.reload(voice_profiles)
 
-    with caplog.at_level(logging.ERROR, logger="voicemode"):
+    with caplog.at_level(logging.WARNING, logger="voicemode"):
         profiles = voice_profiles.load_profiles()
 
-    assert "bob" not in profiles
-    error_records = [
-        r for r in caplog.records
-        if r.levelno >= logging.ERROR and "bob" in r.message
-    ]
-    assert len(error_records) == 1, (
-        "Expected a single ERROR listing all three colliding paths"
-    )
-    msg = error_records[0].message
+    for canon in ("show-a/bob", "show-b/bob", "show-c/bob"):
+        assert canon in profiles
+
+    with pytest.raises(voice_profiles.AmbiguousLeaf) as exc_info:
+        voice_profiles.resolve_voice("bob")
+    msg = str(exc_info.value)
     assert "show-a/bob" in msg
     assert "show-b/bob" in msg
     assert "show-c/bob" in msg

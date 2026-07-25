@@ -1,32 +1,38 @@
-"""VM-1901 — deliberate repro of every silent-substitution mouth (repro-001).
+"""VM-1901 — every silent-substitution mouth, before AND after the fix.
 
-Reported symptom (README.md): an unresolvable ``voice=`` reference in
-``converse()`` silently synthesizes with **OpenAI Alloy** (a cross-provider
-identity swap) instead of erroring or falling back to the *named* voice's own
-default clip. The tool result still reports success; nothing in the log
-calls out the substitution as a failure.
+Originally filed (repro-001) as a deliberate repro of the reported symptom:
+an unresolvable ``voice=`` reference in ``converse()`` silently synthesizes
+with **OpenAI Alloy** (a cross-provider identity swap) instead of erroring
+or falling back to the *named* voice's own default clip — with the tool
+result still reporting success and nothing in the log calling out the
+substitution.
 
-Per triage-001's verdict, this is not one bug but a *family* of resolver
-mouths that all share the same failure shape (voice_profiles.get_profile()
-returns ``None`` -> ``is_clone_voice()`` is ``False`` -> ``simple_failover``
-falls through to the generic ``TTS_BASE_URLS`` chain -> if that chain reaches
-OpenAI, ``_prepare_tts_endpoint`` maps any name it doesn't recognise to
-``"alloy"`` with only an INFO log line). This file exercises **five** mouths
-individually, plus the original 2026-07-09 colon-syntax finding, each as a
-deterministic, recorded repro: what was NOT logged, and what the call
-actually returns.
+fix-001 closes every one of these mouths by making voice resolution TOTAL
+(:func:`voice_mode.voice_profiles.resolve_voice`): an unresolvable
+expression now RAISES — before any TTS endpoint is tried, never reaching a
+provider at all — instead of silently falling through to
+``voice_mapping.get(voice, "alloy")``. This file is the evidence base for
+that fix: every assertion below now documents the POST-fix behaviour
+(a loud, specific exception naming the alternatives), with the pre-fix
+symptom kept in the docstrings so the regression this closes stays legible.
 
-MOUTH 1 — bare container (``secretary``, ``blackadder``)
-MOUTH 2 — group-qualified path (``secretary/lee-holloway``)
-MOUTH 3 — leaf-name collision (two dirs sharing a leaf name)
-MOUTH 4 — sample-bin dir (>=2 wavs, no default.wav)
-MOUTH 5 — out-of-range index (``name[99]``)
-SYNTAX  — colon selector (``aubrey-plaza:2``) is not implemented; the
-          bracket form (``aubrey-plaza[2]``) is, confirming this is a syntax
-          gap, not (only) a resolver bug.
-
-Nothing here is fixed yet — every assertion below documents *current*,
-pre-fix behaviour. design-001/fix-001 change these.
+MOUTH 1 — bare container (``secretary``, ``blackadder``) -> now a NotACast
+          (undeclared group) error naming the members, not Alloy.
+MOUTH 2 — group-qualified path (``secretary/lee-holloway``) -> now RESOLVES
+          (closes the FAVORITES.md:27 doc/code lie).
+MOUTH 3 — leaf-name collision -> both qualified forms now resolve; the bare,
+          ambiguous form raises AmbiguousLeaf naming them.
+MOUTH 4 — sample-bin dir (>=2 wavs, no default.wav) -> the skip is now
+          WARNING-visible at load, and naming the dir directly raises
+          Unresolvable (it registers as neither a voice nor a group).
+MOUTH 5 — out-of-range index (``name[99]``) -> now raises IndexOutOfRange
+          naming the count, instead of silently falling back to
+          default.wav. (Design.md ruled this mouth severable/lower-severity
+          since it never crossed providers — fix-001 closes it anyway since
+          the resolver core makes it "free": no separate code path.)
+SYNTAX  — colon selector (``aubrey-plaza:2``) is reserved, not implemented
+          (voices/README.md rule 7 says "future"); it's just an opaque,
+          unresolvable name — confirmed via the bracket form working.
 """
 
 import importlib
@@ -35,6 +41,14 @@ import logging
 import pytest
 
 from voice_mode.simple_failover import _prepare_tts_endpoint, _resolve_tts_endpoints
+
+# NOTE: exception classes are deliberately NOT imported at module level.
+# Every test reloads voice_mode.voice_profiles (via _reload_voice_profiles)
+# to pick up a fresh VOICEMODE_VOICES_DIR, and importlib.reload() rebinds
+# each class name to a NEW class object — a module-level import taken before
+# the first reload would go stale and silently fail isinstance()/except
+# checks against later-raised instances. Always reach for exception classes
+# off the reloaded module (``vp.NotACast``, etc.), never a bare import.
 
 
 OPENAI_URL = "https://api.openai.com/v1"
@@ -58,28 +72,38 @@ def _reload_voice_profiles(voices_dir, monkeypatch):
     return voice_profiles
 
 
-def _hits_alloy(voice_expr, vp_module):
-    """Drive the real resolver + endpoint-prep pipeline for ``voice_expr``.
-
-    Mirrors what ``simple_tts_failover``/``simple_tts_synthesize`` do: resolve
-    endpoints (clone route vs generic chain), then prepare the first endpoint
-    exactly as the failover loop would. Returns the ``selected_voice`` that
-    would actually be sent to the wire, plus whether it counted as a clone
-    voice at all.
+def _never_reaches_wire(voice_expr, vp_module):
+    """Drive the REAL endpoint-resolution entry point for ``voice_expr`` and
+    assert it raises before any endpoint/model is selected — i.e. no TTS
+    request could possibly be issued and no cross-provider substitution is
+    possible. Mirrors what ``simple_tts_failover``/``simple_tts_synthesize``
+    do first, before touching ``_prepare_tts_endpoint``. Returns the raised
+    exception for message inspection.
     """
     import voice_mode.simple_failover as sf
 
-    # simple_failover imports get_profile/is_clone_voice lazily from
-    # voice_mode.voice_profiles inside _resolve_tts_endpoints, so reloading
-    # the voice_profiles module (fixture above) is picked up without also
-    # reloading simple_failover.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sf, "TTS_BASE_URLS", [OPENAI_URL])
+        with pytest.raises(vp_module.VoiceResolutionError) as exc_info:
+            _resolve_tts_endpoints(voice_expr, None)
+    return exc_info.value
+
+
+def _resolves_to_clone(voice_expr, vp_module):
+    """Drive the real resolver + endpoint-prep pipeline for ``voice_expr``,
+    asserting it resolves as a CLONE voice (never reaching the provider
+    chain / Alloy). Returns the selected_voice, provider_type, clone_profile.
+    """
+    import voice_mode.simple_failover as sf
+
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(sf, "TTS_BASE_URLS", [OPENAI_URL])
         endpoints, clone_profile = _resolve_tts_endpoints(voice_expr, None)
+        assert clone_profile is not None
         _client, selected_voice, _model, provider_type = _prepare_tts_endpoint(
             endpoints[0], voice_expr, None, clone_profile
         )
-    return selected_voice, provider_type, clone_profile is not None
+    return selected_voice, provider_type, clone_profile
 
 
 # ---------------------------------------------------------------------------
@@ -102,44 +126,77 @@ def container_voices_dir(tmp_path):
 
 class TestMouth1BareContainer:
     """FAVORITES.md-documented names like ``secretary``/``blackadder`` name a
-    container dir, not a voice — today that resolves to nothing, silently."""
+    container (group) dir, not a voice. Pre-fix, that resolved to nothing
+    and silently landed on Alloy. Post-fix: an undeclared group is a
+    ``NotACast`` — a cast requires a DECLARED default (Mike's ruling,
+    2026-07-25) — and the error names every member."""
 
-    def test_container_name_is_not_a_registered_profile(
+    def test_container_registers_as_a_group_not_a_voice_profile(
         self, container_voices_dir, monkeypatch
     ):
         vp = _reload_voice_profiles(container_voices_dir, monkeypatch)
         profiles = vp.load_profiles()
-        # The container names themselves never register — only their leaves do.
+        # The container names themselves never register as VOICE profiles —
+        # only their (now canonically-keyed) qualified leaves do.
         assert "secretary" not in profiles
         assert "blackadder" not in profiles
-        assert {"lee-holloway", "edmund", "baldrick"} <= set(profiles.keys())
+        assert {"secretary/lee-holloway", "blackadder/edmund", "blackadder/baldrick"} <= set(
+            profiles.keys()
+        )
 
     def test_container_name_is_not_recognised_as_a_clone_voice(
-        self, container_voices_dir, monkeypatch, caplog
+        self, container_voices_dir, monkeypatch
     ):
         vp = _reload_voice_profiles(container_voices_dir, monkeypatch)
         vp.load_profiles()
-        with caplog.at_level(logging.DEBUG, logger="voicemode"):
-            secretary_is_clone = vp.is_clone_voice("secretary")
-            blackadder_is_clone = vp.is_clone_voice("blackadder")
-        assert secretary_is_clone is False
-        assert blackadder_is_clone is False
-        # The damning bit: is_clone_voice() emits NO log line at all for an
-        # unresolvable name — the caller gets a bare False with zero breadcrumb.
-        assert caplog.records == []
+        # is_clone_voice() keeps its old best-effort contract: an undeclared
+        # cast isn't a clone voice, but this wrapper stays silent (False) by
+        # design — callers that need the loud failure use resolve_voice()
+        # directly, exercised below.
+        assert vp.is_clone_voice("secretary") is False
+        assert vp.is_clone_voice("blackadder") is False
+
+    @pytest.mark.parametrize("expr,members", [
+        ("secretary", ["lee-holloway"]),
+        ("blackadder", ["baldrick", "edmund"]),
+    ])
+    def test_undeclared_container_raises_not_a_cast_naming_members(
+        self, container_voices_dir, monkeypatch, expr, members
+    ):
+        vp = _reload_voice_profiles(container_voices_dir, monkeypatch)
+        vp.load_profiles()
+        with pytest.raises(vp.NotACast) as exc_info:
+            vp.resolve_voice(expr)
+        msg = str(exc_info.value)
+        for member in members:
+            assert member in msg
 
     @pytest.mark.parametrize("expr", ["secretary", "blackadder"])
-    def test_container_name_silently_lands_on_alloy(
+    def test_container_name_raises_before_any_endpoint_is_tried(
         self, container_voices_dir, monkeypatch, expr
     ):
         vp = _reload_voice_profiles(container_voices_dir, monkeypatch)
         vp.load_profiles()
-        selected_voice, provider_type, was_clone = _hits_alloy(expr, vp)
-        # Requested `expr` (a real, populated container of clone voices);
-        # got: OpenAI Alloy. No exception, no error surfaced to the caller.
-        assert was_clone is False
-        assert provider_type == "openai"
-        assert selected_voice == "alloy"
+        exc = _never_reaches_wire(expr, vp)
+        assert isinstance(exc, vp.NotACast)
+        # This IS the fix: no exception, no error surfaced was the old bug.
+        # Now it's a loud, specific, pre-wire failure — never Alloy.
+
+    def test_declared_cast_resolves_to_its_default_member(
+        self, container_voices_dir, monkeypatch
+    ):
+        """Once a group DECLARES a default (voice.md `default:`), it's a
+        cast and resolves — Mike's ruling: casts are first-class, not an
+        error case."""
+        (container_voices_dir / "secretary" / "voice.md").write_text(
+            "---\ndefault: lee-holloway\n---\n"
+        )
+        vp = _reload_voice_profiles(container_voices_dir, monkeypatch)
+        vp.load_profiles()
+        res = vp.resolve_voice("secretary")
+        assert res.kind == "clone"
+        assert res.resolved == "secretary/lee-holloway"
+        assert res.via == "cast-default:lee-holloway"
 
 
 # ---------------------------------------------------------------------------
@@ -148,45 +205,50 @@ class TestMouth1BareContainer:
 
 class TestMouth2GroupQualifiedPath:
     """FAVORITES.md writes the group-qualified form ``secretary/lee-holloway``
-    to disambiguate — that form fails today, while the bare leaf name works,
-    because ``parse_voice_expr`` partitions on ``/`` and treats the tail as a
-    *file* inside a voice dir named by the head, not as a nested profile
-    lookup."""
+    to disambiguate. Pre-fix that form failed (parse_voice_expr partitioned
+    on ``/`` and treated the tail as a *file* inside a voice dir named by the
+    head). Post-fix: resolve_voice() walks the actual tree segment by
+    segment, so the qualified form resolves — closing the one genuine
+    doc/code lie in this task."""
 
-    def test_parse_treats_slash_as_file_selector_not_group_path(
+    def test_legacy_parser_still_treats_slash_as_file_selector(
         self, container_voices_dir, monkeypatch
     ):
+        """parse_voice_expr() is kept, unchanged, for back-compat callers —
+        resolve_voice() no longer calls it. Documented here so nobody is
+        surprised the two functions disagree about ``/``."""
         vp = _reload_voice_profiles(container_voices_dir, monkeypatch)
         assert vp.parse_voice_expr("secretary/lee-holloway") == (
             "secretary",
             "lee-holloway",
         )
 
-    def test_group_qualified_path_fails_while_bare_leaf_works(
+    def test_group_qualified_path_now_resolves(
         self, container_voices_dir, monkeypatch
     ):
         vp = _reload_voice_profiles(container_voices_dir, monkeypatch)
         vp.load_profiles()
 
-        # The documented form: fails (head "secretary" is not a profile).
-        assert vp.get_profile("secretary/lee-holloway") is None
-        assert vp.is_clone_voice("secretary/lee-holloway") is False
+        # The documented form now resolves (mouth 2, closed):
+        p = vp.get_profile("secretary/lee-holloway")
+        assert p is not None
+        assert p.ref_audio.endswith("/secretary/lee-holloway/default.wav")
+        assert vp.is_clone_voice("secretary/lee-holloway") is True
 
-        # The bare leaf name: works fine.
+        # The bare leaf name still works too (unambiguous):
         assert vp.get_profile("lee-holloway") is not None
         assert vp.is_clone_voice("lee-holloway") is True
 
-    def test_group_qualified_path_silently_lands_on_alloy(
+    def test_group_qualified_path_reaches_the_named_clone_never_alloy(
         self, container_voices_dir, monkeypatch
     ):
         vp = _reload_voice_profiles(container_voices_dir, monkeypatch)
         vp.load_profiles()
-        selected_voice, provider_type, was_clone = _hits_alloy(
+        selected_voice, provider_type, clone_profile = _resolves_to_clone(
             "secretary/lee-holloway", vp
         )
-        assert was_clone is False
-        assert provider_type == "openai"
-        assert selected_voice == "alloy"
+        assert provider_type != "openai"
+        assert clone_profile.ref_audio.endswith("/secretary/lee-holloway/default.wav")
 
 
 # ---------------------------------------------------------------------------
@@ -204,41 +266,47 @@ def collision_voices_dir(tmp_path):
 
 
 class TestMouth3LeafCollision:
-    """voice_profiles.py:277-283 — two same-named leaves anywhere in the tree
-    drop ALL candidates. Unlike the other mouths, load-time DOES log an
-    ERROR (once, at startup) — but the per-call resolve path is exactly as
-    silent as the rest: no exception, straight through to Alloy."""
+    """voice_profiles.py — two same-named leaves anywhere in the tree used
+    to drop ALL candidates at load time (one ERROR) and then resolve calls
+    were silent (straight through to Alloy). Post-fix: BOTH qualified forms
+    register and resolve; only the bare, ambiguous name fails, loudly,
+    naming the qualified alternatives — strictly better on both halves."""
 
-    def test_collision_drops_both_candidates_with_one_load_time_error(
+    def test_collision_registers_both_qualified_forms_with_a_load_time_warning(
         self, collision_voices_dir, monkeypatch, caplog
     ):
         vp = _reload_voice_profiles(collision_voices_dir, monkeypatch)
-        with caplog.at_level(logging.ERROR, logger="voicemode"):
+        with caplog.at_level(logging.WARNING, logger="voicemode"):
             profiles = vp.load_profiles()
-        assert "bob" not in profiles
+        assert "bobs-burgers/bob" in profiles
+        assert "the-simpsons/bob" in profiles
         assert "alan" in profiles
-        assert any("collision" in r.message.lower() for r in caplog.records)
+        assert any("ambiguous" in r.message.lower() and "bob" in r.message for r in caplog.records)
 
-    def test_collision_resolve_call_has_no_error_of_its_own(
-        self, collision_voices_dir, monkeypatch, caplog
+    def test_bare_ambiguous_name_raises_at_resolve_time(
+        self, collision_voices_dir, monkeypatch
     ):
-        vp = _reload_voice_profiles(collision_voices_dir, monkeypatch)
-        vp.load_profiles()  # the one-time collision ERROR already fired here
-        caplog.clear()
-        with caplog.at_level(logging.DEBUG, logger="voicemode"):
-            is_clone = vp.is_clone_voice("bob")
-        assert is_clone is False
-        # The per-call check itself is silent — the only signal already
-        # scrolled off at startup, long before this converse() call happens.
-        assert caplog.records == []
-
-    def test_collision_silently_lands_on_alloy(self, collision_voices_dir, monkeypatch):
         vp = _reload_voice_profiles(collision_voices_dir, monkeypatch)
         vp.load_profiles()
-        selected_voice, provider_type, was_clone = _hits_alloy("bob", vp)
-        assert was_clone is False
-        assert provider_type == "openai"
-        assert selected_voice == "alloy"
+        with pytest.raises(vp.AmbiguousLeaf) as exc_info:
+            vp.resolve_voice("bob")
+        msg = str(exc_info.value)
+        assert "bobs-burgers/bob" in msg
+        assert "the-simpsons/bob" in msg
+
+    def test_collision_raises_before_any_endpoint_is_tried(self, collision_voices_dir, monkeypatch):
+        vp = _reload_voice_profiles(collision_voices_dir, monkeypatch)
+        vp.load_profiles()
+        exc = _never_reaches_wire("bob", vp)
+        assert isinstance(exc, vp.AmbiguousLeaf)
+
+    def test_each_qualified_form_resolves_to_its_own_clone(self, collision_voices_dir, monkeypatch):
+        vp = _reload_voice_profiles(collision_voices_dir, monkeypatch)
+        vp.load_profiles()
+        v1, p1, cp1 = _resolves_to_clone("bobs-burgers/bob", vp)
+        v2, p2, cp2 = _resolves_to_clone("the-simpsons/bob", vp)
+        assert p1 != "openai" and p2 != "openai"
+        assert cp1.ref_audio != cp2.ref_audio
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +321,7 @@ def sample_bin_voices_dir(tmp_path):
     mixtape.mkdir()
     (mixtape / "take-1.wav").write_bytes(b"riff-1")
     (mixtape / "take-2.wav").write_bytes(b"riff-2")
-    # No default.wav — voice_profiles.py:104-109 treats this as a sample
-    # bin, not a voice, and skips it entirely (debug-only log, no ERROR).
+    # No default.wav — treated as a sample bin, not a voice, and skipped.
     return voices
 
 
@@ -266,25 +333,30 @@ class TestMouth4SampleBinDir:
         profiles = vp.load_profiles()
         assert "mixtape" not in profiles
 
-    def test_sample_bin_dir_skip_is_debug_only(
+    def test_sample_bin_dir_skip_is_now_warning_visible(
         self, sample_bin_voices_dir, monkeypatch, caplog
     ):
+        """Pre-fix this was DEBUG-only (invisible at INFO+). Post-fix it's a
+        WARNING naming the cure — the skip is no longer invisible at any
+        level an operator would normally run at."""
         vp = _reload_voice_profiles(sample_bin_voices_dir, monkeypatch)
-        with caplog.at_level(logging.INFO, logger="voicemode"):
+        with caplog.at_level(logging.WARNING, logger="voicemode"):
             vp.load_profiles()
-        # Nothing at INFO-or-louder mentions the skip — you'd have to already
-        # be running at DEBUG to see why "mixtape" never showed up.
-        assert not any("mixtape" in r.message for r in caplog.records)
+        assert any(
+            "mixtape" in r.message and "default.wav" in r.message
+            for r in caplog.records
+        )
 
-    def test_sample_bin_dir_silently_lands_on_alloy(
+    def test_naming_a_sample_bin_dir_raises_before_any_endpoint_is_tried(
         self, sample_bin_voices_dir, monkeypatch
     ):
         vp = _reload_voice_profiles(sample_bin_voices_dir, monkeypatch)
         vp.load_profiles()
-        selected_voice, provider_type, was_clone = _hits_alloy("mixtape", vp)
-        assert was_clone is False
-        assert provider_type == "openai"
-        assert selected_voice == "alloy"
+        exc = _never_reaches_wire("mixtape", vp)
+        # "mixtape" registers as neither a voice (no default.wav / single
+        # wav) nor a group (no subdirectories) — it's simply unresolvable,
+        # and the error says so instead of quietly reaching Alloy.
+        assert isinstance(exc, vp.Unresolvable)
 
 
 # ---------------------------------------------------------------------------
@@ -305,38 +377,40 @@ def indexed_voices_dir(tmp_path):
 
 
 class TestMouth5OutOfRangeIndex:
-    """Distinct shape from the other four: this mouth does NOT reach Alloy —
-    ``resolve_voice_expr`` catches the bad index and falls back to the SAME
-    voice's default.wav. It logs an ERROR (unlike mouths 1/2/3's per-call
-    silence) but still returns success with the wrong *clip*, not the wrong
-    *voice* — worth recording precisely because it's the one mouth that
-    partially self-corrects."""
+    """Distinct shape from the other four: pre-fix this did NOT reach Alloy
+    — ``resolve_voice_expr`` caught the bad index and fell back to the SAME
+    voice's default.wav (wrong clip, not wrong voice — design.md ruled it
+    lower-severity and explicitly severable). fix-001 closes it anyway: the
+    resolver core makes IndexOutOfRange free (no separate code path), so
+    ``name[99]`` now raises, naming the actual sample count, instead of
+    silently substituting the default clip."""
 
-    def test_out_of_range_index_logs_error_but_returns_default_clip(
-        self, indexed_voices_dir, monkeypatch, caplog
-    ):
-        vp = _reload_voice_profiles(indexed_voices_dir, monkeypatch)
-        vp.load_profiles()
-        with caplog.at_level(logging.ERROR, logger="voicemode"):
-            p = vp.get_profile("samantha[99]")
-        assert p is not None
-        assert p.ref_audio.endswith("/samantha/default.wav")
-        assert any("out of range" in r.message.lower() for r in caplog.records)
-
-    def test_out_of_range_index_does_not_cross_providers(
+    def test_out_of_range_index_raises_naming_the_count(
         self, indexed_voices_dir, monkeypatch
     ):
-        """Unlike mouths 1-4, this one stays a clone voice end to end — it
-        never reaches OpenAI/Alloy. Recorded here so fix-001 doesn't
-        conflate this mouth's (smaller) blast radius with the others'."""
         vp = _reload_voice_profiles(indexed_voices_dir, monkeypatch)
         vp.load_profiles()
-        selected_voice, provider_type, was_clone = _hits_alloy(
-            "samantha[99]", vp
-        )
-        assert was_clone is True
+        with pytest.raises(vp.IndexOutOfRange) as exc_info:
+            vp.resolve_voice("samantha[99]")
+        assert "2 sample" in str(exc_info.value)
+
+    def test_out_of_range_index_raises_before_any_endpoint_is_tried(
+        self, indexed_voices_dir, monkeypatch
+    ):
+        """Unlike mouths 1-4, this mouth never had a cross-provider blast
+        radius — but now it doesn't even reach text_to_speech with the wrong
+        clip; it fails at resolution, same as every other mouth."""
+        vp = _reload_voice_profiles(indexed_voices_dir, monkeypatch)
+        vp.load_profiles()
+        exc = _never_reaches_wire("samantha[99]", vp)
+        assert isinstance(exc, vp.IndexOutOfRange)
+
+    def test_in_range_index_still_resolves_normally(self, indexed_voices_dir, monkeypatch):
+        vp = _reload_voice_profiles(indexed_voices_dir, monkeypatch)
+        vp.load_profiles()
+        selected_voice, provider_type, clone_profile = _resolves_to_clone("samantha[0]", vp)
         assert provider_type != "openai"
-        assert selected_voice == "samantha[99]"
+        assert clone_profile.ref_audio.endswith(".wav")
 
 
 # ---------------------------------------------------------------------------
@@ -358,12 +432,13 @@ def aubrey_plaza_voices_dir(tmp_path):
 
 class TestColonSyntaxNotImplemented:
     """The ORIGINAL 2026-07-09 repro: ``voice="aubrey-plaza:2"`` and
-    ``voice="aubrey-plaza:next-question"`` fell through to Alloy. This
-    confirms *why*: ``name:N``/``name:label`` (SuperDirt-style colon, per
-    voices/README.md rule 7) is simply not parsed anywhere — the whole
-    string is treated as a literal (and unregistered) voice name. The
-    bracket form ``name[N]`` IS implemented and works. This is a syntax
-    gap, layered on top of (not instead of) the resolver-silence bug."""
+    ``voice="aubrey-plaza:next-question"`` fell through to Alloy. Root
+    cause: ``name:N``/``name:label`` (SuperDirt-style colon) is RESERVED by
+    voices/README.md rule 7 ("leaves room for future colon-index access"),
+    not implemented — design.md §3.2.3 keeps it reserved (no parser
+    meaning). The bracket form ``name[N]`` IS implemented and works. Post-
+    fix, the colon form is simply an opaque, unresolvable name: it now
+    raises loudly instead of silently reaching Alloy."""
 
     def test_colon_form_is_parsed_as_a_single_opaque_name(
         self, aubrey_plaza_voices_dir, monkeypatch
@@ -391,16 +466,12 @@ class TestColonSyntaxNotImplemented:
         assert indexed is not None
         assert indexed.ref_audio.endswith(".wav")
 
-    def test_colon_form_silently_lands_on_alloy(
+    def test_colon_form_raises_before_any_endpoint_is_tried(
         self, aubrey_plaza_voices_dir, monkeypatch
     ):
         vp = _reload_voice_profiles(aubrey_plaza_voices_dir, monkeypatch)
         vp.load_profiles()
-        selected_voice, provider_type, was_clone = _hits_alloy(
-            "aubrey-plaza:2", vp
-        )
-        assert was_clone is False
-        assert provider_type == "openai"
-        assert selected_voice == "alloy"
-        # ...exactly the field-observed 2026-07-09 symptom, reproduced
-        # deterministically and in-process.
+        exc = _never_reaches_wire("aubrey-plaza:2", vp)
+        assert isinstance(exc, vp.Unresolvable)
+        # The nearest-matches hint should point back at the real voice.
+        assert "aubrey-plaza" in str(exc)

@@ -22,33 +22,68 @@ from .providers import _select_stt_model_for_endpoint, _select_tts_model_for_end
 logger = logging.getLogger("voicemode")
 
 
+class UnmappedProviderVoiceError(RuntimeError):
+    """Defensive backstop (VM-1901 design.md §3.2.7).
+
+    ``resolve_voice()``'s provider-native whitelist should have already
+    accepted or rejected any voice name before it reaches this endpoint's
+    mapping table — if an unrecognised name gets here anyway, that is a bug
+    upstream (whitelist/mapping-table drift), not a legitimate fallback
+    case. Raising turns that gap into a loud, traceable failure for THIS
+    endpoint (failover continues to the next one) instead of silently
+    substituting "alloy".
+    """
+
+
 def _resolve_tts_endpoints(voice, ref_text_override):
     """Resolve which TTS endpoints to try and the clone profile (if any).
 
-    Clone voices route directly to their own endpoint; an explicit ``ref_text``
-    override wins over the profile/sidecar transcript (VM-1278). For non-clone
-    voices a stray ref_text override is ignored with a warning. Shared by the
-    play (``simple_tts_failover``) and synth-only (``simple_tts_synthesize``)
+    VM-1901: this is where every "unresolvable voice silently becomes Alloy"
+    mouth used to live — ``is_clone_voice()``/``get_profile()`` returning
+    False/None for anything they didn't recognise, falling straight through
+    to the generic ``TTS_BASE_URLS`` chain. This now calls the TOTAL
+    resolver (:func:`voice_profiles.resolve_voice`) directly: an
+    unresolvable/ambiguous/undeclared-cast expression raises a
+    ``VoiceResolutionError`` here, before any endpoint is tried, instead of
+    reaching a provider at all.
+
+    Clone/clip voices route directly to their own endpoint; an explicit
+    ``ref_text`` override wins over the profile/sidecar transcript (VM-1278).
+    A provider-native resolution (``kind="provider"``, e.g. an OpenAI/Kokoro
+    voice name) falls through to the generic chain exactly as before — that
+    is legitimate usage, not a fallback. Shared by the play
+    (``simple_tts_failover``) and synth-only (``simple_tts_synthesize``)
     paths so endpoint selection stays identical between them.
 
     Returns:
         tuple: (endpoints_to_try, clone_profile)
+
+    Raises:
+        voice_profiles.VoiceResolutionError: the voice expression could not
+            be resolved. Callers must catch this — see
+            :func:`simple_tts_failover` / :func:`simple_tts_synthesize`.
     """
     from dataclasses import replace as _dc_replace
-    from .voice_profiles import get_profile, is_clone_voice
+    from .voice_profiles import resolve_voice
 
-    clone_profile = get_profile(voice) if is_clone_voice(voice) else None
-    if clone_profile:
+    resolution = resolve_voice(voice)
+
+    if resolution.kind in ("clone", "clip"):
+        clone_profile = resolution.profile
         if ref_text_override is not None:
             clone_profile = _dc_replace(clone_profile, ref_text=ref_text_override)
             logger.info(f"Voice '{voice}': applying ref_text override ({len(ref_text_override)} chars)")
-        logger.info(f"Voice '{voice}' is a clone profile, routing to {clone_profile.base_url}")
+        logger.info(
+            f"Voice '{voice}' resolved to {resolution.resolved!r} "
+            f"(via={resolution.via}), routing to {clone_profile.base_url}"
+        )
         return [clone_profile.base_url], clone_profile
 
     if ref_text_override is not None:
         logger.warning(
-            f"ref_text override supplied but voice '{voice}' is not a clone "
-            f"voice (no abs-path clip or registered profile) — override ignored"
+            f"ref_text override supplied but voice '{voice}' resolved to a "
+            f"provider-native voice ({resolution.resolved!r}), not a clone — "
+            f"override ignored"
         )
     return TTS_BASE_URLS, None
 
@@ -94,7 +129,19 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                     "am_onyx": "onyx",
                     "bm_fable": "fable"
                 }
-                selected_voice = voice_mapping.get(voice, "alloy")  # Default to alloy
+                # VM-1901: this used to default unrecognised names to
+                # "alloy" — the mechanism the alloy-fallback bug actually
+                # rode in on. resolve_voice() now gates everything reaching
+                # here to its provider-native whitelist, so an unmapped name
+                # is upstream drift, not a real fallback; raise instead of
+                # substituting (belt to the resolver's braces).
+                if voice not in voice_mapping:
+                    raise UnmappedProviderVoiceError(
+                        f"Voice {voice!r} has no OpenAI mapping and isn't an "
+                        f"OpenAI-native name — resolve_voice() should not have "
+                        f"accepted it as provider-native for this endpoint."
+                    )
+                selected_voice = voice_mapping[voice]
                 logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
         else:
             selected_voice = voice  # Use original voice for Kokoro
@@ -128,6 +175,7 @@ async def simple_tts_failover(
 
     from .core import text_to_speech
     from .conversation_logger import get_conversation_logger
+    from .voice_profiles import VoiceResolutionError
 
     # Pull the optional ref_text override out of kwargs before it gets
     # forwarded to text_to_speech (which has no ref_text param). None means
@@ -141,25 +189,40 @@ async def simple_tts_failover(
     conversation_logger = get_conversation_logger()
     conversation_id = conversation_logger.conversation_id
 
-    # Check if this is a clone voice — if so, route directly to its endpoint
-    endpoints_to_try, clone_profile = _resolve_tts_endpoints(voice, ref_text_override)
+    # Check if this is a clone voice — if so, route directly to its endpoint.
+    # VM-1901: an unresolvable voice raises HERE, before any endpoint is
+    # tried — no TTS request issued, no cross-provider substitution possible.
+    try:
+        endpoints_to_try, clone_profile = _resolve_tts_endpoints(voice, ref_text_override)
+    except VoiceResolutionError as e:
+        logger.error(f"Voice resolution failed for {voice!r}: {e}")
+        return False, None, {
+            'error_type': 'voice_resolution_failed',
+            'error': str(e),
+            'attempted_endpoints': [],
+        }
 
     # Try each TTS endpoint in order
     logger.info(f"simple_tts_failover: Starting with endpoints = {endpoints_to_try}")
     for base_url in endpoints_to_try:
         logger.info(f"Trying TTS endpoint: {base_url}")
 
-        client, selected_voice, selected_model, provider_type = _prepare_tts_endpoint(
-            base_url, voice, model, clone_profile
-        )
-
-        # Create clients dict for text_to_speech
-        openai_clients = {'tts': client}
-
-        # Try TTS with this endpoint
-        # Wrap in try/catch to get actual exception details
+        # Wrap in try/catch to get actual exception details. _prepare_tts_endpoint
+        # can itself raise (VM-1901's defensive UnmappedProviderVoiceError) —
+        # treated the same as any other per-endpoint failure so failover
+        # continues to the next endpoint.
         last_exception = None
+        provider_type = detect_provider_type(base_url)
+        selected_voice = voice
+        selected_model = model
         try:
+            client, selected_voice, selected_model, provider_type = _prepare_tts_endpoint(
+                base_url, voice, model, clone_profile
+            )
+
+            # Create clients dict for text_to_speech
+            openai_clients = {'tts': client}
+
             # Pass clone profile through kwargs if present
             tts_kwargs = dict(kwargs)
             if clone_profile:
@@ -252,6 +315,7 @@ async def simple_tts_synthesize(
 
     from .core import synthesize_tts_audio
     from .conversation_logger import get_conversation_logger
+    from .voice_profiles import VoiceResolutionError
 
     ref_text_override = kwargs.pop("ref_text", None)
     attempted_endpoints = []
@@ -259,19 +323,32 @@ async def simple_tts_synthesize(
     conversation_logger = get_conversation_logger()
     conversation_id = conversation_logger.conversation_id
 
-    endpoints_to_try, clone_profile = _resolve_tts_endpoints(voice, ref_text_override)
+    # VM-1901: an unresolvable voice raises HERE, before any endpoint is
+    # tried — see simple_tts_failover's identical guard for the rationale.
+    try:
+        endpoints_to_try, clone_profile = _resolve_tts_endpoints(voice, ref_text_override)
+    except VoiceResolutionError as e:
+        logger.error(f"Voice resolution failed for {voice!r}: {e}")
+        return False, None, None, None, {
+            'error_type': 'voice_resolution_failed',
+            'error': str(e),
+            'attempted_endpoints': [],
+        }
 
     logger.info(f"simple_tts_synthesize: Starting with endpoints = {endpoints_to_try}")
     for base_url in endpoints_to_try:
         logger.info(f"Trying TTS endpoint (synth): {base_url}")
 
-        client, selected_voice, selected_model, provider_type = _prepare_tts_endpoint(
-            base_url, voice, model, clone_profile
-        )
-        openai_clients = {'tts': client}
-
         last_exception = None
+        provider_type = detect_provider_type(base_url)
+        selected_voice = voice
+        selected_model = model
         try:
+            client, selected_voice, selected_model, provider_type = _prepare_tts_endpoint(
+                base_url, voice, model, clone_profile
+            )
+            openai_clients = {'tts': client}
+
             tts_kwargs = dict(kwargs)
             if clone_profile:
                 tts_kwargs['clone_profile'] = clone_profile
