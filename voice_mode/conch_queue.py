@@ -13,7 +13,8 @@ On-disk layout (siblings of the holder lock under ``~/.voicemode/``)::
     conch.queue.d/              # one file per waiter
         000017-<session>.json   # <seq zero-padded>-<session>.json
     conch.queue.seq             # flock-guarded monotonic counter
-    conch.grant                 # grant hint: {"session_id", "seq", "granted_at"}
+    conch.grant                 # grant hint: {"session_id", "seq", "granted_at",
+                                 #              "claim_ttl" (optional)}
 
 Design notes:
 
@@ -31,15 +32,27 @@ Design notes:
   ``try_acquire`` on release and FIFO order would be lost (thundering herd).
   A grant is only valid while its grantee remains a live waiter, so a
   dead/deregistered grantee invalidates the grant automatically.
-- **Grant claim TTL (VM-1967)**: the grant also carries ``granted_at``. A
-  grantee is expected to self-acquire within one poll cycle; if it hasn't
-  claimed within ``CONCH_GRANT_TTL`` seconds, the grant self-heals
+- **Grant claim TTL (VM-1967, widened VM-2078)**: the grant also carries
+  ``granted_at``. A grantee is expected to self-acquire within one poll
+  cycle; if it hasn't claimed within ``CONCH_GRANT_TTL`` seconds (or the
+  grant's own ``claim_ttl`` override, see below), the grant self-heals
   (``ConchQueue._current_grant``): the stuck grantee is evicted and the next
   live waiter is promoted, so a single missed claim (e.g. an orphaned entry
   left by a cancelled ``converse()`` call, VM-1967's root cause) can never
   wedge the queue forever. Every grant is now covered -- VM-2078 removed the
   callback mode whose exemption from this TTL is what let a single unclaimed
-  grant wedge the queue permanently.
+  grant wedge the queue permanently. The judgement also holds off entirely
+  while a live holder still blocks the claim (``_grant_wedged``'s holder
+  gate) -- a grantee cannot claim a floor nobody has released yet.
+- **``claim_ttl`` (VM-2078 fix-002)**: an optional, bounded override on a
+  single grant record, widening its claim window past the base
+  ``CONCH_GRANT_TTL``. Written by ``grant()`` only when the GRANTER has
+  direct evidence the claim mechanism differs from an ordinary poll loop
+  (e.g. a ``summon_and_grant`` nudge confirmed delivered, D2) -- never a
+  self-declared property of the waiter. Deliberately not a field on
+  ``WaiterEntry``: it describes what was observed about *this grant*, not a
+  category of waiter, so it cannot resurrect the removed ``mode`` concept
+  under a new name.
 
 Paths are resolved at call time from ``Conch.LOCK_FILE.parent`` (NOT frozen at
 import) so they honour runtime home resolution (VM-1502) and test isolation
@@ -493,11 +506,45 @@ class ConchQueue:
         before its victim existed wedged the queue permanently. Every waiter now
         polls; every grant is TTL-covered.
         """
-        existing = cls.granted_to()  # validates liveness; clears a stale grant
+        # Deliberately reads the RAW grant record (``_raw_grant``), NOT the
+        # TTL-judged ``_current_grant``/``granted_to``. Judging staleness
+        # here -- before this branch gets to re-stamp -- would evict a
+        # legitimate give for having sat exactly as long as the holder it
+        # was waiting behind was still speaking: the holder-gate in
+        # ``_grant_wedged`` protects reads made *while the holder is still
+        # active*, but by the time ``grant_next()`` runs on release, the
+        # holder lock is already gone (``Conch.release`` unlinks it before
+        # calling ``_queue_promote_next``), so a judged read at this exact
+        # instant would see no holder and immediately evict the give it is
+        # about to honour. Liveness (is the named session still a live
+        # waiter?) is the only validity check this branch needs -- staleness
+        # of the OLD timestamp is moot, since honouring it re-stamps to now
+        # regardless of how old it was (VM-2078 Q3 design review).
+        raw_grant = cls._raw_grant()
+        existing = raw_grant.get("session_id") if raw_grant else None
         if existing is not None:
             for e in cls.list():
                 if e.session_id == existing:
-                    return e  # explicit give stands -- do not clobber
+                    # Re-stamp granted_at: THIS is the moment the floor
+                    # actually frees and the grantee's claim window begins --
+                    # not whenever the operator originally ran `conch give`
+                    # while a previous holder was still speaking. Without
+                    # this the grant would already be old at the exact
+                    # moment it becomes claimable, and get judged wedged on
+                    # the very next read. Preserve any other keys on the
+                    # existing grant record verbatim (e.g. ``claim_ttl`` --
+                    # see ``grant()``): re-stamping is a timestamp refresh,
+                    # not a new grant decision, so a bounded window the
+                    # granter earlier wrote on observed delivery evidence
+                    # must survive it.
+                    payload = dict(raw_grant)
+                    payload["granted_at"] = datetime.now().isoformat()
+                    cls._atomic_write_json(cls._grant_file(), payload)
+                    return e  # explicit give stands -- do not clobber, only re-stamp
+            # Named session is no longer a live waiter: a dead/departed give
+            # must not wedge the queue. No explicit clear needed here -- the
+            # head-promotion write below (or clear_grant on an empty queue)
+            # unconditionally overwrites/removes this stale record.
 
         waiters = cls.list()  # live, ordered; runs cleanup
         if not waiters:
@@ -519,7 +566,7 @@ class ConchQueue:
         return target
 
     @classmethod
-    def grant(cls, session_id: str) -> bool:
+    def grant(cls, session_id: str, *, claim_ttl: Optional[float] = None) -> bool:
         """Grant the conch to a *named* live waiter (used by ``conch give``).
 
         Unlike :meth:`grant_next` (which always promotes the head), this writes
@@ -530,6 +577,23 @@ class ConchQueue:
 
         Args:
             session_id: the waiter to grant to.
+            claim_ttl: an optional bounded claim-window override (seconds),
+                recorded on the GRANT RECORD in place of the base
+                ``CONCH_GRANT_TTL`` (see ``_grant_wedged``). This exists for
+                the D2 operator-summon carve-out: a summoned session has no
+                poll loop of its own, so the base window (sized for a poll
+                loop) is too short for it to answer a pane nudge. The window
+                is set here by the GRANTER, from evidence the granter itself
+                observed (e.g. do-003's checked-and-surfaced nudge-delivery
+                result) -- never self-declared by the grantee's entry. This
+                is deliberately NOT a category field: it lives on the
+                one-shot grant record, not on ``WaiterEntry``, so it says
+                nothing about the *kind* of waiter, only about what was
+                observed for THIS grant. Callers that have no such evidence
+                must leave this ``None`` (base TTL applies) -- and a caller
+                that observed the nudge FAIL (or the target being remote,
+                where no nudge is even possible) must not call ``grant()``
+                at all, per the same ruling.
 
         Returns:
             ``True`` if the session was a live waiter and the grant was written;
@@ -539,44 +603,103 @@ class ConchQueue:
             return False
         for e in cls.list():  # runs cleanup; only live waiters
             if e.session_id == session_id:
-                cls._atomic_write_json(
-                    cls._grant_file(),
-                    {
-                        "session_id": e.session_id,
-                        "seq": e.seq,
-                        # VM-1967 safety net -- see grant_next().
-                        "granted_at": datetime.now().isoformat(),
-                    },
-                )
+                payload = {
+                    "session_id": e.session_id,
+                    "seq": e.seq,
+                    # VM-1967 safety net -- see grant_next().
+                    "granted_at": datetime.now().isoformat(),
+                }
+                if claim_ttl is not None:
+                    payload["claim_ttl"] = claim_ttl
+                cls._atomic_write_json(cls._grant_file(), payload)
                 return True
         return False
 
     @classmethod
     def _grant_wedged(cls, grant: dict, entry: "WaiterEntry") -> bool:
-        """True if a grant has sat unclaimed past ``CONCH_GRANT_TTL``.
+        """True if a grant has sat unclaimed past its claim window.
 
-        Every grantee is expected to self-acquire within one poll cycle of
-        being granted (the ``converse()`` loop polls ``try_acquire()`` every
-        ``CONCH_CHECK_INTERVAL``), so "still unclaimed after
-        ``CONCH_GRANT_TTL``" means the claim was missed -- exactly VM-1967's
-        root cause (a cancelled caller's orphaned, still-"live" queue entry
-        gets granted and nothing ever claims it, and with no TTL the grant
-        blocked the whole queue forever). VM-2078 removed the one exemption
-        this TTL used to carry (callback mode) -- there is no grant class left
-        that legitimately holds a grant it never intends to claim, so every
-        grant is now covered.
+        Every ordinary grantee is expected to self-acquire within one poll
+        cycle of being granted (the ``converse()`` loop polls
+        ``try_acquire()`` every ``CONCH_CHECK_INTERVAL``), so "still
+        unclaimed after the TTL" means the claim was missed -- exactly
+        VM-1967's root cause (a cancelled caller's orphaned, still-"live"
+        queue entry gets granted and nothing ever claims it, and with no TTL
+        the grant blocked the whole queue forever). VM-2078 removed callback
+        mode's TTL exemption -- there is no grant class left that
+        self-declares its way out of the TTL.
+
+        But "every grant TTL-covered" is not "every grant uses the same
+        window": a ``summon_and_grant`` (D2 operator-path carve-out) target
+        has a local ``pid`` but no poll loop of its own -- it is nudged, not
+        polling -- so the ordinary poll-cycle window is too short for a
+        human/agent to answer a pane nudge and call ``converse()`` again. A
+        category field on the *waiter* (local vs remote, summoned vs
+        ordinary) would resurrect the removed ``mode`` concept under a new
+        name, so the window is instead a property of the *grant record*
+        (``claim_ttl``, see ``grant()``), written by the GRANTER from
+        evidence it directly observed (do-003's checked-and-surfaced nudge
+        delivery) -- never self-declared by the grantee's entry. No
+        ``claim_ttl`` on the record means the ordinary base TTL applies.
         """
+        # Holder gate FIRST, before any TTL arithmetic -- order matters, not
+        # just presence. A grant cannot be judged "wedged" while a live
+        # holder still occupies the floor: the grantee structurally cannot
+        # claim yet, no matter how long ago the grant was issued (`conch
+        # give` / `summon_and_grant` both issue grants WHILE the holder is
+        # still speaking -- VM-2078 Q3 repro). If this ran after the
+        # granted_at parse below, a missing/malformed timestamp would
+        # short-circuit past it and the gate would never fire. A wedged
+        # HOLDER is the holder lock's own problem (CONCH_HOLD_EXPIRY /
+        # stale-lock clearance) -- not the grant TTL's -- so this opens no
+        # new gap. Goes through Conch.get_holder() (which does the liveness
+        # check via is_active()), never a raw lock-file read, or a stale
+        # holder record would gate on a lock that's already dead and
+        # reintroduce an un-expiring grant.
+        if Conch.get_holder() is not None:
+            return False
+
         ttl = _get_grant_ttl()
         if not ttl or ttl <= 0:
-            return False
+            return False  # administratively disabled -- no TTL judgement at all
+        claim_ttl = grant.get("claim_ttl")
+        if claim_ttl is not None and claim_ttl > 0:
+            # A bounded, GRANTER-observed override for this specific grant
+            # (e.g. a confirmed-delivered summon nudge) -- widens, never
+            # disables, the window. Ignored if <= 0 (malformed) rather than
+            # treated as "no TTL", so a corrupt claim_ttl can't reintroduce
+            # an un-expiring grant.
+            ttl = claim_ttl
         granted_at = cls._parse_iso(grant.get("granted_at"))
         if granted_at is None:
-            # No timestamp (grant predates VM-1967, or was written by
-            # something else) -- can't judge age, so don't guess stuck. The
-            # next grant_next()/grant() call stamps one.
+            # No timestamp (grant predates VM-1967, was written by something
+            # else, or -- previously -- lived forever unexempted). Rather
+            # than exempt it forever, stamp it now (persisted, atomic write)
+            # so it becomes judgeable from first sighting, and return False
+            # this once so the grantee gets one full TTL window from here.
+            cls._atomic_write_json(
+                cls._grant_file(),
+                {**grant, "granted_at": datetime.now().isoformat()},
+            )
             return False
         now = datetime.now(granted_at.tzinfo) if granted_at.tzinfo is not None else datetime.now()
         return (now - granted_at).total_seconds() > ttl
+
+    @classmethod
+    def _raw_grant(cls) -> Optional[dict]:
+        """The on-disk grant record verbatim, or ``None`` if absent/corrupt.
+
+        No liveness or TTL judgment -- see ``_current_grant`` for the judged
+        version. Exists for callers that are about to re-validate/re-stamp
+        the record themselves, where running the judged read first would
+        evict what they are about to honour (``grant_next()``'s
+        honour-an-existing-give branch -- see its comment).
+        """
+        gf = cls._grant_file()
+        try:
+            return json.loads(gf.read_text())
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+            return None
 
     @classmethod
     def _current_grant(cls) -> Optional[dict]:
@@ -595,11 +718,10 @@ class ConchQueue:
         practice it self-heals the moment any other queued waiter's poll
         loop (or a status check) next asks "who is granted?".
         """
-        gf = cls._grant_file()
-        try:
-            g = json.loads(gf.read_text())
-        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        g = cls._raw_grant()
+        if g is None:
             return None
+        gf = cls._grant_file()
         sid = g.get("session_id")
         if sid is None:
             cls._unlink(gf)

@@ -443,14 +443,135 @@ class TestGrantTTLSafetyNet:
 
         assert ConchQueue.granted_to() == "stuck-head"
 
-    def test_legacy_grant_with_no_granted_at_is_not_treated_as_wedged(self, monkeypatch):
-        """A grant written before VM-1967 (or by any other writer) carries no
-        ``granted_at`` -- can't judge its age, so don't guess it's stuck."""
+    def test_missing_granted_at_is_stamped_on_first_sighting_then_judged_normally(
+        self, monkeypatch
+    ):
+        """VM-2078 fix-002: a grant carrying no ``granted_at`` (predates
+        VM-1967, or was written by something else) must NOT be exempt
+        forever -- that is itself an un-expiring grant, exactly the class
+        this task exists to eliminate. First read stamps it (persisted,
+        atomic) and treats it as fresh-from-now; only once THAT stamp ages
+        past the TTL is it judged wedged, same as any other grant.
+
+        Supersedes the old ``test_legacy_grant_with_no_granted_at_is_not_
+        treated_as_wedged``, which asserted the pre-fix-002 contract
+        (exempt forever) -- that test encoded the bug this one closes, per
+        the fix-002-prescription-corrected decision in progress.json.
+        """
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
         ConchQueue.register("a")
         ConchQueue._atomic_write_json(
             ConchQueue._grant_file(), {"session_id": "a", "seq": 1})
+
+        # First sighting: judged fresh (not wedged), AND now stamped on disk
+        # -- the bonus gap this closes: "no timestamp" no longer means
+        # "exempt forever".
         assert ConchQueue.granted_to() == "a"
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("granted_at") is not None
+
+        # Now that it carries a real stamp, ageing it past the TTL judges
+        # and evicts it exactly like any other grant.
+        self._backdate_grant(11)
+        assert ConchQueue.granted_to() is None
+        assert ConchQueue.list() == []
+
+    def test_holder_gate_precedes_missing_granted_at_stamp(self, monkeypatch):
+        """Order matters, not just presence (fix-002 checklist #1). With a
+        missing ``granted_at`` AND a live holder, the holder gate must
+        short-circuit FIRST -- if the granted_at parse ran first, a live
+        holder would be irrelevant to the missing-timestamp branch, but the
+        real risk is the reverse: the gate placed AFTER the parse would
+        never run at all when the timestamp is malformed. Assert the
+        stamp-on-first-sighting write from the missing-timestamp branch does
+        NOT fire while the holder gate is the one short-circuiting."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        try:
+            ConchQueue.register("a")
+            ConchQueue._atomic_write_json(
+                ConchQueue._grant_file(), {"session_id": "a", "seq": 1})  # no granted_at
+
+            assert ConchQueue.granted_to() == "a"  # holder gate -> not wedged
+            grant_payload = json.loads(ConchQueue._grant_file().read_text())
+            assert grant_payload.get("granted_at") is None  # gate ran first; no stamp write
+        finally:
+            holder.release()
+
+    def test_give_during_live_holder_speech_survives_past_ttl(self, monkeypatch):
+        """VM-2078 Q3 repro, inverted into a regression test. Reproduced
+        against unmodified master with mode='wait' throughout (no callback
+        involved): ``conch give`` while the holder is still speaking used to
+        evaporate once the grant aged past ``CONCH_GRANT_TTL``, evicting the
+        innocent, still-polling waiter. A grant cannot be judged wedged while
+        a live holder still blocks the claim -- the grantee cannot claim
+        yet, no matter how long ago the grant was issued."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        try:
+            ConchQueue.register("A")
+            assert ConchQueue.grant("A") is True  # operator: `conch give A`
+            self._backdate_grant(9999)  # ancient, but the holder is still speaking
+
+            # Must NOT evaporate and must NOT evict the waiter -- this is the
+            # exact bug reproduced against unmodified master.
+            assert ConchQueue.granted_to() == "A"
+            assert [e.session_id for e in ConchQueue.list()] == ["A"]
+        finally:
+            holder.release()
+
+    def test_give_re_stamped_on_release_then_claims_normally(self, monkeypatch):
+        """The companion half of the give-during-hold fix: when the holder
+        finally releases, ``grant_next``'s honour-an-existing-give early
+        return must re-stamp ``granted_at`` -- the claim window begins when
+        the floor actually frees, not whenever the operator originally ran
+        `conch give`. Without the re-stamp the grant is already ancient at
+        the exact moment it becomes claimable and would be judged wedged on
+        the very next read."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        ConchQueue.register("A")
+        assert ConchQueue.grant("A") is True
+        self._backdate_grant(9999)  # already "ancient" while the holder still speaks
+
+        holder.release()  # full release -> grant_next() honours the existing give
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        granted_at = datetime.fromisoformat(grant_payload["granted_at"])
+        assert (datetime.now() - granted_at).total_seconds() < 2  # freshly re-stamped
+
+        # And the grantee can now claim normally -- the re-stamp did not
+        # merely avoid eviction, it produced a genuinely fresh claim window.
+        a = Conch(agent_name="a", session_id="A")
+        assert a.try_acquire() is True
+        a.release()
+
+    def test_stacked_wedged_grants_recursion_bound(self, monkeypatch):
+        """``_current_grant``'s self-heal recursion (deregister -> grant_next
+        -> recursive ``_current_grant``) goes from a rare path to a routine
+        one once every grant is TTL-covered (no more callback exemption) --
+        exercise it two deep: each self-heal promotes a freshly-stamped
+        grant, so a single stale read never cascades past the next live
+        waiter."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("first")
+        ConchQueue.register("second")
+        ConchQueue.register("third")
+        ConchQueue.grant_next()  # grants "first"
+        self._backdate_grant(11)  # wedge #1
+
+        # One read self-heals through the first wedge and lands on a fresh
+        # grant for "second" -- not a second wedge, no stack blow-up.
+        assert ConchQueue.granted_to() == "second"
+        assert [e.session_id for e in ConchQueue.list()] == ["second", "third"]
+
+        # Wedge the newly-promoted grant too -> self-heals again, to "third".
+        self._backdate_grant(11)
+        assert ConchQueue.granted_to() == "third"
+        assert [e.session_id for e in ConchQueue.list()] == ["third"]
 
     def test_grant_age_seconds(self, monkeypatch):
         ConchQueue.register("a")
@@ -459,6 +580,90 @@ class TestGrantTTLSafetyNet:
         self._backdate_grant(5)
         age = ConchQueue.grant_age_seconds()
         assert age is not None and 4.5 <= age <= 6.0
+
+
+# --------------------------------------------------------------------------- #
+# VM-2078 fix-002: claim_ttl -- a bounded override on a SINGLE grant record,
+# widening (never disabling, never a category on the waiter) the claim window
+# from evidence the GRANTER directly observed -- e.g. a summon_and_grant nudge
+# (D2) confirmed delivered. do-003 is the intended caller; this is the
+# queue-side primitive it will drive once its checked-and-surfaced delivery
+# result exists (see the "SHAPE SETTLED" note in fix-002's slice notes).
+# --------------------------------------------------------------------------- #
+
+class TestGrantClaimTTLOverride:
+    def _backdate_grant(self, seconds):
+        """Rewrite the on-disk grant with ``granted_at`` ``seconds`` in the past."""
+        gf = ConchQueue._grant_file()
+        g = json.loads(gf.read_text())
+        g["granted_at"] = (datetime.now() - timedelta(seconds=seconds)).isoformat()
+        ConchQueue._atomic_write_json(gf, g)
+
+    def test_grant_without_claim_ttl_uses_base_ttl(self, monkeypatch):
+        """Regression: an ordinary `grant()` call (no observed-delivery
+        evidence passed) must be unaffected -- same base-TTL behaviour as
+        before ``claim_ttl`` existed, and no stray key on the grant record."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a") is True
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert "claim_ttl" not in grant_payload
+
+        self._backdate_grant(11)  # past the 10s base TTL
+        assert ConchQueue.granted_to() is None  # evicted, same as always
+
+    def test_claim_ttl_is_persisted_on_the_grant_record(self):
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a", claim_ttl=90.0) is True
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 90.0
+
+    def test_claim_ttl_widens_the_window_past_the_base_ttl(self, monkeypatch):
+        """The whole point of the override: a summoned session (D2) with a
+        CONFIRMED-delivered nudge must survive well past the ordinary
+        poll-loop TTL, since it has no poll loop -- but the window stays
+        FINITE, not exempt."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("summoned")
+        assert ConchQueue.grant("summoned", claim_ttl=90.0) is True
+
+        self._backdate_grant(30)  # past the 10s base TTL, well within 90s
+        assert ConchQueue.granted_to() == "summoned"  # survives -- override applies
+
+        self._backdate_grant(91)  # past the claim_ttl override too
+        assert ConchQueue.granted_to() is None  # still finite -- eventually evicted
+        assert ConchQueue.list() == []
+
+    def test_claim_ttl_survives_the_re_stamp_on_release(self, monkeypatch):
+        """``grant_next()``'s honour-an-existing-give re-stamp (VM-2078 Q3)
+        must PRESERVE a ``claim_ttl`` override, not silently drop it back to
+        the base TTL -- the moment the floor frees is exactly when a
+        summoned session most needs its widened window."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        ConchQueue.register("summoned")
+        assert ConchQueue.grant("summoned", claim_ttl=90.0) is True
+
+        holder.release()  # -> grant_next() honours the existing give, re-stamps
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 90.0
+        granted_at = datetime.fromisoformat(grant_payload["granted_at"])
+        assert (datetime.now() - granted_at).total_seconds() < 2  # freshly re-stamped
+
+        self._backdate_grant(30)  # past the base 10s, within the preserved 90s
+        assert ConchQueue.granted_to() == "summoned"
+
+    def test_disabled_base_ttl_ignores_claim_ttl_too(self, monkeypatch):
+        """``CONCH_GRANT_TTL=0`` is the administrative "disable the safety
+        net entirely" switch -- a per-grant ``claim_ttl`` override must not
+        partially re-enable judgement while the base is off."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a", claim_ttl=5.0) is True
+        self._backdate_grant(9999)
+        assert ConchQueue.granted_to() == "a"
 
 
 # --------------------------------------------------------------------------- #
