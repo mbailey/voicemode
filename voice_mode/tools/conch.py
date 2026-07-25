@@ -190,7 +190,7 @@ def _do_callback(session_id, agent, project_path, voice) -> dict:
     expires = _expiry_iso()
     position = ConchQueue.register(
         session_id, agent=agent, project_path=project_path, voice=voice,
-        mode="callback", pid=None, expires=expires,
+        pid=None, expires=expires,
     )
     return {
         "ok": True, "action": "callback", "registered": True, "granted": False,
@@ -220,7 +220,7 @@ async def _do_wait(session_id, agent, project_path, voice, timeout) -> dict:
 
     ConchQueue.register(
         session_id, agent=agent, project_path=project_path, voice=voice,
-        mode="wait", pid=None, expires=_expiry_iso(),
+        pid=None, expires=_expiry_iso(),
     )
 
     interval = CONCH_CHECK_INTERVAL if CONCH_CHECK_INTERVAL > 0 else 0.5
@@ -242,7 +242,7 @@ async def _do_wait(session_id, agent, project_path, voice, timeout) -> dict:
             break
         ConchQueue.register(
             session_id, agent=agent, project_path=project_path, voice=voice,
-            mode="wait", pid=None, expires=_expiry_iso(),
+            pid=None, expires=_expiry_iso(),
         )
         await asyncio.sleep(interval)
         waited += interval
@@ -271,7 +271,7 @@ async def _do_wait(session_id, agent, project_path, voice, timeout) -> dict:
 
 
 def _do_heartbeat(session_id, agent, project_path, voice) -> dict:
-    """Refresh a remote waiter's TTL, preserving its place (seq) and mode."""
+    """Refresh a remote waiter's TTL, preserving its place (seq)."""
     entry = _entry_of(session_id)
     if entry is None:
         return {
@@ -284,21 +284,23 @@ def _do_heartbeat(session_id, agent, project_path, voice) -> dict:
     expires = _expiry_iso()
     # register() keeps the original seq + requested_at for an existing session,
     # so this refreshes the TTL without losing the waiter's place. Carry the
-    # existing mode/fields forward unless the caller supplied new ones.
+    # existing fields forward unless the caller supplied new ones.
     position = ConchQueue.register(
         session_id,
         agent=agent if agent is not None else entry.agent,
         project_path=project_path if project_path is not None else entry.project_path,
         voice=voice if voice is not None else entry.voice,
-        mode=entry.mode,
         pid=None,
         expires=expires,
     )
+    # "mode" here is a fixed label, not a stored field (VM-2078 dropped
+    # WaiterEntry.mode) -- heartbeat is only ever sent by a caller already
+    # registered via action="callback", so it is always this value.
     return {
         "ok": True, "action": "heartbeat", "registered": True,
-        "session_id": session_id, "mode": entry.mode, "position": position,
+        "session_id": session_id, "mode": "callback", "position": position,
         "expires": expires,
-        "message": f"Heartbeat acknowledged; still at position #{position} (mode {entry.mode}).",
+        "message": f"Heartbeat acknowledged; still at position #{position} (mode callback).",
     }
 
 
@@ -311,8 +313,8 @@ def _do_give(target) -> dict:
 
     Mirrors the CLI ``give`` (parity, via the shared ``conch_ops`` core):
     resolve a waiter first; on a genuine no-match fall back to summoning a
-    running non-waiter (auto-enqueue callback + grant + notify). An *ambiguous*
-    token is surfaced rather than summoned.
+    running non-waiter (auto-enqueue + grant + notify, VM-1637). An
+    *ambiguous* token is surfaced rather than summoned.
     """
     if not target:
         return {
@@ -340,7 +342,9 @@ def _do_give(target) -> dict:
             "ok": False, "action": "give",
             "message": f"{waiter.agent or waiter.session_id} is no longer waiting; nothing granted.",
         }
-    conch_ops.notify_granted_session(waiter.session_id)
+    # No nudge here (VM-2078): an ordinary waiter polls and self-acquires, so
+    # pinging it is redundant. Only the summon path (no poll loop of its own)
+    # still needs one -- see conch_ops.summon_and_grant.
     holder = Conch.get_holder()
     when = "now (the conch is free)" if holder is None else \
         f"when {holder.get('agent') or 'the holder'} releases"
@@ -373,7 +377,7 @@ def _do_bump() -> dict:
                 "ok": True, "action": "bump", "bumped": None, "next": None,
                 "message": "Conch is free and no one is waiting — nothing to bump.",
             }
-        conch_ops.notify_granted_session(head.session_id)
+        # No nudge here (VM-2078): the promoted head polls and self-acquires.
         return {
             "ok": True, "action": "bump", "bumped": None, "next": head.session_id,
             "message": (
@@ -395,7 +399,7 @@ def _do_bump() -> dict:
                 "re-request. Queue is empty — the conch is now free."
             ),
         }
-    conch_ops.notify_granted_session(head.session_id)
+    # No nudge here (VM-2078): the promoted head polls and self-acquires.
     return {
         "ok": True, "action": "bump", "bumped": bumped_sid, "next": head.session_id,
         "message": (

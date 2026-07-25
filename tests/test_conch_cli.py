@@ -40,9 +40,9 @@ def _no_discovery(monkeypatch):
     monkeypatch.setattr(conch_ops, "_list_running_sessions", lambda: [])
 
 
-def _register(sid, *, agent=None, mode="wait"):
+def _register(sid, *, agent=None):
     """Register a live local waiter (pid = current process)."""
-    return ConchQueue.register(sid, agent=agent, mode=mode)
+    return ConchQueue.register(sid, agent=agent)
 
 
 def _running(sid, *, agent=None, name=None, pid=None, cwd=None):
@@ -99,7 +99,7 @@ class TestStatus:
     def test_holder_and_queue_json(self, runner):
         _make_holder(agent="cora", sid="cora-sess-abcdef")
         _register("waiter-1-aaa", agent="w1")
-        _register("waiter-2-bbb", agent="w2", mode="callback")
+        _register("waiter-2-bbb", agent="w2")
         result = runner.invoke(conch, ["status", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -108,7 +108,7 @@ class TestStatus:
         # Ordered queue, positions 1..2, FIFO by registration.
         assert [q["position"] for q in data["queue"]] == [1, 2]
         assert data["queue"][0]["session_id"] == "waiter-1-aaa"
-        assert data["queue"][1]["mode"] == "callback"
+        assert "mode" not in data["queue"][1]  # VM-2078: mode column removed
 
     def test_grant_outstanding_and_unclaimed_is_not_reported_free(self, runner):
         """VM-1967: no live holder but a live WAIT-mode grant stands unclaimed
@@ -231,7 +231,7 @@ class _RecordingRun:
 
 class TestSummon:
     def test_summon_non_waiter_enqueues_grants_nudges(self, runner, monkeypatch):
-        """give a running non-waiter ⇒ auto-enqueue (callback) + grant + nudge (SC1)."""
+        """give a running non-waiter ⇒ auto-enqueue + grant + nudge (SC1)."""
         monkeypatch.setattr(conch_ops, "_list_running_sessions",
                             lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
         rec = _RecordingRun()
@@ -241,10 +241,9 @@ class TestSummon:
         assert result.exit_code == 0
         assert "summoned" in result.output.lower()
         assert "dora" in result.output
-        # Enqueued as a callback waiter carrying the notify fields, and granted.
+        # Enqueued as an ordinary waiter carrying the notify fields, and granted.
         entry = next((e for e in ConchQueue.list() if e.session_id == "run-1"), None)
         assert entry is not None
-        assert entry.mode == "callback"
         assert entry.agent == "dora"
         assert entry.pid == os.getpid()
         assert ConchQueue.granted_to() == "run-1"

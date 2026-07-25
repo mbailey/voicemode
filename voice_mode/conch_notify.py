@@ -1,17 +1,15 @@
 """notify_granted — the *push* half of the conch's pull/push delivery (VM-1625).
 
-A waiter in ``wait`` mode is actively polling: when the conch becomes theirs
-they *pull* it (their own loop self-acquires). A waiter in ``callback`` mode is
-idle — it asked to be pinged rather than block — so when the floor falls to it,
-or it is skipped so a blocking waiter behind it isn't starved (the F1 fix in
-:meth:`voice_mode.conch_queue.ConchQueue.grant_next`), it must be *pushed*: told
-to call ``converse()`` and (re)engage.
-
-This module is the single home for that push so every grant site can share it:
-
-- the CLI ``conch give`` / ``conch bump`` (via ``cli_commands.conch._notify_granted``),
-- ``ConchQueue.grant_next`` pinging callback waiters it skips,
-- and, when it lands, VM-1619's converse callback-return path.
+**VM-2078 update:** converse's ``callback`` mode (register-and-discard, pinged
+out-of-band) is removed — every ordinary waiter now polls and *pulls* its own
+grant, so an ordinary give/bump nudge is redundant and its call sites are
+gone. The one caller left is :func:`voice_mode.conch_ops.summon_and_grant`
+(VM-1637, ``conch give`` to a running non-waiter): a summoned session has no
+poll loop of its own, so it still needs telling. This module (and its summon
+caller) is deliberately kept — see VM-2078's carve-out — while the mode-based
+gate that used to decide *whether* to push is gone along with ``mode`` itself.
+do-003 narrows this further to a small, checked-return operator-path nudge;
+this module still does the unconditional push in the meantime.
 
 Delivery is **best-effort and never raises** into a grant site — a missing
 ``session`` binary, no tmux, or a vanished waiter is a silent no-op, mirroring
@@ -25,8 +23,8 @@ Delivery is **best-effort and never raises** into a grant site — a missing
   ``conch status``. ``_remote_marker`` is left as the seam for VM-970's MCP
   channel notification to fill.
 
-The function takes a ``WaiterEntry``-shaped object (duck-typed: ``mode``,
-``pid``, ``session_id``, ``project_path``) so it carries no import dependency on
+The function takes a ``WaiterEntry``-shaped object (duck-typed: ``pid``,
+``session_id``, ``project_path``) so it carries no import dependency on
 the queue layer and stays trivially callable from anywhere.
 """
 
@@ -44,41 +42,33 @@ _SEND_TIMEOUT = 10.0
 
 
 def notify_granted(entry, *, block: bool = True) -> None:
-    """Push a "your turn" nudge to a grantee that is **not** actively watching.
+    """Push a "your turn" nudge to a grantee.
 
-    The idempotency / "not watching" gate is mode-based (VM-1625 decision):
+    VM-2078 removed the mode-based gate: the only remaining caller is the
+    summon path (:func:`voice_mode.conch_ops.summon_and_grant`), whose target
+    has no poll loop of its own, so every call here pushes unconditionally.
 
-    - ``mode == "wait"`` ⇒ the grantee is polling; the *pull* wins ⇒ **no push**
-      (a ``give`` to a wait-mode waiter is a silent no-push — its own loop takes
-      the floor, so a double-delivery is impossible).
-    - ``mode == "callback"`` ⇒ idle ⇒ **push**.
-
-    Routing for a callback grantee: local (``pid`` set) ⇒ tmux pane nudge;
-    remote (``pid is None``) ⇒ remote-marker seam (VM-970). A ``None`` entry (the
-    waiter vanished between grant and notify) is a harmless no-op.
+    Routing: local (``pid`` set) ⇒ tmux pane nudge; remote (``pid is None``)
+    ⇒ remote-marker seam (VM-970). A ``None`` entry (the waiter vanished
+    between grant and notify) is a harmless no-op.
 
     ``block`` controls the **local** push only (the remote seam is already a
     no-op):
 
     - ``block=True`` (default) — run ``session send`` synchronously, bounded by
-      ``_SEND_TIMEOUT``. Right for the one-shot CLI ``give`` / ``bump``: the
-      command is about to exit, so it should deliver the nudge before returning.
+      ``_SEND_TIMEOUT``. Right for the one-shot CLI/MCP ``give`` summon path:
+      the command is about to exit, so it should deliver the nudge before
+      returning.
     - ``block=False`` — fire the local push on a daemon thread and return at
-      once. Right for the converse **release** hot path
-      (``Conch.release`` → ``ConchQueue.grant_next`` pinging skipped callback
-      heads, the VM-1625 impl-001 peer-review finding): the holder must never
-      block its release on session discovery / tmux. The thread's
-      ``subprocess.run`` still waits on and reaps its child, so no zombie
-      accumulates in the long-lived MCP server, and the thread is a daemon so a
-      slow nudge can never hold up interpreter exit.
+      once, for any future caller that must not block on session discovery /
+      tmux. The thread's ``subprocess.run`` still waits on and reaps its
+      child, so no zombie accumulates in the long-lived MCP server, and the
+      thread is a daemon so a slow nudge can never hold up interpreter exit.
 
-    Never raises: any failure is swallowed so ``give`` / ``bump`` / ``grant_next``
-    are never broken by a notification glitch.
+    Never raises: any failure is swallowed so a grant site is never broken by
+    a notification glitch.
     """
     if entry is None:
-        return
-    # Only an idle callback waiter needs pushing; a wait-mode waiter self-acquires.
-    if getattr(entry, "mode", "wait") != "callback":
         return
     try:
         if getattr(entry, "pid", None) is None:

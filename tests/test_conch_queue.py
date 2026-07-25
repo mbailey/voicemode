@@ -13,7 +13,6 @@ import multiprocessing
 import os
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -21,7 +20,7 @@ import psutil
 import pytest
 
 from voice_mode.conch import Conch
-from voice_mode.conch_queue import ConchQueue, WaiterEntry
+from voice_mode.conch_queue import ConchQueue
 
 
 # --------------------------------------------------------------------------- #
@@ -29,12 +28,14 @@ from voice_mode.conch_queue import ConchQueue, WaiterEntry
 # --------------------------------------------------------------------------- #
 
 def _write_entry(seq, session_id, *, pid=-1, expires=None, agent="other",
-                 mode="wait"):
+                 extra=None):
     """Write a raw queue entry file directly (simulating another registrant).
 
     ``pid=-1`` means "use the current process" (a live local waiter). Pass
     ``pid=None`` for a remote waiter, or an explicit int (e.g. a reaped, dead
-    PID) to fabricate a stale local entry.
+    PID) to fabricate a stale local entry. ``extra`` merges in additional raw
+    keys -- e.g. a legacy ``"mode": "callback"`` (VM-2078 dropped the field;
+    ``from_dict`` must tolerate and discard an unknown key like this).
     """
     if pid == -1:
         pid = os.getpid()
@@ -43,17 +44,19 @@ def _write_entry(seq, session_id, *, pid=-1, expires=None, agent="other",
     if isinstance(expires, datetime):
         expires = expires.isoformat()
     path = qdir / ConchQueue._filename(seq, session_id)
-    path.write_text(json.dumps({
+    payload = {
         "session_id": session_id,
         "seq": seq,
         "agent": agent,
         "project_path": None,
         "voice": None,
         "pid": pid,
-        "mode": mode,
         "requested_at": datetime.now().isoformat(),
         "expires": expires,
-    }))
+    }
+    if extra:
+        payload.update(extra)
+    path.write_text(json.dumps(payload))
     return path
 
 
@@ -96,15 +99,20 @@ class TestRegisterOrder:
 
     def test_register_persists_all_fields(self):
         ConchQueue.register(
-            "a", agent="cora", project_path="/p", voice="af_sky", mode="callback")
+            "a", agent="cora", project_path="/p", voice="af_sky")
         entry = ConchQueue.head()
         assert entry.session_id == "a"
         assert entry.agent == "cora"
         assert entry.project_path == "/p"
         assert entry.voice == "af_sky"
-        assert entry.mode == "callback"
         assert entry.pid == os.getpid()
         assert entry.requested_at is not None
+
+    def test_register_rejects_mode_kwarg(self):
+        """VM-2078 dropped the mode concept entirely -- register() no longer
+        accepts it (no retain-and-ignore)."""
+        with pytest.raises(TypeError):
+            ConchQueue.register("a", mode="wait")
 
     def test_empty_queue_head_is_none(self):
         assert ConchQueue.head() is None
@@ -227,10 +235,22 @@ class TestCleanup:
                 ).isoformat().replace("+00:00", "Z")
         (qdir / ConchQueue._filename(1, "rz")).write_text(json.dumps({
             "session_id": "rz", "seq": 1, "agent": "remote", "project_path": None,
-            "voice": None, "pid": None, "mode": "wait",
+            "voice": None, "pid": None,
             "requested_at": datetime.now().isoformat(), "expires": zstr,
         }))
         assert [e.session_id for e in ConchQueue.list()] == ["rz"]
+
+    def test_legacy_mode_key_is_tolerated_and_discarded(self):
+        """VM-2078 Q1: a legacy on-disk entry carrying "mode": "callback" (plus
+        any other unknown/future key) must not crash -- from_dict is
+        field-explicit, so it is silently ignored, and the entry is granted
+        like any ordinary waiter."""
+        _write_entry(1, "legacy-cb", extra={"mode": "callback", "future_key": "x"})
+        entries = ConchQueue.list()
+        assert [e.session_id for e in entries] == ["legacy-cb"]
+        assert not hasattr(entries[0], "mode")
+        granted = ConchQueue.grant_next()
+        assert granted.session_id == "legacy-cb"
 
     def test_register_remote_with_tz_aware_expires_persists(self):
         # End-to-end via the public API: registering a remote waiter with a
@@ -346,8 +366,10 @@ class TestGrant:
 
 
 # --------------------------------------------------------------------------- #
-# VM-1967: grant claim TTL safety net -- a WAIT-mode grant nobody ever claims
-# self-heals past CONCH_GRANT_TTL instead of wedging the queue forever.
+# VM-1967: grant claim TTL safety net -- a grant nobody ever claims self-heals
+# past CONCH_GRANT_TTL instead of wedging the queue forever. VM-2078 removed
+# the one exemption this TTL used to carry (callback mode) -- every grant is
+# now covered, with no grant class exempt.
 # --------------------------------------------------------------------------- #
 
 class TestGrantTTLSafetyNet:
@@ -358,16 +380,16 @@ class TestGrantTTLSafetyNet:
         g["granted_at"] = (datetime.now() - timedelta(seconds=seconds)).isoformat()
         ConchQueue._atomic_write_json(gf, g)
 
-    def test_stale_wait_grant_self_heals_and_promotes_next(self, monkeypatch):
-        """The exact VM-1967 deadlock shape: a WAIT-mode grant that is never
-        claimed must NOT wedge the queue forever -- past CONCH_GRANT_TTL it is
+    def test_stale_grant_self_heals_and_promotes_next(self, monkeypatch):
+        """The exact VM-1967 deadlock shape: a grant that is never claimed
+        must NOT wedge the queue forever -- past CONCH_GRANT_TTL it is
         treated as abandoned, the stuck grantee is evicted, and the next live
         waiter is promoted, matching the manual `conch give` recovery an
         operator would otherwise have to perform.
         """
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("stuck-head", mode="wait")
-        ConchQueue.register("next-in-line", mode="wait")
+        ConchQueue.register("stuck-head")
+        ConchQueue.register("next-in-line")
         ConchQueue.grant_next()  # promotes stuck-head, never claimed
         assert ConchQueue.granted_to() == "stuck-head"
 
@@ -379,41 +401,43 @@ class TestGrantTTLSafetyNet:
         assert ConchQueue.granted_to() == "next-in-line"
         assert [e.session_id for e in ConchQueue.list()] == ["next-in-line"]
 
-    def test_stale_wait_grant_with_no_other_waiters_clears_to_free(self, monkeypatch):
+    def test_stale_grant_with_no_other_waiters_clears_to_free(self, monkeypatch):
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("stuck-head", mode="wait")
+        ConchQueue.register("stuck-head")
         ConchQueue.grant_next()
         self._backdate_grant(11)
 
         assert ConchQueue.granted_to() is None
         assert ConchQueue.list() == []
 
-    def test_fresh_wait_grant_within_ttl_is_not_disturbed(self, monkeypatch):
+    def test_fresh_grant_within_ttl_is_not_disturbed(self, monkeypatch):
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("head", mode="wait")
+        ConchQueue.register("head")
         ConchQueue.grant_next()
         self._backdate_grant(5)  # within the 10s TTL
 
         assert ConchQueue.granted_to() == "head"
         assert "head" in [e.session_id for e in ConchQueue.list()]
 
-    def test_callback_grant_is_exempt_from_ttl(self, monkeypatch):
-        """A CALLBACK grantee is claimed out-of-band, at agent/human pace
-        (VM-1625) -- unclaimed for a long time is normal there, not stuck, so
-        it must never be evicted by the TTL safety net."""
+    def test_lone_waiter_grant_is_no_longer_exempt(self, monkeypatch):
+        """VM-2078: the exact wedge this task closes. Previously a lone
+        callback waiter granted the head (nothing to starve) was EXEMPT from
+        the TTL, so it never expired even when never claimed. There is no
+        such exemption any more -- a lone head grant self-heals past TTL
+        exactly like any other."""
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("idle-callback", mode="callback")
-        ConchQueue.grant_next()  # only-callback case -> grants head unchanged
-        assert ConchQueue.granted_to() == "idle-callback"
+        ConchQueue.register("idle-waiter")
+        ConchQueue.grant_next()  # only waiter -> grants head unchanged
+        assert ConchQueue.granted_to() == "idle-waiter"
 
-        self._backdate_grant(9999)  # ancient -- would trip a WAIT-mode TTL
+        self._backdate_grant(9999)  # ancient -- would have been exempt pre-VM-2078
 
-        assert ConchQueue.granted_to() == "idle-callback"
-        assert "idle-callback" in [e.session_id for e in ConchQueue.list()]
+        assert ConchQueue.granted_to() is None
+        assert ConchQueue.list() == []
 
     def test_ttl_disabled_when_zero(self, monkeypatch):
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
-        ConchQueue.register("stuck-head", mode="wait")
+        ConchQueue.register("stuck-head")
         ConchQueue.grant_next()
         self._backdate_grant(9999)
 
@@ -423,165 +447,18 @@ class TestGrantTTLSafetyNet:
         """A grant written before VM-1967 (or by any other writer) carries no
         ``granted_at`` -- can't judge its age, so don't guess it's stuck."""
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("a", mode="wait")
+        ConchQueue.register("a")
         ConchQueue._atomic_write_json(
             ConchQueue._grant_file(), {"session_id": "a", "seq": 1})
         assert ConchQueue.granted_to() == "a"
 
     def test_grant_age_seconds(self, monkeypatch):
-        ConchQueue.register("a", mode="wait")
+        ConchQueue.register("a")
         assert ConchQueue.grant_age_seconds() is None  # no grant yet
         ConchQueue.grant_next()
         self._backdate_grant(5)
         age = ConchQueue.grant_age_seconds()
         assert age is not None and 4.5 <= age <= 6.0
-
-
-# --------------------------------------------------------------------------- #
-# grant_next skips leading callback waiters (VM-1625, F1)
-# --------------------------------------------------------------------------- #
-
-def _mock_session_send(monkeypatch):
-    """Capture the local notify push (``session send``) instead of spawning it.
-
-    Returns the list of recorded argv lists. A callback waiter skipped by
-    grant_next is a *local* waiter here (current PID), so it would otherwise
-    shell out to the real ``session send`` and type into a live tmux pane.
-    """
-    calls = []
-
-    def fake_run(*args, **kwargs):
-        calls.append(args[0] if args else kwargs.get("args"))
-
-        class _Result:
-            returncode = 0
-
-        return _Result()
-
-    monkeypatch.setattr("subprocess.run", fake_run)
-    return calls
-
-
-def _join_notify_threads(timeout=5.0):
-    """Join the fire-and-forget notify threads grant_next spawns on the release
-    hot path (``notify_block=False``), so a test can assert their side effect
-    deterministically instead of racing them. Named ``conch-notify`` by
-    ``conch_notify._dispatch_async``.
-    """
-    for t in list(threading.enumerate()):
-        if t.name == "conch-notify":
-            t.join(timeout)
-
-
-class TestGrantNextCallbackSkip:
-    def test_skips_leading_callback_to_grant_wait_waiter(self, monkeypatch):
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-head", mode="callback")     # idle callback at head
-        _write_entry(2, "wait-behind", mode="wait")     # blocking waiter behind it
-
-        granted = ConchQueue.grant_next()
-        assert granted.session_id == "wait-behind"       # wait waiter wins, not cb-head
-        assert ConchQueue.granted_to() == "wait-behind"
-        # The skipped callback head was pinged to return.
-        assert any("cb-head" in argv for argv in calls)
-
-    def test_callback_head_no_longer_starves_wait_waiter(self, monkeypatch):
-        """F1 closing the loop: the wait waiter actually acquires now.
-
-        Pre-fix grant_next promoted the head regardless of mode, so the granted
-        callback head (which never self-acquires) gated the wait waiter behind
-        it until it timed out. Now the wait waiter is the grantee and acquires.
-        """
-        _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-head", mode="callback")
-        _write_entry(2, "wait-behind", mode="wait")
-        ConchQueue.grant_next()  # holder releases -> promote next
-
-        # cb-head is not the grantee, so it can't (and never would) take the floor;
-        # wait-behind is the grantee and acquires cleanly.
-        assert Conch(agent_name="cb", session_id="cb-head").try_acquire() is False
-        assert Conch(agent_name="w", session_id="wait-behind").try_acquire() is True
-
-    def test_only_callback_waiters_grant_head_unchanged(self, monkeypatch):
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-1", mode="callback")
-        _write_entry(2, "cb-2", mode="callback")
-
-        granted = ConchQueue.grant_next()
-        assert granted.session_id == "cb-1"              # head granted, unchanged
-        assert ConchQueue.granted_to() == "cb-1"
-        # Only-callback path is unchanged: grant_next pings no one (the lone
-        # callback case VM-1619's converse delivery owns; bump notifies it).
-        assert calls == []
-
-    def test_multiple_leading_callbacks_all_pinged(self, monkeypatch):
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-a", mode="callback")
-        _write_entry(2, "cb-b", mode="callback")
-        _write_entry(3, "wait-c", mode="wait")
-
-        granted = ConchQueue.grant_next()
-        assert granted.session_id == "wait-c"
-        pinged = {argv[2] for argv in calls}  # ["session", "send", <target>, text]
-        assert pinged == {"cb-a", "cb-b"}
-
-    def test_callbacks_after_wait_head_are_untouched(self, monkeypatch):
-        """A wait waiter at the head grants normally; trailing callbacks aren't pinged."""
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "wait-head", mode="wait")
-        _write_entry(2, "cb-trailing", mode="callback")
-
-        granted = ConchQueue.grant_next()
-        assert granted.session_id == "wait-head"
-        assert calls == []  # nothing skipped, nothing pinged
-
-    def test_skip_ping_fires_via_real_release(self, monkeypatch):
-        """The skip-and-ping is reachable through a real holder release, not only
-        a direct ``grant_next`` call (impl-002 review coverage gap).
-
-        ``Conch.release`` -> ``_queue_promote_next`` -> ``grant_next`` still
-        promotes the wait waiter (F1) and pings the skipped callback head -- but
-        on this hot path the ping is fire-and-forget (``notify_block=False``), so
-        we join the named notify thread before asserting its side effect.
-        """
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-head", mode="callback")
-        _write_entry(2, "wait-behind", mode="wait")
-
-        holder = Conch(agent_name="holder", session_id="holder")
-        assert holder.try_acquire() is True
-        holder.release()  # full release -> promote next on the converse hot path
-
-        # F1 still holds via the real release: the wait waiter is the grantee...
-        assert ConchQueue.granted_to() == "wait-behind"
-        # ...and the skipped callback head was pinged -- off-thread, so join first.
-        _join_notify_threads()
-        assert any("cb-head" in argv for argv in calls)
-
-    def test_release_skip_ping_is_off_the_release_thread(self, monkeypatch):
-        """The release-path ping is dispatched, not run inline, so a wedged
-        ``session send`` can't add latency to the holder's release (impl-002)."""
-        captured = []
-        # Intercept the dispatcher so we can prove the ping was handed off rather
-        # than executed on the release thread.
-        import voice_mode.conch_notify as conch_notify
-        monkeypatch.setattr(
-            conch_notify, "_dispatch_async",
-            lambda fn, *a: captured.append((fn, a)),
-        )
-        _write_entry(1, "cb-head", mode="callback")
-        _write_entry(2, "wait-behind", mode="wait")
-
-        holder = Conch(agent_name="holder", session_id="holder")
-        assert holder.try_acquire() is True
-        holder.release()
-
-        assert ConchQueue.granted_to() == "wait-behind"
-        # Exactly one ping, handed to the async dispatcher for the skipped head.
-        assert len(captured) == 1
-        fn, fn_args = captured[0]
-        assert fn is conch_notify._local_nudge
-        assert fn_args[0].session_id == "cb-head"
 
 
 # --------------------------------------------------------------------------- #

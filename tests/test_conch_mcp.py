@@ -61,9 +61,9 @@ async def call(**kwargs):
 # Helpers
 # --------------------------------------------------------------------------- #
 
-def _register_local(sid, *, agent=None, mode="wait"):
+def _register_local(sid, *, agent=None):
     """Register a live LOCAL waiter (pid = current process)."""
-    return ConchQueue.register(sid, agent=agent, mode=mode)
+    return ConchQueue.register(sid, agent=agent)
 
 
 def _make_holder(agent="holder", sid="holder-sess"):
@@ -94,13 +94,13 @@ def _norm_state():
     """Normalised, seq-independent snapshot of the shared conch state.
 
     The grant ``seq`` is a monotonic internal hint that drifts between two runs;
-    the *meaningful* state (who holds, who is granted, who is queued in what
-    mode) is what the two front ends must agree on.
+    the *meaningful* state (who holds, who is granted, who is queued) is what
+    the two front ends must agree on.
     """
     return {
         "granted": ConchQueue.granted_to(),
         "holder": (Conch.get_holder() or {}).get("session_id"),
-        "queue": [(e.session_id, e.mode) for e in ConchQueue.list()],
+        "queue": [e.session_id for e in ConchQueue.list()],
     }
 
 
@@ -147,12 +147,12 @@ class TestStatus:
     @pytest.mark.asyncio
     async def test_status_shows_holder_and_queue(self, clean_conch):
         _make_holder(agent="alpha", sid="alpha-sess")
-        _register_local("beta-222", agent="beta", mode="wait")
+        _register_local("beta-222", agent="beta")
         res = await call(action="status")
         assert res["holder"]["agent"] == "alpha"
         assert res["holder"]["session_id"] == "alpha-sess"
         assert [q["session_id"] for q in res["queue"]] == ["beta-222"]
-        assert res["queue"][0]["mode"] == "wait"
+        assert "mode" not in res["queue"][0]  # VM-2078: mode column removed
 
 
 # --------------------------------------------------------------------------- #
@@ -172,7 +172,6 @@ class TestCallback:
         entry = _entry("remote-1")
         assert entry is not None
         assert entry.pid is None
-        assert entry.mode == "callback"
         assert entry.expires is not None
         assert res["expires"] == entry.expires
 
@@ -202,7 +201,7 @@ class TestWait:
     @pytest.mark.asyncio
     async def test_wait_granted_via_explicit_grant(self, clean_conch):
         _make_holder()  # busy: not the free-head path
-        _register_local("w1", agent="w1", mode="callback")
+        _register_local("w1", agent="w1")
         assert ConchQueue.grant("w1") is True
         res = await call(action="wait", session_id="w1", timeout=5)
         assert res["granted"] is True
@@ -213,7 +212,7 @@ class TestWait:
         monkeypatch.setattr("voice_mode.tools.conch.CONCH_CHECK_INTERVAL", 0.02)
         _make_holder()  # live holder => never free for us
         # A separate granted waiter means our head-of-free path never fires.
-        _register_local("other", agent="other", mode="wait")
+        _register_local("other", agent="other")
         assert ConchQueue.grant("other") is True
         res = await call(action="wait", session_id="w1", timeout=0.2)
         assert res["ok"] is True
@@ -227,7 +226,7 @@ class TestWait:
         monkeypatch.setattr("voice_mode.tools.conch.CONCH_CHECK_INTERVAL", 0.02)
         monkeypatch.setattr("voice_mode.tools.conch.CONCH_MCP_WAIT_CAP", 0.1)
         _make_holder()
-        _register_local("other", mode="wait")
+        _register_local("other")
         ConchQueue.grant("other")
         res = await call(action="wait", session_id="w1", timeout=999)
         # min(timeout, cap) => the cap wins.
@@ -241,17 +240,16 @@ class TestWait:
 
 class TestHeartbeat:
     @pytest.mark.asyncio
-    async def test_heartbeat_refreshes_expires_and_preserves_seq_and_mode(self, clean_conch):
+    async def test_heartbeat_refreshes_expires_and_preserves_seq(self, clean_conch):
         first = await call(action="callback", session_id="r1")
         seq_before = _entry("r1").seq
         exp_before = first["expires"]
 
         res = await call(action="heartbeat", session_id="r1")
         assert res["ok"] is True
-        assert res["mode"] == "callback"  # mode preserved (not flipped to wait)
+        assert res["mode"] == "callback"  # fixed label, not a stored field (VM-2078)
         entry = _entry("r1")
         assert entry.seq == seq_before  # place preserved
-        assert entry.mode == "callback"
         # TTL moved forward (or stayed equal at worst — never earlier).
         assert parse_ts(res["expires"]) >= parse_ts(exp_before)
 
@@ -330,7 +328,7 @@ class TestSummon:
         assert res["summoned"] is True
         assert res["target"] == "run-1"
         entry = _entry("run-1")
-        assert entry is not None and entry.mode == "callback" and entry.pid == os.getpid()
+        assert entry is not None and entry.pid == os.getpid()
         assert ConchQueue.granted_to() == "run-1"
 
     @pytest.mark.asyncio
@@ -473,7 +471,7 @@ class TestParityWithCLI:
 
         assert mcp_state == cli_state
         assert mcp_state["granted"] == "run-1"
-        assert mcp_state["queue"] == [("run-1", "callback")]
+        assert mcp_state["queue"] == ["run-1"]
         assert mcp_grant_sid == cli_grant_sid == "run-1"
 
     @pytest.mark.asyncio

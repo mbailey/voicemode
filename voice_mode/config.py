@@ -633,18 +633,6 @@ CONCH_LOCK_EXPIRY = float(os.getenv("VOICEMODE_CONCH_LOCK_EXPIRY", "300"))
 # still applies).
 CONCH_HOLD_EXPIRY = float(os.getenv("VOICEMODE_CONCH_HOLD_EXPIRY", "10"))
 
-# Default delivery mode when a busy converse() engages the waiter queue (i.e.
-# wait_for_conch is truthy — that flag remains the gate for whether we queue at
-# all). VM-1415's "configurable default mode":
-#   "wait"     — block until the conch is granted to us, bounded by the timeout.
-#   "callback" — register and return immediately with the queue position; the
-#                turn is delivered out-of-band later (delivery is VM-1625).
-# Overridable per call via converse(conch_mode=...). Unknown values fall back to
-# "wait" so a misconfiguration never silently downgrades a wait into a callback.
-CONCH_MODE = os.getenv("VOICEMODE_CONCH_MODE", "wait").strip().lower()
-if CONCH_MODE not in ("wait", "callback"):
-    CONCH_MODE = "wait"
-
 # Heartbeat TTL (seconds) for a REMOTE waiter registered via the MCP `conch`
 # tool (VM-1622). A streamable-HTTP agent has no host PID, so its liveness is
 # the `expires` TTL on its queue entry (VM-1613's WaiterEntry.expires, honoured

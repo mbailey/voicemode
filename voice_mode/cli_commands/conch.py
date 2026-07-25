@@ -34,7 +34,6 @@ from voice_mode import conch_ops
 from voice_mode.conch_ops import (
     ConchResolveError,
     force_clear_lock as _force_clear_lock,
-    notify_granted_session as _notify_granted,
     short as _short,
     status_payload as _status_payload,
 )
@@ -118,7 +117,6 @@ def _render_status_human(snap: dict) -> None:
             click.echo(
                 f"  #{e['position']}  {e.get('agent') or '?':<10}  "
                 f"session {_short(e.get('session_id'))}  "
-                f"{e.get('mode') or 'wait':<8}  "
                 f"waiting {_fmt_duration(e.get('waiting_seconds'))}{mark}"
             )
     else:
@@ -166,9 +164,10 @@ def conch_give(session):
     Resolves SESSION against the waiter queue first: a matching waiter is made
     the designated next acquirer (it takes the floor when the current holder
     releases). If no waiter matches, SESSION is resolved against the *running*
-    sessions (``session list``) and **summoned** — auto-enqueued as a callback
-    waiter, granted, and nudged to take the floor (VM-1637). This does NOT evict
-    the holder — use 'bump' for an immediate hand-off.
+    sessions (``session list``) and **summoned** — auto-enqueued, granted, and
+    nudged to take the floor (VM-1637, since a summoned session has no poll
+    loop of its own). This does NOT evict the holder — use 'bump' for an
+    immediate hand-off.
     """
     waiters = ConchQueue.list()
     try:
@@ -191,7 +190,8 @@ def conch_give(session):
         raise click.ClickException(
             f"{target.agent or target.session_id} is no longer waiting; nothing granted."
         )
-    _notify_granted(target.session_id)
+    # No nudge here (VM-2078): an ordinary waiter polls and self-acquires, so
+    # pinging it is redundant. Only the summon path above still needs one.
     holder = _holder_dict()
     when = "now (conch is free)" if holder is None else f"when {holder.get('agent') or 'the holder'} releases"
     click.echo(
@@ -223,7 +223,7 @@ def conch_bump():
         if head is None:
             click.echo("Conch is free and no one is waiting — nothing to bump.")
         else:
-            _notify_granted(head.session_id)
+            # No nudge here (VM-2078): the promoted head polls and self-acquires.
             click.echo(
                 f"Conch was already free; promoted {head.agent or _short(head.session_id)} "
                 f"(session {_short(head.session_id)}) as next in line."
@@ -241,7 +241,7 @@ def conch_bump():
             "Queue is empty — the conch is now free."
         )
     else:
-        _notify_granted(head.session_id)
+        # No nudge here (VM-2078): the promoted head polls and self-acquires.
         click.echo(
             f"Bumped {bumped_agent} (session {_short(bumped_sid)}); they must re-request. "
             f"Next up: {head.agent or _short(head.session_id)} (session {_short(head.session_id)})."
@@ -296,7 +296,7 @@ def conch_wait(session_id, timeout, as_json):
     from voice_mode.config import CONCH_CHECK_INTERVAL
 
     sid = session_id or f"cli-wait-{os.getpid()}"
-    ConchQueue.register(sid, agent="conch-wait", mode="wait")
+    ConchQueue.register(sid, agent="conch-wait")
 
     interval = CONCH_CHECK_INTERVAL if CONCH_CHECK_INTERVAL > 0 else 0.5
     waited = 0.0

@@ -88,7 +88,7 @@ def status_payload() -> dict:
 
     ``free`` (VM-1967) is the single unambiguous "is the conch actually
     usable right now" signal: ``holder is None`` alone is NOT sufficient --
-    a live WAIT-mode grant can be outstanding-but-unclaimed (nobody holds the
+    a grant can be outstanding-but-unclaimed (nobody holds the
     flock, yet every other acquirer is gated behind that grant), which
     ``holder`` reports as free while the conch is, in fact, deadlocked
     (the "status line seems to be lying" field report this fixes). ``free``
@@ -127,7 +127,6 @@ def status_payload() -> dict:
             "voice": e.voice,
             "voice_requested": e.voice_requested,  # VM-1901
             "voice_via": e.voice_via,  # VM-1901
-            "mode": e.mode,
             "pid": e.pid,
             "granted": is_granted,
             "granted_seconds": granted_age if is_granted else None,
@@ -365,12 +364,15 @@ def force_clear_lock() -> Optional[dict]:
 def notify_granted_session(session_id: Optional[str]) -> None:
     """Push a "your turn" nudge to ``session_id`` after a grant (VM-1625).
 
-    ``give``/``bump`` call this after writing the grant. It resolves the
-    grantee's live queue entry and delegates to
-    :func:`voice_mode.conch_notify.notify_granted`, which owns the mode gate
-    (callback ⇒ push, wait ⇒ pull/no-push) and the local/remote routing.
-    Best-effort: a vanished waiter or any notify glitch is a silent no-op and
-    never breaks the command.
+    VM-2078 removed converse's callback mode (and with it the ordinary
+    give/bump nudges -- every ordinary waiter now polls and self-acquires, so
+    pinging it is redundant). The one caller left is
+    :func:`summon_and_grant` (VM-1637): an operator-summoned non-waiter has no
+    poll loop of its own, so it still needs telling. Resolves the grantee's
+    live queue entry and delegates to
+    :func:`voice_mode.conch_notify.notify_granted` for the local/remote
+    routing. Best-effort: a vanished waiter or any notify glitch is a silent
+    no-op and never breaks the command.
     """
     if not session_id:
         return
@@ -397,11 +399,12 @@ def summon_and_grant(token: str) -> dict:
        may raise :class:`ConchResolveError`),
     2. no-ops if that session is the **current holder** (it already has the
        floor — do not double-enqueue),
-    3. otherwise auto-enqueues it as a ``callback``-mode waiter carrying the
+    3. otherwise auto-enqueues it as an ordinary waiter carrying the
        fields notify needs (``session_id``, ``pid``, ``project_path``, ``agent``),
        grants it the conch (now a live waiter, so ``ConchQueue.grant`` succeeds
        and the grant hint makes it the next acquirer), and pushes the VM-1625
-       nudge,
+       nudge — a summoned session has no poll loop of its own, so unlike an
+       ordinary waiter it must still be told (VM-2078 carve-out),
 
     returning a structured outcome dict (``summoned``/``noop`` + identity +
     ``message``) that each front end renders in its own style.
@@ -432,7 +435,6 @@ def summon_and_grant(token: str) -> dict:
         agent=target.agent or target.name,
         project_path=target.project_path,
         voice=None,
-        mode="callback",
         pid=target.pid,
     )
     granted = ConchQueue.grant(target.session_id)

@@ -32,13 +32,14 @@ Design notes:
   A grant is only valid while its grantee remains a live waiter, so a
   dead/deregistered grantee invalidates the grant automatically.
 - **Grant claim TTL (VM-1967)**: the grant also carries ``granted_at``. A
-  WAIT-mode grantee is expected to self-acquire within one poll cycle; if it
-  hasn't claimed within ``CONCH_GRANT_TTL`` seconds, the grant self-heals
+  grantee is expected to self-acquire within one poll cycle; if it hasn't
+  claimed within ``CONCH_GRANT_TTL`` seconds, the grant self-heals
   (``ConchQueue._current_grant``): the stuck grantee is evicted and the next
   live waiter is promoted, so a single missed claim (e.g. an orphaned entry
   left by a cancelled ``converse()`` call, VM-1967's root cause) can never
-  wedge the queue forever. CALLBACK-mode grants are exempt (claimed
-  out-of-band, at agent/human pace).
+  wedge the queue forever. Every grant is now covered -- VM-2078 removed the
+  callback mode whose exemption from this TTL is what let a single unclaimed
+  grant wedge the queue permanently.
 
 Paths are resolved at call time from ``Conch.LOCK_FILE.parent`` (NOT frozen at
 import) so they honour runtime home resolution (VM-1502) and test isolation
@@ -94,12 +95,15 @@ class WaiterEntry:
     voice_requested: Optional[str] = None  # VM-1901: caller's verbatim expression
     voice_via: Optional[str] = None        # VM-1901: resolution route
     pid: Optional[int] = None
-    mode: str = "wait"  # wait | callback (acted on by VM-1619/VM-1622)
     requested_at: Optional[str] = None
     expires: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "WaiterEntry":
+        # field-explicit on purpose -- never refactor to cls(**data). Reading
+        # named keys via data.get(...) means a legacy or future unknown key
+        # (e.g. VM-2078's now-removed "mode": "callback") is silently
+        # ignored rather than raising TypeError.
         return cls(
             session_id=data.get("session_id"),
             seq=int(data.get("seq", 0)),
@@ -109,7 +113,6 @@ class WaiterEntry:
             voice_requested=data.get("voice_requested"),
             voice_via=data.get("voice_via"),
             pid=data.get("pid"),
-            mode=data.get("mode", "wait"),
             requested_at=data.get("requested_at"),
             expires=data.get("expires"),
         )
@@ -363,7 +366,6 @@ class ConchQueue:
         voice: Optional[str] = None,
         voice_requested: Optional[str] = None,
         voice_via: Optional[str] = None,
-        mode: str = "wait",
         pid=_SELF_PID,
         expires=None,
     ) -> int:
@@ -380,7 +382,6 @@ class ConchQueue:
             voice_requested / voice_via: additive VM-1901 fields — the
                 caller's verbatim expression and its resolution route,
                 mirroring the conch holder payload.
-            mode: ``wait`` or ``callback`` (stored now; acted on by VM-1619).
             pid: defaults to the caller's PID (local waiter). Pass ``None`` for
                 a remote waiter (liveness then tracked by ``expires``); pass an
                 explicit int to register on behalf of another process.
@@ -418,7 +419,6 @@ class ConchQueue:
             "voice_requested": voice_requested,
             "voice_via": voice_via,
             "pid": pid,
-            "mode": mode,
             "requested_at": requested_at,
             "expires": expires,
         }
@@ -467,7 +467,7 @@ class ConchQueue:
         cls.list()
 
     @classmethod
-    def grant_next(cls, *, notify_block: bool = True) -> Optional[WaiterEntry]:
+    def grant_next(cls) -> Optional[WaiterEntry]:
         """Promote the next acquirer on release -- unless an explicit give stands.
 
         Called on the holder's full release. Normally records a live waiter in
@@ -486,26 +486,12 @@ class ConchQueue:
         ``granted_to`` and falls through to promotion, so a dead give can never
         wedge the queue.
 
-        **Skip leading callback waiters (VM-1625, F1):** a ``callback`` waiter
-        never self-acquires (delivery is out-of-band) yet stays a live waiter,
-        so a grant standing on it gates **every** ``wait`` waiter behind it via
-        ``Conch._queue_grant_blocks`` -- starving blocking waiters until they
-        time out. So when at least one ``wait`` waiter exists, grant the
-        first one, skipping any leading callback waiters, and ping each skipped
-        callback waiter to return (``conch_notify.notify_granted``). With **only**
-        callback waiters (no blocking waiter to starve) the head is granted
-        unchanged -- the lone-callback case VM-1619's converse delivery handles.
-
-        Trade-off (intended): a later ``wait`` waiter can acquire ahead of an
-        idle callback waiter -- callback means "ping me, I'm not blocking", so a
-        blocking waiter should not starve behind it.
-
-        ``notify_block`` controls how the skipped-callback pings are delivered.
-        Default ``True`` runs them synchronously -- right for the one-shot CLI
-        ``bump`` path. The converse **release** hot path
-        (``Conch._queue_promote_next``) passes ``notify_block=False`` so each
-        ping is fire-and-forget and a wedged ``session send`` can never add to
-        the holder's release latency (VM-1625 impl-001 peer-review finding).
+        Grants the head, always. There is deliberately **no** mode-based skip:
+        callback mode was removed in VM-2078 because a grant that nobody polls
+        for cannot be reasoned about at grant time -- the starvation guard was
+        evaluated only when a grant was made, so a lone callback waiter granted
+        before its victim existed wedged the queue permanently. Every waiter now
+        polls; every grant is TTL-covered.
         """
         existing = cls.granted_to()  # validates liveness; clears a stale grant
         if existing is not None:
@@ -518,54 +504,19 @@ class ConchQueue:
             cls.clear_grant()
             return None
 
-        # First wait-mode waiter wins; everything ahead of it is a callback
-        # waiter we skip (and ping). No wait waiter => only callbacks => grant
-        # the head unchanged (nothing to starve).
-        target = None
-        skipped = []
-        for e in waiters:
-            if e.mode == "wait":
-                target = e
-                break
-            skipped.append(e)
-        if target is None:
-            target = waiters[0]
-        else:
-            for e in skipped:
-                if e.mode == "callback":
-                    cls._notify_callback(e, block=notify_block)
-
+        target = waiters[0]
         cls._atomic_write_json(
             cls._grant_file(),
             {
                 "session_id": target.session_id,
                 "seq": target.seq,
                 # VM-1967 safety net: stamp when this grant was issued so a
-                # WAIT-mode grant that never gets claimed can self-heal past
+                # grant that never gets claimed can self-heal past
                 # CONCH_GRANT_TTL (see ``_grant_wedged`` / ``_current_grant``).
                 "granted_at": datetime.now().isoformat(),
             },
         )
         return target
-
-    @classmethod
-    def _notify_callback(cls, entry, *, block: bool = True) -> None:
-        """Best-effort ping to a skipped callback waiter (VM-1625).
-
-        Lazy import + swallow-all, matching the fail-safe queue integration in
-        ``Conch``: notifying is never allowed to break grant promotion, which is
-        critical-path coordination, and the queue stays usable when the notify
-        module / ``session`` binary is absent.
-
-        ``block`` is forwarded to ``notify_granted``: the release hot path passes
-        ``block=False`` so the ping is dispatched off-thread and never delays the
-        holder's release; the CLI ``bump`` path keeps the synchronous default.
-        """
-        try:
-            from voice_mode.conch_notify import notify_granted
-            notify_granted(entry, block=block)
-        except Exception:
-            pass
 
     @classmethod
     def grant(cls, session_id: str) -> bool:
@@ -602,21 +553,19 @@ class ConchQueue:
 
     @classmethod
     def _grant_wedged(cls, grant: dict, entry: "WaiterEntry") -> bool:
-        """True if a WAIT-mode grant has sat unclaimed past ``CONCH_GRANT_TTL``.
+        """True if a grant has sat unclaimed past ``CONCH_GRANT_TTL``.
 
-        Only WAIT-mode grantees are safety-netted: a WAIT waiter is expected
-        to self-acquire within one poll cycle of being granted (the
-        ``converse()`` WAIT loop polls ``try_acquire()`` every
+        Every grantee is expected to self-acquire within one poll cycle of
+        being granted (the ``converse()`` loop polls ``try_acquire()`` every
         ``CONCH_CHECK_INTERVAL``), so "still unclaimed after
         ``CONCH_GRANT_TTL``" means the claim was missed -- exactly VM-1967's
-        root cause (a cancelled WAIT caller's orphaned, still-"live" queue
-        entry gets granted and nothing ever claims it, and with no TTL the
-        grant blocked the whole queue forever). A CALLBACK grantee is
-        claimed out-of-band at agent/human pace (VM-1625) -- unclaimed for a
-        while is normal there, not stuck, so it is exempt.
+        root cause (a cancelled caller's orphaned, still-"live" queue entry
+        gets granted and nothing ever claims it, and with no TTL the grant
+        blocked the whole queue forever). VM-2078 removed the one exemption
+        this TTL used to carry (callback mode) -- there is no grant class left
+        that legitimately holds a grant it never intends to claim, so every
+        grant is now covered.
         """
-        if entry.mode != "wait":
-            return False
         ttl = _get_grant_ttl()
         if not ttl or ttl <= 0:
             return False
@@ -636,7 +585,7 @@ class ConchQueue:
         A grant is only valid while its grantee is still a live waiter; a
         dead or deregistered grantee leaves the grant stale, which this
         clears (pre-VM-1967 behaviour, unchanged). VM-1967 safety net: a
-        WAIT-mode grant nobody ever claims within ``CONCH_GRANT_TTL`` is ALSO
+        grant nobody ever claims within ``CONCH_GRANT_TTL`` is ALSO
         treated as stale here -- the stuck grantee is evicted from the queue
         and the next live waiter is promoted (mirroring the manual
         ``conch give`` recovery an operator would otherwise have to do), so
@@ -659,7 +608,7 @@ class ConchQueue:
             if e.session_id == sid:
                 if cls._grant_wedged(g, e):
                     cls.deregister(sid)
-                    cls.grant_next(notify_block=False)
+                    cls.grant_next()
                     return cls._current_grant()
                 return g
         cls._unlink(gf)  # grantee gone -- stale grant
@@ -670,7 +619,7 @@ class ConchQueue:
         """The session id of the current live grantee, or ``None``.
 
         A grant is only valid while its grantee is still a live waiter, or
-        (VM-1967) while a WAIT-mode grant remains within its claim TTL --
+        (VM-1967) while the grant remains within its claim TTL --
         see ``_current_grant``.
         """
         g = cls._current_grant()
