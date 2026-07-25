@@ -898,6 +898,7 @@ async def _speak_turns_pipeline(
                         model=config.get('model') if config else tts_model,
                         voice=config.get('voice') if config else turn["voice"],
                         voice_requested=config.get('voice_requested') if config else turn["voice"],
+                        voice_resolved=config.get('voice_resolved') if config else None,
                         voice_via=config.get('voice_via') if config else None,
                         provider=config.get('provider') if config else tts_provider,
                         provider_url=config.get('base_url') if config else None,
@@ -2525,6 +2526,7 @@ async def _ask_turns_pipeline(
                         model=config.get('model') if config else tts_model,
                         voice=config.get('voice') if config else turn["voice"],
                         voice_requested=config.get('voice_requested') if config else turn["voice"],
+                        voice_resolved=config.get('voice_resolved') if config else None,
                         voice_via=config.get('voice_via') if config else None,
                         provider=config.get('provider') if config else tts_provider,
                         provider_url=config.get('base_url') if config else None,
@@ -3765,6 +3767,7 @@ consult the MCP resources listed above.
                             voice=tts_config.get('voice') if tts_config else voice,
                             # VM-1901: requested-vs-resolved provenance (design.md §5.3).
                             voice_requested=tts_config.get('voice_requested') if tts_config else voice,
+                            voice_resolved=tts_config.get('voice_resolved') if tts_config else None,
                             voice_via=tts_config.get('voice_via') if tts_config else None,
                             provider=tts_config.get('provider') if tts_config else (tts_provider if tts_provider else 'openai'),
                             provider_url=tts_config.get('base_url') if tts_config else None,

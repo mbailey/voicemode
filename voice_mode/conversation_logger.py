@@ -221,15 +221,25 @@ class ConversationLogger:
         provider-level voice actually sent (a clone canonical id, an OpenAI
         voice name, ...). Additive on top of it (SCHEMA_VERSION 4):
         ``voice_requested`` (the caller's verbatim expression, e.g.
-        ``"blackadder"`` or ``"secretary/lee-holloway"``) and ``voice_via``
+        ``"blackadder"`` or ``"secretary/lee-holloway"``), ``voice_via``
         (the resolution route, e.g. ``"cast-default:blackadder"`` or
-        ``"leaf"``, including multi-level cast chains). Never guess these
-        for a legacy record — see the class docstring's reader rule.
+        ``"leaf"``, including multi-level cast chains), and
+        ``voice_resolved`` (review fix, design.md §5.3: the canonical id
+        BEFORE any endpoint-level provider mapping — this is additive
+        alongside ``voice`` specifically because the two can legitimately
+        differ, e.g. the one remaining ``is_fallback`` case where a Kokoro
+        alias like ``"af_sky"`` resolves to itself but is then MAPPED to
+        ``"nova"`` for an OpenAI endpoint: ``voice`` records what was
+        actually sent ("nova"), ``voice_resolved`` records what the
+        resolver produced ("af_sky") — losing either half hides the
+        substitution). Never guess any of these for a legacy record — see
+        the class docstring's reader rule.
         """
         metadata = {
             "model": kwargs.get("model"),
             "voice": kwargs.get("voice"),
             "voice_requested": kwargs.get("voice_requested"),
+            "voice_resolved": kwargs.get("voice_resolved"),
             "voice_via": kwargs.get("voice_via"),
             "provider": kwargs.get("provider"),
             "provider_url": kwargs.get("provider_url"),

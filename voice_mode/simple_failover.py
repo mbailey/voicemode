@@ -95,6 +95,22 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
     ``AsyncOpenAI`` client plus the voice/model actually sent to the provider
     (clone voices pass through; OpenAI maps Kokoro voice names to equivalents).
 
+    ``voice`` here MUST be ``resolution.resolved`` (the canonical id from
+    :func:`voice_profiles.resolve_voice`), never the raw caller expression —
+    review fix, VM-1901 observability-001. Passing the raw expression through
+    reintroduced this slice's own headline bug one call deeper: for a cast
+    (``"peep-show"`` resolving to member ``"peep-show/mark"``) or any other
+    request-vs-resolved qualified/index/ambiguous-leaf path, the clone branch
+    below did ``selected_voice = voice`` — the unresolved cast/leaf name,
+    not the member that will actually sound — and that string is exactly
+    what ends up in the exchange log's ``voice`` field (config['voice'] below)
+    and, via ``resolution.resolved`` no longer matching what's shown, silently
+    defeats the clash detector's "compare resolved ids" contract for the very
+    cases (casts, qualified paths) this design exists to make correct.
+    Provider-native resolutions are unaffected either way (``resolved ==
+    requested`` for those by construction), so this only changes behavior for
+    the cases that were wrong.
+
     Returns:
         tuple: (client, selected_voice, selected_model, provider_type,
         is_fallback, fallback_reason)
@@ -235,8 +251,13 @@ async def simple_tts_failover(
         selected_voice = voice
         selected_model = model
         try:
+            # Review fix (VM-1901 observability-001): pass resolution.resolved,
+            # not the raw `voice` expression -- see _prepare_tts_endpoint's
+            # docstring. For a cast/qualified request this is the difference
+            # between "peep-show" (unresolved) and "peep-show/mark" (what
+            # will actually sound) ending up in the exchange log.
             client, selected_voice, selected_model, provider_type, is_fallback, fallback_reason = _prepare_tts_endpoint(
-                base_url, voice, model, clone_profile
+                base_url, resolution.resolved, model, clone_profile
             )
 
             # Create clients dict for text_to_speech
@@ -370,8 +391,11 @@ async def simple_tts_synthesize(
         selected_voice = voice
         selected_model = model
         try:
+            # Review fix (VM-1901 observability-001): resolution.resolved, not
+            # the raw `voice` -- see _prepare_tts_endpoint's docstring and the
+            # identical fix in simple_tts_failover above.
             client, selected_voice, selected_model, provider_type, is_fallback, fallback_reason = _prepare_tts_endpoint(
-                base_url, voice, model, clone_profile
+                base_url, resolution.resolved, model, clone_profile
             )
             openai_clients = {'tts': client}
 

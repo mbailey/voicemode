@@ -437,3 +437,128 @@ class TestResolutionRunsBeforeConch:
 
         assert "❌ Error" not in result
         mock_tts.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# REVIEW FIX (VM-1901 observability-001, peer review): the acceptance is a
+# deliberate fallback/substitution being PROVABLY visible in an ACTUAL
+# emitted record -- not just in a hand-built mock config. These tests drive
+# the REAL resolver (voice_profiles.resolve_voice) through the REAL
+# simple_failover machinery end to end, with no mocked resolution step,
+# because that is exactly where the gap was: `_prepare_tts_endpoint` was
+# being handed the RAW requested expression instead of
+# `resolution.resolved`, so for any request that resolves to something
+# OTHER than itself (a cast default, a qualified path) the clone branch's
+# `selected_voice = voice` silently re-surfaced the original bug ONE call
+# deeper -- the exchange log's own `voice` field (supposedly "the resolved
+# canonical id / what will actually sound") carried the unresolved cast
+# name instead. `Conch` was unaffected (converse.py resolves independently,
+# correctly, for the conch payload) -- only the exchange-log/config side
+# was wrong, and only for clone/cast/qualified paths where requested !=
+# resolved. Caught by probing the real path directly, per the review
+# brief's "look at the actual emitted records, do not accept assertions
+# about them."
+# ---------------------------------------------------------------------------
+
+class TestRealResolutionFeedsTheExchangeLogCorrectly:
+    async def test_cast_default_records_the_resolved_member_not_the_cast_name(self, tmp_path, monkeypatch):
+        """`voice="peep-show"` (a cast, declared default "mark") must leave
+        `config['voice']` == "peep-show/mark" (the member that will
+        actually sound), never the unresolved cast name "peep-show" --
+        drives the real resolver + real simple_tts_failover, no mocked
+        resolution."""
+        from voice_mode.simple_failover import simple_tts_failover
+        import voice_mode.simple_failover as sf
+
+        voices = tmp_path / "voices"
+        voices.mkdir()
+        _make_voice(voices, "peep-show/mark")
+        _make_voice(voices, "peep-show/jez")
+        (voices / "peep-show" / "voice.md").write_text("---\ndefault: mark\n---\n")
+        _reload_voice_profiles(voices, monkeypatch)
+
+        async def fake_tts(**kwargs):
+            return True, {"generation": 0.1}
+
+        with patch.object(sf, "TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.core.text_to_speech", side_effect=fake_tts):
+            success, metrics, config = await simple_tts_failover(text="hi", voice="peep-show")
+
+        assert success is True
+        # The headline assertion: NOT the raw cast name.
+        assert config["voice"] == "peep-show/mark"
+        assert config["voice_requested"] == "peep-show"
+        assert config["voice_resolved"] == "peep-show/mark"
+        assert config["voice_via"] == "cast-default:mark"
+
+    async def test_qualified_group_path_records_the_resolved_member(self, tmp_path, monkeypatch):
+        """`voice="blackadder/blackadder"` (explicit qualified path, requested
+        == resolved here) is the control case; the interesting one above is
+        the cast-default divergence. Both must agree `config['voice']` is
+        always the canonical resolved id."""
+        from voice_mode.simple_failover import simple_tts_failover
+        import voice_mode.simple_failover as sf
+
+        voices = tmp_path / "voices"
+        voices.mkdir()
+        _make_voice(voices, "blackadder/blackadder")
+        _make_voice(voices, "blackadder/baldrick")
+        _reload_voice_profiles(voices, monkeypatch)
+
+        async def fake_tts(**kwargs):
+            return True, {"generation": 0.1}
+
+        with patch.object(sf, "TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.core.text_to_speech", side_effect=fake_tts):
+            success, metrics, config = await simple_tts_failover(text="hi", voice="blackadder/blackadder")
+
+        assert success is True
+        assert config["voice"] == "blackadder/blackadder"
+        assert config["voice_resolved"] == "blackadder/blackadder"
+
+
+class TestExchangeMetadataRoundTripsFallbackAndResolvedFields:
+    """Review fix: voice_resolved/is_fallback/fallback_reason were written to
+    the raw JSONL dict by ConversationLogger.log_tts but NOT declared on
+    ExchangeMetadata -- ExchangeMetadata.from_dict filters incoming keys
+    against cls.__annotations__, so every reader going through
+    Exchange.from_jsonl (statistics, any structured consumer) silently
+    dropped them. The dead-hook pattern this slice exists to kill, one
+    layer up: correct on disk, invisible to the model."""
+
+    def test_voice_resolved_and_fallback_fields_survive_a_jsonl_round_trip(self):
+        exchange = Exchange(
+            version=4, timestamp=__import__("datetime").datetime.now(),
+            conversation_id="c1", type="tts", text="hi",
+            metadata=ExchangeMetadata(
+                voice_mode_version="8.0.0", voice="nova",
+                voice_requested="af_sky", voice_resolved="af_sky",
+                voice_via="provider-native",
+                is_fallback=True,
+                fallback_reason="endpoint-failover: af_sky→nova (kokoro unreachable)",
+            ),
+        )
+        round_tripped = Exchange.from_jsonl(exchange.to_jsonl())
+
+        assert round_tripped.metadata.voice_resolved == "af_sky"
+        assert round_tripped.metadata.is_fallback is True
+        assert "af_sky" in round_tripped.metadata.fallback_reason
+        assert "nova" in round_tripped.metadata.fallback_reason
+
+    def test_fallback_substitution_is_visible_in_voice_provenance(self):
+        """The design's own acceptance: a deliberate fallback must be
+        PROVABLY visible -- not just the substituted voice shown alone."""
+        exchange = Exchange(
+            version=4, timestamp=__import__("datetime").datetime.now(),
+            conversation_id="c1", type="tts", text="hi",
+            metadata=ExchangeMetadata(
+                voice_mode_version="8.0.0", voice="nova",
+                voice_requested="af_sky", voice_resolved="af_sky",
+                voice_via="provider-native",
+                is_fallback=True,
+                fallback_reason="endpoint-failover: af_sky→nova (kokoro unreachable)",
+            ),
+        )
+        rendered = exchange.voice_provenance
+        assert "nova" in rendered  # what was actually sent
+        assert "af_sky" in rendered  # what the resolver produced -- the substitution is visible
