@@ -1,5 +1,7 @@
 # VoiceMode
 
+[![MCP Toplist](https://mcptoplist.com/badge/dev.voicemode%2Fvoicemode.svg)](https://mcptoplist.com/server/dev.voicemode%2Fvoicemode)
+
 > Natural voice conversations with Claude Code (and other MCP capable agents)
 
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode)](https://pepy.tech/project/voice-mode)
