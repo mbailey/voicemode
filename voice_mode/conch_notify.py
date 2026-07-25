@@ -32,12 +32,12 @@ import os
 import subprocess
 import threading
 
-#: The nudge an idle (callback-mode) grantee receives. Short, names the action,
-#: and is the single tunable string for the push (VM-1625 decision).
+#: The nudge a grantee with no poll loop of its own receives. Short, names the
+#: action, and is the single tunable string for the push (VM-1625 decision).
 NUDGE_TEXT = "🐚 You've been granted the conch — call converse() to take the floor."
 
-#: Bound the best-effort push so a grant site (including the converse release
-#: hot path via ``grant_next``) can never hang on session discovery / tmux.
+#: Bound the best-effort push so a grant site can never hang on session
+#: discovery / tmux.
 _SEND_TIMEOUT = 10.0
 
 

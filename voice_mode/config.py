@@ -642,15 +642,16 @@ CONCH_HOLD_EXPIRY = float(os.getenv("VOICEMODE_CONCH_HOLD_EXPIRY", "10"))
 # ~30s beats yet prunes a genuinely-dead remote waiter within ~1.5 min.
 CONCH_REMOTE_TTL = float(os.getenv("VOICEMODE_CONCH_REMOTE_TTL", "90"))
 
-# Safety-net TTL (seconds) for a WAIT-mode conch grant that never gets
-# claimed (VM-1967). A WAIT waiter is expected to self-acquire within one
-# poll cycle (CONCH_CHECK_INTERVAL) of being granted; if it hasn't claimed
-# within this window the grant is treated as abandoned -- the stuck grantee
-# is evicted from the queue and the next live waiter is promoted, so a
-# single missed claim (e.g. an orphaned queue entry left by a cancelled
-# converse() call) can never wedge the whole queue forever. Exempt:
-# CALLBACK-mode grants, which are claimed out-of-band at agent/human pace
-# and are not expected to be claimed promptly. Set to 0 to disable.
+# Safety-net TTL (seconds) for a conch grant that never gets claimed
+# (VM-1967). A grantee is expected to self-acquire within one poll cycle
+# (CONCH_CHECK_INTERVAL) of being granted; if it hasn't claimed within this
+# window the grant is treated as abandoned -- the stuck grantee is evicted
+# from the queue and the next live waiter is promoted, so a single missed
+# claim (e.g. an orphaned queue entry left by a cancelled converse() call)
+# can never wedge the whole queue forever. Every grant is covered -- VM-2078
+# removed the one exemption this TTL used to carry (callback-mode grants,
+# claimed out-of-band at agent/human pace), which is what let a single
+# unclaimed grant wedge the queue permanently. Set to 0 to disable.
 CONCH_GRANT_TTL = float(os.getenv("VOICEMODE_CONCH_GRANT_TTL", "30"))
 
 # Hard cap (seconds) on a blocking `conch(action="wait")` MCP call (VM-1622). A
