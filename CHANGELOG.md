@@ -7,7 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Conch `callback` mode removed entirely — code, docs, and the agent-facing tool description (VM-2078)** —
+  `converse(conch_mode="callback")` and `VOICEMODE_CONCH_MODE` are gone, and
+  `conch(action="callback")` is renamed to `action="queue"`. Callback mode's
+  own tool description was upfront about the discard — "your message is NOT
+  spoken now" — but promised that "when the conch is granted to you, your
+  turn is actively delivered out-of-band." **It never was.** "Delivery" was
+  a best-effort tmux pane nudge whose return value nothing checked; for a
+  remote grantee (no host PID) it delivered nothing at all, ever. The real
+  damage, though, wasn't the broken promise — it was the *other* half of
+  that same docstring working exactly as designed: "you stay registered —
+  that's the point," it said, and a registered, granted, never-claiming
+  waiter with no expiry sitting at the head of the queue is precisely what
+  wedged it. An unclaimed callback grant was deliberately exempted from the
+  `CONCH_GRANT_TTL` self-heal (VM-1967) on that same premise — claimed
+  "at agent/human pace," unclaimed for a while is normal there, not stuck —
+  so a single lost nudge could wedge the *entire* queue indefinitely, with
+  no error anywhere. This happened twice on one live session, each
+  recovered only by manual operator intervention. Every grant is now
+  covered by the TTL self-heal; there is no more exemption.
+
 ### Fixed
+
+- **`conch give`/operator `summon` could hand over the floor to a target it never confirmed was told (VM-2078)** —
+  this is the **summon fallback only**: `give`ing to a running session that
+  is *not already in the queue*. The old notify path there was best-effort
+  and its return value was never checked, so a nudge that silently failed
+  still granted the conch; nobody could tell "delivered" from "who knows."
+  That path now grants only on a confirmed-delivered nudge; a failed nudge,
+  or a remote target with no local PID to nudge at all, withholds the grant
+  entirely, returns `granted: false`, and tells the operator to relay the
+  message themselves rather than leaving an unpolled entry queued to block
+  everyone else. `give`ing to a session **already in the queue** is
+  unchanged — and, for a remote one, now works *better* (see the mid-turn
+  claim-window fix below): its claim window is heartbeat-scaled instead of
+  the short local poll window. The MCP `conch(action="heartbeat")` response also now
+  reports `granted` (and, once granted, `claim_window_remaining`), so a
+  queued remote agent discovers its grant on the very call it's told to
+  make every ~30 s, instead of needing an extra, un-instructed `status`
+  call.
 
 - **A silently held voice channel could lock out every other agent, including the user's own assistant (VM-2045)** —
   `converse(hold_conch=true)` re-stamped the hold's idle-expiry TTL on every
@@ -16,6 +56,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel indefinitely, silently refusing every other agent's `converse()`
   calls. A hold is now only kept when the turn actually spoke; a silent
   `hold_conch=true` call falls through to a full release instead.
+- **A `conch give`/summon issued mid-turn could silently evaporate and evict an innocent waiter (VM-2078)** —
+  `_grant_wedged`'s staleness check measured wall-clock grant age only, so a
+  grant issued by `conch give` or an operator `summon` *while the holder was
+  still speaking* could be judged "wedged" and evicted before the floor ever
+  freed for the grantee to claim it — costing the target its place in line
+  for a race it had no way to win. The check is now holder-gated (a grant
+  cannot be judged wedged while a live holder still blocks the claim),
+  `granted_at` is re-stamped when a grant is finally honoured so its TTL
+  clock starts when the claim actually becomes possible, and the claim
+  window is scaled to how the grantee can actually claim it (a local poll
+  loop gets a short window; a remote/nudge-only claim gets a longer,
+  heartbeat-scaled one).
+
+### Migration
+
+- **`converse(conch_mode=...)` is removed — background a `wait`-mode call instead.**
+  There is no more `wait`/`callback` choice: every queued `converse` waiter
+  polls and is TTL-covered. If you relied on callback mode to avoid holding a
+  turn open, run a `wait_for_conch=true` `converse()` call in the
+  background — you get the same "don't block my turn" benefit without
+  discarding your message or depending on a fragile tmux pane nudge.
+- **`VOICEMODE_CONCH_MODE` is removed** — it no longer has any effect; delete
+  it from your `~/.voicemode/voicemode.env`.
+- **`conch(action="callback")` is renamed to `action="queue"`.** Same
+  register-and-poll behaviour (nothing changes about how it works), just an
+  honest name — nothing about it was ever a callback in the telephone sense.
+  The literal string `"callback"` still resolves but now returns an error
+  naming `"queue"` as the replacement, so no caller fails silently. Remote
+  agents that need to queue for longer than the 25 s `conch(action="wait")`
+  cap should use `action="queue"` + periodic `action="heartbeat"` instead.
 
 ## [8.12.0] - 2026-07-21
 

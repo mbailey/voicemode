@@ -40,9 +40,9 @@ def _no_discovery(monkeypatch):
     monkeypatch.setattr(conch_ops, "_list_running_sessions", lambda: [])
 
 
-def _register(sid, *, agent=None, mode="wait"):
+def _register(sid, *, agent=None):
     """Register a live local waiter (pid = current process)."""
-    return ConchQueue.register(sid, agent=agent, mode=mode)
+    return ConchQueue.register(sid, agent=agent)
 
 
 def _running(sid, *, agent=None, name=None, pid=None, cwd=None):
@@ -99,7 +99,7 @@ class TestStatus:
     def test_holder_and_queue_json(self, runner):
         _make_holder(agent="cora", sid="cora-sess-abcdef")
         _register("waiter-1-aaa", agent="w1")
-        _register("waiter-2-bbb", agent="w2", mode="callback")
+        _register("waiter-2-bbb", agent="w2")
         result = runner.invoke(conch, ["status", "--json"])
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -108,7 +108,7 @@ class TestStatus:
         # Ordered queue, positions 1..2, FIFO by registration.
         assert [q["position"] for q in data["queue"]] == [1, 2]
         assert data["queue"][0]["session_id"] == "waiter-1-aaa"
-        assert data["queue"][1]["mode"] == "callback"
+        assert "mode" not in data["queue"][1]  # VM-2078: mode column removed
 
     def test_grant_outstanding_and_unclaimed_is_not_reported_free(self, runner):
         """VM-1967: no live holder but a live WAIT-mode grant stands unclaimed
@@ -231,7 +231,8 @@ class _RecordingRun:
 
 class TestSummon:
     def test_summon_non_waiter_enqueues_grants_nudges(self, runner, monkeypatch):
-        """give a running non-waiter ⇒ auto-enqueue (callback) + grant + nudge (SC1)."""
+        """give a running non-waiter ⇒ auto-enqueue + nudge + grant-iff-
+        confirmed-delivered (SC1, VM-2078 D2)."""
         monkeypatch.setattr(conch_ops, "_list_running_sessions",
                             lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
         rec = _RecordingRun()
@@ -241,15 +242,54 @@ class TestSummon:
         assert result.exit_code == 0
         assert "summoned" in result.output.lower()
         assert "dora" in result.output
-        # Enqueued as a callback waiter carrying the notify fields, and granted.
+        # Enqueued as an ordinary waiter carrying the notify fields, and granted.
         entry = next((e for e in ConchQueue.list() if e.session_id == "run-1"), None)
         assert entry is not None
-        assert entry.mode == "callback"
         assert entry.agent == "dora"
         assert entry.pid == os.getpid()
         assert ConchQueue.granted_to() == "run-1"
-        # The VM-1625 push fired (callback + local pid ⇒ tmux nudge).
+        # The VM-1625 push fired (summon path + local pid ⇒ tmux nudge; the
+        # target has no poll loop of its own).
         assert any(call and call[:2] == ["session", "send"] for call in rec.calls)
+
+    def test_summon_withholds_grant_when_nudge_fails(self, runner, monkeypatch):
+        """D2 amendment: an ATTEMPTED-but-failed nudge must NOT grant, and
+        REFINE #1: the target must be DEREGISTERED (not left queued) — a
+        queued entry nobody polls for would block every other waiter for a
+        full claim window and then be evicted anyway. The operator is told
+        plainly to tell it themselves, and how it can actually join."""
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
+        monkeypatch.setattr("subprocess.run", _RecordingRun(returncode=1))
+
+        result = runner.invoke(conch, ["give", "dora"])
+        assert result.exit_code == 0
+        assert "tell them yourself" in result.output.lower()
+        assert "not queu" in result.output.lower()
+        assert "wait_for_conch" in result.output
+        entry = next((e for e in ConchQueue.list() if e.session_id == "run-1"), None)
+        assert entry is None  # deregistered, not left stranded in the queue
+        assert ConchQueue.granted_to() is None  # NOT granted
+
+    def test_summon_withholds_grant_when_target_is_remote(self, runner, monkeypatch):
+        """D2 amendment: a remote target (no local pid) has no nudge path at
+        all — must not be silently upgraded to a delivered nudge. REFINE #1:
+        also deregistered, same as the failed-nudge case."""
+        remote = conch_ops.RunningSession(
+            session_id="remote-run", pid=None, agent="dora", project_path=None,
+        )
+        monkeypatch.setattr(conch_ops, "_list_running_sessions", lambda: [remote])
+        rec = _RecordingRun()  # would report "delivered" if it were ever called
+        monkeypatch.setattr("subprocess.run", rec)
+
+        result = runner.invoke(conch, ["give", "dora"])
+        assert result.exit_code == 0
+        assert "remote" in result.output.lower()
+        assert "wait_for_conch" in result.output
+        assert ConchQueue.granted_to() is None
+        entry = next((e for e in ConchQueue.list() if e.session_id == "remote-run"), None)
+        assert entry is None  # deregistered, not left stranded in the queue
+        assert rec.calls == []  # no nudge attempted at all for a remote target
 
     def test_summon_by_session_id_prefix(self, runner, monkeypatch):
         monkeypatch.setattr(conch_ops, "_list_running_sessions",

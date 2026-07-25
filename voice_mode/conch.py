@@ -655,19 +655,13 @@ class Conch:
             pass
 
     def _queue_promote_next(self) -> None:
-        """Record the head of the queue as the designated next acquirer.
-
-        ``notify_block=False``: this runs on the holder's release (the converse
-        hot path), so any ping to a skipped callback head is fire-and-forget --
-        a wedged ``session send`` must never add latency to the release
-        (VM-1625 impl-001 peer-review finding).
-        """
+        """Record the head of the queue as the designated next acquirer."""
         try:
             from voice_mode.conch_queue import ConchQueue
         except ImportError:
             return
         try:
-            ConchQueue.grant_next(notify_block=False)
+            ConchQueue.grant_next()
         except Exception:
             pass
 

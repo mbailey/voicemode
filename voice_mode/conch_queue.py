@@ -13,7 +13,8 @@ On-disk layout (siblings of the holder lock under ``~/.voicemode/``)::
     conch.queue.d/              # one file per waiter
         000017-<session>.json   # <seq zero-padded>-<session>.json
     conch.queue.seq             # flock-guarded monotonic counter
-    conch.grant                 # grant hint: {"session_id", "seq", "granted_at"}
+    conch.grant                 # grant hint: {"session_id", "seq", "granted_at",
+                                 #              "claim_ttl" (optional)}
 
 Design notes:
 
@@ -31,14 +32,31 @@ Design notes:
   ``try_acquire`` on release and FIFO order would be lost (thundering herd).
   A grant is only valid while its grantee remains a live waiter, so a
   dead/deregistered grantee invalidates the grant automatically.
-- **Grant claim TTL (VM-1967)**: the grant also carries ``granted_at``. A
-  WAIT-mode grantee is expected to self-acquire within one poll cycle; if it
-  hasn't claimed within ``CONCH_GRANT_TTL`` seconds, the grant self-heals
+- **Grant claim TTL (VM-1967, widened VM-2078)**: the grant also carries
+  ``granted_at``. A grantee is expected to self-acquire within one poll
+  cycle; if it hasn't claimed within ``CONCH_GRANT_TTL`` seconds (or the
+  grant's own ``claim_ttl`` override, see below), the grant self-heals
   (``ConchQueue._current_grant``): the stuck grantee is evicted and the next
   live waiter is promoted, so a single missed claim (e.g. an orphaned entry
   left by a cancelled ``converse()`` call, VM-1967's root cause) can never
-  wedge the queue forever. CALLBACK-mode grants are exempt (claimed
-  out-of-band, at agent/human pace).
+  wedge the queue forever. Every grant is now covered -- VM-2078 removed the
+  callback mode whose exemption from this TTL is what let a single unclaimed
+  grant wedge the queue permanently. The judgement also holds off entirely
+  while a live holder still blocks the claim (``_grant_wedged``'s holder
+  gate) -- a grantee cannot claim a floor nobody has released yet.
+- **``claim_ttl`` (VM-2078 fix-002)**: an optional, bounded override
+  (seconds, must be > 0) on a single grant record, recorded in place of the
+  base ``CONCH_GRANT_TTL``. Written by TWO grant-issuing paths, each from
+  evidence the GRANTER observes at grant time -- never a self-declared
+  property of the waiter: ``grant()`` (the ``conch give`` / summon path)
+  when it has direct evidence the claim mechanism differs from an ordinary
+  poll loop (e.g. a ``summon_and_grant`` nudge confirmed delivered, D2); and
+  ``grant_next()``'s ordinary head-promotion, when the promoted waiter has
+  no local ``pid`` -- a remote waiter's claim is a heartbeat round trip, not
+  a poll loop, so it gets ``max(CONCH_GRANT_TTL, CONCH_REMOTE_TTL)``.
+  Deliberately not a field on ``WaiterEntry``: it describes what was
+  observed about *this grant*, not a category of waiter, so it cannot
+  resurrect the removed ``mode`` concept under a new name.
 
 Paths are resolved at call time from ``Conch.LOCK_FILE.parent`` (NOT frozen at
 import) so they honour runtime home resolution (VM-1502) and test isolation
@@ -77,6 +95,24 @@ def _get_grant_ttl() -> float:
         return 30.0
 
 
+def _get_remote_ttl() -> float:
+    """Heartbeat-cadence claim window (seconds) for a grantee with no local
+    poll loop (``pid is None``).
+
+    Deferred import for the same reason as ``_get_grant_ttl`` -- env-var
+    overrides and test monkeypatching must both take effect, and this module
+    deliberately carries no top-level config import (VM-1502). Reuses the
+    existing ``VOICEMODE_CONCH_REMOTE_TTL`` (already the remote heartbeat
+    TTL front ends stamp onto ``expires``, see ``tools/conch.py``) rather
+    than inventing a second remote-timing knob.
+    """
+    try:
+        from voice_mode.config import CONCH_REMOTE_TTL
+        return CONCH_REMOTE_TTL
+    except ImportError:
+        return 90.0
+
+
 @dataclass
 class WaiterEntry:
     """One waiter's record in the queue.
@@ -94,12 +130,15 @@ class WaiterEntry:
     voice_requested: Optional[str] = None  # VM-1901: caller's verbatim expression
     voice_via: Optional[str] = None        # VM-1901: resolution route
     pid: Optional[int] = None
-    mode: str = "wait"  # wait | callback (acted on by VM-1619/VM-1622)
     requested_at: Optional[str] = None
     expires: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "WaiterEntry":
+        # field-explicit on purpose -- never refactor to cls(**data). Reading
+        # named keys via data.get(...) means a legacy or future unknown key
+        # (e.g. VM-2078's now-removed "mode": "callback") is silently
+        # ignored rather than raising TypeError.
         return cls(
             session_id=data.get("session_id"),
             seq=int(data.get("seq", 0)),
@@ -109,7 +148,6 @@ class WaiterEntry:
             voice_requested=data.get("voice_requested"),
             voice_via=data.get("voice_via"),
             pid=data.get("pid"),
-            mode=data.get("mode", "wait"),
             requested_at=data.get("requested_at"),
             expires=data.get("expires"),
         )
@@ -363,7 +401,6 @@ class ConchQueue:
         voice: Optional[str] = None,
         voice_requested: Optional[str] = None,
         voice_via: Optional[str] = None,
-        mode: str = "wait",
         pid=_SELF_PID,
         expires=None,
     ) -> int:
@@ -380,7 +417,6 @@ class ConchQueue:
             voice_requested / voice_via: additive VM-1901 fields — the
                 caller's verbatim expression and its resolution route,
                 mirroring the conch holder payload.
-            mode: ``wait`` or ``callback`` (stored now; acted on by VM-1619).
             pid: defaults to the caller's PID (local waiter). Pass ``None`` for
                 a remote waiter (liveness then tracked by ``expires``); pass an
                 explicit int to register on behalf of another process.
@@ -418,7 +454,6 @@ class ConchQueue:
             "voice_requested": voice_requested,
             "voice_via": voice_via,
             "pid": pid,
-            "mode": mode,
             "requested_at": requested_at,
             "expires": expires,
         }
@@ -467,7 +502,73 @@ class ConchQueue:
         cls.list()
 
     @classmethod
-    def grant_next(cls, *, notify_block: bool = True) -> Optional[WaiterEntry]:
+    def _write_grant_decision(
+        cls, entry: "WaiterEntry", *, claim_ttl: Optional[float] = None
+    ) -> None:
+        """Write a NEW grant to ``entry`` -- the single writer for both
+        grant-issuing DECISION points (VM-2078 fix-002 REFINE #2).
+
+        This module has four writes to the grant record that look identical
+        at a glance but split into two categories: **decisions** (this
+        method -- ``grant_next()``'s head-promotion and ``grant()``'s
+        named-waiter grant) derive ``claim_ttl`` from scratch for a *new*
+        grant; **refreshes** (``grant_next()``'s honour-an-existing-give
+        re-stamp, and ``_current_grant``'s granted_at-missing self-heal
+        stamp) preserve whatever ``claim_ttl`` a previous decision wrote,
+        verbatim, and must NOT re-derive it here -- doing so would quietly
+        turn a preserver into a decider and erase the split this method
+        exists to keep legible in code, not just in a comment (mirrors the
+        read-side split between ``_raw_grant``, unjudged, and
+        ``_current_grant``, judged).
+
+        Args:
+            entry: the waiter being granted to.
+            claim_ttl: an explicit, GRANTER-observed override (``grant()``'s
+                confirmed-delivered summon nudge) -- always wins over the
+                fallback below. If ``None`` and ``entry.pid is None``,
+                falls back to the bounded remote window
+                (``max(_get_grant_ttl(), _get_remote_ttl())``): a pid-less
+                waiter's claim is a heartbeat/status round trip, not a poll
+                loop, so the base window is structurally unwinnable for it,
+                whether it arrived here via ordinary head-promotion or an
+                explicit ``conch give`` with no delivery evidence to
+                report. ``max()``, never a replacement -- an
+                administratively widened ``CONCH_GRANT_TTL`` (e.g. for
+                debugging) must not be cut back to the remote default.
+        """
+        payload = {
+            "session_id": entry.session_id,
+            "seq": entry.seq,
+            # VM-1967 safety net: stamp when this grant was issued so a
+            # grant that never gets claimed can self-heal past
+            # CONCH_GRANT_TTL (see ``_grant_wedged`` / ``_current_grant``).
+            "granted_at": datetime.now().isoformat(),
+        }
+        if claim_ttl is not None:
+            payload["claim_ttl"] = claim_ttl
+        elif entry.pid is None:
+            payload["claim_ttl"] = cls.remote_claim_window()
+        cls._atomic_write_json(cls._grant_file(), payload)
+
+    @classmethod
+    def remote_claim_window(cls) -> float:
+        """The bounded claim window (seconds) for a grantee with no poll loop
+        of its own -- ``max(_get_grant_ttl(), _get_remote_ttl())``.
+
+        The single source of truth for that value, used two ways: (1) as the
+        ``pid is None`` fallback in :meth:`_write_grant_decision` above, and
+        (2) as the explicit ``claim_ttl`` a caller with its OWN delivery
+        evidence passes to :meth:`grant` (e.g.
+        ``conch_ops.summon_and_grant``'s confirmed-delivered nudge, VM-2078
+        D2) -- a summoned *local*-pid target answered via a pane nudge claims
+        at human/agent reaction speed, the same order of magnitude as a
+        remote heartbeat round trip, not a poll cycle, so it needs the same
+        bounded widening even though it has a pid.
+        """
+        return max(_get_grant_ttl(), _get_remote_ttl())
+
+    @classmethod
+    def grant_next(cls) -> Optional[WaiterEntry]:
         """Promote the next acquirer on release -- unless an explicit give stands.
 
         Called on the holder's full release. Normally records a live waiter in
@@ -486,89 +587,69 @@ class ConchQueue:
         ``granted_to`` and falls through to promotion, so a dead give can never
         wedge the queue.
 
-        **Skip leading callback waiters (VM-1625, F1):** a ``callback`` waiter
-        never self-acquires (delivery is out-of-band) yet stays a live waiter,
-        so a grant standing on it gates **every** ``wait`` waiter behind it via
-        ``Conch._queue_grant_blocks`` -- starving blocking waiters until they
-        time out. So when at least one ``wait`` waiter exists, grant the
-        first one, skipping any leading callback waiters, and ping each skipped
-        callback waiter to return (``conch_notify.notify_granted``). With **only**
-        callback waiters (no blocking waiter to starve) the head is granted
-        unchanged -- the lone-callback case VM-1619's converse delivery handles.
-
-        Trade-off (intended): a later ``wait`` waiter can acquire ahead of an
-        idle callback waiter -- callback means "ping me, I'm not blocking", so a
-        blocking waiter should not starve behind it.
-
-        ``notify_block`` controls how the skipped-callback pings are delivered.
-        Default ``True`` runs them synchronously -- right for the one-shot CLI
-        ``bump`` path. The converse **release** hot path
-        (``Conch._queue_promote_next``) passes ``notify_block=False`` so each
-        ping is fire-and-forget and a wedged ``session send`` can never add to
-        the holder's release latency (VM-1625 impl-001 peer-review finding).
+        Grants the head, always. There is deliberately **no** mode-based skip:
+        callback mode was removed in VM-2078 because a grant that nobody polls
+        for cannot be reasoned about at grant time -- the starvation guard was
+        evaluated only when a grant was made, so a lone callback waiter granted
+        before its victim existed wedged the queue permanently. Every waiter now
+        polls; every grant is TTL-covered.
         """
-        existing = cls.granted_to()  # validates liveness; clears a stale grant
+        # Deliberately reads the RAW grant record (``_raw_grant``), NOT the
+        # TTL-judged ``_current_grant``/``granted_to``. Judging staleness
+        # here -- before this branch gets to re-stamp -- would evict a
+        # legitimate give for having sat exactly as long as the holder it
+        # was waiting behind was still speaking: the holder-gate in
+        # ``_grant_wedged`` protects reads made *while the holder is still
+        # active*, but by the time ``grant_next()`` runs on release, the
+        # holder lock is already gone (``Conch.release`` unlinks it before
+        # calling ``_queue_promote_next``), so a judged read at this exact
+        # instant would see no holder and immediately evict the give it is
+        # about to honour. Liveness (is the named session still a live
+        # waiter?) is the only validity check this branch needs -- staleness
+        # of the OLD timestamp is moot, since honouring it re-stamps to now
+        # regardless of how old it was (VM-2078 Q3 design review).
+        raw_grant = cls._raw_grant()
+        existing = raw_grant.get("session_id") if raw_grant else None
         if existing is not None:
             for e in cls.list():
                 if e.session_id == existing:
-                    return e  # explicit give stands -- do not clobber
+                    # Re-stamp granted_at: THIS is the moment the floor
+                    # actually frees and the grantee's claim window begins --
+                    # not whenever the operator originally ran `conch give`
+                    # while a previous holder was still speaking. Without
+                    # this the grant would already be old at the exact
+                    # moment it becomes claimable, and get judged wedged on
+                    # the very next read. Preserve any other keys on the
+                    # existing grant record verbatim (e.g. ``claim_ttl`` --
+                    # see ``grant()``): re-stamping is a timestamp refresh,
+                    # not a new grant decision, so a bounded window the
+                    # granter earlier wrote on observed delivery evidence
+                    # must survive it.
+                    payload = dict(raw_grant)
+                    payload["granted_at"] = datetime.now().isoformat()
+                    cls._atomic_write_json(cls._grant_file(), payload)
+                    return e  # explicit give stands -- do not clobber, only re-stamp
+            # Named session is no longer a live waiter: a dead/departed give
+            # must not wedge the queue. No explicit clear needed here -- the
+            # head-promotion write below (or clear_grant on an empty queue)
+            # unconditionally overwrites/removes this stale record.
 
         waiters = cls.list()  # live, ordered; runs cleanup
         if not waiters:
             cls.clear_grant()
             return None
 
-        # First wait-mode waiter wins; everything ahead of it is a callback
-        # waiter we skip (and ping). No wait waiter => only callbacks => grant
-        # the head unchanged (nothing to starve).
-        target = None
-        skipped = []
-        for e in waiters:
-            if e.mode == "wait":
-                target = e
-                break
-            skipped.append(e)
-        if target is None:
-            target = waiters[0]
-        else:
-            for e in skipped:
-                if e.mode == "callback":
-                    cls._notify_callback(e, block=notify_block)
-
-        cls._atomic_write_json(
-            cls._grant_file(),
-            {
-                "session_id": target.session_id,
-                "seq": target.seq,
-                # VM-1967 safety net: stamp when this grant was issued so a
-                # WAIT-mode grant that never gets claimed can self-heal past
-                # CONCH_GRANT_TTL (see ``_grant_wedged`` / ``_current_grant``).
-                "granted_at": datetime.now().isoformat(),
-            },
-        )
+        target = waiters[0]
+        # A NEW grant decision (not a refresh) -- see ``_write_grant_decision``
+        # for why that distinction is written into the code, not left as a
+        # comment. No explicit ``claim_ttl``: this is ordinary head-promotion,
+        # not the summon carve-out, so the only evidence available is
+        # ``target.pid``, which the helper itself keys on.
+        cls._write_grant_decision(target)
         return target
 
     @classmethod
-    def _notify_callback(cls, entry, *, block: bool = True) -> None:
-        """Best-effort ping to a skipped callback waiter (VM-1625).
-
-        Lazy import + swallow-all, matching the fail-safe queue integration in
-        ``Conch``: notifying is never allowed to break grant promotion, which is
-        critical-path coordination, and the queue stays usable when the notify
-        module / ``session`` binary is absent.
-
-        ``block`` is forwarded to ``notify_granted``: the release hot path passes
-        ``block=False`` so the ping is dispatched off-thread and never delays the
-        holder's release; the CLI ``bump`` path keeps the synchronous default.
-        """
-        try:
-            from voice_mode.conch_notify import notify_granted
-            notify_granted(entry, block=block)
-        except Exception:
-            pass
-
-    @classmethod
-    def grant(cls, session_id: str) -> bool:
+    def grant(cls, session_id: str, *, claim_ttl: Optional[float] = None) -> bool:
         """Grant the conch to a *named* live waiter (used by ``conch give``).
 
         Unlike :meth:`grant_next` (which always promotes the head), this writes
@@ -579,6 +660,32 @@ class ConchQueue:
 
         Args:
             session_id: the waiter to grant to.
+            claim_ttl: an optional bounded claim-window override (seconds,
+                must be > 0 -- a value <= 0 is ignored by ``_grant_wedged``
+                rather than treated as "no TTL"), recorded on the GRANT
+                RECORD in place of the base ``CONCH_GRANT_TTL`` (see
+                ``_grant_wedged``). This exists for
+                the D2 operator-summon carve-out: a summoned session has no
+                poll loop of its own, so the base window (sized for a poll
+                loop) is too short for it to answer a pane nudge. The window
+                is set here by the GRANTER, from evidence the granter itself
+                observed (e.g. do-003's checked-and-surfaced nudge-delivery
+                result) -- never self-declared by the grantee's entry. This
+                is deliberately NOT a category field: it lives on the
+                one-shot grant record, not on ``WaiterEntry``, so it says
+                nothing about the *kind* of waiter, only about what was
+                observed for THIS grant. Callers that have no such evidence
+                must leave this ``None`` -- and a caller that observed the
+                nudge FAIL (or the target being remote, where no nudge is
+                even possible) must not call ``grant()`` at all, per the
+                same ruling. ``None`` does not always mean "base TTL
+                applies" though: if the target waiter has no local ``pid``,
+                this method itself falls back to the same bounded remote
+                window ``grant_next()`` uses for ordinary head-promotion
+                (VM-2078 fix-002 REFINE #2) -- ``conch give`` to a remote
+                waiter is the same unwinnable poll-cycle arithmetic as an
+                ordinary remote promotion, through a different door, and a
+                caller-supplied ``claim_ttl`` still wins over it.
 
         Returns:
             ``True`` if the session was a live waiter and the grant was written;
@@ -588,46 +695,138 @@ class ConchQueue:
             return False
         for e in cls.list():  # runs cleanup; only live waiters
             if e.session_id == session_id:
-                cls._atomic_write_json(
-                    cls._grant_file(),
-                    {
-                        "session_id": e.session_id,
-                        "seq": e.seq,
-                        # VM-1967 safety net -- see grant_next().
-                        "granted_at": datetime.now().isoformat(),
-                    },
-                )
+                # A NEW grant decision -- see ``_write_grant_decision``. An
+                # explicit ``claim_ttl`` (this method's own summon carve-out)
+                # always wins; failing that, the helper still falls back to
+                # the bounded remote window if ``e.pid is None`` -- `conch
+                # give` to a remote waiter is the same unwinnable poll-cycle
+                # arithmetic as an ordinary remote head-promotion
+                # (``grant_next()``), through a different door.
+                cls._write_grant_decision(e, claim_ttl=claim_ttl)
                 return True
         return False
 
     @classmethod
-    def _grant_wedged(cls, grant: dict, entry: "WaiterEntry") -> bool:
-        """True if a WAIT-mode grant has sat unclaimed past ``CONCH_GRANT_TTL``.
+    def _effective_claim_ttl(cls, grant: dict) -> Optional[float]:
+        """The claim-window TTL (seconds) governing ``grant``, or ``None`` if
+        the TTL net is administratively disabled -- i.e. there is no
+        deadline at all, never "the deadline already passed".
 
-        Only WAIT-mode grantees are safety-netted: a WAIT waiter is expected
-        to self-acquire within one poll cycle of being granted (the
-        ``converse()`` WAIT loop polls ``try_acquire()`` every
-        ``CONCH_CHECK_INTERVAL``), so "still unclaimed after
-        ``CONCH_GRANT_TTL``" means the claim was missed -- exactly VM-1967's
-        root cause (a cancelled WAIT caller's orphaned, still-"live" queue
-        entry gets granted and nothing ever claims it, and with no TTL the
-        grant blocked the whole queue forever). A CALLBACK grantee is
-        claimed out-of-band at agent/human pace (VM-1625) -- unclaimed for a
-        while is normal there, not stuck, so it is exempt.
+        Single source of truth for the ENFORCER (``_grant_wedged``) and the
+        REPORTER (``claim_window_remaining``) -- they must never be able to
+        disagree about what the window IS, only about what to DO with it
+        (evict vs. report seconds left). Before this extraction each
+        computed its own answer and drifted: with ``CONCH_GRANT_TTL=0`` the
+        enforcer correctly never expired the grant, but the reporter said
+        "0.0 seconds remaining" for that same grant -- which reads as
+        *already expired*, the opposite of what is true. That is the same
+        family of bug ``_write_grant_decision`` exists to prevent on the
+        write side, reproduced on the read side (VM-2078 do-003 REFINE #1).
+
+        A disabled base TTL (``CONCH_GRANT_TTL <= 0``) turns TTL judgement
+        off PROJECT-WIDE, including any per-grant ``claim_ttl`` override --
+        an operator who sets ``CONCH_GRANT_TTL=0`` to disable the safety net
+        entirely should not have a summon/remote override quietly keep a
+        piece of it running (mirrors ``grant()``'s own doc on this point).
         """
-        if entry.mode != "wait":
+        base = _get_grant_ttl()
+        if not base or base <= 0:
+            return None  # administratively disabled -- no deadline at all
+        claim_ttl = grant.get("claim_ttl")
+        if claim_ttl is not None and claim_ttl > 0:
+            # A bounded, GRANTER-observed override for this specific grant
+            # (e.g. a confirmed-delivered summon nudge, or a remote
+            # head-promotion) -- OVERRIDES the base window and must be > 0;
+            # it happens to widen in every caller today, but nothing here
+            # requires that (a narrower override would just evict sooner,
+            # harmlessly). Ignored if <= 0 (malformed) rather than treated
+            # as "no TTL", so a corrupt claim_ttl can't reintroduce an
+            # un-expiring grant.
+            return claim_ttl
+        return base
+
+    @classmethod
+    def _grant_wedged(cls, grant: dict, entry: "WaiterEntry") -> bool:
+        """True if a grant has sat unclaimed past its claim window.
+
+        Every ordinary grantee is expected to self-acquire within one poll
+        cycle of being granted (the ``converse()`` loop polls
+        ``try_acquire()`` every ``CONCH_CHECK_INTERVAL``), so "still
+        unclaimed after the TTL" means the claim was missed -- exactly
+        VM-1967's root cause (a cancelled caller's orphaned, still-"live"
+        queue entry gets granted and nothing ever claims it, and with no TTL
+        the grant blocked the whole queue forever). VM-2078 removed callback
+        mode's TTL exemption -- there is no grant class left that
+        self-declares its way out of the TTL.
+
+        But "every grant TTL-covered" is not "every grant uses the same
+        window" -- two grant-issuing paths write a wider ``claim_ttl``, each
+        from evidence the GRANTER observes at grant time, never a
+        self-declared property of the waiter: (1) ``grant()``'s
+        ``summon_and_grant`` (D2 operator-path carve-out) target has a local
+        ``pid`` but no poll loop of its own -- it is nudged, not polling --
+        so the ordinary poll-cycle window is too short for a human/agent to
+        answer a pane nudge and call ``converse()`` again; (2)
+        ``grant_next()``'s ordinary head-promotion, when the promoted waiter
+        has no local ``pid`` at all -- a remote waiter's claim is a
+        heartbeat/status round trip, not a poll loop, so the poll-cycle
+        window is structurally unwinnable for it (VM-2078 fix-002 REFINE
+        #1). A category field on the *waiter* (local vs remote, summoned vs
+        ordinary) would resurrect the removed ``mode`` concept under a new
+        name, so the window is instead a property of the *grant record*
+        (``claim_ttl``, see ``grant()`` / ``grant_next()``). No ``claim_ttl``
+        on the record means the ordinary base TTL applies.
+        """
+        # Holder gate FIRST, before any TTL arithmetic -- order matters, not
+        # just presence. A grant cannot be judged "wedged" while a live
+        # holder still occupies the floor: the grantee structurally cannot
+        # claim yet, no matter how long ago the grant was issued (`conch
+        # give` / `summon_and_grant` both issue grants WHILE the holder is
+        # still speaking -- VM-2078 Q3 repro). If this ran after the
+        # granted_at parse below, a missing/malformed timestamp would
+        # short-circuit past it and the gate would never fire. A wedged
+        # HOLDER is the holder lock's own problem (CONCH_HOLD_EXPIRY /
+        # stale-lock clearance) -- not the grant TTL's -- so this opens no
+        # new gap. Goes through Conch.get_holder() (which does the liveness
+        # check via is_active()), never a raw lock-file read, or a stale
+        # holder record would gate on a lock that's already dead and
+        # reintroduce an un-expiring grant.
+        if Conch.get_holder() is not None:
             return False
-        ttl = _get_grant_ttl()
-        if not ttl or ttl <= 0:
-            return False
+
+        ttl = cls._effective_claim_ttl(grant)
+        if ttl is None:
+            return False  # administratively disabled -- no TTL judgement at all
         granted_at = cls._parse_iso(grant.get("granted_at"))
         if granted_at is None:
-            # No timestamp (grant predates VM-1967, or was written by
-            # something else) -- can't judge age, so don't guess stuck. The
-            # next grant_next()/grant() call stamps one.
+            # No timestamp (grant predates VM-1967, was written by something
+            # else, or -- previously -- lived forever unexempted). Rather
+            # than exempt it forever, stamp it now (persisted, atomic write)
+            # so it becomes judgeable from first sighting, and return False
+            # this once so the grantee gets one full TTL window from here.
+            cls._atomic_write_json(
+                cls._grant_file(),
+                {**grant, "granted_at": datetime.now().isoformat()},
+            )
             return False
         now = datetime.now(granted_at.tzinfo) if granted_at.tzinfo is not None else datetime.now()
         return (now - granted_at).total_seconds() > ttl
+
+    @classmethod
+    def _raw_grant(cls) -> Optional[dict]:
+        """The on-disk grant record verbatim, or ``None`` if absent/corrupt.
+
+        No liveness or TTL judgment -- see ``_current_grant`` for the judged
+        version. Exists for callers that are about to re-validate/re-stamp
+        the record themselves, where running the judged read first would
+        evict what they are about to honour (``grant_next()``'s
+        honour-an-existing-give branch -- see its comment).
+        """
+        gf = cls._grant_file()
+        try:
+            return json.loads(gf.read_text())
+        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+            return None
 
     @classmethod
     def _current_grant(cls) -> Optional[dict]:
@@ -636,7 +835,7 @@ class ConchQueue:
         A grant is only valid while its grantee is still a live waiter; a
         dead or deregistered grantee leaves the grant stale, which this
         clears (pre-VM-1967 behaviour, unchanged). VM-1967 safety net: a
-        WAIT-mode grant nobody ever claims within ``CONCH_GRANT_TTL`` is ALSO
+        grant nobody ever claims within ``CONCH_GRANT_TTL`` is ALSO
         treated as stale here -- the stuck grantee is evicted from the queue
         and the next live waiter is promoted (mirroring the manual
         ``conch give`` recovery an operator would otherwise have to do), so
@@ -646,11 +845,10 @@ class ConchQueue:
         practice it self-heals the moment any other queued waiter's poll
         loop (or a status check) next asks "who is granted?".
         """
-        gf = cls._grant_file()
-        try:
-            g = json.loads(gf.read_text())
-        except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        g = cls._raw_grant()
+        if g is None:
             return None
+        gf = cls._grant_file()
         sid = g.get("session_id")
         if sid is None:
             cls._unlink(gf)
@@ -659,7 +857,7 @@ class ConchQueue:
             if e.session_id == sid:
                 if cls._grant_wedged(g, e):
                     cls.deregister(sid)
-                    cls.grant_next(notify_block=False)
+                    cls.grant_next()
                     return cls._current_grant()
                 return g
         cls._unlink(gf)  # grantee gone -- stale grant
@@ -670,7 +868,7 @@ class ConchQueue:
         """The session id of the current live grantee, or ``None``.
 
         A grant is only valid while its grantee is still a live waiter, or
-        (VM-1967) while a WAIT-mode grant remains within its claim TTL --
+        (VM-1967) while the grant remains within its claim TTL --
         see ``_current_grant``.
         """
         g = cls._current_grant()
@@ -700,6 +898,40 @@ class ConchQueue:
         if session_id is None:
             return False
         return cls.granted_to() == session_id
+
+    @classmethod
+    def claim_window_remaining(cls, session_id: str) -> Optional[float]:
+        """Seconds left for ``session_id`` to claim its grant, or ``None``.
+
+        ``None`` when ``session_id`` is not the current live grantee, the
+        grant carries no ``granted_at`` timestamp, or the TTL net is
+        administratively disabled (``CONCH_GRANT_TTL <= 0``) -- that last
+        case is "no deadline exists", not "0.0 seconds left", and is shared
+        with the enforcer via ``_effective_claim_ttl`` (REFINE #1: this
+        reporter previously derived its own TTL independently and drifted
+        from ``_grant_wedged`` -- with ``CONCH_GRANT_TTL=0`` the enforcer
+        never expired the grant, but this method said "0.0 seconds
+        remaining", telling an agent obediently heartbeating on this exact
+        call it was out of time while it in fact held the floor
+        indefinitely). Falls back to the base ``CONCH_GRANT_TTL`` when the
+        grant carries no ``claim_ttl`` override.
+
+        VM-2078 do-003: lets a passively-granted party discover it *on the
+        one call it was told to make regularly* -- e.g. the MCP
+        ``heartbeat`` action -- instead of needing a second, un-instructed
+        ``status`` call to find out it is even holding a grant at all.
+        """
+        g = cls._current_grant()
+        if g is None or g.get("session_id") != session_id:
+            return None
+        granted_at = cls._parse_iso(g.get("granted_at"))
+        if granted_at is None:
+            return None
+        ttl = cls._effective_claim_ttl(g)
+        if ttl is None:
+            return None  # administratively disabled -- no deadline at all
+        now = datetime.now(granted_at.tzinfo) if granted_at.tzinfo is not None else datetime.now()
+        return max(0.0, ttl - (now - granted_at).total_seconds())
 
     @classmethod
     def clear_grant(cls) -> None:

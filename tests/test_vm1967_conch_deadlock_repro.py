@@ -93,7 +93,7 @@ class TestConchDeadlockFixedByDeregisterOnCancel:
         FIXED (post fix-001) behaviour at every step:
 
         1. A real holder takes the floor (so the first waiter must queue).
-        2. sess-a joins in ``conch_mode="wait"`` and blocks in the poll loop.
+        2. sess-a joins the queue and blocks in the poll loop.
         3. The MCP client cancels the call mid-wait (ESC / disconnect) — the
            coroutine is cancelled while parked in ``asyncio.sleep`` inside the
            WAIT loop, exactly as a real client cancellation would land.
@@ -126,7 +126,6 @@ class TestConchDeadlockFixedByDeregisterOnCancel:
                 message="Hello",
                 wait_for_response=False,
                 wait_for_conch=30,  # long timeout: cancellation must pre-empt it
-                conch_mode="wait",
                 session_id="sess-a",
             ))
 
@@ -180,7 +179,6 @@ class TestConchDeadlockFixedByDeregisterOnCancel:
                 message="Hello",
                 wait_for_response=False,
                 wait_for_conch=0.05,
-                conch_mode="wait",
                 session_id="sess-b",
             )
 
@@ -213,8 +211,7 @@ class TestConchDeadlockFixedByDeregisterOnCancel:
                     message="Hello",
                     wait_for_response=False,
                     wait_for_conch=30,
-                    conch_mode="wait",
-                    session_id="repeat-offender",
+                        session_id="repeat-offender",
                 ))
                 await asyncio.sleep(0.03)
                 task.cancel()
@@ -244,7 +241,7 @@ class TestConchDeadlockSafetyNetStatusFix:
 
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 5.0)
 
-        ConchQueue.register("sess-a", agent="converse", mode="wait")
+        ConchQueue.register("sess-a", agent="converse")
         holder = Conch(agent_name="holder")
         assert holder.try_acquire()
         holder.release()  # grant_next() promotes sess-a
@@ -277,7 +274,7 @@ class TestConchDeadlockSafetyNetStatusFix:
         lying' -- `Holder: none` while a grant is outstanding must no
         longer be reported as `free`.
         """
-        ConchQueue.register("stuck-head", agent="stuck-agent", mode="wait")
+        ConchQueue.register("stuck-head", agent="stuck-agent")
         ConchQueue.grant_next()  # promotes stuck-head, never claimed
 
         assert Conch.get_holder() is None  # the holder LOCK genuinely is free
