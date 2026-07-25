@@ -32,14 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **`conch give`/operator `summon` could hand over the floor to a target it never confirmed was told (VM-2078)** —
-  the old notify path was best-effort and its return value was never
-  checked, so a nudge that silently failed still granted the conch; nobody
-  could tell "delivered" from "who knows." `conch(action="give")`/`summon`
-  now grants only on a confirmed-delivered nudge; a failed nudge, or a
-  remote target with no local PID to nudge at all, withholds the grant
+  this is the **summon fallback only**: `give`ing to a running session that
+  is *not already in the queue*. The old notify path there was best-effort
+  and its return value was never checked, so a nudge that silently failed
+  still granted the conch; nobody could tell "delivered" from "who knows."
+  That path now grants only on a confirmed-delivered nudge; a failed nudge,
+  or a remote target with no local PID to nudge at all, withholds the grant
   entirely, returns `granted: false`, and tells the operator to relay the
   message themselves rather than leaving an unpolled entry queued to block
-  everyone else. The MCP `conch(action="heartbeat")` response also now
+  everyone else. `give`ing to a session **already in the queue** is
+  unchanged — and, for a remote one, now works *better* (see the mid-turn
+  claim-window fix below): its claim window is heartbeat-scaled instead of
+  the short local poll window. The MCP `conch(action="heartbeat")` response also now
   reports `granted` (and, once granted, `claim_window_remaining`), so a
   queued remote agent discovers its grant on the very call it's told to
   make every ~30 s, instead of needing an extra, un-instructed `status`
