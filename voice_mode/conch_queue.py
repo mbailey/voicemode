@@ -707,6 +707,45 @@ class ConchQueue:
         return False
 
     @classmethod
+    def _effective_claim_ttl(cls, grant: dict) -> Optional[float]:
+        """The claim-window TTL (seconds) governing ``grant``, or ``None`` if
+        the TTL net is administratively disabled -- i.e. there is no
+        deadline at all, never "the deadline already passed".
+
+        Single source of truth for the ENFORCER (``_grant_wedged``) and the
+        REPORTER (``claim_window_remaining``) -- they must never be able to
+        disagree about what the window IS, only about what to DO with it
+        (evict vs. report seconds left). Before this extraction each
+        computed its own answer and drifted: with ``CONCH_GRANT_TTL=0`` the
+        enforcer correctly never expired the grant, but the reporter said
+        "0.0 seconds remaining" for that same grant -- which reads as
+        *already expired*, the opposite of what is true. That is the same
+        family of bug ``_write_grant_decision`` exists to prevent on the
+        write side, reproduced on the read side (VM-2078 do-003 REFINE #1).
+
+        A disabled base TTL (``CONCH_GRANT_TTL <= 0``) turns TTL judgement
+        off PROJECT-WIDE, including any per-grant ``claim_ttl`` override --
+        an operator who sets ``CONCH_GRANT_TTL=0`` to disable the safety net
+        entirely should not have a summon/remote override quietly keep a
+        piece of it running (mirrors ``grant()``'s own doc on this point).
+        """
+        base = _get_grant_ttl()
+        if not base or base <= 0:
+            return None  # administratively disabled -- no deadline at all
+        claim_ttl = grant.get("claim_ttl")
+        if claim_ttl is not None and claim_ttl > 0:
+            # A bounded, GRANTER-observed override for this specific grant
+            # (e.g. a confirmed-delivered summon nudge, or a remote
+            # head-promotion) -- OVERRIDES the base window and must be > 0;
+            # it happens to widen in every caller today, but nothing here
+            # requires that (a narrower override would just evict sooner,
+            # harmlessly). Ignored if <= 0 (malformed) rather than treated
+            # as "no TTL", so a corrupt claim_ttl can't reintroduce an
+            # un-expiring grant.
+            return claim_ttl
+        return base
+
+    @classmethod
     def _grant_wedged(cls, grant: dict, entry: "WaiterEntry") -> bool:
         """True if a grant has sat unclaimed past its claim window.
 
@@ -755,20 +794,9 @@ class ConchQueue:
         if Conch.get_holder() is not None:
             return False
 
-        ttl = _get_grant_ttl()
-        if not ttl or ttl <= 0:
+        ttl = cls._effective_claim_ttl(grant)
+        if ttl is None:
             return False  # administratively disabled -- no TTL judgement at all
-        claim_ttl = grant.get("claim_ttl")
-        if claim_ttl is not None and claim_ttl > 0:
-            # A bounded, GRANTER-observed override for this specific grant
-            # (e.g. a confirmed-delivered summon nudge, or a remote
-            # head-promotion) -- OVERRIDES the base window and must be > 0;
-            # it happens to widen in every caller today, but nothing here
-            # requires that (a narrower override would just evict sooner,
-            # harmlessly). Ignored if <= 0 (malformed) rather than treated
-            # as "no TTL", so a corrupt claim_ttl can't reintroduce an
-            # un-expiring grant.
-            ttl = claim_ttl
         granted_at = cls._parse_iso(grant.get("granted_at"))
         if granted_at is None:
             # No timestamp (grant predates VM-1967, was written by something
@@ -875,9 +903,18 @@ class ConchQueue:
     def claim_window_remaining(cls, session_id: str) -> Optional[float]:
         """Seconds left for ``session_id`` to claim its grant, or ``None``.
 
-        ``None`` when ``session_id`` is not the current live grantee, or the
-        grant carries no ``granted_at`` timestamp. Falls back to the base
-        ``CONCH_GRANT_TTL`` when the grant carries no ``claim_ttl`` override.
+        ``None`` when ``session_id`` is not the current live grantee, the
+        grant carries no ``granted_at`` timestamp, or the TTL net is
+        administratively disabled (``CONCH_GRANT_TTL <= 0``) -- that last
+        case is "no deadline exists", not "0.0 seconds left", and is shared
+        with the enforcer via ``_effective_claim_ttl`` (REFINE #1: this
+        reporter previously derived its own TTL independently and drifted
+        from ``_grant_wedged`` -- with ``CONCH_GRANT_TTL=0`` the enforcer
+        never expired the grant, but this method said "0.0 seconds
+        remaining", telling an agent obediently heartbeating on this exact
+        call it was out of time while it in fact held the floor
+        indefinitely). Falls back to the base ``CONCH_GRANT_TTL`` when the
+        grant carries no ``claim_ttl`` override.
 
         VM-2078 do-003: lets a passively-granted party discover it *on the
         one call it was told to make regularly* -- e.g. the MCP
@@ -890,9 +927,9 @@ class ConchQueue:
         granted_at = cls._parse_iso(g.get("granted_at"))
         if granted_at is None:
             return None
-        ttl = g.get("claim_ttl")
-        if ttl is None or ttl <= 0:
-            ttl = _get_grant_ttl()
+        ttl = cls._effective_claim_ttl(g)
+        if ttl is None:
+            return None  # administratively disabled -- no deadline at all
         now = datetime.now(granted_at.tzinfo) if granted_at.tzinfo is not None else datetime.now()
         return max(0.0, ttl - (now - granted_at).total_seconds())
 

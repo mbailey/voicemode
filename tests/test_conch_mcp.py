@@ -414,8 +414,11 @@ class TestSummon:
     async def test_summon_withholds_grant_when_nudge_fails(self, clean_conch, monkeypatch):
         """D2 amendment: an ATTEMPTED-but-failed nudge must NOT grant --
         handing the floor to a target just confirmed not to have been told
-        is the original bug wearing a different hat. The target stays
-        queued (not stranded) rather than being granted blind."""
+        is the original bug wearing a different hat. REFINE #1: the target
+        must also be DEREGISTERED rather than left queued -- a queued entry
+        nobody polls for would block every other waiter for a full claim
+        window and then be evicted anyway, so leaving it behind would strand
+        it (and everyone behind it), not protect it."""
         monkeypatch.setattr(conch_ops, "_list_running_sessions",
                             lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
         monkeypatch.setattr("subprocess.run", _nudge_failed)
@@ -425,14 +428,17 @@ class TestSummon:
         assert res["granted"] is False
         assert res["nudge"] == "failed"
         assert "tell them yourself" in res["message"].lower()
+        assert "not queu" in res["message"].lower()
+        assert "wait_for_conch" in res["message"]
         assert ConchQueue.granted_to() is None
         entry = _entry("run-1")
-        assert entry is not None  # still queued, not stranded
+        assert entry is None  # deregistered, not left stranded in the queue
 
     @pytest.mark.asyncio
     async def test_summon_withholds_grant_when_target_is_remote(self, clean_conch, monkeypatch):
         """D2 amendment: a remote target (no local pid) has NO nudge path at
-        all -- must not be silently upgraded to 'delivered'."""
+        all -- must not be silently upgraded to 'delivered'. REFINE #1: also
+        deregistered, same as the failed-nudge case."""
         # NOTE: _running()'s `pid=None` default means "use this live process"
         # (so the summoned waiter survives dead-PID cleanup) — construct the
         # RunningSession directly to get a genuinely pid-less (remote) target.
@@ -445,9 +451,10 @@ class TestSummon:
         assert res["ok"] is True
         assert res["granted"] is False
         assert res["nudge"] == "remote"
+        assert "wait_for_conch" in res["message"]
         assert ConchQueue.granted_to() is None
         entry = _entry("remote-run")
-        assert entry is not None and entry.pid is None
+        assert entry is None  # deregistered, not left stranded in the queue
 
     @pytest.mark.asyncio
     async def test_summon_target_is_holder_is_noop(self, clean_conch, monkeypatch):

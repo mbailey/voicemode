@@ -383,9 +383,15 @@ def summon_and_grant(token: str) -> dict:
       (:meth:`ConchQueue.remote_claim_window`) — the target has no poll loop
       of its own, so the ordinary poll-cycle window is unwinnable for it;
     - nudge ``"failed"`` or ``"remote"`` (no local pid — no nudge is even
-      possible) ⇒ **do not grant at all**. The target stays queued as an
-      ordinary waiter (so it is still in line, not stranded) and the
-      response tells the operator plainly to tell it themselves.
+      possible) ⇒ **do not grant at all, and DEREGISTER the auto-enqueued
+      waiter rather than leave it queued** (VM-2078 do-003 REFINE #1). A
+      target that was never told did not opt in; leaving it queued would
+      manufacture a live entry nobody polls for — promoted at the head, it
+      would block every other waiter for a full claim window and then be
+      evicted anyway, so "they are queued and will acquire it in the
+      ordinary order" would be false on both halves. The response instead
+      tells the operator plainly that the target is **not** queued and how
+      it can join for real (``converse(wait_for_conch=true)``).
 
     Every outcome path returns a structured dict (``summoned``/``noop`` +
     ``granted`` + ``nudge`` + identity + ``message``) designed to be acted on
@@ -426,10 +432,19 @@ def summon_and_grant(token: str) -> dict:
     if nudge != "delivered":
         # D2 amendment: a failed/impossible nudge must WITHHOLD the grant —
         # handing the floor to a target you just confirmed was not told is
-        # the original bug wearing a different hat. Left queued (above) so
-        # it still gets its ordinary turn instead of being stranded.
+        # the original bug wearing a different hat.
+        #
+        # REFINE #1: and must NOT leave the auto-enqueued waiter behind
+        # either. It never opted in and was never told, so a "they are
+        # queued, ordinary order" message is false on both halves: promoted
+        # at the head it would block every other waiter for a full claim
+        # window, then be evicted anyway (precedent: converse's gate-closed
+        # path — never silently block a caller who did not opt in, leave no
+        # registration behind). Deregister it and tell the operator plainly
+        # it is NOT queued and how it can join for real.
         why = ("could not confirm the nudge was delivered" if nudge == "failed"
                else "is remote — no nudge is possible at all")
+        ConchQueue.deregister(target.session_id)
         return {
             "action": "give",
             "summoned": True,
@@ -440,8 +455,10 @@ def summon_and_grant(token: str) -> dict:
             "agent": target.label,
             "message": (
                 f"Summoned {target.label} (session {short(target.session_id)}) but "
-                f"{why} — NOT granting the conch. Tell them yourself; they are "
-                f"queued and will acquire it in the ordinary order."
+                f"{why} — NOT granting the conch, and NOT queuing them (a queued "
+                f"entry nobody polls for would just block everyone else and then "
+                f"be evicted anyway). Tell them yourself; to actually join the "
+                f"queue they need to call converse(wait_for_conch=true)."
             ),
         }
 

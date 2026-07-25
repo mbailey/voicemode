@@ -253,9 +253,11 @@ class TestSummon:
         assert any(call and call[:2] == ["session", "send"] for call in rec.calls)
 
     def test_summon_withholds_grant_when_nudge_fails(self, runner, monkeypatch):
-        """D2 amendment: an ATTEMPTED-but-failed nudge must NOT grant — the
-        target stays queued, not stranded, and the operator is told plainly
-        to tell it themselves."""
+        """D2 amendment: an ATTEMPTED-but-failed nudge must NOT grant, and
+        REFINE #1: the target must be DEREGISTERED (not left queued) — a
+        queued entry nobody polls for would block every other waiter for a
+        full claim window and then be evicted anyway. The operator is told
+        plainly to tell it themselves, and how it can actually join."""
         monkeypatch.setattr(conch_ops, "_list_running_sessions",
                             lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
         monkeypatch.setattr("subprocess.run", _RecordingRun(returncode=1))
@@ -263,13 +265,16 @@ class TestSummon:
         result = runner.invoke(conch, ["give", "dora"])
         assert result.exit_code == 0
         assert "tell them yourself" in result.output.lower()
+        assert "not queu" in result.output.lower()
+        assert "wait_for_conch" in result.output
         entry = next((e for e in ConchQueue.list() if e.session_id == "run-1"), None)
-        assert entry is not None  # still queued
+        assert entry is None  # deregistered, not left stranded in the queue
         assert ConchQueue.granted_to() is None  # NOT granted
 
     def test_summon_withholds_grant_when_target_is_remote(self, runner, monkeypatch):
         """D2 amendment: a remote target (no local pid) has no nudge path at
-        all — must not be silently upgraded to a delivered nudge."""
+        all — must not be silently upgraded to a delivered nudge. REFINE #1:
+        also deregistered, same as the failed-nudge case."""
         remote = conch_ops.RunningSession(
             session_id="remote-run", pid=None, agent="dora", project_path=None,
         )
@@ -280,7 +285,10 @@ class TestSummon:
         result = runner.invoke(conch, ["give", "dora"])
         assert result.exit_code == 0
         assert "remote" in result.output.lower()
+        assert "wait_for_conch" in result.output
         assert ConchQueue.granted_to() is None
+        entry = next((e for e in ConchQueue.list() if e.session_id == "remote-run"), None)
+        assert entry is None  # deregistered, not left stranded in the queue
         assert rec.calls == []  # no nudge attempted at all for a remote target
 
     def test_summon_by_session_id_prefix(self, runner, monkeypatch):

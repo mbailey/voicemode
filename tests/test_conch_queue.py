@@ -851,6 +851,34 @@ class TestClaimWindowRemaining:
         self._backdate_grant(9999)
         assert ConchQueue.claim_window_remaining("a") == 0.0
 
+    def test_none_not_zero_when_administratively_disabled(self, monkeypatch):
+        """REFINE #1 (do-003, retry 1/3): with ``CONCH_GRANT_TTL=0`` the
+        ENFORCER (``_grant_wedged``) never expires the grant -- but this
+        reporter used to derive its own TTL independently and say "0.0
+        seconds remaining", which reads as *already expired*. A remote
+        agent obediently heartbeating on this exact call would be told it
+        was out of time while it in fact held the floor indefinitely.
+        ``None`` ("no deadline exists") is the only answer that agrees with
+        the enforcer -- both must now go through the same
+        ``_effective_claim_ttl`` helper."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a") is True
+        self._backdate_grant(9999)
+        assert ConchQueue.granted_to() == "a"  # enforcer: never wedged
+        assert ConchQueue.claim_window_remaining("a") is None  # reporter agrees
+
+    def test_none_not_zero_when_disabled_even_with_a_claim_ttl_override(self, monkeypatch):
+        """Mirrors ``test_disabled_base_ttl_ignores_claim_ttl_too`` on the
+        enforcer side: a disabled base TTL turns judgement off project-wide,
+        including a per-grant ``claim_ttl`` override -- the reporter must
+        not partially re-enable it either."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
+        ConchQueue.register("summoned")
+        assert ConchQueue.grant("summoned", claim_ttl=5.0) is True
+        self._backdate_grant(9999)
+        assert ConchQueue.claim_window_remaining("summoned") is None
+
 
 # --------------------------------------------------------------------------- #
 # Conch <-> queue integration (try_acquire grant-respect, release promotion)
