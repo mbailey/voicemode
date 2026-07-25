@@ -665,6 +665,54 @@ class TestGrantClaimTTLOverride:
         self._backdate_grant(9999)
         assert ConchQueue.granted_to() == "a"
 
+    def test_remote_head_promotion_gets_the_remote_claim_window(self, monkeypatch):
+        """REFINE #1 (fix-002, retry 1/3): ``claim_ttl`` is only ever written
+        by ``grant()`` -- the SUMMON path. ``grant_next()``'s ordinary
+        HEAD-PROMOTION never wrote it, so a REMOTE waiter (``pid=None``,
+        whose claim is a heartbeat/status round trip) promoted on release
+        was judged against the local poll-cycle window and evicted before
+        it could structurally ever claim in time -- a regression this
+        branch introduced by removing callback mode's TTL exemption without
+        giving ordinary-promoted remote waiters a correct window.
+
+        Restored in the shape the reviewer asked for: monkeypatch BOTH
+        getters so it reads like its neighbours, promote a ``pid=None``
+        waiter via ``grant_next()`` (the ordinary promotion path -- the
+        uncovered one, not ``grant()``'s summon path), then assert the
+        window is bounded, not exempt: survives the local TTL, still
+        eventually evicted past the remote one.
+        """
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("remote-waiter", pid=None)
+        assert ConchQueue.grant_next() is not None  # ordinary head-promotion
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 60.0  # max(10, 60)
+
+        self._backdate_grant(30)  # past the 10s local TTL, within the 60s remote one
+        assert ConchQueue.granted_to() == "remote-waiter"  # survives -- can still claim
+
+        self._backdate_grant(9999)  # past the remote TTL too
+        assert ConchQueue.granted_to() is None  # still finite -- eventually evicted
+        assert ConchQueue.list() == []
+
+    def test_local_head_promotion_is_unaffected_by_the_remote_window(self, monkeypatch):
+        """Companion to the remote case: an ordinary LOCAL promotion (a real
+        ``pid``) must carry no ``claim_ttl`` at all and keep using the base
+        TTL exactly as before -- the remote window is scoped to ``pid is
+        None``, not a blanket widening of every head-promotion."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("local-waiter")  # defaults pid to this process
+        assert ConchQueue.grant_next() is not None
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert "claim_ttl" not in grant_payload
+
+        self._backdate_grant(11)  # past the 10s base TTL
+        assert ConchQueue.granted_to() is None  # evicted, same as always
+
 
 # --------------------------------------------------------------------------- #
 # Conch <-> queue integration (try_acquire grant-respect, release promotion)

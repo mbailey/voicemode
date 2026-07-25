@@ -44,15 +44,19 @@ Design notes:
   grant wedge the queue permanently. The judgement also holds off entirely
   while a live holder still blocks the claim (``_grant_wedged``'s holder
   gate) -- a grantee cannot claim a floor nobody has released yet.
-- **``claim_ttl`` (VM-2078 fix-002)**: an optional, bounded override on a
-  single grant record, widening its claim window past the base
-  ``CONCH_GRANT_TTL``. Written by ``grant()`` only when the GRANTER has
-  direct evidence the claim mechanism differs from an ordinary poll loop
-  (e.g. a ``summon_and_grant`` nudge confirmed delivered, D2) -- never a
-  self-declared property of the waiter. Deliberately not a field on
-  ``WaiterEntry``: it describes what was observed about *this grant*, not a
-  category of waiter, so it cannot resurrect the removed ``mode`` concept
-  under a new name.
+- **``claim_ttl`` (VM-2078 fix-002)**: an optional, bounded override
+  (seconds, must be > 0) on a single grant record, recorded in place of the
+  base ``CONCH_GRANT_TTL``. Written by TWO grant-issuing paths, each from
+  evidence the GRANTER observes at grant time -- never a self-declared
+  property of the waiter: ``grant()`` (the ``conch give`` / summon path)
+  when it has direct evidence the claim mechanism differs from an ordinary
+  poll loop (e.g. a ``summon_and_grant`` nudge confirmed delivered, D2); and
+  ``grant_next()``'s ordinary head-promotion, when the promoted waiter has
+  no local ``pid`` -- a remote waiter's claim is a heartbeat round trip, not
+  a poll loop, so it gets ``max(CONCH_GRANT_TTL, CONCH_REMOTE_TTL)``.
+  Deliberately not a field on ``WaiterEntry``: it describes what was
+  observed about *this grant*, not a category of waiter, so it cannot
+  resurrect the removed ``mode`` concept under a new name.
 
 Paths are resolved at call time from ``Conch.LOCK_FILE.parent`` (NOT frozen at
 import) so they honour runtime home resolution (VM-1502) and test isolation
@@ -89,6 +93,24 @@ def _get_grant_ttl() -> float:
         return CONCH_GRANT_TTL
     except ImportError:
         return 30.0
+
+
+def _get_remote_ttl() -> float:
+    """Heartbeat-cadence claim window (seconds) for a grantee with no local
+    poll loop (``pid is None``).
+
+    Deferred import for the same reason as ``_get_grant_ttl`` -- env-var
+    overrides and test monkeypatching must both take effect, and this module
+    deliberately carries no top-level config import (VM-1502). Reuses the
+    existing ``VOICEMODE_CONCH_REMOTE_TTL`` (already the remote heartbeat
+    TTL front ends stamp onto ``expires``, see ``tools/conch.py``) rather
+    than inventing a second remote-timing knob.
+    """
+    try:
+        from voice_mode.config import CONCH_REMOTE_TTL
+        return CONCH_REMOTE_TTL
+    except ImportError:
+        return 90.0
 
 
 @dataclass
@@ -552,17 +574,35 @@ class ConchQueue:
             return None
 
         target = waiters[0]
-        cls._atomic_write_json(
-            cls._grant_file(),
-            {
-                "session_id": target.session_id,
-                "seq": target.seq,
-                # VM-1967 safety net: stamp when this grant was issued so a
-                # grant that never gets claimed can self-heal past
-                # CONCH_GRANT_TTL (see ``_grant_wedged`` / ``_current_grant``).
-                "granted_at": datetime.now().isoformat(),
-            },
-        )
+        payload = {
+            "session_id": target.session_id,
+            "seq": target.seq,
+            # VM-1967 safety net: stamp when this grant was issued so a
+            # grant that never gets claimed can self-heal past
+            # CONCH_GRANT_TTL (see ``_grant_wedged`` / ``_current_grant``).
+            "granted_at": datetime.now().isoformat(),
+        }
+        if target.pid is None:
+            # REFINE #1 (fix-002): ordinary head-promotion is a SECOND
+            # grant-issuing path, distinct from ``grant()``'s summon carve-
+            # out -- and it was the one the settled delivery-evidence shape
+            # missed. A remote waiter's claim is a heartbeat/status ROUND
+            # TRIP, not a local poll loop, so the base (poll-cycle-sized)
+            # TTL is structurally unwinnable for it: tools/conch.py has it
+            # heartbeat on a ~CONCH_REMOTE_TTL cadence, so a base-TTL grant
+            # dies at almost exactly the moment it would first look.
+            # "Grantee has no local pid" is a fact the GRANTER observes
+            # right here at grant time -- exactly like an observed nudge
+            # delivery in the summon path -- so writing a wider window is
+            # the same delivery-evidence principle, not a new exemption.
+            # max(), never a replacement: an administratively widened
+            # CONCH_GRANT_TTL (e.g. for debugging) must not be cut back to
+            # the remote default. NO field on WaiterEntry -- this lives on
+            # the one-shot grant record only, same as ``grant()``'s
+            # ``claim_ttl``, so it says nothing about a *category* of
+            # waiter.
+            payload["claim_ttl"] = max(_get_grant_ttl(), _get_remote_ttl())
+        cls._atomic_write_json(cls._grant_file(), payload)
         return target
 
     @classmethod
@@ -577,9 +617,11 @@ class ConchQueue:
 
         Args:
             session_id: the waiter to grant to.
-            claim_ttl: an optional bounded claim-window override (seconds),
-                recorded on the GRANT RECORD in place of the base
-                ``CONCH_GRANT_TTL`` (see ``_grant_wedged``). This exists for
+            claim_ttl: an optional bounded claim-window override (seconds,
+                must be > 0 -- a value <= 0 is ignored by ``_grant_wedged``
+                rather than treated as "no TTL"), recorded on the GRANT
+                RECORD in place of the base ``CONCH_GRANT_TTL`` (see
+                ``_grant_wedged``). This exists for
                 the D2 operator-summon carve-out: a summoned session has no
                 poll loop of its own, so the base window (sized for a poll
                 loop) is too short for it to answer a pane nudge. The window
@@ -630,17 +672,22 @@ class ConchQueue:
         self-declares its way out of the TTL.
 
         But "every grant TTL-covered" is not "every grant uses the same
-        window": a ``summon_and_grant`` (D2 operator-path carve-out) target
-        has a local ``pid`` but no poll loop of its own -- it is nudged, not
-        polling -- so the ordinary poll-cycle window is too short for a
-        human/agent to answer a pane nudge and call ``converse()`` again. A
-        category field on the *waiter* (local vs remote, summoned vs
+        window" -- two grant-issuing paths write a wider ``claim_ttl``, each
+        from evidence the GRANTER observes at grant time, never a
+        self-declared property of the waiter: (1) ``grant()``'s
+        ``summon_and_grant`` (D2 operator-path carve-out) target has a local
+        ``pid`` but no poll loop of its own -- it is nudged, not polling --
+        so the ordinary poll-cycle window is too short for a human/agent to
+        answer a pane nudge and call ``converse()`` again; (2)
+        ``grant_next()``'s ordinary head-promotion, when the promoted waiter
+        has no local ``pid`` at all -- a remote waiter's claim is a
+        heartbeat/status round trip, not a poll loop, so the poll-cycle
+        window is structurally unwinnable for it (VM-2078 fix-002 REFINE
+        #1). A category field on the *waiter* (local vs remote, summoned vs
         ordinary) would resurrect the removed ``mode`` concept under a new
         name, so the window is instead a property of the *grant record*
-        (``claim_ttl``, see ``grant()``), written by the GRANTER from
-        evidence it directly observed (do-003's checked-and-surfaced nudge
-        delivery) -- never self-declared by the grantee's entry. No
-        ``claim_ttl`` on the record means the ordinary base TTL applies.
+        (``claim_ttl``, see ``grant()`` / ``grant_next()``). No ``claim_ttl``
+        on the record means the ordinary base TTL applies.
         """
         # Holder gate FIRST, before any TTL arithmetic -- order matters, not
         # just presence. A grant cannot be judged "wedged" while a live
@@ -665,10 +712,13 @@ class ConchQueue:
         claim_ttl = grant.get("claim_ttl")
         if claim_ttl is not None and claim_ttl > 0:
             # A bounded, GRANTER-observed override for this specific grant
-            # (e.g. a confirmed-delivered summon nudge) -- widens, never
-            # disables, the window. Ignored if <= 0 (malformed) rather than
-            # treated as "no TTL", so a corrupt claim_ttl can't reintroduce
-            # an un-expiring grant.
+            # (e.g. a confirmed-delivered summon nudge, or a remote
+            # head-promotion) -- OVERRIDES the base window and must be > 0;
+            # it happens to widen in every caller today, but nothing here
+            # requires that (a narrower override would just evict sooner,
+            # harmlessly). Ignored if <= 0 (malformed) rather than treated
+            # as "no TTL", so a corrupt claim_ttl can't reintroduce an
+            # un-expiring grant.
             ttl = claim_ttl
         granted_at = cls._parse_iso(grant.get("granted_at"))
         if granted_at is None:
