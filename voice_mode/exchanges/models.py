@@ -14,6 +14,11 @@ class ExchangeMetadata:
     voice_mode_version: str
     model: Optional[str] = None
     voice: Optional[str] = None
+    # VM-1901 (SCHEMA_VERSION 4): additive requested-vs-resolved provenance.
+    # Absent (None) on any record logged before this slice — a v<=3 record
+    # is result-only, provenance unknown; never backfill a guessed value.
+    voice_requested: Optional[str] = None
+    voice_via: Optional[str] = None
     provider: Optional[str] = None
     provider_url: Optional[str] = None  # Full URL of the provider endpoint
     provider_type: Optional[str] = None  # e.g., "openai", "local", "kokoro"
@@ -138,8 +143,30 @@ class Exchange:
             parts.append(self.metadata.model)
         if self.metadata.voice and self.is_tts:
             parts.append(f"voice: {self.metadata.voice}")
-        
+
         return " | ".join(parts) if parts else "unknown"
+
+    @property
+    def voice_provenance(self) -> str:
+        """Render requested-vs-resolved voice identity for a TTS exchange.
+
+        VM-1901 design.md §5.3 reader rule: a record from before
+        SCHEMA_VERSION 4 (``self.version <= 3``) is *result-only, provenance
+        unknown* — it must NEVER be rendered with a guessed/backfilled
+        ``voice_requested``, even though the field is absent (None) the same
+        way an unset v4 field would be. ``version`` is the authoritative
+        signal, not field presence.
+        """
+        if not self.is_tts or not self.metadata:
+            return "unknown"
+        resolved = self.metadata.voice or "unknown"
+        if self.version <= 3:
+            return f"{resolved} (requested voice unknown — pre-v4 record)"
+        requested = self.metadata.voice_requested
+        if requested and requested != resolved:
+            via = f" via {self.metadata.voice_via}" if self.metadata.voice_via else ""
+            return f"{resolved} (requested {requested!r}{via})"
+        return resolved
 
 
 @dataclass

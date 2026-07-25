@@ -321,9 +321,9 @@ class TestUndeclaredGroupSeverity:
         import voice_mode.simple_failover as sf
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(sf, "TTS_BASE_URLS", ["https://api.openai.com/v1"])
-            endpoints, clone_profile = _resolve_tts_endpoints("blackadder", None)
+            endpoints, clone_profile, _resolution = _resolve_tts_endpoints("blackadder", None)
             assert clone_profile is not None
-            _client, _voice, _model, provider_type = _prepare_tts_endpoint(
+            _client, _voice, _model, provider_type, _is_fallback, _fallback_reason = _prepare_tts_endpoint(
                 endpoints[0], "blackadder", None, clone_profile
             )
         assert provider_type != "openai"
@@ -351,7 +351,7 @@ def test_unmapped_provider_voice_raises_instead_of_defaulting_to_alloy():
 def test_known_kokoro_voice_still_maps_cleanly_on_openai_endpoint():
     from voice_mode.simple_failover import _prepare_tts_endpoint
 
-    _client, selected_voice, _model, provider_type = _prepare_tts_endpoint(
+    _client, selected_voice, _model, provider_type, is_fallback, fallback_reason = _prepare_tts_endpoint(
         base_url="https://api.openai.com/v1",
         voice="af_sky",
         model="tts-1",
@@ -359,6 +359,10 @@ def test_known_kokoro_voice_still_maps_cleanly_on_openai_endpoint():
     )
     assert selected_voice == "nova"
     assert provider_type == "openai"
+    # VM-1901 observability-001: this IS the one legitimate fallback left —
+    # a known Kokoro alias mapped to its OpenAI equivalent.
+    assert is_fallback is True
+    assert "af_sky" in fallback_reason and "nova" in fallback_reason
 
 
 def test_resolution_failure_never_crashes_the_caller_returns_clean_failure(tmp_path, monkeypatch):

@@ -110,8 +110,19 @@ class Conch:
     - project_path: Holder's working directory, or null (CID-62) — lets
       consumers (e.g. the Stream Deck) show who's talking on which project
       with zero lookups, even for a dead/cross-machine session
-    - voice: TTS voice name in use, or null (VM-914) — lets another agent read
-      the holder's voice and pick a different one to avoid a voice clash
+    - voice: the RESOLVED canonical voice id/provider name — what will
+      actually sound, or null (VM-914) — lets another agent read the
+      holder's voice and pick a different one to avoid a voice clash
+    - voice_requested: the caller's verbatim voice expression, or null
+      (VM-1901) — additive alongside ``voice``. Before VM-1901's
+      observability-001, ``voice`` here was itself the raw request (a
+      variable named "resolved" that never passed through the resolver);
+      it now carries the true resolution and ``voice_requested`` keeps the
+      ask, so "what was asked" and "what will sound" are never conflated.
+    - voice_via: the resolution route (e.g. ``"leaf"``, ``"cast-default:
+      mark"``, ``"provider-native"``), or null (VM-1901) — lets a reader
+      distinguish a cast resolving to its declared default from a bare
+      leaf match without re-deriving it.
     - acquired: ISO timestamp when the lock/hold was last (re-)stamped
     - held: True when this is a *hold* persisting between turns (the file is
       left in place with the kernel flock released); False during an active
@@ -128,6 +139,20 @@ class Conch:
     2. The on-disk ``held`` marker answers "is the floor reserved between
        turns?" — guarded by a pid-alive check and an idle-expiry timestamp,
        since plain bytes do not self-clean when a process dies.
+
+    **Clash rule (VM-1901 design.md §5.2, Q4 — read this before writing a
+    detector against this payload):** a clash is the SAME RESOLVED voice at
+    the MEMBER level — never compared at cast level, and never on
+    ``voice_requested``. Two agents on sibling members of the same cast
+    (``blackadder/blackadder`` vs ``blackadder/baldrick``) are distinct
+    members with distinct reference audio — genuinely different voices, NOT
+    a clash. An agent naming the cast (``blackadder``, which resolves to its
+    declared default member) and another agent naming that same member
+    explicitly (``blackadder/blackadder``) resolve to the SAME id — that IS
+    a clash, and exactly what comparing the requested strings would miss
+    (comparing requests, not results, is the original bug restated one level
+    up). Compare the ``voice`` field (resolved), never ``voice_requested``.
+    See :meth:`voices_clash`.
     """
 
     LOCK_FILE = Path.home() / ".voicemode" / "conch"
@@ -139,6 +164,8 @@ class Conch:
         project_path: Optional[str] = None,
         voice: Optional[str] = None,
         hold_timeout: Optional[float] = None,
+        voice_requested: Optional[str] = None,
+        voice_via: Optional[str] = None,
     ):
         """Initialize Conch with optional agent name.
 
@@ -148,20 +175,28 @@ class Conch:
                 Stored verbatim in the lock payload; null when not provided.
             project_path: Optional holder working directory (CID-62). Stored in
                 the payload so consumers can render "who, on which project".
-            voice: Optional TTS voice name in use (VM-914). Stored so another
-                agent can read the holder's voice and pick a different one to
-                avoid a voice clash.
+            voice: The RESOLVED voice (VM-914 / VM-1901) — canonical id or
+                provider name, i.e. what will actually sound. Stored so
+                another agent can read the holder's voice and pick a
+                different one to avoid a voice clash.
             hold_timeout: Optional per-hold idle-expiry override in seconds
                 (VM-1649). When this instance reserves the floor between turns
                 (release(hold=True)), now + this TTL is stamped into the
                 payload's ``expires`` so other agents honour it; None falls back
                 to the configured CONCH_HOLD_EXPIRY default.
+            voice_requested: The caller's verbatim voice expression (VM-1901),
+                additive alongside ``voice``. Distinct on purpose: ``voice``
+                is a postcondition of resolution, this is the ask.
+            voice_via: The resolution route (VM-1901), e.g. ``"leaf"`` or
+                ``"cast-default:mark"`` — see ``voice_profiles.VoiceResolution.via``.
         """
         self.agent_name = agent_name
         self.session_id = session_id
         self.project_path = project_path
         self.voice = voice
         self.hold_timeout = hold_timeout
+        self.voice_requested = voice_requested
+        self.voice_via = voice_via
         self._acquired = False
         self._fd = None  # File descriptor for flock
         self._acquire_time = None  # Track when acquired
@@ -194,6 +229,8 @@ class Conch:
             "session_id": self.session_id,
             "project_path": self.project_path,
             "voice": self.voice,
+            "voice_requested": self.voice_requested,
+            "voice_via": self.voice_via,
             "acquired": (self._acquire_time or datetime.now()).isoformat(),
             "held": held,
             "expires": self._hold_expires_at() if held else None,
@@ -247,6 +284,8 @@ class Conch:
         project_path: Optional[str] = None,
         voice: Optional[str] = None,
         hold_timeout: Optional[float] = None,
+        voice_requested: Optional[str] = None,
+        voice_via: Optional[str] = None,
     ) -> None:
         """Write a between-turns hold marker owned by the current process,
         WITHOUT taking the kernel flock.
@@ -273,11 +312,27 @@ class Conch:
             "session_id": session_id,
             "project_path": project_path,
             "voice": voice,
+            "voice_requested": voice_requested,
+            "voice_via": voice_via,
             "acquired": now.isoformat(),
             "held": True,
             "expires": expires,
         }
         cls.LOCK_FILE.write_text(json.dumps(data, indent=2))
+
+    @staticmethod
+    def voices_clash(resolved_a: Optional[str], resolved_b: Optional[str]) -> bool:
+        """VM-1901 design.md §5.2 (Q4) — the clash rule, made checkable.
+
+        A clash is the SAME RESOLVED voice at the member level. Callers must
+        pass ``voice`` (resolved), never ``voice_requested`` — comparing
+        requests instead of results is the original bug restated (the
+        detector built to catch ``laurie``/``laurie`` collisions would stay
+        defeatable by the very silent-fallback bug it exists to catch).
+
+        Two unset/unresolved voices never clash (nothing to compare).
+        """
+        return bool(resolved_a) and bool(resolved_b) and resolved_a == resolved_b
 
     def acquire(
         self,

@@ -180,6 +180,58 @@ def isolate_home_directory(tmp_path, monkeypatch):
     except Exception:
         pass
     try:
+        # VM-1901 observability-001: same bug class again, closed for the
+        # LAST module that had it. voice_mode.voice_profiles.VOICES_DIR is
+        # frozen from the real os.path.expanduser("~/.voicemode/voices") at
+        # import time, and its `_registry`/`_loaded` cache is a bare module
+        # global with no per-test reset. Individual tests that need a custom
+        # tree already cope by monkeypatching VOICEMODE_VOICES_DIR + calling
+        # `importlib.reload(voice_profiles)` themselves -- but that reload
+        # mutates the SAME module dict every other importer's already-bound
+        # `resolve_voice`/`_ensure_loaded` references share (Python globals
+        # are a live dict lookup, not a snapshot), so a stale tmp_path from
+        # one test's reload silently outlives it for every later test in the
+        # process. This went unnoticed while only simple_failover's deep,
+        # rarely-exercised call path used resolve_voice(); VM-1901 made
+        # converse() call it unconditionally on every single call (the
+        # totality fix requires resolving BEFORE the conch, not just deep in
+        # TTS), so re-pin + reset it here exactly like the three re-pins
+        # above, so every test starts from a clean, fake-home-scoped state
+        # regardless of what an earlier test's reload left behind.
+        import voice_mode.voice_profiles as _voice_profiles_module
+        monkeypatch.setattr(
+            _voice_profiles_module, "VOICES_DIR", fake_home / ".voicemode" / "voices",
+        )
+        monkeypatch.setattr(_voice_profiles_module, "_loaded", False)
+        monkeypatch.setattr(
+            _voice_profiles_module, "_registry", _voice_profiles_module._Registry(),
+        )
+    except Exception:
+        pass
+    try:
+        # VM-1901 observability-001: voice_mode.config.TTS_VOICES is frozen at
+        # import time too, from `VOICEMODE_VOICES` -- which on a developer
+        # machine is commonly set for real in ~/.voicemode/voicemode.env
+        # (e.g. a personal clone voice like "laurie"), loaded via find_dotenv
+        # BEFORE this fixture ever runs. That default is exactly what
+        # converse() now resolves unconditionally on every call (the totality
+        # fix above), so without this re-pin the whole suite's outcome would
+        # depend on whichever developer's real voicemode.env happens to be on
+        # PATH -- a personal voice that doesn't exist in the isolated fake
+        # home's (nonexistent) voices dir would make every plain converse()
+        # call in the suite fail resolution. Reset to the coded default so
+        # the suite is deterministic regardless of the host's real config.
+        # Re-pin at BOTH names: `voice_mode.config.TTS_VOICES` (the source
+        # constant) and `voice_mode.tools.converse.TTS_VOICES` (a `from
+        # voice_mode.config import TTS_VOICES` value binding in converse.py,
+        # NOT a live attribute lookup -- patching config's copy alone would
+        # leave converse.py's own name pointing at the original list).
+        import voice_mode.config as _config_module
+        monkeypatch.setattr(_config_module, "TTS_VOICES", ["af_sky", "alloy"])
+        monkeypatch.setattr(_converse_module, "TTS_VOICES", ["af_sky", "alloy"])
+    except Exception:
+        pass
+    try:
         from voice_mode.cli_commands import autofocus
         monkeypatch.setattr(
             autofocus, "SENTINEL_FILE",

@@ -98,9 +98,9 @@ def _resolves_to_clone(voice_expr, vp_module):
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(sf, "TTS_BASE_URLS", [OPENAI_URL])
-        endpoints, clone_profile = _resolve_tts_endpoints(voice_expr, None)
+        endpoints, clone_profile, _resolution = _resolve_tts_endpoints(voice_expr, None)
         assert clone_profile is not None
-        _client, selected_voice, _model, provider_type = _prepare_tts_endpoint(
+        _client, selected_voice, _model, provider_type, _is_fallback, _fallback_reason = _prepare_tts_endpoint(
             endpoints[0], voice_expr, None, clone_profile
         )
     return selected_voice, provider_type, clone_profile

@@ -103,6 +103,13 @@ def status_payload() -> dict:
             "session_id": holder.get("session_id"),
             "project_path": holder.get("project_path"),
             "voice": holder.get("voice"),
+            # VM-1901: additive requested-vs-resolved provenance, straight
+            # from the conch payload -- conch-watch's roster and the
+            # voice-clash detector now see the RESOLVED id in `voice` (what
+            # will actually sound) plus the caller's ask, instead of a
+            # "resolved" field that was never resolved.
+            "voice_requested": holder.get("voice_requested"),
+            "voice_via": holder.get("voice_via"),
             "pid": holder.get("pid"),
             "held": bool(holder.get("held")),
             "held_seconds": age_seconds(holder.get("acquired")),
@@ -118,6 +125,8 @@ def status_payload() -> dict:
             "agent": e.agent,
             "project_path": e.project_path,
             "voice": e.voice,
+            "voice_requested": e.voice_requested,  # VM-1901
+            "voice_via": e.voice_via,  # VM-1901
             "mode": e.mode,
             "pid": e.pid,
             "granted": is_granted,
