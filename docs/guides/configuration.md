@@ -193,9 +193,6 @@ VOICEMODE_CONCH_ENABLED=true
 VOICEMODE_CONCH_TIMEOUT=60           # Seconds to wait for the conch
 VOICEMODE_CONCH_CHECK_INTERVAL=0.5   # Polling interval
 VOICEMODE_CONCH_LOCK_EXPIRY=300      # Stale-lock expiry (0 disables)
-VOICEMODE_CONCH_MODE=wait            # Default mode when a busy converse() queues:
-                                     #   wait     = block until your turn
-                                     #   callback = return now with your position
 VOICEMODE_CONCH_REMOTE_TTL=90        # Heartbeat TTL (s) for a REMOTE MCP waiter
 VOICEMODE_CONCH_MCP_WAIT_CAP=25      # Hard cap (s) on a blocking MCP conch wait
 ```
@@ -208,11 +205,15 @@ independent knobs:
 - **`wait_for_conch`** is the *gate*. Left at its default (`false`), a busy
   `converse` returns **immediately** with a status that names the holder and
   notes you are *not* queued — it never silently blocks a caller who didn't opt
-  in. Set it `true` (or to a number of seconds) to join the queue.
-- **`conch_mode`** (default `VOICEMODE_CONCH_MODE`) chooses how you're served
-  *once queued*: `wait` blocks until your turn; `callback` registers you and
-  returns straight away with your queue position (your turn is delivered later —
-  out-of-band push is tracked in VM-1625).
+  in. Set it `true` (or to a number of seconds) to join the queue and block
+  until your turn.
+
+There is no separate "delivery mode" to choose any more (**VM-2078** removed
+`conch_mode`/`VOICEMODE_CONCH_MODE` and the `callback` mode they selected —
+see "Removed: callback mode" below). Every `converse` waiter now blocks and
+polls the same way; if you don't want to hold your turn open, **background**
+the call instead — that gives you callback's one real advantage (not tying up
+a turn) without discarding your message or depending on a fragile tmux nudge.
 
 Two properties the queue buys you over the old blind poll-and-block:
 
@@ -241,34 +242,90 @@ issued over MCP mutate the *same* state the CLI does). One composite tool with
 an `action` arg mirrors the CLI verbs:
 
 - `conch(action="status")` — holder + ordered queue (no session needed).
-- `conch(action="callback", session_id=…)` — **the recommended way to join when
-  busy.** Registers and returns your position immediately; your turn is
-  delivered out-of-band when granted. Timeout-safe.
+- `conch(action="queue", session_id=…)` — **the recommended way to join when
+  busy, and the only timeout-safe way a remote agent can hold a place** (see
+  below). Registers and returns your position immediately; you discover your
+  grant on your next `heartbeat`/`status` call (register-and-**poll**, not a
+  push — see "Removed: callback mode"). *(`action="callback"` was renamed to
+  `action="queue"` in VM-2078 — it was never a real callback: nothing rang you
+  back, it was register-and-poll all along. The literal string `"callback"`
+  still resolves, but only to an error naming `"queue"` as the replacement.)*
 - `conch(action="wait", session_id=…, timeout=…)` — block until your turn,
   **hard-capped** by `VOICEMODE_CONCH_MCP_WAIT_CAP` (default 25 s) so it can't
   exceed a client's request timeout. On success the conch is free for you — call
-  `converse()` next. On timeout you're deregistered.
+  `converse()` next. On timeout you're deregistered. **Remote-agent posture:**
+  because `wait` is capped at 25 s, a remote agent that expects to queue for
+  longer than that should use `queue` + `heartbeat` instead of `wait` — `wait`
+  is the low-latency path for a short queue, `queue`+`heartbeat` is the one
+  that survives an arbitrarily long wait.
 - `conch(action="heartbeat", session_id=…)` — refresh your remote-liveness TTL
-  while idle (keeps your place and mode). Send roughly every ~30 s in callback
-  mode.
+  while idle (keeps your place). Send roughly every ~30 s while queued, and
+  check the response's `granted` field every time — that heartbeat is how a
+  `queue`d waiter (no poll loop of its own) discovers its grant.
 - `conch(action="leave", session_id=…)` — give up your place.
 - `conch(action="give", target=…)` / `bump` / `release` — the same operator
-  overrides as the CLI.
+  overrides as the CLI. `give`'s summon path (see "Removed: callback mode"
+  below) additionally reports whether its nudge was delivered.
 
 A remote agent has no host PID, so its liveness is the `expires` heartbeat TTL
 (`VOICEMODE_CONCH_REMOTE_TTL`, default 90 s) the tool stamps on every
-`wait`/`callback`/`heartbeat` call; a waiter past its TTL is auto-pruned so a
+`wait`/`queue`/`heartbeat` call; a waiter past its TTL is auto-pruned so a
 dead remote agent never wedges the queue. **`session_id` is required** for the
 register/heartbeat/leave actions — it is the remote agent's stable queue and
 grant key (there is no `CLAUDE_CODE_SESSION_ID` env over HTTP). Remote *push*
 notify-on-give lands with VM-970; until then the grant is discovered on the
-agent's next `status`/`heartbeat`/`callback` call (the pull-only path).
+agent's next `status`/`heartbeat`/`queue` call (the pull-only path).
 
 The `conch` tool is **not** in the default tool set (which loads only `converse`
 and `service` to keep token usage low). Enable it on a server that should expose
 queue management to remote agents via `VOICEMODE_TOOLS_ENABLED` (whitelist) or
 `VOICEMODE_TOOLS_DISABLED` (blacklist) — e.g.
 `VOICEMODE_TOOLS_ENABLED=converse,service,conch`.
+
+#### Removed: callback mode (VM-2078)
+
+`converse(conch_mode="callback")` and `VOICEMODE_CONCH_MODE` are **gone** —
+along with `conch(action="callback")`, renamed to `action="queue"` (same
+behaviour, an honest name; see above). The old `converse()` tool description
+promised a callback-mode caller "returns immediately with your position and
+delivers your turn when granted" — **it never delivered the turn.** The
+message was discarded at registration, and the "delivery" was a best-effort
+tmux pane nudge whose return value no caller checked; for a remote grantee
+(no host PID) it delivered nothing at all, ever. Silently unclaimed grants
+were also exempted from `CONCH_GRANT_TTL`'s self-heal on the theory that an
+out-of-band claim is normal to sit unclaimed — the combination let a single
+lost nudge wedge the entire queue indefinitely, with no error anywhere.
+
+**If you used callback mode to avoid holding a turn open**, background a
+`wait`-mode `converse()` call instead: you keep the message (nothing is
+discarded), the wait is genuinely TTL-covered by the self-heal above, and you
+still get the floor back without blocking your own turn.
+
+**If you used `conch(action="callback")` to hold a remote place in line**,
+call `conch(action="queue", session_id=…)` — identical register-and-poll
+behaviour, just honestly named; see "Remote agents: the MCP `conch` tool"
+above for the full remote-agent posture (`queue`+`heartbeat` vs. the
+25 s-capped `wait`).
+
+**The one thing that survives:** `voicemode conch give <session>` /
+`conch(action="give", target=…)` can still *summon* a running non-waiter that
+never queued. That summon nudge is now **operator-path only** (no mode gate —
+it fires because an operator asked), and its delivery is **checked and
+reported**, never best-effort-and-swallowed: a confirmed-delivered nudge
+grants the floor with a bounded claim window; a nudge that fails, or a target
+with no local PID to nudge at all, **withholds the grant entirely** and tells
+the operator plainly to relay the message themselves. Every grant this
+mechanism issues is therefore still covered by a finite TTL — there is no
+longer any grant exempt from the self-heal.
+
+**Project design rule going forward:** a grant's claim-window TTL is keyed on
+the **observable claim mechanism** — is a live holder still blocking the
+claim; does the grantee have a local poll loop (short window) or only a
+nudge/remote round trip (longer, heartbeat-scaled window) — **never on a
+declared mode.** Callback mode's exemption was the last place a *declared*
+category, rather than what the system could actually observe, decided how
+long a grant could sit unclaimed; that is why closing it required removing
+the mode entirely rather than special-casing it further.
 
 ### LiveKit Configuration
 
