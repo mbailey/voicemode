@@ -91,6 +91,8 @@ class WaiterEntry:
     agent: Optional[str] = None
     project_path: Optional[str] = None
     voice: Optional[str] = None
+    voice_requested: Optional[str] = None  # VM-1901: caller's verbatim expression
+    voice_via: Optional[str] = None        # VM-1901: resolution route
     pid: Optional[int] = None
     mode: str = "wait"  # wait | callback (acted on by VM-1619/VM-1622)
     requested_at: Optional[str] = None
@@ -104,6 +106,8 @@ class WaiterEntry:
             agent=data.get("agent"),
             project_path=data.get("project_path"),
             voice=data.get("voice"),
+            voice_requested=data.get("voice_requested"),
+            voice_via=data.get("voice_via"),
             pid=data.get("pid"),
             mode=data.get("mode", "wait"),
             requested_at=data.get("requested_at"),
@@ -357,6 +361,8 @@ class ConchQueue:
         agent: Optional[str] = None,
         project_path: Optional[str] = None,
         voice: Optional[str] = None,
+        voice_requested: Optional[str] = None,
+        voice_via: Optional[str] = None,
         mode: str = "wait",
         pid=_SELF_PID,
         expires=None,
@@ -370,7 +376,10 @@ class ConchQueue:
         Args:
             session_id: Caller-provided session id (required, the queue key).
             agent / project_path / voice: descriptive fields, mirror the conch
-                holder payload.
+                holder payload. ``voice`` is the RESOLVED voice (VM-1901).
+            voice_requested / voice_via: additive VM-1901 fields — the
+                caller's verbatim expression and its resolution route,
+                mirroring the conch holder payload.
             mode: ``wait`` or ``callback`` (stored now; acted on by VM-1619).
             pid: defaults to the caller's PID (local waiter). Pass ``None`` for
                 a remote waiter (liveness then tracked by ``expires``); pass an
@@ -406,6 +415,8 @@ class ConchQueue:
             "agent": agent,
             "project_path": project_path,
             "voice": voice,
+            "voice_requested": voice_requested,
+            "voice_via": voice_via,
             "pid": pid,
             "mode": mode,
             "requested_at": requested_at,

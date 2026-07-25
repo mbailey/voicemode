@@ -34,6 +34,16 @@ from voice_mode.server import mcp
 from voice_mode.conch import Conch, _get_hold_expiry
 from voice_mode.conch_queue import ConchQueue
 from voice_mode.conversation_logger import get_conversation_logger
+# resolve_voice/VoiceResolutionError are imported lazily where used (see the
+# early-resolution block in _converse_core), NOT bound at module import time
+# -- mirrors simple_failover.py's identical lazy-import pattern. A top-level
+# `from voice_mode.voice_profiles import VoiceResolutionError` would bind to
+# whichever class object existed at converse.py's own import time; any later
+# `importlib.reload(voice_profiles)` (tests do this to point the resolver at
+# a temp voices tree) creates a NEW VoiceResolutionError class, and an
+# instance of the new class fails `isinstance` against the old one -- the
+# `except VoiceResolutionError` below would silently stop catching anything.
+# The lazy, per-call import always resolves the CURRENT class.
 from voice_mode.config import (
     audio_operation_lock,
     BASE_DIR,
@@ -862,7 +872,7 @@ async def _speak_turns_pipeline(
                 })
                 continue
             try:
-                success, samples, sample_rate, metrics, _config = await synthesize_turn_with_failover(
+                success, samples, sample_rate, metrics, config = await synthesize_turn_with_failover(
                     message=turn["say"],
                     voice=turn["voice"],
                     model=tts_model,
@@ -874,7 +884,33 @@ async def _speak_turns_pipeline(
                 )
             except Exception as e:
                 logger.error(f"Turn {idx} synthesis raised: {e}")
-                success, samples, sample_rate, metrics = False, None, None, {}
+                success, samples, sample_rate, metrics, config = False, None, None, {}, None
+
+            # VM-1901 §5.4: this call used to discard `config` (the
+            # underscore WAS the hole) — turns[] speech never appeared in
+            # the exchange log at all. Log immediately on success, per turn,
+            # with its own resolution (turns carry per-turn voice); mirrors
+            # the single-message path's log-on-success pattern.
+            if success:
+                try:
+                    get_conversation_logger().log_tts(
+                        text=turn["say"],
+                        model=config.get('model') if config else tts_model,
+                        voice=config.get('voice') if config else turn["voice"],
+                        voice_requested=config.get('voice_requested') if config else turn["voice"],
+                        voice_resolved=config.get('voice_resolved') if config else None,
+                        voice_via=config.get('voice_via') if config else None,
+                        provider=config.get('provider') if config else tts_provider,
+                        provider_url=config.get('base_url') if config else None,
+                        provider_type=config.get('provider_type') if config else None,
+                        is_fallback=config.get('is_fallback', False) if config else False,
+                        fallback_reason=config.get('fallback_reason') if config else None,
+                        audio_format=audio_format,
+                        generation_time=(metrics or {}).get('generation'),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to log turn {idx} TTS to JSONL: {e}")
+
             await audio_queue.put({
                 "index": idx, "turn": turn, "samples": samples, "sample_rate": sample_rate,
                 "success": bool(success), "metrics": metrics or {},
@@ -2466,7 +2502,7 @@ async def _ask_turns_pipeline(
                 })
                 continue
             try:
-                success, samples, sample_rate, metrics, _config = await synthesize_turn_with_failover(
+                success, samples, sample_rate, metrics, config = await synthesize_turn_with_failover(
                     message=turn["say"],
                     voice=turn["voice"],
                     model=tts_model,
@@ -2478,7 +2514,31 @@ async def _ask_turns_pipeline(
                 )
             except Exception as e:
                 logger.error(f"Survey turn {idx} synthesis raised: {e}")
-                success, samples, sample_rate, metrics = False, None, None, {}
+                success, samples, sample_rate, metrics, config = False, None, None, {}, None
+
+            # VM-1901 §5.4: same blindness fix as the speak-only pipeline —
+            # `_config` was discarded here too, so an ask-survey's turns never
+            # reached the exchange log either. Log immediately on success.
+            if success:
+                try:
+                    get_conversation_logger().log_tts(
+                        text=turn["say"],
+                        model=config.get('model') if config else tts_model,
+                        voice=config.get('voice') if config else turn["voice"],
+                        voice_requested=config.get('voice_requested') if config else turn["voice"],
+                        voice_resolved=config.get('voice_resolved') if config else None,
+                        voice_via=config.get('voice_via') if config else None,
+                        provider=config.get('provider') if config else tts_provider,
+                        provider_url=config.get('base_url') if config else None,
+                        provider_type=config.get('provider_type') if config else None,
+                        is_fallback=config.get('is_fallback', False) if config else False,
+                        fallback_reason=config.get('fallback_reason') if config else None,
+                        audio_format=audio_format,
+                        generation_time=(metrics or {}).get('generation'),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to log survey turn {idx} TTS to JSONL: {e}")
+
             await audio_queue.put({
                 "index": idx, "samples": samples, "sample_rate": sample_rate,
                 "success": bool(success), "metrics": metrics or {},
@@ -3181,10 +3241,31 @@ consult the MCP resources listed above.
     except OSError:
         resolved_project_path = None
     # The nominal voice this call will use (param, else the first configured
-    # default). Resolved cheaply here (no provider/network) so it can go in the
-    # conch for voice-clash avoidance (VM-914) — another agent can read the
-    # holder's voice and choose a different one.
-    resolved_voice = voice or (TTS_VOICES[0] if TTS_VOICES else None)
+    # default). VM-1901 observability-001: this now runs the REAL, TOTAL
+    # resolver (filesystem-only, no network — the cheapness this comment
+    # always promised) instead of the old `voice or TTS_VOICES[0]` fake
+    # "resolved_voice" that never passed through the resolver. An
+    # unresolvable/ambiguous/undeclared-cast expression raises HERE — before
+    # the conch is constructed, let alone acquired or queued — so a caller
+    # never takes the floor, or a queue position, merely to say nothing
+    # (design.md §5.1). The resolution also feeds the conch payload below
+    # (voice=resolved, voice_requested, voice_via) so conch-watch's roster
+    # and the voice-clash detector finally see truth, not the request.
+    from voice_mode.voice_profiles import resolve_voice, VoiceResolutionError
+    _nominal_voice_expr = voice or (TTS_VOICES[0] if TTS_VOICES else None)
+    voice_requested = None
+    voice_via = None
+    if _nominal_voice_expr:
+        try:
+            _voice_resolution = resolve_voice(_nominal_voice_expr)
+        except VoiceResolutionError as e:
+            logger.error(f"Voice resolution failed for {_nominal_voice_expr!r}: {e}")
+            return f"❌ Error: {e}"
+        resolved_voice = _voice_resolution.resolved
+        voice_requested = _voice_resolution.requested
+        voice_via = _voice_resolution.via
+    else:
+        resolved_voice = None
 
     # Resolve ref_text override once (path-vs-inline auto-detect). None means
     # "no override" — fall back to the resolved profile/sidecar transcript.
@@ -3362,6 +3443,8 @@ consult the MCP resources listed above.
         project_path=resolved_project_path,
         voice=resolved_voice,
         hold_timeout=resolved_hold_timeout,  # VM-1649 per-call hold TTL override
+        voice_requested=voice_requested,  # VM-1901: additive requested-vs-resolved
+        voice_via=voice_via,
     )
     # VM-1967: set when this call commits to the blocking WAIT-mode poll loop
     # (below), so the outer `finally` can deregister the ConchQueue entry on
@@ -3424,6 +3507,8 @@ consult the MCP resources listed above.
                         agent="converse",
                         project_path=resolved_project_path,
                         voice=resolved_voice,
+                        voice_requested=voice_requested,  # VM-1901
+                        voice_via=voice_via,
                         mode=resolved_conch_mode,
                         pid=os.getpid(),
                     )
@@ -3680,6 +3765,10 @@ consult the MCP resources listed above.
                             audio_file=os.path.basename(tts_metrics.get('audio_path')) if tts_metrics and tts_metrics.get('audio_path') else None,
                             model=tts_config.get('model') if tts_config else tts_model,
                             voice=tts_config.get('voice') if tts_config else voice,
+                            # VM-1901: requested-vs-resolved provenance (design.md §5.3).
+                            voice_requested=tts_config.get('voice_requested') if tts_config else voice,
+                            voice_resolved=tts_config.get('voice_resolved') if tts_config else None,
+                            voice_via=tts_config.get('voice_via') if tts_config else None,
                             provider=tts_config.get('provider') if tts_config else (tts_provider if tts_provider else 'openai'),
                             provider_url=tts_config.get('base_url') if tts_config else None,
                             provider_type=tts_config.get('provider_type') if tts_config else None,
@@ -4581,8 +4670,12 @@ async def pause_conversation(
     except OSError:
         project_path = None
     # Preserve the voice already recorded by our own prior converse hold (if
-    # any) so a pause doesn't blank it out.
+    # any) so a pause doesn't blank it out. Includes the VM-1901 additive
+    # provenance fields — a pause must not downgrade a resolved hold back to
+    # request-only.
     holder_voice = holder.get("voice") if holder else None
+    holder_voice_requested = holder.get("voice_requested") if holder else None
+    holder_voice_via = holder.get("voice_via") if holder else None
 
     logger.info(
         f"pause_conversation: holding for {seconds:.0f}s, resuming at {end_str}"
@@ -4605,6 +4698,8 @@ async def pause_conversation(
             project_path=project_path,
             voice=holder_voice,
             hold_timeout=hold_ttl if hold_ttl > 0 else None,
+            voice_requested=holder_voice_requested,
+            voice_via=holder_voice_via,
         )
         chunk = min(interval, seconds - elapsed)
         await asyncio.sleep(chunk)
