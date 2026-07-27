@@ -1,5 +1,13 @@
 # Voicemode Resource Structure Plan
 
+> **Dated design record.** This is the plan that produced the
+> `voicemode://docs/*` resources; it is kept for provenance, not as a parameter
+> reference. The authoritative parameter documentation is
+> [`parameters.md`](parameters.md) in this directory (served as
+> `voicemode://docs/parameters`). The parameter sketches that used to sit inline
+> below were a third hand-maintained copy of it and had drifted to names the tool
+> no longer has — collapsed to pointers under VM-2099.
+
 ## Goal
 Reduce the `mcp__voicemode__converse` tool description from ~4000 tokens to ~1000 tokens by moving detailed documentation into MCP resources that can be fetched on-demand.
 
@@ -27,16 +35,16 @@ See MCP resources for detailed documentation:
 - voicemode-patterns: Best practices and conversation patterns
 - voicemode-troubleshooting: Audio, VAD, and connectivity issues
 
-Key parameters:
-- message (required): The message to speak
-- wait_for_response: Listen for response after speaking (default: true)
-- listen_duration: Max listen time in seconds (default: the user's VOICEMODE_DEFAULT_LISTEN_DURATION — leave unset; a value you pass replaces theirs silently)
-- voice: TTS voice name (auto-selected unless specified)
-- tts_provider: openai or kokoro (auto-selected unless specified)
-- disable_silence_detection: Disable auto-stop on silence (default: false)
+Key parameters: message (required) plus the optional listening, voice and
+audio settings — each one described, with its default expressed as the config
+key that owns it, in the voicemode-parameters resource.
 
-For full parameter list and advanced options, see voicemode-parameters resource.
+For the full parameter list and advanced options, see voicemode-parameters resource.
 ```
+
+*(The sketch above deliberately names no parameter defaults: this document is a
+plan for the tool description, and every default it once spelled out was a copy
+of [`parameters.md`](parameters.md) that stopped matching it.)*
 
 ## Resource Structure
 
