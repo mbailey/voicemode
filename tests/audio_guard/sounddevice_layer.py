@@ -93,6 +93,9 @@ _PATCHED_PAIRS: list = []      # (original, replacement) for the alias sweep
 _INSTALLED: list = []          # (owner, name, replacement) for the armed check
 _GUARDED_MODULE_NAMES: set = set()
 _LIFTED: dict = {}             # attribute -> event, currently-lifted guards
+#: The class objects we patched, so a RELOAD is detectable: reload rebuilds
+#: every class, leaving our references pointing at objects nothing uses.
+_ARMED_CLASSES: dict = {}
 _STATE: dict = {}
 
 
@@ -330,6 +333,7 @@ def arm(mode: str = MODE_BLOCK) -> dict:
                 armed[member] = {"classification": member_class, "kind": kind}
             if armed:
                 covered[name] = armed
+                _ARMED_CLASSES[name] = obj
             else:
                 # Device-touching, but every route to PortAudio runs through a
                 # public entry point guarded above.  RECORDED, not silently
@@ -419,8 +423,54 @@ def verify_armed() -> list:
     return missing
 
 
+def reloaded() -> bool:
+    """Has the sounddevice module been rebuilt under us?
+
+    ``importlib.reload(sounddevice)`` re-executes the module body into the same
+    module object, which (a) writes straight into ``__dict__``, so the rebinding
+    watcher never sees it, and (b) builds BRAND NEW class objects — so every
+    class guard we installed is now on an object nothing refers to any more.
+    Re-installing attribute by attribute would restore the module-level
+    functions and silently leave the streams unguarded, which is a worse state
+    than either: a guard that *looks* re-armed.  So a reload is detected as a
+    reload and answered with a complete re-arm.
+    """
+    import sounddevice as sd
+
+    for name, cls in _ARMED_CLASSES.items():
+        if getattr(sd, name, None) is not cls:
+            return True
+    if _STATE.get("backstop_installed") and not isinstance(
+        getattr(sd, "_lib", None), _PortAudioBackstop
+    ):
+        return True
+    return False
+
+
+def _forget_state() -> None:
+    _ORIGINALS.clear()
+    _INSTALLED.clear()
+    _PATCHED_PAIRS.clear()
+    _GUARDED_MODULE_NAMES.clear()
+    _ARMED_CLASSES.clear()
+    _LIFTED.clear()
+
+
 def rearm(missing: list) -> int:
     """Re-install guards that went missing, so a window is at most one test long."""
+    if reloaded():
+        mode = _STATE.get("mode", MODE_BLOCK)
+        note(
+            "guard-full-rearm",
+            layer="sounddevice",
+            detail="sounddevice was reloaded: every guard was silently removed "
+                   "and its classes rebuilt, so the guard was derived and armed "
+                   "again from scratch",
+        )
+        _forget_state()
+        arm(mode)
+        return -1
+
     restored = 0
     for owner, name, replacement in _INSTALLED:
         owner_name = getattr(owner, "__name__", repr(owner))

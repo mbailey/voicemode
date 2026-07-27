@@ -169,6 +169,11 @@ class _Reporter:
         for layer, module in (("sounddevice", sounddevice_layer),
                               ("subprocess", subprocess_layer)):
             missing = module.verify_armed()
+            if not missing and getattr(module, "reloaded", bool)():
+                # A reload writes straight into the module __dict__, so nothing
+                # observes it as it happens. Ask directly.
+                missing = [{"owner": "sounddevice", "attribute": "<module reloaded>",
+                            "found": "rebuilt module"}]
             if not missing:
                 continue
             note(

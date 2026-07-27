@@ -161,6 +161,11 @@ class TestNoFalsePositives:
         before = len(audio_guard.HITS)
         error = sd.PortAudioError("device disconnected")
         assert isinstance(error, Exception)
+        # Rendering it must not fire either: PortAudioError.__str__ only reaches
+        # the device on its three-argument branch, and AST reachability cannot
+        # see that. The derivation leaves it MEDIATED and says so in the report
+        # rather than guarding it and inventing a phantom hit here.
+        assert "device disconnected" in str(error)
         assert len(audio_guard.HITS) == before
 
     def test_ordinary_subprocess_is_not_recorded_as_a_crossing(self):
@@ -201,6 +206,50 @@ class TestSubprocessLayerFires:
         with expect_blocked(label="drill: shell pipeline"):
             with pytest.raises(AudioSubprocessSpawnedInTest):
                 os.system("cat /tmp/x.wav | paplay")
+
+
+class TestGuardSurvivesItsOwnDisarming:
+    """``importlib.reload(sounddevice)`` removes every guard, silently.
+
+    Silently is the operative word: a reload writes straight into the module's
+    ``__dict__``, so the rebinding watcher never sees it, and it builds BRAND
+    NEW class objects — so re-installing attribute by attribute would restore
+    the module-level functions and leave every stream class unguarded while
+    *looking* re-armed.  The teardown check answers a reload as a reload: it
+    re-derives and arms again from scratch, and says so as an event.
+
+    The drill INSPECTS and never CALLS while the guard is down.  Calling
+    ``sd.play()`` in that window would open the real device of whoever is at
+    this machine — which is the thing we are here to prevent, not to prove.
+    """
+
+    def test_a_reload_removes_the_guards(self):
+        import importlib
+
+        importlib.reload(sd)
+        assert not hasattr(sd.play, "__vm2072_audio_guard__"), (
+            "expected the reload to remove the guard — if it did not, this "
+            "drill is no longer testing anything"
+        )
+
+    def test_the_guard_came_back_by_itself(self):
+        """Runs immediately after the reload drill, in file order."""
+        assert hasattr(sd.play, "__vm2072_audio_guard__"), (
+            "the guard did not survive a reload of sounddevice"
+        )
+        assert hasattr(sd._lib.Pa_OpenStream, "__vm2072_audio_guard__"), (
+            "the PortAudio backstop did not come back with the rest"
+        )
+        events = [e["event"] for e in audio_guard.EVENTS]
+        assert "guard-full-rearm" in events, (
+            "the reload was repaired without being recorded — a silent repair "
+            "is only one bug away from a silent hole"
+        )
+
+    def test_the_rearmed_guard_actually_fires(self):
+        with expect_blocked("play", label="drill: post-reload"):
+            with pytest.raises(AudioDeviceTouchedInTest):
+                sd.play(SILENCE, samplerate=44100)
 
 
 class TestEndToEndInAChildRun:
