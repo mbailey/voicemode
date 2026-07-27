@@ -30,7 +30,7 @@ See MCP resources for detailed documentation:
 Key parameters:
 - message (required): The message to speak
 - wait_for_response: Listen for response after speaking (default: true)
-- listen_duration: Max listen time in seconds (default: 120)
+- listen_duration: Max listen time in seconds (default: the user's VOICEMODE_DEFAULT_LISTEN_DURATION — leave unset; a value you pass replaces theirs silently)
 - voice: TTS voice name (auto-selected unless specified)
 - tts_provider: openai or kokoro (auto-selected unless specified)
 - disable_silence_detection: Disable auto-stop on silence (default: false)

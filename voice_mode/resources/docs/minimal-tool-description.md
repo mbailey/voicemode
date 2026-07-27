@@ -22,7 +22,9 @@ Have an ongoing voice conversation - speak a message and optionally listen for r
 KEY PARAMETERS:
 • message (required): The message to speak
 • wait_for_response (bool, default: true): Listen for response after speaking
-• listen_duration (number, default: 120): Max listen time in seconds
+• listen_duration (number, default: the user's VOICEMODE_DEFAULT_LISTEN_DURATION):
+  Max listen time in seconds. Leave unset — the user's config owns the ceiling,
+  and a value you pass replaces theirs silently
 • min_listen_duration (number, default: 2.0): Min recording time before silence detection
 • voice (string): TTS voice name (auto-selected unless specified)
 • tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)

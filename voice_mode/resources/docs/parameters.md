@@ -13,24 +13,35 @@ Whether to listen for a voice response after speaking.
 ## Timing Parameters
 
 ### listen_duration_max
-**Type:** number (default: 120.0 seconds)
-Maximum time to listen for response. The tool handles silence detection well.
+**Type:** number (default: the user's `VOICEMODE_DEFAULT_LISTEN_DURATION`)
+Hard ceiling on one listening turn. **Leave it unset.** The ceiling belongs to
+the user's own configuration (`VOICEMODE_DEFAULT_LISTEN_DURATION` in
+`~/.voicemode/voicemode.env`), and silence detection already ends the turn as
+soon as they stop speaking — the ceiling is a backstop, not a budget to size to
+the question.
 
-**When to override:**
-- Silence detection is disabled and you need specific timeout
-- Response will be exceptionally long (>120s)
-- Special timing requirements
+A value passed on the call **replaces the user's configured one silently**, with
+no notice to them. That is how a user gets cut off mid-answer: not by a wrong
+number, but by an assistant choosing a number at all.
 
-**Usually:** Let default and silence detection handle it.
+**When to override:** only for a specific need you could state out loud — e.g.
+silence detection is disabled for a diagnostic call, so nothing else would end
+the recording. Never as routine, never "to be safe", never copied from an
+example. If the user's window is genuinely too short, change the config, not the
+call.
 
 ### listen_duration_min
-**Type:** number (default: 2.0 seconds)
-Minimum recording time before silence detection can stop.
+**Type:** number (default: 2.0 seconds — a built-in floor; unlike the ceiling,
+this one is not config-backed today)
+Minimum recording time before silence detection can stop. Usually leave it
+unset; the same norm applies as for the ceiling — override only on a present,
+articulable need. The difference is direction: a floor **cannot** cut an answer
+short, so raising it for a stated reason is safe.
 
-**Use cases:**
-- Complex questions: 2-3 seconds
+**Presents needs that justify raising it** (not a menu to pick from by habit):
+- The user needs a moment to think — e.g. you just read them a long list
+- Complex questions, where a pause mid-answer is expected: 2-3 seconds
 - Open-ended prompts: 3-5 seconds
-- Quick responses: 0.5-1 second
 
 ### timeout (DEPRECATED)
 Use `listen_duration_max` instead. Only applies to LiveKit transport.

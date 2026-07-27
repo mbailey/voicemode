@@ -2934,11 +2934,13 @@ def _format_survey_result(
     return json.dumps({"survey": survey}, ensure_ascii=False, indent=2), success
 
 
-# Literal schema-description text for the `turns` parameter (README ## Design,
-# VM-1775 slice 6). Applied here via Annotated/Field so it lands in the tool's
-# JSON schema (not just prose in the docstring); every other converse() param
-# still gets its description from the KEY PARAMETERS prose below pending the
-# broader per-arg Annotated/Field migration (VM-1451).
+# Schema-description text for the `turns` parameter (introduced VM-1775 slice 6
+# from that task's README ## Design; the cap advice it originally carried was
+# removed by VM-2099 — see _LISTEN_DURATION_MAX_PARAM_DESCRIPTION below).
+# Applied here via Annotated/Field so it lands in the tool's JSON schema (not
+# just prose in the docstring); most other converse() params still get their
+# description from the KEY PARAMETERS prose below pending the broader per-arg
+# Annotated/Field migration (VM-1451).
 _TURNS_PARAM_DESCRIPTION = (
     "Ordered list of utterances to deliver in ONE call, pipelined (turn N+1 is "
     "synthesized while turn N plays — no synth dead-air). Each turn is an "
@@ -2964,8 +2966,11 @@ _TURNS_PARAM_DESCRIPTION = (
     "\"spoken\"|\"answered\"|\"no_speech\"|\"tts_failed\"|\"stt_failed\"|"
     "\"not_reached\", \"reply\": str|null}, ...]}} — entries for no_speech / "
     "tts_failed / not_reached can simply be re-asked in a follow-up call. "
-    "Keep surveys short (≤ ~7 ask turns) and give each ask turn a sensible "
-    "\"listen_duration_max\" (30–45s for normal questions). Because turns "
+    "Keep surveys short (≤ ~7 ask turns), and leave each ask turn's listening "
+    "window to the user's own configured default: do NOT set a per-turn "
+    "\"listen_duration_max\" unless that turn has a present, articulable need. "
+    "A cap you choose silently replaces the user's, so a number you invent "
+    "cuts them off mid-answer. Because turns "
     "advance automatically without reacting to each answer, make the survey "
     "legible to the user: OPEN with a leading say turn announcing how many "
     "questions there are (e.g. \"I've got 3 quick questions\") so they know a "
@@ -2983,13 +2988,49 @@ _TURNS_PARAM_DESCRIPTION = (
 )
 
 
+# Schema-description text for the listening-window parameters (VM-2099). These
+# exist because the parameters had NO schema-level description at all: an agent
+# reading the tool schema saw a bare number slot and filled it, which is how the
+# user got cut off mid-answer. Both descriptions name the CONFIG KEY rather than
+# a literal number, per this repo's own convention for config-backed defaults
+# (exemplar: the `time_in_response` bullet, which documents its default as
+# VOICEMODE_TIME_IN_RESPONSE). Stating a number here would be both a teaching
+# position and a claim that goes false the moment the user configures their own
+# value — the defect VM-2099 fixed in six places.
+_LISTEN_DURATION_MAX_PARAM_DESCRIPTION = (
+    "Hard ceiling on how long ONE listening turn records, in seconds. LEAVE "
+    "THIS UNSET. The user owns the cap through their own configuration "
+    "(VOICEMODE_DEFAULT_LISTEN_DURATION in ~/.voicemode/voicemode.env), and "
+    "silence detection already ends the turn as soon as they stop speaking — "
+    "the ceiling is a backstop, not a budget for you to size to the question. "
+    "A value you pass REPLACES the user's configured one silently and without "
+    "notice to them, so a ceiling you guessed cuts them off mid-answer. "
+    "Override ONLY for a specific need you could state out loud (e.g. silence "
+    "detection is disabled for a diagnostic call) — never as routine, never "
+    "\"to be safe\", and never copied from an example."
+)
+
+_LISTEN_DURATION_MIN_PARAM_DESCRIPTION = (
+    "Floor on how long ONE listening turn records before silence detection is "
+    "allowed to end it, in seconds. Usually unset. Raising it protects "
+    "thinking pauses — the legitimate case is the user needing a moment to "
+    "consider, e.g. just after you read them a long list. It cannot cut an "
+    "answer short (that is listen_duration_max, which the user's config owns), "
+    "so raising it on a present need is safe; still leave it alone by default."
+)
+
+
 async def _converse_core(
     message: Optional[str] = None,
     turns: Annotated[Optional[list], Field(description=_TURNS_PARAM_DESCRIPTION)] = None,
     pause_after_ms: int = 150,
     wait_for_response: Union[bool, str] = True,
-    listen_duration_max: float = DEFAULT_LISTEN_DURATION,
-    listen_duration_min: float = 2.0,
+    listen_duration_max: Annotated[
+        float, Field(description=_LISTEN_DURATION_MAX_PARAM_DESCRIPTION)
+    ] = DEFAULT_LISTEN_DURATION,
+    listen_duration_min: Annotated[
+        float, Field(description=_LISTEN_DURATION_MIN_PARAM_DESCRIPTION)
+    ] = 2.0,
     timeout: float = 60.0,
     voice: Optional[str] = None,
     tts_provider: Optional[Literal["openai", "kokoro"]] = None,
@@ -3121,12 +3162,21 @@ KEY PARAMETERS:
   floor. Falls back to VOICEMODE_SESSION_ID / CLAUDE_CODE_SESSION_ID from the
   environment (stdio transport only) when not passed.
 
-TIMING PARAMETERS (usually leave at defaults):
-  Silence detection handles most cases automatically. Only override these if
-  silence detection is disabled or the user reports being cut off.
-  Defaults are configurable by the user via ~/.voicemode/voicemode.env.
-• listen_duration_max (number, default: 120): Max listen time in seconds
-• listen_duration_min (number, default: 2.0): Min recording time before silence detection
+TIMING PARAMETERS (pass neither unless you have a present, articulable need):
+  Silence detection ends the turn when the user stops speaking, so the cap is a
+  backstop — not a budget you are meant to size. The USER owns it via
+  VOICEMODE_DEFAULT_LISTEN_DURATION in ~/.voicemode/voicemode.env; pass nothing
+  and their configured value applies. A cap you supply REPLACES theirs
+  silently, with no notice to them, so a number you choose can cut the user off
+  mid-answer. Never pass one as routine, and never copy one from an example.
+• listen_duration_max (number, default: the user's
+  VOICEMODE_DEFAULT_LISTEN_DURATION): Hard ceiling on listening, in seconds.
+  Override only for a specific need you can state (e.g. silence detection is
+  disabled for a diagnostic) — not to guess how long an answer will take.
+• listen_duration_min (number): Minimum recording time before silence detection
+  may stop the turn, in seconds. Raising it protects thinking pauses — the
+  legitimate case being the user needing time after a long list. Leave it unset
+  otherwise.
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.
@@ -4383,8 +4433,12 @@ async def converse(
     turns: Annotated[Optional[list], Field(description=_TURNS_PARAM_DESCRIPTION)] = None,
     pause_after_ms: int = 150,
     wait_for_response: Union[bool, str] = True,
-    listen_duration_max: float = DEFAULT_LISTEN_DURATION,
-    listen_duration_min: float = 2.0,
+    listen_duration_max: Annotated[
+        float, Field(description=_LISTEN_DURATION_MAX_PARAM_DESCRIPTION)
+    ] = DEFAULT_LISTEN_DURATION,
+    listen_duration_min: Annotated[
+        float, Field(description=_LISTEN_DURATION_MIN_PARAM_DESCRIPTION)
+    ] = 2.0,
     timeout: float = 60.0,
     voice: Optional[str] = None,
     tts_provider: Optional[Literal["openai", "kokoro"]] = None,
@@ -4522,12 +4576,21 @@ KEY PARAMETERS:
   floor. Falls back to VOICEMODE_SESSION_ID / CLAUDE_CODE_SESSION_ID from the
   environment (stdio transport only) when not passed.
 
-TIMING PARAMETERS (usually leave at defaults):
-  Silence detection handles most cases automatically. Only override these if
-  silence detection is disabled or the user reports being cut off.
-  Defaults are configurable by the user via ~/.voicemode/voicemode.env.
-• listen_duration_max (number, default: 120): Max listen time in seconds
-• listen_duration_min (number, default: 2.0): Min recording time before silence detection
+TIMING PARAMETERS (pass neither unless you have a present, articulable need):
+  Silence detection ends the turn when the user stops speaking, so the cap is a
+  backstop — not a budget you are meant to size. The USER owns it via
+  VOICEMODE_DEFAULT_LISTEN_DURATION in ~/.voicemode/voicemode.env; pass nothing
+  and their configured value applies. A cap you supply REPLACES theirs
+  silently, with no notice to them, so a number you choose can cut the user off
+  mid-answer. Never pass one as routine, and never copy one from an example.
+• listen_duration_max (number, default: the user's
+  VOICEMODE_DEFAULT_LISTEN_DURATION): Hard ceiling on listening, in seconds.
+  Override only for a specific need you can state (e.g. silence detection is
+  disabled for a diagnostic) — not to guess how long an answer will take.
+• listen_duration_min (number): Minimum recording time before silence detection
+  may stop the turn, in seconds. Raising it protects thinking pauses — the
+  legitimate case being the user needing time after a long list. Leave it unset
+  otherwise.
 
 PRIVACY: Microphone access required when wait_for_response=true.
          Audio processed via STT service, not stored.

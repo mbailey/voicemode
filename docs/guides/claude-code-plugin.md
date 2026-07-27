@@ -92,7 +92,7 @@ still `mcp__voicemode__*`. There is one server either way. See
 |-----------|---------|-------------|
 | `message` | (required) | Text for Claude to speak |
 | `wait_for_response` | true | Listen for user response after speaking |
-| `listen_duration_max` | 120 | Maximum recording time (seconds) |
+| `listen_duration_max` | user's `VOICEMODE_DEFAULT_LISTEN_DURATION` | Ceiling on recording time (seconds). Leave unset — the user's config owns it; a value you pass replaces theirs silently |
 | `voice` | auto | TTS voice name |
 | `vad_aggressiveness` | 3 | Voice detection strictness (0-3) |
 
