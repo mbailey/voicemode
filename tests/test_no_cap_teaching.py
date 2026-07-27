@@ -76,6 +76,42 @@ IF THIS CHECK FIRES ON YOU, the fix is almost never to exempt yourself — it is
 to say the config key instead of the number, or to state the present, articulable
 need in prose. Adding an exemption here is a deliberate, reviewable act, which is
 the point: the last time this defect shipped, nothing had to be edited at all.
+
+ON A FALSE POSITIVE — the remedy norm, in order
+
+Sometimes the check fires on a true statement that is not advice: an incident
+record, a changelog-shaped note, a timing measurement that legitimately puts a
+number next to a ceiling token. The remedy is fixed:
+
+  1. **REWORD to break the adjacency.** Say the same true thing without the
+     number sitting beside the ceiling token.
+  2. **NEVER exempt the path.** A path exemption is a whitelist by another name,
+     and it is the first crack that ends this check — the next author's file is
+     not on any list, which is the whole reason the check scans by pattern.
+  3. **NEVER alter a measurement while rewording.** Evidence is not negotiable;
+     if a number is a thing that was observed, it stays, verbatim.
+
+Exemplar (VM-2099, `voice_mode/mcp_shutdown_patch.py`): a measured-incident
+table read `17.5s (i.e. to listen_duration_max)`. It is a record, not advice —
+and the fix was still a rewording, not an exemption: the cross-reference now
+reads "the whole remainder of the listening window described above". Both
+measurements were kept verbatim.
+
+THE SCANNED SPACE, STATED (a clean result is only as good as its search space)
+
+Walked from the repo root: `*.md`, `*.markdown`, `*.mdx`, `*.rst`, `*.txt`,
+`*.py` (string literals only) and — since VM-2099 `do-002` — `*.json`, `*.yaml`,
+`*.yml`, `*.toml`, because agent-facing prompts and tool descriptions increasingly
+ship as data files, and a cap suggestion inside one read green until now.
+Untracked files are included; ``_SKIP_DIRS`` holds only build/vendor noise.
+
+Two boundaries remain, and neither is closed by widening a suffix list:
+  * **Python comments** are not scanned — string literals are. A comment reaches
+    no agent.
+  * **Prose that never names the parameter** ("listen for up to 45 seconds")
+    reads green. The scan is anchored to the ceiling token on purpose; scanning
+    every duration in the repo would be unusable, and an unusable check gets
+    deleted.
 """
 
 from __future__ import annotations
@@ -92,7 +128,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Discovered by walking the tree, NOT by listing files: a new doc dropped in a
 # new directory tomorrow is scanned the moment it exists (and before it is even
 # committed -- untracked files count too).
-_DOC_SUFFIXES = frozenset({".md", ".markdown", ".mdx", ".rst", ".txt"})
+#
+# The structured-data suffixes are here because an agent-facing surface is
+# increasingly a data file: an MCP server manifest, a plugin's tool description,
+# a prompt shipped as JSON or YAML. Prose is not the only thing an agent reads,
+# and "the check was clean" must mean the same thing tomorrow. See the module
+# docstring for the full statement of the scanned space and its two remaining
+# boundaries.
+_DOC_SUFFIXES = frozenset(
+    {".md", ".markdown", ".mdx", ".rst", ".txt", ".json", ".yaml", ".yml", ".toml"}
+)
 _PY_SUFFIX = ".py"
 _SKIP_DIRS = frozenset(
     {
@@ -398,6 +443,29 @@ def test_check_catches_a_brand_new_file(tmp_path):
     )
     violations = scan_for_cap_teaching(tmp_path)
     assert violations and "usage.md" in violations[0].path
+
+
+def test_check_catches_a_prompt_shipped_as_structured_data(tmp_path):
+    """The boundary closed by do-002: an agent-facing surface that is a data file
+    rather than prose -- a prompt in JSON, a tool description in YAML, defaults in
+    TOML. Each read green before the suffix list was widened."""
+    _write(
+        tmp_path,
+        "prompts/survey.json",
+        '{"description": "Ask each question with listen_duration_max=45."}\n',
+    )
+    _write(
+        tmp_path,
+        "agents/interviewer.yaml",
+        "instructions: |\n  Give each turn a listen_duration_max of 30 seconds.\n",
+    )
+    _write(
+        tmp_path,
+        "config/tool.toml",
+        '[converse]\n# advice, not config: listen_duration_max = 60 is plenty\n',
+    )
+    found = {v.path for v in scan_for_cap_teaching(tmp_path)}
+    assert found == {"prompts/survey.json", "agents/interviewer.yaml", "config/tool.toml"}
 
 
 def test_check_catches_an_example_call_in_a_new_docstring(tmp_path):
