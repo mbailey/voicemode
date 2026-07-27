@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The test suite can no longer open the machine's real audio device (VM-2072)** —
+  running `pytest` on this repo used to open the microphone and put sound
+  through the speakers of whoever was at the machine: chimes, start/stop beeps,
+  volume swings, and a degraded voice channel. It ran that way for about 24
+  hours while three crews worked, and **it never presented as an audio bug** —
+  it presented as unexplained flakiness somewhere else, which the agent on the
+  receiving end rationalised and worked around. A default run now cannot reach
+  the device at all.
+
+  The protection is `tests/audio_guard/`, armed at `pytest_configure` before any
+  test module is imported — deliberately not an autouse fixture, because a
+  fixture is not in the room for module-level code that pytest runs at
+  collection time (this repo has such a file, and nobody can put a marker on a
+  module body). It guards the PortAudio path — every device-touching
+  `sounddevice` entry point, **derived at arm time** rather than listed, plus
+  the `_StreamBase` choke point every stream constructs through and a backstop
+  on the C library handle itself — and the process-spawn path, because
+  `paplay`/`mpv`/`afplay` make noise without touching `sounddevice` at all, so
+  a green device layer does not by itself prove silence.
+
+  Two design points worth knowing when you hit it:
+  **the exit status comes from the guard's own hit record, not from pytest's
+  pass/fail** (measured here: the code under test swallowed the guard's
+  exception and the run still said "10 passed"), and **a lifted guard is made
+  visible rather than prevented** — `mock.patch('sounddevice.wait')` really does
+  open an unguarded window, so it is recorded as an event and re-armed at
+  teardown.
+
+  `@pytest.mark.audio` and `-m "not audio"` are now registered and in `addopts`,
+  but they are the convenience layer: expect the marker to be forgotten on the
+  next audio-touching test, exactly as this repo's `slow` and `manual` markers
+  already have zero users. `pytest -m audio` runs **muted** — real calls at real
+  entry points, inert stand-ins, PortAudio never called — and
+  `VOICEMODE_TEST_AUDIO_GUARD=off` is the escape hatch, which announces itself
+  loudly. See `docs/reference/audio-test-isolation.md`.
+
+  ⚠️ **Tool-use soundfonts are a separate noise source and are NOT fixed by
+  this.** `VOICEMODE_SOUNDFONTS_ENABLED` defaults to true and fires on **agent
+  tool calls**, not on test runs. If the machine still makes noise after this
+  lands, that is why — it is not this fix failing.
+
 ### Removed
 
 - **Conch `callback` mode removed entirely — code, docs, and the agent-facing tool description (VM-2078)** —

@@ -168,6 +168,28 @@ Services can be installed and managed through MCP tools, with automatic service 
 - Unit tests: `tests/` - run with `make test`
 - Manual tests: `tests/manual/` - require user interaction
 
+### ⛔ The suite must never open the real audio device
+
+There may be a **live human on voice at this machine**, and this suite used to
+run through their speakers and microphone. It presented as unexplained flakiness
+somewhere else, not as an audio bug, which is why it survived for a day.
+
+`tests/audio_guard/` now makes the device unreachable from a test run: it arms
+at `pytest_configure` (before any test module is imported), blocks both the
+`sounddevice`/PortAudio path and audio subprocess spawns (`paplay`, `mpv`,
+`afplay`, ...), and **fails the run from its own hit record** — a blocked call
+that the code under test swallowed still fails, because that exact case reported
+"10 passed" here.
+
+- `pytest` — default; audio-marked tests excluded, device unreachable.
+- `pytest -m audio` — the opt-in path; runs **muted**, never on a real device.
+- `VOICEMODE_TEST_AUDIO_GUARD=off` — the escape hatch, which announces itself.
+  **Ask first if anyone might be on voice.**
+
+If a test fails on the guard it is almost certainly missing a mock rather than
+needing a marker. Full reference:
+[docs/reference/audio-test-isolation.md](docs/reference/audio-test-isolation.md).
+
 ## Logging
 
 Logs are stored in `~/.voicemode/`:
