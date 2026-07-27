@@ -46,7 +46,7 @@ voicemode:converse("Searching the codebase now...", wait_for_response=False)
 ```
 
 For most conversations, just pass your message - defaults handle everything else.
-Use default converse tool parameters unless there's a good reason not to. Timing parameters (`listen_duration_max`, `listen_duration_min`) use smart defaults with silence detection - don't override unless the user requests it or you see a clear need. Defaults are configurable by the user via `~/.voicemode/voicemode.env`.
+Use default converse tool parameters unless there's a good reason not to. **The user owns their listening window: never pass `listen_duration_max`.** Silence detection already ends the turn when they stop speaking, and the ceiling comes from their own `VOICEMODE_DEFAULT_LISTEN_DURATION` in `~/.voicemode/voicemode.env`. A ceiling you pass replaces theirs silently, with no notice to them — so a number you picked cuts them off mid-answer, and they cannot predict when. Override only for a need you could state out loud (e.g. silence detection is off for a diagnostic), never as routine and never copied from an example. `listen_duration_min` is a floor, not a ceiling: raising it on a present need (they need a moment to think after a long list) is legitimate and cannot cut an answer short.
 
 | Parameter           | Default  | Description                                                          |
 | ------------------- | -------- | -------------------------------------------------------------------- |
@@ -103,8 +103,9 @@ were heard or the script just moved on. Make multi-turn legible:
    mid-survey without reintroducing dead-air, so it belongs at the **top of
    your next `converse` call**, before you move on. Recap the answers you
    collected so the user knows they landed.
-3. **Keep it short.** ≤ ~7 ask turns per survey; give each a sensible
-   `listen_duration_max` (30–45s for normal questions).
+3. **Keep it short.** ≤ ~7 ask turns per survey. Set no listening ceiling on
+   the ask turns — the user's configured default owns it, and a per-turn
+   `listen_duration_max` you choose cuts them off mid-answer.
 
 ## Voicemode echo (default ON)
 

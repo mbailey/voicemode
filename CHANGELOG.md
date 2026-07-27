@@ -31,6 +31,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Voicemode no longer teaches assistants to invent a listening limit — you own it, and they stop cutting you off (VM-2099)** —
+  the ceiling on how long voicemode listens belongs to *you*, through
+  `VOICEMODE_DEFAULT_LISTEN_DURATION` in `~/.voicemode/voicemode.env`. It always
+  did; the trouble was that the tool's own documentation talked assistants into
+  passing their own value instead, and a value passed on the call replaces yours
+  silently, with no notice to you. One live session picked four different limits
+  across roughly fifteen calls with nobody having asked it to — every one of them
+  a fraction of the configured window — so being cut off mid-answer was
+  unpredictable by design. Notably, the shortest thing the docs actually
+  recommended would have truncated the very answer that reported this bug.
+  Every surface an assistant reads before speaking to you has been corrected in
+  place: the `turns` schema advice, the voicemode skill, the troubleshooting and
+  parameter references, the plugin guide, and the tool description itself — which
+  had also been advertising a default that was simply false once you configured
+  your own. Where a default has to be mentioned, the docs now name the config key
+  rather than a number, so they cannot go stale against your settings, and
+  `listen_duration_max`/`listen_duration_min` finally carry real descriptions in
+  the tool schema: leave the ceiling alone, it is yours. Raising the *floor*
+  (`listen_duration_min`) for thinking time is untouched — it cannot cut an
+  answer short.
+  A pattern-scanning test now fails the build if a listening-limit number
+  reappears in any documentation, example or prompt — including in files that do
+  not exist yet, which is how this came back the last time it was fixed.
+  The parameter reference itself was the reason stale advice could survive a fix:
+  it existed twice, hand-maintained, and the two copies had quietly drifted apart
+  for months — so a correction to one left the other still teaching the old thing.
+  They are now one document, served to assistants and published on the docs site
+  from the same file, and each copy gained what the other had been keeping to
+  itself: the site reference now documents vocabulary biasing, transport and the
+  result widgets, while the assistant-facing copy gained the audio-saving and
+  manual-transcription-recovery guidance. A test fails if a second copy appears.
+
 - **`conch give`/operator `summon` could hand over the floor to a target it never confirmed was told (VM-2078)** —
   this is the **summon fallback only**: `give`ing to a running session that
   is *not already in the queue*. The old notify path there was best-effort

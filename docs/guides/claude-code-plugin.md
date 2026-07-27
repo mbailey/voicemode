@@ -88,13 +88,15 @@ still `mcp__voicemode__*`. There is one server either way. See
 
 ### Converse Tool Parameters
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `message` | (required) | Text for Claude to speak |
-| `wait_for_response` | true | Listen for user response after speaking |
-| `listen_duration_max` | 120 | Maximum recording time (seconds) |
-| `voice` | auto | TTS voice name |
-| `vad_aggressiveness` | 3 | Voice detection strictness (0-3) |
+`message` is the only required parameter; everything else — listening window,
+voice, provider, silence detection, speech rate — is optional, and every default
+belongs to your configuration rather than to the assistant.
+
+The parameters are documented once, in the
+[Converse Parameters reference](../reference/converse-parameters.md) (the same
+document assistants are served as `voicemode://docs/parameters`). This guide used
+to restate a handful of them here, which is how a stale listening ceiling
+survived a fix for five months (VM-2099) — so it links instead.
 
 ## Transport Modes: Local stdio vs Remote HTTP
 

@@ -1,25 +1,52 @@
-"""Tests for turns schema discoverability (VM-1775 impl-006).
+"""Tests for turns schema discoverability (VM-1775 impl-006; re-expressed VM-2099).
 
-Slice 6 hands `turns` the literal per-argument schema description from
-README ## Design, applied via `Annotated[..., Field(description=...)]` so it
-actually lands in the MCP tool's JSON schema (FastMCP only auto-fills a
-parameter's schema `description` from a docstring `Args:` block or an
-explicit `Field`/`Annotated` annotation -- this project's `converse()`
-docstring uses a hand-written "KEY PARAMETERS" prose section instead, which
-FastMCP does not parse per-argument, so before this slice `turns` had no
-schema-level description at all). This is deliberately scoped to `turns`
-only; the broader per-argument migration for every other converse() param is
-handed off to VM-1451, per the README's own note.
+Slice 6 hands `turns` a per-argument schema description, applied via
+`Annotated[..., Field(description=...)]` so it actually lands in the MCP tool's
+JSON schema (FastMCP only auto-fills a parameter's schema `description` from a
+docstring `Args:` block or an explicit `Field`/`Annotated` annotation -- this
+project's `converse()` docstring uses a hand-written "KEY PARAMETERS" prose
+section instead, which FastMCP does not parse per-argument, so before that slice
+`turns` had no schema-level description at all).
+
+WHY THIS FILE NO LONGER PINS THE TEXT BYTE-FOR-BYTE (VM-2099)
+-------------------------------------------------------------
+It used to hold `_README_LITERAL_TURNS_DESCRIPTION`: a copy of VM-1775's task
+README ## Design text, asserted equal to the shipped constant. The sync intent
+was legitimate -- "the shipped schema text is exactly what the design specified"
+-- but it was expressed as an ETERNAL CONTENT PIN, and the content it pinned
+included advice: "give each ask turn a sensible listen_duration_max (30-45s for
+normal questions)". That advice was the bug in VM-2099 (agents absorbed the
+number and cut the user off mid-answer), and the pin meant DELETING the bug
+turned CI red. The suite had become the defect's defence.
+
+The principle, so the next author does not rebuild the trap: **a sync test may
+assert two copies match only when one side is mechanically DERIVED from the
+single source at test time. A third copy embedded in the test is not a sync --
+it is an embalming.** The "source" here was a completed task's README, outside
+this repo and frozen; no derivation was possible, so the byte-equality assertion
+could only ever pin history.
+
+What replaces it, keeping every intent that was real:
+  * the wiring is still asserted (the schema property carries the description --
+    that comparison is DERIVED, both sides read from the module at test time, so
+    it stays honest as the text is edited);
+  * the substance is asserted STRUCTURALLY (the description exists, is
+    non-trivial, and names the turn vocabulary, the per-turn override keys, the
+    controls and the survey return shape) -- an accidental truncation still
+    fails, and rewording deliberately does not;
+  * the NEGATIVE property that actually matters -- no numeric listening-ceiling
+    advice in this or any other teaching position -- is asserted by
+    `tests/test_no_cap_teaching.py`, by pattern, across the whole doc/prompt/
+    schema space. Advice content is therefore checked for the property it must
+    have, not frozen at a wording.
 
 Covers:
   * The tool's JSON schema actually carries the description on `turns` (not
     just prose in the docstring humans read).
-  * The description is the literal text from README ## Design, byte-for-byte
-    -- this is the "golden" contract for the handoff, so a drift between the
-    README and the shipped schema text is caught immediately.
+  * The description still documents the turn vocabulary, per-turn overrides,
+    survey controls and return shape (structural, not byte-for-byte).
   * The tool-description "KEY PARAMETERS" bullet for `turns` was updated to
-    the say/ask line (README ## Design's "Tool-description bullet" text),
-    not left describing the old speak-only-only P1 shape.
+    the say/ask line, not left describing the old speak-only P1 shape.
   * The killed-call recovery note (replies persist in conversation logs,
     even for a call that never returns) is documented somewhere reachable
     from the tool description.
@@ -39,57 +66,40 @@ def _collapse_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-# Golden copy of README.md's "LITERAL SCHEMA-DESCRIPTION TEXT" for `turns`
-# (## Design section). Kept as a literal duplicate here (same convention as
-# the impl-003 golden tests for the survey JSON worked examples) so a change
-# to either side shows up as a failing test, not a silent drift.
-_README_LITERAL_TURNS_DESCRIPTION = (
-    "Ordered list of utterances to deliver in ONE call, pipelined (turn N+1 is "
-    "synthesized while turn N plays — no synth dead-air). Each turn is an "
-    "object with EXACTLY ONE of: \"say\": str — speak this text and advance "
-    "(no listening), or \"ask\": str — speak this text, then LISTEN and "
-    "record the user's spoken reply. Optional per-turn overrides (each "
-    "defaults to the call-level argument of the same name): \"voice\", "
-    "\"speed\", \"tts_instructions\", \"pause_after_ms\"; and, meaningful on "
-    "ask turns: \"listen_duration_max\", \"listen_duration_min\", "
-    "\"vad_aggressiveness\", \"ack\". \"ack\" (bool, default false, or set the "
-    "call-level \"ack\" to switch every ask turn on) plays a short content-free "
-    "confirmation cue when — and only when — a reply is captured, so the user "
-    "can tell \"heard you → advancing\" from \"didn't hear → advancing\"; it "
-    "stays silent on a timeout/no-speech and keeps the survey pipelined (no "
-    "synth). (\"wait_for_response\": true on a say turn is an "
-    "accepted alias for \"ask\".) The call-level wait_for_response is IGNORED "
-    "when turns is present — listening happens only for ask turns. If NO turn "
-    "asks, the call speaks the sequence and returns a text summary. If ANY "
-    "turn asks, the call returns a JSON object (as a string) with replies "
-    "aligned to turns by index: {\"survey\": {\"completed\": bool, \"asked\": "
-    "n, \"answered\": n, \"stopped_at\": null|{turn, phase, reason}, "
-    "\"turns\": [{\"turn\": i, \"verb\": \"say\"|\"ask\", \"status\": "
-    "\"spoken\"|\"answered\"|\"no_speech\"|\"tts_failed\"|\"stt_failed\"|"
-    "\"not_reached\", \"reply\": str|null}, ...]}} — entries for no_speech / "
-    "tts_failed / not_reached can simply be re-asked in a follow-up call. "
-    "Keep surveys short (≤ ~7 ask turns) and give each ask turn a sensible "
-    "\"listen_duration_max\" (30–45s for normal questions). Because turns "
-    "advance automatically without reacting to each answer, make the survey "
-    "legible to the user: OPEN with a leading say turn announcing how many "
-    "questions there are (e.g. \"I've got 3 quick questions\") so they know a "
-    "multi-turn survey is running, and at the TOP of your NEXT converse call "
-    "acknowledge the answers you just collected — content-aware acknowledgment "
-    "can't be pipelined mid-survey, so it belongs at the next call. During a "
-    "survey "
-    "the user can: answer early or finish answering with skip-forward, hear "
-    "the question again with skip-back or by saying \"repeat\", pause with "
-    "\"wait\", and abandon the survey with the stop control or by saying only "
-    "\"break\" / \"stop the survey\" (returns the replies collected so far "
-    "plus where it stopped). Unknown keys in a turn are rejected. \"play\" is "
-    "reserved for a future phase. If both message and turns are given, turns "
-    "wins."
+# The per-turn override keys and survey vocabulary the description must keep
+# documenting. These are STRUCTURAL facts about the turns feature (they name
+# things a caller has to be able to find), not a copy of the advice prose --
+# renaming or dropping one is a real contract change; rewording a sentence is
+# not. Deliberately no durations here: numbers in a teaching position are what
+# VM-2099 removed, and tests/test_no_cap_teaching.py fails if one comes back.
+_REQUIRED_VOCABULARY = (
+    '"say": str',
+    '"ask": str',
+    "listen_duration_max",
+    "listen_duration_min",
+    "vad_aggressiveness",
+    '"ack"',
+    "pause_after_ms",
+    "wait_for_response",
+    "skip-forward",
+    "skip-back",
+    '"break"',
+    '"survey"',
+    '"stopped_at"',
+    "turns wins",
 )
 
 
-def test_turns_param_description_constant_matches_readme_literal_text():
-    """The module constant is the README's literal text, byte-for-byte."""
-    assert _TURNS_PARAM_DESCRIPTION == _README_LITERAL_TURNS_DESCRIPTION
+def test_turns_param_description_is_substantive():
+    """The description exists and is real prose, not an empty string or a stub
+    left behind by an edit. (What it MUST NOT contain -- a numeric listening
+    ceiling -- is asserted by tests/test_no_cap_teaching.py, which scans this
+    constant along with every other teaching position.)"""
+    assert _TURNS_PARAM_DESCRIPTION.strip(), "turns lost its schema description"
+    assert len(_collapse_whitespace(_TURNS_PARAM_DESCRIPTION)) > 800, (
+        "the turns description has been truncated -- it documents the whole "
+        "say/ask vocabulary, the survey controls and the return shape"
+    )
 
 
 @pytest.mark.asyncio
@@ -107,18 +117,7 @@ async def test_turns_schema_description_covers_key_contract_points():
     guards against a future edit accidentally truncating the text."""
     tool = await mcp.get_tool("converse")
     desc = tool.parameters["properties"]["turns"]["description"]
-    for expected in (
-        '"say": str',
-        '"ask": str',
-        "listen_duration_max",
-        "vad_aggressiveness",
-        "wait_for_response",
-        "skip-forward",
-        "skip-back",
-        '"break"',
-        '"stopped_at"',
-        "turns wins",
-    ):
+    for expected in _REQUIRED_VOCABULARY:
         assert expected in desc, f"missing {expected!r} from turns schema description"
 
 

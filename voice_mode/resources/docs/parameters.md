@@ -1,5 +1,15 @@
 # Voicemode Parameters Reference
 
+<!-- SINGLE SOURCE (VM-2099). This file is the one authoritative reference for
+     `converse()` parameters. It is served to agents as `voicemode://docs/parameters`
+     and included verbatim into the documentation site page
+     `docs/reference/converse-parameters.md` (pymdownx snippet). Do not create a
+     second copy anywhere: two hand-maintained copies drifted apart for months and
+     were how stale ceiling advice survived (VM-746 -> VM-1775 -> VM-2099).
+     `tests/test_parameter_docs_single_source.py` fails if a copy reappears.
+     Because this file renders from two different directories, links here are
+     absolute (site URL or `voicemode://` resource URI), never relative. -->
+
 ## Core Parameters
 
 ### message (required)
@@ -13,24 +23,35 @@ Whether to listen for a voice response after speaking.
 ## Timing Parameters
 
 ### listen_duration_max
-**Type:** number (default: 120.0 seconds)
-Maximum time to listen for response. The tool handles silence detection well.
+**Type:** number (default: the user's `VOICEMODE_DEFAULT_LISTEN_DURATION`)
+Hard ceiling on one listening turn. **Leave it unset.** The ceiling belongs to
+the user's own configuration (`VOICEMODE_DEFAULT_LISTEN_DURATION` in
+`~/.voicemode/voicemode.env`), and silence detection already ends the turn as
+soon as they stop speaking — the ceiling is a backstop, not a budget to size to
+the question.
 
-**When to override:**
-- Silence detection is disabled and you need specific timeout
-- Response will be exceptionally long (>120s)
-- Special timing requirements
+A value passed on the call **replaces the user's configured one silently**, with
+no notice to them. That is how a user gets cut off mid-answer: not by a wrong
+number, but by an assistant choosing a number at all.
 
-**Usually:** Let default and silence detection handle it.
+**When to override:** only for a specific need you could state out loud — e.g.
+silence detection is disabled for a diagnostic call, so nothing else would end
+the recording. Never as routine, never "to be safe", never copied from an
+example. If the user's window is genuinely too short, change the config, not the
+call.
 
 ### listen_duration_min
-**Type:** number (default: 2.0 seconds)
-Minimum recording time before silence detection can stop.
+**Type:** number (default: 2.0 seconds — a built-in floor; unlike the ceiling,
+this one is not config-backed today)
+Minimum recording time before silence detection can stop. Usually leave it
+unset; the same norm applies as for the ceiling — override only on a present,
+articulable need. The difference is direction: a floor **cannot** cut an answer
+short, so raising it for a stated reason is safe.
 
-**Use cases:**
-- Complex questions: 2-3 seconds
+**Presents needs that justify raising it** (not a menu to pick from by habit):
+- The user needs a moment to think — e.g. you just read them a long list
+- Complex questions, where a pause mid-answer is expected: 2-3 seconds
 - Open-ended prompts: 3-5 seconds
-- Quick responses: 0.5-1 second
 
 ### timeout (DEPRECATED)
 Use `listen_duration_max` instead. Only applies to LiveKit transport.
@@ -206,7 +227,9 @@ Whisper uses the last 224 tokens of the prompt. In practice, this means:
 
 If a word is still misrecognized after adding it to the prompt, try including it in context: instead of just "Tali", use "my dog Tali" or "Tali is a Rottweiler".
 
-**See also:** [Troubleshooting - Words Misrecognized](troubleshooting.md#specific-words-consistently-misrecognized)
+**See also:** Troubleshooting — "Words Misrecognized"
+(`voicemode://docs/troubleshooting`, or
+[on the site](https://voicemode.dev/troubleshooting/))
 
 ## Audio Format & Feedback
 
@@ -237,6 +260,72 @@ Skip text-to-speech, show text only.
 - Rapid development iterations
 - When voice isn't needed
 - Text-only mode
+
+## Audio Saving & Debugging
+
+Audio files can be saved for debugging, manual transcription recovery, or archival purposes.
+
+### Configuration
+
+Set in `~/.voicemode/voicemode.env`:
+
+```bash
+# Save all audio files (STT recordings and TTS output)
+VOICEMODE_SAVE_ALL=true
+
+# Or enable individually
+VOICEMODE_SAVE_AUDIO=true         # STT recordings only
+VOICEMODE_SAVE_TRANSCRIPTIONS=true # Transcription JSON files
+
+# Automatically enabled in debug mode
+VOICEMODE_DEBUG=true
+```
+
+### Saved File Locations
+
+```
+~/.voicemode/audio/
+├── latest-STT.wav          # Symlink to most recent STT recording
+├── latest-TTS.mp3          # Symlink to most recent TTS output
+├── 2026-02-09_14-15-23_STT_conv-abc123.wav
+└── 2026-02-09_14-15-28_TTS_conv-abc123.mp3
+```
+
+### Manual STT Recovery
+
+If STT fails but audio was recorded, manually transcribe:
+
+```bash
+whisper-cli ~/.voicemode/audio/latest-STT.wav
+```
+
+See [STT Recovery](https://github.com/mbailey/voicemode/blob/master/.claude/skills/voicemode/SKILL.md#stt-recovery---manual-transcription)
+and Troubleshooting — "No Speech Detected"
+(`voicemode://docs/troubleshooting`, or
+[on the site](https://voicemode.dev/troubleshooting/#1-no-speech-detected))
+for details.
+
+## Result Widgets
+
+`converse()` results can carry small, non-spoken, agent-facing one-liners in a
+trailing ` | Widgets: ...` segment appended to every return path (including
+error returns) — text-only, never passed to TTS/synthesis. See
+[Environment Variables](https://voicemode.dev/reference/environment/#result-widgets)
+for the underlying `VOICEMODE_*` toggles.
+
+### time_in_response
+**Type:** boolean | string (optional)
+Include the current local wall-clock time (`HH:MM:SS`) in the result's
+`Widgets:` segment, so you have an in-band answer if asked what time it is
+instead of confabulating one.
+
+**Values:**
+- `true` - Always include the time widget for this call
+- `false` - Never include it for this call
+- `null` (default) - Follow `VOICEMODE_TIME_IN_RESPONSE` env var (itself `false`)
+
+**Default:** Uses `VOICEMODE_TIME_IN_RESPONSE` env var, mirrors the
+`metrics_level`/`skip_tts` per-call-override-of-config-default pattern.
 
 ## Transport Parameters
 
