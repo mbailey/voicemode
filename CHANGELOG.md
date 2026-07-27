@@ -54,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A pattern-scanning test now fails the build if a listening-limit number
   reappears in any documentation, example or prompt — including in files that do
   not exist yet, which is how this came back the last time it was fixed.
+  The parameter reference itself was the reason stale advice could survive a fix:
+  it existed twice, hand-maintained, and the two copies had quietly drifted apart
+  for months — so a correction to one left the other still teaching the old thing.
+  They are now one document, served to assistants and published on the docs site
+  from the same file, and each copy gained what the other had been keeping to
+  itself: the site reference now documents vocabulary biasing, transport and the
+  result widgets, while the assistant-facing copy gained the audio-saving and
+  manual-transcription-recovery guidance. A test fails if a second copy appears.
 
 - **`conch give`/operator `summon` could hand over the floor to a target it never confirmed was told (VM-2078)** —
   this is the **summon fallback only**: `give`ing to a running session that
