@@ -73,9 +73,9 @@ which drives a real stdio voicemode server, starts a recording, then closes
 its stdin:
 
 ===========  ================================================================
-unpatched    process lived **17.5s** past the close (i.e. to
-             ``listen_duration_max``), logging RECORDING_END -> STT_START ->
-             STT_COMPLETE -- mic held, transcript of nobody
+unpatched    process lived **17.5s** past the close -- the whole remainder of
+             the listening window described above -- logging RECORDING_END ->
+             STT_START -> STT_COMPLETE: mic held, transcript of nobody
 patched      process exited in **0.4s**, logging TOOL_CANCELLED
 ===========  ================================================================
 
