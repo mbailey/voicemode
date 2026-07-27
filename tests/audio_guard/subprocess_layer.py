@@ -57,7 +57,13 @@ import sys
 import threading
 
 from . import AudioSubprocessSpawnedInTest, MODE_MUTE, record_hit
-from ._audio_programs import ALWAYS_AUDIO, AUDIO_PROGRAMS, CONDITIONAL_AUDIO
+from ._audio_programs import (
+    ALWAYS_AUDIO,
+    AUDIO_PROGRAMS,
+    CONDITIONAL_AUDIO,
+    KNOWN_JUDGEMENT_GAPS,
+    fired_triggers,
+)
 
 #: Every spawn of any kind, for the census (bounded, see _MAX_SPAWNS).
 SPAWNS: list = []
@@ -118,9 +124,18 @@ def _tokens(cmd) -> list:
 
 
 def _audio_match(cmd):
-    """Classify a command against the two tiers, carrying the reason either way."""
+    """Classify a command against the two tiers, carrying the reason either way.
+
+    ⚠️ A CONDITIONAL PROGRAM IS JUDGED ON ARGV STRUCTURE, NOT ON A SUBSTRING OF
+    THE JOINED ARGV.  The triggers used to be tested with ``t in " ".join(argv)``
+    — under which ``piper``'s ``-`` (meaning "write to stdout") matched the dash
+    in ``--model``, so every ``piper`` invocation with any flag was blocked, and
+    ``ffmpeg -i alsa_capture.wav out.mp3`` was blocked on a FILENAME.  Each entry
+    now declares where its trigger has to appear (``_audio_programs.match``) and
+    only its own arguments — the tokens AFTER the program — are searched.
+    """
     tokens = _tokens(cmd)
-    for token in tokens:
+    for index, token in enumerate(tokens):
         base = _basename(token)
         if base in ALWAYS_AUDIO:
             return {
@@ -132,8 +147,7 @@ def _audio_match(cmd):
             }
         if base in CONDITIONAL_AUDIO:
             info = CONDITIONAL_AUDIO[base]
-            haystack = " ".join(tokens)
-            fired = [t for t in info["triggers"] if t in haystack]
+            fired = fired_triggers(base, tokens[index + 1:])
             return {
                 "program": base,
                 "reason": info["reason"],
@@ -216,6 +230,9 @@ def _handle(entry_point: str, cmd) -> bool:
             program=audio["program"],
             audio_reason=audio["reason"],
             tier=audio["tier"],
+            # The structured decision, not only its prose: which trigger fired
+            # (and that none did) is the auditable half of a judgement call.
+            triggers_fired=audio.get("triggers_fired", []),
             decision_reason=audio["decision_reason"],
             mute_note=("a spawn cannot be muted, only refused"
                        if mode == MODE_MUTE else None),
@@ -229,6 +246,7 @@ def _handle(entry_point: str, cmd) -> bool:
         program=audio["program"],
         audio_reason=audio["reason"],
         tier=audio["tier"],
+        triggers_fired=audio.get("triggers_fired", []),
         decision_reason=audio["decision_reason"],
     )
     return False
@@ -419,6 +437,34 @@ def verify_armed() -> list:
     return missing
 
 
+def rearm(missing: list) -> int:
+    """Re-install guards that went missing, and return how many really came back.
+
+    ⚠️ THIS EXISTS BECAUSE THE PLUGIN USED TO ANNOUNCE ``guard-rearmed`` FOR
+    THIS LAYER WHEN THIS LAYER HAD NO ``rearm()`` AT ALL — a repair reported
+    but never performed, in exactly the log a human would read after an
+    incident.  Found by fix-001's peer review.  Of the two honest answers
+    (perform it, or stop claiming it) this is the one that shuts the window:
+    the layer's patches are plain attributes and re-installing them is a
+    ``setattr``, so there was never a structural reason it could not.
+
+    The return value is the count actually restored, and the caller reports
+    THAT — zero is a failed repair and must read as one.
+    """
+    restored = 0
+    for owner, name, replacement in _INSTALLED:
+        owner_name = getattr(owner, "__name__", repr(owner))
+        if not any(item["owner"] == owner_name and item["attribute"] == name
+                   for item in missing):
+            continue
+        try:
+            setattr(owner, name, replacement)
+            restored += 1
+        except Exception:  # pragma: no cover - defensive
+            continue
+    return restored
+
+
 def disarm() -> None:
     _INSTALLED.clear()
     while _ORIGINALS:
@@ -437,4 +483,7 @@ def census_summary() -> dict:
         "capped_at": _MAX_SPAWNS,
         "programs": programs,
         "audio_programs_watched": sorted(AUDIO_PROGRAMS),
+        # Travels with the evidence rather than living in a docstring: what the
+        # judgement tables knowingly do NOT claim.
+        "known_judgement_gaps": KNOWN_JUDGEMENT_GAPS,
     }

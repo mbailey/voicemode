@@ -186,8 +186,56 @@ class _Reporter:
                        "the device was unguarded at that entry point for part "
                        "of the test. Re-arming now.",
             )
-            restored = module.rearm(missing) if hasattr(module, "rearm") else 0
+            self._repair(layer, module, nodeid, missing)
+
+    @staticmethod
+    def _repair(layer: str, module, nodeid: str, missing: list) -> None:
+        """Re-arm, and report ONLY what actually happened.
+
+        ⚠️ THE GUARD NEVER REPORTS AN ACTION IT DID NOT PERFORM.  This used to
+        read ``module.rearm(missing) if hasattr(module, 'rearm') else 0``
+        followed unconditionally by ``note("guard-rearmed", restored=0)`` — and
+        the subprocess layer had no ``rearm()``, so every one of its windows was
+        logged as repaired while nothing was repaired.  That is the dead-guard
+        family pointing the other way: not a check that silently fails, but a
+        log that manufactures confidence in exactly the record a human consults
+        after an incident.  Found by fix-001's peer review.
+
+        So there are now three distinct outcomes and three distinct events:
+        the repair happened, the repair was attempted and restored nothing, or
+        the layer cannot perform one at all.
+        """
+        repair = getattr(module, "rearm", None)
+        if repair is None:  # pragma: no cover - no such layer today
+            note(
+                "guard-not-rearmable",
+                layer=layer,
+                nodeid=nodeid,
+                missing=missing,
+                detail="this layer cannot re-install its guards; the window "
+                       "stays open. Recorded as unrepaired rather than claimed "
+                       "repaired.",
+            )
+            return
+        restored = repair(missing)
+        if restored == -1:
+            # The sounddevice layer's answer to a reload: the module's classes
+            # were rebuilt, so it re-derives and re-arms wholesale rather than
+            # counting attributes.
+            note("guard-rearmed", layer=layer, nodeid=nodeid, restored="all",
+                 detail="the layer was re-derived and armed again from scratch")
+        elif restored:
             note("guard-rearmed", layer=layer, nodeid=nodeid, restored=restored)
+        else:
+            note(
+                "guard-rearm-failed",
+                layer=layer,
+                nodeid=nodeid,
+                missing=missing,
+                detail="re-arming restored NOTHING — these entry points are "
+                       "still unguarded and this run's coverage is incomplete "
+                       "from here on.",
+            )
 
     # -- reporting ---------------------------------------------------------
     def pytest_report_header(self, config):

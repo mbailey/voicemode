@@ -38,6 +38,7 @@ from tests.audio_guard import (
     AudioDeviceTouchedInTest,
     AudioSubprocessSpawnedInTest,
     expect_blocked,
+    subprocess_layer,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -350,6 +351,192 @@ class TestGuardSurvivesItsOwnDisarming:
         with expect_blocked("play", label="drill: post-reload"):
             with pytest.raises(AudioDeviceTouchedInTest):
                 sd.play(SILENCE, samplerate=44100)
+
+
+class TestConditionalTriggersMatchArgvStructure:
+    """A conditional program is judged on WHERE the trigger appears.
+
+    The triggers were originally tested with ``t in " ".join(argv)``.  Under
+    that rule ``piper``'s ``-`` (meaning "write to stdout") matched the dash of
+    ``--model``, so EVERY ``piper`` invocation with any flag was blocked, and
+    ``ffmpeg -i alsa_capture.wav`` was blocked on a FILENAME.  A false RED costs
+    as much as a miss here — hits decide the exit status — so both directions
+    are drilled: the structural match still fires on the real thing, and no
+    longer fires on the lookalike.
+    """
+
+    def test_piper_writing_a_file_is_not_blocked(self):
+        """The regression itself: a flag is not a ``-``."""
+        match = subprocess_layer._audio_match(
+            ["piper", "--model", "en_US.onnx", "--output_file", "/tmp/out.wav"])
+        assert match["program"] == "piper"
+        assert match["block"] is False, (
+            "a piper invocation writing a WAV file was blocked because '-' "
+            "was matched as a substring of '--model'"
+        )
+        assert match["triggers_fired"] == []
+
+    def test_piper_piping_raw_audio_onward_is_still_blocked(self):
+        for argv in (["piper", "--model", "x.onnx", "--output-raw"],
+                     ["piper", "--output_raw"],
+                     ["piper", "-"]):
+            match = subprocess_layer._audio_match(argv)
+            assert match["block"] is True, argv
+            assert match["triggers_fired"], argv
+
+    def test_a_filename_that_merely_reads_like_a_device_is_not_a_device(self):
+        match = subprocess_layer._audio_match(
+            ["ffmpeg", "-i", "/tmp/alsa_capture.wav", "/tmp/out.mp3"])
+        assert match["block"] is False, (
+            "a file named alsa_capture.wav is not an audio device"
+        )
+
+    def test_an_audio_device_muxer_is_still_blocked_both_spellings(self):
+        for argv in (["ffmpeg", "-f", "alsa", "default"],
+                     ["ffmpeg", "-f=audiotoolbox", "-"],
+                     ["ffmpeg", "-i", "x.wav", "-f", "coreaudio", "default"]):
+            match = subprocess_layer._audio_match(argv)
+            assert match["block"] is True, argv
+
+    def test_a_word_inside_another_word_is_not_the_word(self):
+        """``essay`` is not ``say``; ``Sounds good`` is not ``sound``."""
+        for argv in (["osascript", "-e", 'display dialog "essay"'],
+                     ["osascript", "-e", 'display dialog "Soundstage"']):
+            match = subprocess_layer._audio_match(argv)
+            assert match["block"] is False, argv
+
+    def test_a_script_that_really_speaks_is_still_blocked(self):
+        for argv in (["osascript", "-e", 'say "hello"'],
+                     ["osascript", "-e", "set volume output volume 50"],
+                     ["powershell", "-c", "[console]::Beep(440,500)"],
+                     ["powershell", "-Command",
+                      "(New-Object System.Media.SoundPlayer 'x.wav').Play()"]):
+            match = subprocess_layer._audio_match(argv)
+            assert match["block"] is True, argv
+
+    def test_the_flag_itself_is_never_the_script(self):
+        """``-e`` is an option letter, not AppleScript.
+
+        Only non-flag arguments are searched, so an option that happens to
+        contain a trigger word cannot fire one.
+        """
+        match = subprocess_layer._audio_match(["osascript", "--saymore",
+                                               "tell app \"Finder\" to close"])
+        assert match["block"] is False
+
+    def test_the_program_is_judged_on_its_own_arguments_only(self):
+        """A pipeline's later program does not lend its argv to an earlier one."""
+        match = subprocess_layer._audio_match("ffprobe alsa.wav")
+        assert match["program"] == "ffprobe"
+        assert match["block"] is False
+
+    @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+    def test_on_the_real_path_the_lookalike_runs_and_is_recorded(self):
+        """Not a classification test: a real spawn, through the real guard.
+
+        ``ffmpeg`` really runs (and fails on the missing file, silently — no
+        output device is involved). What matters is that the guard ALLOWED it
+        and still RECORDED it with its reason.
+        """
+        before = len(audio_guard.HITS)
+        subprocess.run(["ffmpeg", "-i", "/tmp/vm2072-alsa-nonexistent.wav",
+                        "-f", "null", "-"],
+                       capture_output=True, check=False)
+        new = audio_guard.HITS[before:]
+        assert len(new) == 1, [h["entry_point"] for h in new]
+        assert new[0]["disposition"] == "allowed"
+        assert new[0]["triggers_fired"] == []
+
+    def test_on_the_real_path_the_real_thing_is_still_stopped(self):
+        """No process is started, so this drill cannot make a sound even if
+        ``piper`` were installed."""
+        with expect_blocked("subprocess.run", label="drill: piper --output-raw"):
+            with pytest.raises(AudioSubprocessSpawnedInTest):
+                subprocess.run(["piper", "--model", "x.onnx", "--output-raw"])
+
+    def test_the_judgement_gaps_travel_with_the_report(self):
+        """What the tables knowingly do not claim is IN the receipt."""
+        gaps = subprocess_layer.census_summary()["known_judgement_gaps"]
+        assert gaps and all("why_not_closed" in gap for gap in gaps)
+
+
+class TestTheGuardNeverClaimsARepairItDidNotPerform:
+    """A log that manufactures confidence is the dead-guard family, reversed.
+
+    The plugin used to emit ``guard-rearmed`` for the SUBPROCESS layer, which
+    had no ``rearm()`` — a repair announced, never performed, in exactly the
+    record a human would consult after an incident.  Found by fix-001's peer
+    review.
+
+    Ordering-dependent by design, like the reload drill above: the hole has to
+    survive one teardown for the plugin to be the thing that repairs it.  The
+    target is ``subprocess.check_output`` deliberately — no drill in this suite
+    spawns audio through it, and ``Popen``/``fork_exec`` stay armed underneath
+    it regardless, so the window cannot become audible.
+    """
+
+    def test_both_layers_can_perform_the_repair_the_plugin_announces(self):
+        from tests.audio_guard import sounddevice_layer
+
+        for module in (sounddevice_layer, subprocess_layer):
+            assert callable(getattr(module, "rearm", None)), (
+                f"{module.__name__} is announced as re-armed but cannot re-arm"
+            )
+
+    def test_a_guard_removed_mid_test_is_really_gone(self):
+        original = next(o for owner, name, o in subprocess_layer._ORIGINALS
+                        if owner is subprocess and name == "check_output")
+        subprocess.check_output = original  # not monkeypatch: it must SURVIVE
+        assert not hasattr(subprocess.check_output, "__vm2072_audio_guard__")
+
+    def test_the_plugin_repaired_it_and_reported_the_repair_truthfully(self):
+        """Runs immediately after the removal, in file order."""
+        assert hasattr(subprocess.check_output, "__vm2072_audio_guard__"), (
+            "the subprocess layer did not come back — the window stayed open"
+        )
+        rearmed = [e for e in audio_guard.EVENTS
+                   if e["event"] == "guard-rearmed" and e.get("layer") == "subprocess"]
+        assert rearmed, "the repair happened but was never recorded"
+        assert rearmed[-1]["restored"] == 1, rearmed[-1]
+
+    def test_the_repaired_guard_actually_fires(self):
+        with expect_blocked("subprocess.check_output", label="drill: post-rearm"):
+            with pytest.raises(AudioSubprocessSpawnedInTest):
+                subprocess.check_output(["afplay", "/System/Library/Sounds/Ping.aiff"])
+
+    def test_no_rearm_event_anywhere_claims_a_repair_of_nothing(self):
+        for event in audio_guard.EVENTS:
+            if event["event"] != "guard-rearmed":
+                continue
+            assert event["restored"] not in (0, None), event
+
+    def test_a_repair_that_restores_nothing_is_reported_as_a_failure(self):
+        """The honest-reporting path, driven directly through the real code."""
+        from tests.audio_guard import plugin
+
+        before = len(audio_guard.EVENTS)
+        plugin._Reporter._repair(
+            "subprocess", subprocess_layer, "<drill>",
+            [{"owner": "subprocess", "attribute": "no_such_attribute",
+              "found": "NoneType"}],
+        )
+        new = [e["event"] for e in audio_guard.EVENTS[before:]]
+        assert new == ["guard-rearm-failed"], new
+
+    def test_a_layer_that_cannot_rearm_is_not_reported_as_rearmed(self):
+        """No such layer today — which is why the branch needs a drill."""
+        from tests.audio_guard import plugin
+
+        class LayerWithoutRearm:
+            __name__ = "layer_without_rearm"
+
+        before = len(audio_guard.EVENTS)
+        plugin._Reporter._repair(
+            "stub", LayerWithoutRearm(), "<drill>",
+            [{"owner": "stub", "attribute": "x", "found": "NoneType"}],
+        )
+        new = [e["event"] for e in audio_guard.EVENTS[before:]]
+        assert new == ["guard-not-rearmable"], new
 
 
 class TestEndToEndInAChildRun:
