@@ -12,6 +12,21 @@ import pytest_asyncio
 # Add voice_mode to path for testing
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from tests.audio_guard import plugin as _audio_guard_plugin  # noqa: E402
+
+
+def pytest_configure(config):
+    """Arm the VM-2072 audio guard before ANY test module is imported.
+
+    The real audio device must never be opened by a default test run — the
+    suite has been running through the speakers and microphone of the live
+    human at this machine.  See tests/audio_guard/ for the design; the short
+    version is that this is deliberately NOT an autouse fixture, because a
+    fixture is not in the room for module-level code that pytest executes at
+    collection time (this repo has such a file).
+    """
+    _audio_guard_plugin.install(config)
+
 
 # Commands that should never run in tests - these affect system services
 BLOCKED_COMMANDS = {

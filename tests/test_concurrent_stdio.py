@@ -103,8 +103,15 @@ class TestStdioProtection:
         original_stdout = sys.stdout
         original_stderr = sys.stderr
         
+        # VM-2072: record_audio() also enumerates the host's devices before it
+        # records. This test is about stdio restoration, not about this
+        # machine's hardware, so the enumeration is mocked too -- without it the
+        # test opened the live device on every run.
         with patch('voice_mode.tools.converse.sd.rec') as mock_rec, \
-             patch('voice_mode.tools.converse.sd.wait') as mock_wait:
+             patch('voice_mode.tools.converse.sd.wait') as mock_wait, \
+             patch('voice_mode.tools.converse.sd.query_devices',
+                   return_value=[{'name': 'Mock Device', 'max_input_channels': 2,
+                                  'max_output_channels': 2}]):
             # Make recording fail
             mock_rec.side_effect = Exception("Recording failed")
             
