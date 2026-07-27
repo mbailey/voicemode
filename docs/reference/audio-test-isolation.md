@@ -63,6 +63,14 @@ entry points, and the guard hands back inert stand-ins without PortAudio ever
 being called. Device-safe *by construction*, not by a null sink somebody has to
 configure correctly.
 
+**A process spawn is the exception, and it is refused rather than muted.** An
+in-process call can be handed a stand-in; `afplay foo.wav` cannot — once it is
+exec'd it owns the speakers and this guard is not inside it. So on the opt-in
+path an audio spawn raises, and is reported as `REFUSED` rather than `muted`. It
+does not fail the run. If you need the program to genuinely run, that is what
+`VOICEMODE_TEST_AUDIO_GUARD=off` is for — **ask first if anyone might be on
+voice.**
+
 `tests/test_audio_optin_canary.py` occupies that path deliberately — no existing
 test needs a real device, so without a canary the opt-in path would ship
 untested and be discovered broken by the first person who genuinely needs it.
@@ -87,8 +95,18 @@ VM-2072 AUDIO GUARD — mode=block (default run: the device is unreachable)
   sounddevice: 97 guards on 17 entry points, DERIVED at arm time ...
   PortAudio backstop: installed — 13 symbols deliberately let through
   subprocess: 26 spawn entry points armed; every spawn recorded (14 seen)
-RESULT: GREEN — nothing reached the real audio device.
+  not covered — stated, never silent (3):
+    • child processes: ... [14 spawned this run: {'git': 2, 'ffprobe': 11, ...}]
+    • tool-use soundfonts: ...
+    • VOICEMODE_TEST_AUDIO_GUARD=off runs: ...
+RESULT: GREEN — nothing IN THIS PROCESS reached the real audio device
+        (see 'not covered' above for the boundary).
 ```
+
+**Read the verdict's wording as written.** It is scoped on purpose: the guard
+sees this process and every thread in it, and it sees *that* a child was
+spawned — not what the child did once it was running. One spawn counts once,
+even though it crosses three guarded surfaces on the way out.
 
 Set `VOICEMODE_AUDIO_GUARD_REPORT=/path/report.json` for the machine-readable
 receipt (every hit, every event, every deliberate non-coverage with its reason).
@@ -123,14 +141,27 @@ recording call), which kept all of them in the default run. Reach for
 
 Stated so that continued noise is not mistaken for a failed fix:
 
+This list is not prose only: it is the `NON_COVERAGE` table in
+`tests/audio_guard/__init__.py`, **printed in the terminal summary of every run
+and carried in every JSON report**, so it cannot quietly drift out of date.
+
+* **The inside of a child process.** The guard lives in *this* interpreter. It
+  records every spawn and blocks judged-audio programs, but a child that opens
+  the device *itself* — `python -c "import sounddevice; sd.query_devices()"` —
+  is not intercepted and never reaches the hit record. Demonstrated during
+  fix-001's peer review: a child enumerated ten real devices while the summary
+  said GREEN. Mediated by two things: every spawn *is* in the census, so an
+  unrecognised child is visible rather than absent; and rca-001 measured that
+  importing all 131 `voice_mode` modules touches no audio, so today's
+  `python -m voice_mode` children are quiet at import. **This is why the verdict
+  line reads "nothing IN THIS PROCESS".**
 * **Tool-use soundfonts** (`VOICEMODE_SOUNDFONTS_ENABLED`, `config.py`, defaults
   **true**) fire on **agent tool calls**, not on test runs. Out of scope here —
   a test-isolation guard cannot address them, because they are not the test
   suite. The guard does set `VOICEMODE_SOUNDFONTS_ENABLED=false` and
-  `VOICEMODE_AUDIO_FEEDBACK=false` for the test process, so no *test* run emits
-  them, but an agent working normally still can.
-* **A real device opened by a non-Python process** the guard never saw spawn
-  (nothing in this repo does this today).
+  `VOICEMODE_AUDIO_FEEDBACK=false` for the test process (and hence its
+  children), so no *test* run emits them, but an agent working normally still
+  can.
 * **`VOICEMODE_TEST_AUDIO_GUARD=off` runs**, by definition.
 
 ## Writing a new test that touches audio

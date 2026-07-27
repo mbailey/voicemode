@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VOICEMODE_TEST_AUDIO_GUARD=off` is the escape hatch, which announces itself
   loudly. See `docs/reference/audio-test-isolation.md`.
 
+  Two limits are stated on **every run**, in the terminal summary and in every
+  JSON report, rather than left to be discovered: `pytest -m audio` **refuses**
+  an audio *subprocess* instead of muting it (a process cannot be muted, only
+  not started — `VOICEMODE_TEST_AUDIO_GUARD=off` is the door for a genuinely
+  live spawn), and the guard does not reach **inside a child process**: it
+  records every spawn and blocks judged-audio programs, but a child that opens
+  the device itself is outside it. Hence the verdict line reads *"nothing IN
+  THIS PROCESS reached the real audio device"*.
+
   ⚠️ **Tool-use soundfonts are a separate noise source and are NOT fixed by
   this.** `VOICEMODE_SOUNDFONTS_ENABLED` defaults to true and fires on **agent
   tool calls**, not on test runs. If the machine still makes noise after this

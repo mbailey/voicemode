@@ -22,6 +22,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -208,6 +209,105 @@ class TestSubprocessLayerFires:
                 os.system("cat /tmp/x.wav | paplay")
 
 
+class TestOneSpawnIsOneEntry:
+    """A single spawn crosses three guarded surfaces; it must count once.
+
+    ``subprocess.run`` → ``subprocess.Popen`` → ``_posixsubprocess.fork_exec``
+    are all guarded, so one ``ffprobe`` used to appear as three spawns and
+    three hits.  The census is what the guard offers as evidence about child
+    processes it cannot see INSIDE (see ``NON_COVERAGE``), so it has to count
+    processes rather than call frames or the evidence is inflated threefold.
+    """
+
+    @pytest.mark.skipif(not shutil.which("ffprobe"), reason="ffprobe not installed")
+    def test_one_audio_capable_spawn_records_one_hit(self):
+        before = len(audio_guard.HITS)
+        subprocess.run(["ffprobe", "-version"], capture_output=True, check=True)
+        new = audio_guard.HITS[before:]
+        assert len(new) == 1, [h["entry_point"] for h in new]
+        assert new[0]["disposition"] == "allowed"
+
+
+class TestOptInPathRefusesWhatItCannotMute:
+    """⚠️ A PROCESS CANNOT BE MUTED — it can only not be started.
+
+    The mute path originally recorded an audio spawn as *"muted ... no device
+    touched"* and then **really ran it**: ``afplay`` under ``pytest -m audio``
+    would have played through the speakers of whoever is at this machine while
+    the report said the run was quiet.  Found by fix-001's peer review, proven
+    with a spawn that reached the exec and died on ENOENT (nothing audible).
+
+    This drill keeps that door shut.  It provokes the mute decision directly
+    rather than under ``-m audio``, because the drill must run in the DEFAULT
+    suite — a regression test that only runs on the opt-in path would be
+    protecting the opt-in path with a test on the opt-in path.
+    """
+
+    def test_mute_mode_refuses_an_audio_spawn_instead_of_running_it(self, monkeypatch):
+        from tests.audio_guard import subprocess_layer
+
+        monkeypatch.setitem(subprocess_layer._ARMED, "mode", audio_guard.MODE_MUTE)
+        before = len(audio_guard.HITS)
+
+        # pw-play is PipeWire: it cannot exist on this Darwin host, so if the
+        # guard ever lets this through again the failure is ENOENT rather than
+        # a noise. The assertion is that we never get that far.
+        with pytest.raises(AudioSubprocessSpawnedInTest) as excinfo:
+            subprocess.run(["pw-play", "/tmp/does-not-exist.wav"])
+
+        assert "cannot be muted" in str(excinfo.value)
+        new = audio_guard.HITS[before:]
+        assert len(new) == 1
+        assert new[0]["disposition"] == "refused", (
+            "an audio spawn on the opt-in path must be REFUSED — recording it "
+            "as 'muted' and running it anyway is how this bug read as quiet"
+        )
+
+    def test_a_refusal_does_not_fail_the_run(self):
+        """Using the opt-in path as designed is not a defect."""
+        refused = [h for h in audio_guard.HITS if h["disposition"] == "refused"]
+        assert refused, "the refusal drill above did not record anything"
+        assert not [h for h in audio_guard.failing_hits()
+                    if h["disposition"] == "refused"]
+
+
+class TestNonCoverageIsStatedNotSilent:
+    """Reported non-coverage is acceptable; silent non-coverage is a dead guard.
+
+    The sharp case is a CHILD PROCESS.  The guard records every spawn and
+    blocks judged-audio programs, but it does not live inside the child: a
+    child that opens the device itself never reaches the hit record.  Peer
+    review demonstrated a child ``python -c "import sounddevice;
+    sd.query_devices()"`` enumerating ten real devices while the summary
+    printed *"GREEN — nothing reached the real audio device"*.
+
+    The gap is narrow and is not closable from here — but a verdict that
+    claims more than the instrument looked at is this task's own defect shape,
+    so the boundary is now stated on every run.  This test is what keeps it
+    stated.
+    """
+
+    def test_child_processes_are_named_in_the_non_coverage_table(self):
+        areas = {item["area"] for item in audio_guard.NON_COVERAGE}
+        assert "child processes" in areas
+        assert "tool-use soundfonts" in areas
+
+    def test_every_report_carries_the_non_coverage_and_its_scope(self):
+        payload = audio_guard.report_payload()
+        assert payload["non_coverage"] == audio_guard.NON_COVERAGE
+        assert "child process" in payload["verdict_scope"]
+
+    def test_the_verdict_line_is_scoped_to_this_process(self):
+        import inspect as _inspect
+
+        from tests.audio_guard import plugin
+
+        source = _inspect.getsource(plugin._Reporter._write_hits)
+        assert "IN THIS PROCESS" in source, (
+            "the GREEN line claims more than the guard measured"
+        )
+
+
 class TestGuardSurvivesItsOwnDisarming:
     """``importlib.reload(sounddevice)`` removes every guard, silently.
 
@@ -351,8 +451,16 @@ class TestEndToEndInAChildRun:
 
     def test_run_fails_on_the_hit_record_although_every_test_passed(self, child_run):
         proc, report = child_run
-        assert "passed" in proc.stdout
-        assert "failed" not in proc.stdout, proc.stdout
+        # Read pytest's OWN count line, not the whole of stdout: the summary
+        # the guard prints is prose, and prose about failure is not failure.
+        # (Peer review of fix-001 tripped this by adding the sentence "it is
+        # not the fix having failed" to the non-coverage block — a green run
+        # reported as a red one, which is the false-positive family this file
+        # exists to keep out.)
+        counts = [line for line in proc.stdout.splitlines()
+                  if re.search(r"\d+ (passed|failed|error)", line)][-1]
+        assert "passed" in counts, proc.stdout
+        assert "failed" not in counts, proc.stdout
         assert proc.returncode == 1, proc.stdout
         assert report["verdict"] == "RED"
         assert report["failing_hit_count"] >= 1

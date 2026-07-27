@@ -69,6 +69,7 @@ __all__ = [
     "MODE_BLOCK",
     "MODE_MUTE",
     "MODE_OFF",
+    "NON_COVERAGE",
     "AudioDeviceTouchedInTest",
     "AudioSubprocessSpawnedInTest",
     "EVENTS",
@@ -86,6 +87,59 @@ MODE_BLOCK = "block"
 MODE_MUTE = "mute"
 MODE_OFF = "off"
 MODES = (MODE_BLOCK, MODE_MUTE, MODE_OFF)
+
+#: WHAT THIS GUARD DOES NOT COVER — printed in the terminal summary of EVERY
+#: run and carried in EVERY JSON report.
+#:
+#: Reported non-coverage is acceptable; SILENT non-coverage is a dead guard.
+#: The distinction is load-bearing here because the guard's verdict line is the
+#: only thing most people will read, and a verdict that claims more than the
+#: instrument checked is the same defect this whole task exists to close — an
+#: instrument that is confidently quiet about something it never looked at.
+#:
+#: The child-process entry was added by fix-001's peer review, which
+#: demonstrated a child ``python -c "import sounddevice; sd.query_devices()"``
+#: enumerating ten real devices while this guard printed
+#: "GREEN — nothing reached the real audio device".  The spawn WAS recorded;
+#: what the child then did was never visible.  See
+#: ``evidence/fix-001-review/`` in the task.
+NON_COVERAGE: list = [
+    {
+        "area": "child processes",
+        "detail": "the guard lives in THIS interpreter. A spawned child runs "
+                  "outside it: every spawn is recorded and judged-audio "
+                  "programs are blocked, but a child that opens the device "
+                  "ITSELF (e.g. python -c 'import sounddevice') is not "
+                  "intercepted and does not appear in the hit record",
+        "mediated_by": [
+            "every spawn is recorded in the census, so an unrecognised child "
+            "is visible rather than absent",
+            "VM-2072 rca-001 measured import of all 131 voice_mode modules: "
+            "0 sounddevice crossings, so today's `python -m voice_mode` "
+            "children touch no audio at import",
+        ],
+    },
+    {
+        "area": "tool-use soundfonts",
+        "detail": "VOICEMODE_SOUNDFONTS_ENABLED (config.py, defaults TRUE) "
+                  "fires on AGENT TOOL CALLS, not on test runs — so no "
+                  "test-isolation guard can address it. If this machine still "
+                  "makes noise after a green run, this is why; it is not the "
+                  "fix having failed",
+        "mediated_by": [
+            "the guard sets VOICEMODE_SOUNDFONTS_ENABLED=false and "
+            "VOICEMODE_AUDIO_FEEDBACK=false for the test process (and hence "
+            "its children), so no TEST run emits them",
+        ],
+    },
+    {
+        "area": f"{'VOICEMODE_TEST_AUDIO_GUARD'}=off runs",
+        "detail": "the deliberate escape hatch: the real device IS reachable. "
+                  "Announced on stderr at arm time, in the run header and in "
+                  "the summary",
+        "mediated_by": ["it announces itself loudly, three times"],
+    },
+]
 
 #: Env var that overrides the mode.  ``off`` is the deliberate escape hatch.
 MODE_ENV = "VOICEMODE_TEST_AUDIO_GUARD"
@@ -181,10 +235,22 @@ def _sanction_state() -> tuple:
 def record_hit(layer: str, entry_point: str, disposition: str, **detail) -> dict:
     """Record one crossing of the audio boundary.
 
-    ``disposition`` is what the guard DID: ``blocked`` (raised), ``muted``
-    (inert stand-in returned on the opt-in path), or ``allowed`` (audio-capable
-    but the invocation cannot reach a device — recorded loudly rather than
-    dropped, so a wrong judgement is visible instead of silent).
+    ``disposition`` is what the guard DID:
+
+    ``blocked``
+        raised; this is the disposition that fails the run.
+    ``muted``
+        inert stand-in returned on the opt-in path — only possible for an
+        in-process call.
+    ``refused``
+        the opt-in path met something that CANNOT be muted (a process spawn:
+        once exec'd it owns the speakers and this guard is not inside it), so
+        it was stopped instead of pretended away.  Loud, but it does not fail
+        the run — using the opt-in path as designed is not a defect.
+    ``allowed``
+        audio-capable but the invocation cannot reach a device — recorded
+        loudly rather than dropped, so a wrong judgement is visible instead of
+        silent.
     """
     depth, label = _sanction_state()
     thread = threading.current_thread()
@@ -298,6 +364,11 @@ def report_payload(extra: dict | None = None) -> dict:
                         MODE_ENV)
         },
         "layers": STATE.get("layers", {}),
+        # In EVERY report, not only the ones somebody remembered to annotate:
+        # a verdict is only as good as the boundary it was measured inside.
+        "non_coverage": NON_COVERAGE,
+        "verdict_scope": "this pytest process and every thread in it; NOT the "
+                         "inside of a child process (see non_coverage)",
         "verdict": "RED" if failing else "GREEN",
         "hit_count": len(HITS),
         "failing_hit_count": len(failing),

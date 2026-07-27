@@ -170,25 +170,57 @@ def _census(entry_point: str, cmd, audio) -> None:
 
 
 def _handle(entry_point: str, cmd) -> bool:
-    """Record the spawn; return True if it must be blocked."""
-    audio = _audio_match(cmd)
+    """Record the spawn; return True if it must be blocked.
+
+    ONE SPAWN IS ONE ENTRY, at the outermost layer that saw it.  A single
+    ``subprocess.run(['ffprobe', ...])`` crosses three guarded surfaces
+    (``run`` → ``Popen`` → ``fork_exec``); recording each of them made one
+    process look like three in the census and in the hit record.  That matters
+    beyond tidiness: the census is what the guard offers as evidence about
+    child processes it cannot see inside, so it has to count processes rather
+    than call frames.
+
+    Nothing is lost by stopping at the outer layer.  A nested frame is only
+    ever reached when the outer one already recorded and already decided:
+    if it had blocked, it raised, and we would not be here.
+    """
     nested = getattr(_IN_FLIGHT, "depth", 0)
-    if not nested or audio:
-        _census(entry_point, cmd, audio)
+    if nested:
+        return False
+    audio = _audio_match(cmd)
+    _census(entry_point, cmd, audio)
     if not audio:
         return False
     if audio["block"]:
         mode = _ARMED["mode"]
+        # ⚠️ A PROCESS CANNOT BE MUTED — IT CAN ONLY NOT BE STARTED.
+        #
+        # The sounddevice layer can hand a muted caller an inert stand-in
+        # because the call happens inside this interpreter.  There is no such
+        # thing for `afplay foo.wav`: once it is exec'd it owns the speakers,
+        # and this guard is not in that process.  Returning False here (which
+        # this layer originally did on the mute path) recorded the spawn as
+        # "muted ... no device touched" and then REALLY RAN IT — proven under
+        # `pytest -m audio` with a spawn that reached the exec and died on
+        # ENOENT.  That is the task's own defect shape: a report claiming
+        # quiet while sound comes out.
+        #
+        # So the opt-in path REFUSES an audio spawn instead of pretending to
+        # mute it.  Recorded as `refused` (not `blocked`), so it is loud and
+        # in the summary without turning a legitimate opt-in run RED.  A
+        # genuinely live spawn is what VOICEMODE_TEST_AUDIO_GUARD=off is for.
         record_hit(
             "subprocess", entry_point,
-            "muted" if mode == MODE_MUTE else "blocked",
+            "refused" if mode == MODE_MUTE else "blocked",
             command=_render(cmd),
             program=audio["program"],
             audio_reason=audio["reason"],
             tier=audio["tier"],
             decision_reason=audio["decision_reason"],
+            mute_note=("a spawn cannot be muted, only refused"
+                       if mode == MODE_MUTE else None),
         )
-        return mode != MODE_MUTE
+        return True
     # Audio-capable but inert invocation: allowed, and recorded exactly as
     # loudly, so a wrong judgement shows up instead of passing in silence.
     record_hit(
@@ -204,11 +236,21 @@ def _handle(entry_point: str, cmd) -> bool:
 
 def _raise(entry_point: str, cmd) -> None:
     audio = _audio_match(cmd) or {}
+    tail = (
+        " This is the opt-in (-m audio) path, which runs MUTED — and a process "
+        "cannot be muted, only not started, so an audio spawn is REFUSED here "
+        "rather than pretended away. If you genuinely need the program to run, "
+        "that is what VOICEMODE_TEST_AUDIO_GUARD=off is for; ask first if "
+        "anyone might be on voice."
+        if _ARMED["mode"] == MODE_MUTE else
+        " If this test genuinely needs the program, mock the spawn; if the "
+        "spawn IS the subject, mark it @pytest.mark.audio."
+    )
     raise AudioSubprocessSpawnedInTest(
         f"VM-2072: test code tried to spawn {audio.get('program')!r} via "
         f"{entry_point} — {audio.get('reason')}. "
         f"({audio.get('decision_reason')}) No process was started; the audio "
-        "guard blocked it."
+        f"guard stopped it.{tail}"
     )
 
 

@@ -47,6 +47,7 @@ from . import (
     MODE_MUTE,
     MODE_OFF,
     MODES,
+    NON_COVERAGE,
     REPORT_ENV,
     STATE,
     failing_hits,
@@ -249,10 +250,29 @@ class _Reporter:
             write("  ⚠️  rebinding watcher unavailable: a lifted guard would not "
                   "be visible until teardown")
 
+        self._write_non_coverage(write)
         self._write_events(write)
         self._write_hits(write)
         self._maybe_write_report(write)
         write(_BANNER)
+
+    def _write_non_coverage(self, write) -> None:
+        """State the boundary the verdict was measured inside — every run.
+
+        The verdict line below is the only thing most people read, so it must
+        not claim more than the instrument looked at.  A child process is the
+        sharp case: the guard records the spawn and blocks judged-audio
+        programs, but it does not live inside the child, so a child that opens
+        the device itself never reaches the hit record.
+        """
+        census = subprocess_layer.census_summary()
+        write(f"  not covered — stated, never silent ({len(NON_COVERAGE)}):")
+        for item in NON_COVERAGE:
+            extra = ""
+            if item["area"] == "child processes":
+                extra = (f" [{census['spawn_count']} spawned this run: "
+                         f"{census['programs'] or 'none'}]")
+            write(f"    • {item['area']}: {item['detail']}{extra}")
 
     def _write_events(self, write) -> None:
         if not EVENTS:
@@ -272,6 +292,9 @@ class _Reporter:
 
         for disposition, label in (
             ("muted", "muted on the opt-in path (no device touched)"),
+            ("refused", "REFUSED on the opt-in path — a process cannot be "
+                        "muted, only not started (use "
+                        "VOICEMODE_TEST_AUDIO_GUARD=off for a live spawn)"),
             ("allowed", "audio-capable but inert invocation — ALLOWED, recorded"),
         ):
             hits = by_disposition.get(disposition, [])
@@ -290,7 +313,12 @@ class _Reporter:
                 write(f"    {key[1]}  ×{count}  <- {key[0]}")
 
         if not failing:
-            write("RESULT: GREEN — nothing reached the real audio device.")
+            # Scoped deliberately. "Nothing reached the device" is a bigger
+            # claim than this instrument can make: it sees this process and
+            # every thread in it, and it sees that a child was spawned, but
+            # not what the child did once it was running.
+            write("RESULT: GREEN — nothing IN THIS PROCESS reached the real "
+                  "audio device (see 'not covered' above for the boundary).")
             return
         write(f"RESULT: RED — {len(failing)} call(s) reached the audio boundary "
               "and were BLOCKED:")
