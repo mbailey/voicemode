@@ -186,7 +186,7 @@ async def whisper_model_install(
             "successful_downloads": success_count,
             "failed_downloads": total_models - success_count,
             "results": results,
-            "core_ml_available": not skip_core_ml and os.uname().machine == "arm64",
+            "core_ml_available": not skip_core_ml and platform.machine() == "arm64",
         }
         
         # Add warnings and recommendations if present
