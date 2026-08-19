@@ -697,6 +697,13 @@ class TestAModuleReplacedWholesaleIsNotAReload:
     Both directions, as everywhere in this file: the replacement is DETECTED
     (and answered as a replacement, not as a reload), and an ordinary
     ``mock.patch`` of one attribute is NOT mistaken for one.
+
+    ⚠️  THESE DRILLS ASSUME A CLEAN SLOT and fail LOUDLY if one is already in
+    force -- deliberately.  They could have been written to skip instead, and
+    that would be worse: a drill that quietly opts out in exactly the broken
+    state it exists to describe is the silent-failure family this whole file is
+    written against.  If several of these go red at once, read the guard's
+    summary first: it will already be naming the file that replaced the module.
     """
 
     def test_a_magicmock_in_sys_modules_is_detected_as_a_replacement(self):
