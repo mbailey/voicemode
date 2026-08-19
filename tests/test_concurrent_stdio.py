@@ -83,8 +83,22 @@ class TestStdioProtection:
         original_stdout = sys.stdout
         original_stderr = sys.stderr
         
-        with patch('sounddevice.rec') as mock_rec, \
-             patch('sounddevice.wait') as mock_wait:
+        # VM-2072: patch the SEAM record_audio actually uses -- the module
+        # attribute this file used to patch is a different object from the one
+        # the code under test holds whenever anything has put a stand-in in
+        # sys.modules['sounddevice'], and this test then reached the real
+        # device.  Measured in the first full-suite run, 2026-08-19: rec and
+        # query_devices both crossed the audio boundary from here and were
+        # blocked by the guard.  query_devices is mocked too because
+        # record_audio enumerates the host's devices under DEBUG (converse.py
+        # ~1263) -- and DEBUG is set by other tests, so whether this test opened
+        # the microphone depended on what ran before it.  This test is about
+        # stdio restoration, not about this machine's hardware.
+        with patch('voice_mode.tools.converse.sd.rec') as mock_rec, \
+             patch('voice_mode.tools.converse.sd.wait') as mock_wait, \
+             patch('voice_mode.tools.converse.sd.query_devices',
+                   return_value=[{'name': 'Mock Device', 'max_input_channels': 2,
+                                  'max_output_channels': 2}]):
             
             # Mock recording
             mock_rec.return_value = np.array([[100], [200]], dtype=np.int16)

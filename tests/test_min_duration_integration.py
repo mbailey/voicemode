@@ -1,13 +1,28 @@
 """Integration tests for minimum duration feature in converse tool."""
 
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 import numpy as np
 
-# Mock dependencies before import
-import sys
-sys.modules['webrtcvad'] = MagicMock()
-sys.modules['sounddevice'] = MagicMock()
+# VM-2072: this file used to replace sys.modules['sounddevice'] and
+# sys.modules['webrtcvad'] with MagicMocks HERE, at module level -- which pytest
+# executes at COLLECTION time, i.e. before the first test of the whole session
+# and for the rest of it.  Measured on 2026-08-19: every test in the suite then
+# imported a Mock instead of sounddevice, five of the audio guard's own drills
+# silently stopped testing anything, and the guard's repair path errored at the
+# teardown of all 2116 tests.  One line, whole-session blast radius, invisible
+# from any narrow selection.
+#
+# Neither mock was needed: sounddevice and webrtcvad-wheels are both hard
+# runtime dependencies of this package (pyproject.toml), so they are installed
+# wherever these tests run.  Real audio calls are unreachable anyway -- the
+# audio guard (tests/audio_guard/) blocks the device for every test run, which
+# is a stronger guarantee than a mock in one file, and it does not lie to the
+# other 2115 tests.
+#
+# If you need a stand-in for a module here, patch the SEAM the code under test
+# uses (e.g. patch('voice_mode.tools.converse.sd.rec')) rather than replacing a
+# module for everybody.
 
 
 @pytest.mark.asyncio
