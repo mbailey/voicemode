@@ -54,6 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the device itself is outside it. Hence the verdict line reads *"nothing IN
   THIS PROCESS reached the real audio device"*.
 
+  A third limit joins them when it applies: **a test file that replaces
+  `sys.modules['sounddevice']` wholesale** (`= MagicMock()` in a module body,
+  which pytest runs at collection time, i.e. for the rest of the session) takes
+  the sounddevice path out of the guard's reach for every test that follows.
+  That is now detected, reported **once**, named — including *which file did
+  it* — and the verdict downgrades to *"GREEN, BUT COVERAGE WAS INCOMPLETE"*
+  rather than claiming a boundary the instrument no longer had. If the
+  replacement is a real `sounddevice` module the guard simply adopts it and
+  carries on. **Patch the seam the code under test uses, not the module for
+  everybody** — a module-wide stand-in also makes tests pass in isolation and
+  fail, or silently stop testing anything, in a full run.
+
   ⚠️ **Tool-use soundfonts are a separate noise source and are NOT fixed by
   this.** `VOICEMODE_SOUNDFONTS_ENABLED` defaults to true and fires on **agent
   tool calls**, not on test runs. If the machine still makes noise after this

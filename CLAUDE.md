@@ -187,7 +187,11 @@ that the code under test swallowed still fails, because that exact case reported
   **Ask first if anyone might be on voice.**
 
 If a test fails on the guard it is almost certainly missing a mock rather than
-needing a marker. Full reference:
+needing a marker — and **patch the seam the code under test holds**
+(`patch('voice_mode.tools.converse.sd.rec')`), never the whole module. Never do
+`sys.modules['sounddevice'] = MagicMock()`: a module body runs at collection, so
+its blast radius is the entire session, and it takes the guard's sounddevice
+coverage down with it (reported, once, naming your file). Full reference:
 [docs/reference/audio-test-isolation.md](docs/reference/audio-test-isolation.md).
 
 ## Logging

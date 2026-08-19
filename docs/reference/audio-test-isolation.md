@@ -163,6 +163,48 @@ and carried in every JSON report**, so it cannot quietly drift out of date.
   children), so no *test* run emits them, but an agent working normally still
   can.
 * **`VOICEMODE_TEST_AUDIO_GUARD=off` runs**, by definition.
+* **A module that replaces `sys.modules['sounddevice']` wholesale.** If a file
+  does `sys.modules['sounddevice'] = MagicMock()` — in its *module body*, which
+  pytest runs at **collection** time, so it stands for the rest of the session —
+  then every later import of `sounddevice` returns that object and not the
+  guarded module. The guard cannot see through it, and does not pretend to: it
+  reports the condition **once**, names **the file responsible**, adds it to
+  this table for the rest of the run, and downgrades its verdict to *"GREEN, BUT
+  COVERAGE WAS INCOMPLETE"*. (A replacement that is a *real* `sounddevice`
+  module is simply adopted — derived and armed — and coverage continues.)
+  Anything that imported `sounddevice` **before** the replacement still holds
+  the guarded module and is still guarded.
+
+  This one is repairable, unlike the others, and the repair is in the test:
+  **patch the seam the code under test uses.** See below.
+
+## Patch the seam, not the module
+
+Two habits look equivalent and are not:
+
+```python
+patch('sounddevice.rec')                        # the module attribute
+patch('voice_mode.tools.converse.sd.rec')       # the seam the code holds
+```
+
+They are the same object *only while* `sys.modules['sounddevice']` is the module
+`converse` imported. The moment anything replaces it, the first patches a
+stand-in nobody calls and the code under test walks straight to the real device.
+Measured in this repo's first full-suite run (2026-08-19): three such calls
+reached the audio boundary from two tests that passed in isolation, and one
+module-level `sys.modules` assignment silently disabled five of the guard's own
+drills — they stopped raising, which is indistinguishable from "there was
+nothing to catch".
+
+So:
+
+* **Patch the seam** (`voice_mode.tools.converse.sd.rec`), not the module
+  attribute, whenever the code under test holds its own reference.
+* **Never replace a module in `sys.modules` at import time.** Its blast radius
+  is the whole session, not your file. If a dependency is genuinely optional,
+  patch it inside a fixture that restores it.
+* Mocks are for the *seam*; the **device** is the guard's job, and the guard
+  needs nobody to remember anything.
 
 ## Writing a new test that touches audio
 
