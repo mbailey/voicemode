@@ -4,7 +4,12 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 from datetime import datetime, timezone
 
-from voice_mode.provider_discovery import ProviderRegistry, EndpointInfo, detect_provider_type
+from voice_mode.provider_discovery import (
+    ProviderRegistry,
+    EndpointInfo,
+    detect_provider_type,
+    _default_tts_models,
+)
 from voice_mode.providers import (
     get_tts_client_and_voice,
     _select_model_for_endpoint,
@@ -428,6 +433,121 @@ class TestTtsModelSelection:
             kokoro = EndpointInfo(
                 base_url="http://127.0.0.1:8880/v1",
                 models=[],
+                voices=[],
+                provider_type="kokoro",
+            )
+            assert _select_model_for_endpoint(kokoro) == "tts-1"
+
+
+class TestRegistrySeedHardening:
+    """VM-2156: the registry seed must never advertise an id mlx-audio cannot
+    load, and selection must not hand one on even if a stale seed exists.
+
+    Hardening of the seeded/diagnostics path -- the live speech path already
+    resolves through _select_tts_model_for_endpoint (VM-1390).
+    """
+
+    def test_mlx_audio_seed_is_a_repo_id_not_tts_1(self):
+        """The seed for a :8890 endpoint is an HF repo id, matching the
+        provider-aware default (single source: TTS_MODEL_PROVIDER_DEFAULTS)."""
+        seeded = _default_tts_models("http://127.0.0.1:8890/v1")
+        assert seeded == ["mlx-community/Kokoro-82M-bf16"]
+        assert "tts-1" not in seeded
+        assert _model_compatible("mlx-audio", seeded[0])
+
+    def test_non_mlx_seeds_are_unchanged(self):
+        """kokoro / generic-local / unknown keep the historical 'tts-1' seed."""
+        for url in (
+            "http://127.0.0.1:8880/v1",
+            "http://127.0.0.1:9999/v1",
+            "https://example.com/v1",
+        ):
+            assert _default_tts_models(url) == ["tts-1"]
+
+    @pytest.mark.asyncio
+    async def test_registry_initialize_seeds_and_selects_a_repo_id_for_8890(self):
+        """End to end over the seeded path: initialize() then
+        _select_model_for_endpoint() yields a model containing '/' for the
+        mlx-audio endpoint, and a plain id for kokoro."""
+        urls = ["http://127.0.0.1:8890/v1", "http://127.0.0.1:8880/v1"]
+        with patch("voice_mode.provider_discovery.TTS_BASE_URLS", urls), patch(
+            "voice_mode.provider_discovery.STT_BASE_URLS", []
+        ), patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}
+        ):
+            registry = ProviderRegistry()
+            await registry.initialize()
+
+            mlx = registry.registry["tts"]["http://127.0.0.1:8890/v1"]
+            assert mlx.provider_type == "mlx-audio"
+            assert "tts-1" not in mlx.models
+            chosen = _select_model_for_endpoint(mlx)
+            assert "/" in chosen
+            assert _model_compatible("mlx-audio", chosen)
+
+            kokoro = registry.registry["tts"]["http://127.0.0.1:8880/v1"]
+            assert _select_model_for_endpoint(kokoro) == "tts-1"
+
+    def test_stale_incompatible_seed_is_filtered_out(self):
+        """Even with a stale ['tts-1'] seed (old install, or an endpoint that
+        advertises ids it cannot load), mlx-audio is never sent 'tts-1'."""
+        with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}
+        ):
+            stale = EndpointInfo(
+                base_url="http://127.0.0.1:8890/v1",
+                models=["tts-1", "tts-1-hd"],
+                voices=[],
+                provider_type="mlx-audio",
+            )
+            assert (
+                _select_model_for_endpoint(stale)
+                == "mlx-community/Kokoro-82M-bf16"
+            )
+
+    def test_compatible_advertised_models_still_win(self):
+        """The filter narrows, it does not override: a compatible advertised
+        model is still preferred over the built-in default."""
+        with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}
+        ):
+            endpoint = EndpointInfo(
+                base_url="http://127.0.0.1:8890/v1",
+                models=["tts-1", "mlx-community/Other-Repo"],
+                voices=[],
+                provider_type="mlx-audio",
+            )
+            assert (
+                _select_model_for_endpoint(endpoint)
+                == "mlx-community/Other-Repo"
+            )
+
+    def test_explicit_requested_model_is_still_honoured(self):
+        """Caller trust (step 1) is unchanged by the filter."""
+        with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}
+        ):
+            endpoint = EndpointInfo(
+                base_url="http://127.0.0.1:8890/v1",
+                models=["mlx-community/Kokoro-82M-bf16"],
+                voices=[],
+                provider_type="mlx-audio",
+            )
+            assert (
+                _select_model_for_endpoint(
+                    endpoint, "mlx-community/Kokoro-82M-bf16"
+                )
+                == "mlx-community/Kokoro-82M-bf16"
+            )
+
+    def test_kokoro_seed_selection_is_unaffected(self):
+        """Regression guard: the 8880 (kokoro) path keeps its plain id."""
+        with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
+            "voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}
+        ):
+            kokoro = EndpointInfo(
+                base_url="http://127.0.0.1:8880/v1",
+                models=_default_tts_models("http://127.0.0.1:8880/v1"),
                 voices=[],
                 provider_type="kokoro",
             )

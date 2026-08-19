@@ -31,6 +31,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The provider registry no longer advertises `tts-1` for mlx-audio, and selection never sends an id the endpoint cannot load (VM-2156)** —
+  when voicemode registered an endpoint it had not probed, everything that
+  wasn't OpenAI or Cartesia was seeded with the model list `["tts-1"]` —
+  including mlx-audio, which loads Hugging Face repos on demand and has no such
+  repo. mlx-audio's endpoints are now seeded with the same repo id the
+  per-endpoint resolver would pick (`mlx-community/Kokoro-82M-bf16`, from
+  VM-1390's built-in provider defaults, so there is one source of truth), the
+  treatment the STT side already had. Selection is hardened to match: a model
+  advertised by an endpoint is only chosen if it is plausible for that provider,
+  so even a stale registry entry left by an older install falls through to the
+  provider-aware default instead of being sent as-is. This closes a latent
+  defect on the seeded/diagnostics path — the live speech path already resolved
+  models through VM-1390's resolver — and it does not, on its own, address the
+  separate upstream mlx-audio bug where a bad model id kills the server's router
+  thread while `/v1/models` keeps answering 200.
+
 - **Voicemode no longer teaches assistants to invent a listening limit — you own it, and they stop cutting you off (VM-2099)** —
   the ceiling on how long voicemode listens belongs to *you*, through
   `VOICEMODE_DEFAULT_LISTEN_DURATION` in `~/.voicemode/voicemode.env`. It always
