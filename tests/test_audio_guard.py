@@ -675,3 +675,287 @@ class TestEndToEndInAChildRun:
         lifted = [e for e in report["events"] if e["event"] == "guard-lifted"]
         assert lifted, "mock.patch of a guarded name passed in silence"
         assert any(e["attribute"] == "sounddevice.wait" for e in lifted)
+
+
+class TestAModuleReplacedWholesaleIsNotAReload:
+    """``sys.modules['sounddevice'] = MagicMock()`` — the D1 family.
+
+    MEASURED, 2026-08-19, on the first full-suite run this branch ever had:
+    one line at the top of one test file (``tests/test_min_duration_integration``)
+    put a ``MagicMock`` in ``sys.modules['sounddevice']`` at COLLECTION time, so
+    every test from the first one onward saw it.  The guard asked its
+    ``reloaded()`` question with ``import sounddevice as sd``, got the Mock,
+    was answered "yes" by a Mock that answers yes to everything, and re-derived
+    against it — ``inspect.getsource(MagicMock)`` raising ``TypeError`` out of
+    the teardown hookwrapper.  **2116 errors and 4234 events in one run.**
+
+    That is not a cosmetic defect.  A guard that puts an ERROR on every test in
+    the suite is removed by the first person under time pressure, which leaves
+    no guard at all — the exact decay this task exists to prevent, arriving
+    through the guard instead of through the marker.
+
+    Both directions, as everywhere in this file: the replacement is DETECTED
+    (and answered as a replacement, not as a reload), and an ordinary
+    ``mock.patch`` of one attribute is NOT mistaken for one.
+    """
+
+    def test_a_magicmock_in_sys_modules_is_detected_as_a_replacement(self):
+        from unittest.mock import MagicMock
+
+        from tests.audio_guard import sounddevice_layer as layer
+
+        real = sys.modules["sounddevice"]
+        try:
+            sys.modules["sounddevice"] = MagicMock()
+            record = layer.module_replaced()
+            assert record is not None, (
+                "a wholesale replacement of sounddevice went undetected — the "
+                "guard would report full coverage of a module it no longer has"
+            )
+            assert record["replaced_with"] == "MagicMock"
+            assert record["is_module"] is False
+            assert record["adoptable"] is False
+        finally:
+            sys.modules["sounddevice"] = real
+        assert layer.module_replaced() is None, (
+            "the drill did not put sounddevice back — everything after this "
+            "point in the session would be measured against a Mock"
+        )
+
+    def test_a_replacement_is_never_answered_as_a_reload(self):
+        """The exact crash path, asserted at its root.
+
+        ``reloaded()`` returning True here is what sent ``rearm()`` into
+        ``_enum.analyse(MagicMock)``.  It must answer False: a replacement has
+        its own answer, and re-deriving against a stand-in is meaningless.
+        """
+        from unittest.mock import MagicMock
+
+        from tests.audio_guard import sounddevice_layer as layer
+
+        real = sys.modules["sounddevice"]
+        try:
+            sys.modules["sounddevice"] = MagicMock()
+            assert layer.reloaded() is False
+            # …and the repair path it used to reach must not raise, ever.
+            assert layer.rearm([]) == 0
+        finally:
+            sys.modules["sounddevice"] = real
+
+    def test_arming_never_derives_guards_from_a_stand_in(self):
+        """The arm-time half: refuse, shaped, rather than raise.
+
+        Every consumer of this state is a REPORTING path.  A reporting path
+        that explodes takes with it the run's only record of what happened.
+        """
+        from unittest.mock import MagicMock
+
+        from tests.audio_guard import sounddevice_layer as layer
+
+        real = sys.modules["sounddevice"]
+        armed = layer._ARMED_MODULE["object"]
+        try:
+            sys.modules["sounddevice"] = MagicMock()
+            state = layer._unarmed_state("block", "drill: stand-in in sys.modules")
+            assert state["guard_count"] == 0
+            assert state["backstop_installed"] is False
+            assert state["not_armed_reason"]
+            # Every key the reporting paths read must be present.
+            for key in ("covered", "mediated", "rebound_aliases", "mode",
+                        "sounddevice_version", "derived_entry_points"):
+                assert key in state
+        finally:
+            sys.modules["sounddevice"] = real
+            layer._ARMED_MODULE["object"] = armed
+            layer._STATE.pop("not_armed_reason", None)
+
+    def test_the_predicate_tells_a_module_from_a_stand_in(self):
+        from unittest.mock import MagicMock
+
+        from tests.audio_guard import sounddevice_layer as layer
+
+        assert layer._is_sounddevice_module(sd) is True
+        assert layer._is_sounddevice_module(MagicMock()) is False
+        assert layer._is_sounddevice_module(None) is False
+        # A bare module object carrying the name is still not sounddevice:
+        # nothing to derive from and no _lib to back-stop.
+        import types as _types
+        assert layer._is_sounddevice_module(_types.ModuleType("sounddevice")) is False
+
+    def test_a_real_sounddevice_in_the_slot_is_adopted_not_reported_as_a_hole(self):
+        """The DECLINES-TO-CRY-HOLE direction.
+
+        A genuine sounddevice module object in the slot IS coverable, so it gets
+        covered rather than reported as non-coverage.  Exercised by pointing the
+        armed-module reference at a decoy, which makes the REAL module look like
+        the replacement — so the adopt path runs for real, against the real
+        module, with no second ``Pa_Initialize`` anywhere near it.
+        """
+        import types as _types
+
+        from tests.audio_guard import sounddevice_layer as layer
+
+        armed = layer._ARMED_MODULE["object"]
+        decoy = _types.ModuleType("sounddevice")
+        layer._ARMED_MODULE["object"] = decoy
+        try:
+            record = layer.module_replaced()
+            assert record is not None and record["adoptable"] is True
+            assert layer.adopt_replacement() is True
+            assert layer.module_replaced() is None
+            assert layer._ARMED_MODULE["object"] is sd
+        finally:
+            if layer._ARMED_MODULE["object"] is decoy:
+                layer._ARMED_MODULE["object"] = armed
+
+    def test_the_adopted_guard_actually_fires(self):
+        """Runs after the adoption drill, in file order: re-armed and live."""
+        assert hasattr(sd.play, "__vm2072_audio_guard__")
+        with expect_blocked("play", label="drill: post-adoption"):
+            with pytest.raises(AudioDeviceTouchedInTest):
+                sd.play(SILENCE, samplerate=44100)
+
+    def test_re_arming_never_nests_the_portaudio_backstop(self):
+        """One layer between the caller and PortAudio, however often we re-arm.
+
+        The adoption drill above armed over an already-armed module.  If the
+        backstop wrapped itself each time, a long run would build a tower of
+        wrappers whose depth nobody can see — and delegation depth is exactly
+        the kind of thing that works until it does not.
+        """
+        from tests.audio_guard import sounddevice_layer as layer
+
+        inner = sd._lib.__dict__["_vm2072_real"]
+        assert not isinstance(inner, layer._PortAudioBackstop), (
+            "the PortAudio backstop is wrapped around another backstop"
+        )
+
+    def test_an_ordinary_mock_patch_is_not_a_replacement(self):
+        """The other direction: one attribute is not the whole module.
+
+        ``mock.patch('sounddevice.wait')`` is the LIFTED-GUARD case, which has
+        its own event and its own repair.  Reporting it as non-coverage would
+        be a false positive in the run's only record.
+        """
+        from unittest import mock
+
+        from tests.audio_guard import sounddevice_layer as layer
+
+        with mock.patch("sounddevice.wait"):
+            assert layer.module_replaced() is None
+        assert layer.module_replaced() is None
+
+
+class TestAWholesaleReplacementIsReportedOnceAndBreaksNothing:
+    """The D1 defect end to end, in a whole child run — the only place it shows.
+
+    D1 was invisible for three weeks because this slice was (correctly)
+    forbidden to run the full suite while a live human was on the speakers.  It
+    needs a WHOLE RUN because it is a collection-order effect: one file's module
+    body poisons every test that runs after it, including tests in files that
+    have nothing to do with audio.
+
+    So the run below is the shape of the real one, in miniature: an ordinary
+    file, a file that replaces ``sys.modules['sounddevice']`` wholesale at
+    module level, and more ordinary files after it.  Four things are asserted,
+    and all four failed on 2026-08-19:
+
+    * the run does not error — not once, let alone once per test;
+    * the condition is reported EXACTLY ONCE;
+    * the report NAMES THE FILE RESPONSIBLE, not the first innocent test to
+      tear down after it;
+    * the verdict does not claim coverage the guard no longer had.
+    """
+
+    @pytest.fixture(scope="class")
+    def child_run(self, tmp_path_factory):
+        workdir = tmp_path_factory.mktemp("audio_guard_replacement")
+        (workdir / "conftest.py").write_text(textwrap.dedent(f"""
+            import sys
+            sys.path.insert(0, {str(REPO_ROOT)!r})
+            from tests.audio_guard import plugin as _guard
+
+            def pytest_configure(config):
+                _guard.install(config)
+        """))
+        (workdir / "test_aaa_innocent.py").write_text(textwrap.dedent("""
+            def test_one(): assert True
+            def test_two(): assert True
+        """))
+        # The offending shape, verbatim from tests/test_min_duration_integration.py
+        # as it stood at 348113c: module level, so it runs at COLLECTION and
+        # stands for the whole session.
+        (workdir / "test_replaces_sounddevice.py").write_text(textwrap.dedent("""
+            import sys
+            from unittest.mock import MagicMock
+            sys.modules['sounddevice'] = MagicMock()
+
+            def test_needs_no_device(): assert True
+        """))
+        (workdir / "test_zzz_after.py").write_text(textwrap.dedent("""
+            def test_three(): assert True
+            def test_four(): assert True
+        """))
+        report = workdir / "report.json"
+        env = dict(os.environ)
+        env["VOICEMODE_AUDIO_GUARD_REPORT"] = str(report)
+        env["VOICEMODE_AUDIO_FEEDBACK"] = "false"
+        env["VOICEMODE_SOUNDFONTS_ENABLED"] = "false"
+        env.pop("VOICEMODE_TEST_AUDIO_GUARD", None)
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", str(workdir), "-p", "no:cacheprovider",
+             "-q", "--no-header"],
+            cwd=str(workdir), env=env, capture_output=True, text=True, timeout=300,
+        )
+        return proc, json.loads(report.read_text())
+
+    def test_the_run_does_not_error_at_every_teardown(self, child_run):
+        """The 2116-errors defect, asserted as a whole-run property."""
+        proc, _ = child_run
+        counts = [line for line in proc.stdout.splitlines()
+                  if re.search(r"\d+ (passed|failed|error)", line)][-1]
+        assert "error" not in counts, proc.stdout
+        assert "failed" not in counts, proc.stdout
+        assert "5 passed" in counts, proc.stdout
+        assert proc.returncode == 0, proc.stdout
+
+    def test_the_condition_is_reported_exactly_once(self, child_run):
+        _, report = child_run
+        replaced = [e for e in report["events"]
+                    if e["event"] == "sounddevice-module-replaced"]
+        assert len(replaced) == 1, (
+            f"expected exactly one report of the replacement, got "
+            f"{len(replaced)} — once per test is how a guard gets deleted"
+        )
+        assert not [e for e in report["events"] if e["event"] == "guard-full-rearm"], (
+            "the guard re-derived itself against a stand-in: that is the crash "
+            "path, and it is meaningless even when it does not crash"
+        )
+        # No per-test storm of any other kind, either.
+        assert len(report["events"]) < 10, report["events"]
+
+    def test_the_report_names_the_file_responsible(self, child_run):
+        _, report = child_run
+        [event] = [e for e in report["events"]
+                   if e["event"] == "sounddevice-module-replaced"]
+        assert "test_replaces_sounddevice" in event["by"], event
+        assert event["replaced_with"] == "MagicMock"
+        areas = {item["area"]: item for item in report["non_coverage"]}
+        assert "sounddevice replaced in sys.modules" in areas, (
+            "the gap was not stated in the non-coverage table it is printed "
+            "from — silent non-coverage is a dead guard"
+        )
+        assert "test_replaces_sounddevice" in areas[
+            "sounddevice replaced in sys.modules"]["detail"]
+        assert report["sounddevice_module_replaced"]["by"]
+
+    def test_the_verdict_does_not_claim_coverage_it_lost(self, child_run):
+        proc, report = child_run
+        assert report["verdict"] == "GREEN"  # nothing it could see was blocked
+        assert "GREEN, BUT COVERAGE WAS INCOMPLETE" in proc.stdout, proc.stdout
+        assert "test_replaces_sounddevice" in proc.stdout
+
+    def test_it_is_loud_where_the_person_running_the_suite_is_looking(self, child_run):
+        proc, _ = child_run
+        assert "COVERAGE IS INCOMPLETE FROM HERE ON" in proc.stderr, proc.stderr
+        assert "test_replaces_sounddevice" in proc.stderr

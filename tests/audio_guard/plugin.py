@@ -164,11 +164,109 @@ class _Reporter:
         # was not a fixture's temporary patch — it is a real hole.
         self._verify_still_armed(item.nodeid)
 
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_make_collect_report(self, collector):
+        """Collection is where a module-level replacement actually happens.
+
+        ``sys.modules['sounddevice'] = MagicMock()`` in a test file's body runs
+        when pytest IMPORTS that file — during collection, before any test.
+        Checking here is what lets the report NAME THE FILE RESPONSIBLE instead
+        of blaming whichever test happened to tear down first (measured: the
+        first victim was ``tests/dj/test_chapters.py``, which has nothing to do
+        with audio).
+        """
+        yield
+        if STATE.get("armed"):
+            self._check_sounddevice_module(
+                getattr(collector, "nodeid", None) or repr(collector))
+
+    def _check_sounddevice_module(self, source: str) -> None:
+        """Answer a WHOLESALE REPLACEMENT of the sounddevice module.
+
+        Three outcomes, and the choice between them is the whole point:
+
+        * **still ours** — nothing to do (and if a previously reported
+          replacement has gone away, say so and resume normal verification).
+        * **a real sounddevice** — adopt it: derive and arm again.  This is
+          coverable, so it gets covered rather than reported as a hole.
+        * **anything else** (a ``MagicMock``, a stub, or removed outright) —
+          the guard CANNOT cover it: it has no ``_lib`` to back-stop and no
+          source to derive from.  Report it ONCE, loudly, as a named
+          non-coverage condition, and stop verifying the sounddevice layer.
+
+        ONCE is load-bearing.  The previous behaviour re-derived on every
+        teardown and raised out of the hookwrapper each time: 2116 errors and
+        4234 events in one run.  Reported non-coverage is acceptable; a guard
+        that shouts 2116 times is removed by the first person in a hurry, which
+        leaves no guard at all.
+        """
+        replacement = sounddevice_layer.module_replaced()
+        active = STATE.get("sounddevice_module_replaced")
+        if replacement is None:
+            if active:
+                STATE["sounddevice_module_replaced"] = None
+                note("sounddevice-module-restored",
+                     replaced_by=active["by"],
+                     detail="the sounddevice module we armed is back in "
+                            "sys.modules; the guards on it were never removed, "
+                            "so coverage resumes here")
+            return
+        if active:
+            return  # reported once. Never once per test.
+        if replacement["adoptable"] and sounddevice_layer.adopt_replacement():
+            note("sounddevice-module-adopted",
+                 by=source,
+                 detail="sys.modules['sounddevice'] was replaced with a REAL "
+                        "sounddevice module; guards were derived and installed "
+                        "on it, so coverage continues",
+                 **replacement)
+            return
+
+        record = dict(replacement, by=source)
+        STATE["sounddevice_module_replaced"] = record
+        note("sounddevice-module-replaced", **record)
+        NON_COVERAGE.append({
+            "area": "sounddevice replaced in sys.modules",
+            "detail": (
+                f"{source} put a {replacement['replaced_with']} in "
+                "sys.modules['sounddevice'], so from that point on any code "
+                "importing sounddevice gets that object and NOT the guarded "
+                "module. The guard cannot see through it and did not try: "
+                "reported here rather than silently assumed covered"
+            ),
+            "mediated_by": [
+                "the guards this session installed are still on the real "
+                "sounddevice module object, so any caller holding it (anything "
+                "that imported sounddevice before the replacement) is still "
+                "guarded",
+                "the replacement is reported in the run header area, in this "
+                "summary, in the JSON report and on stderr",
+            ],
+        })
+        print(
+            f"\n{_BANNER}\n"
+            "⚠️  VM-2072 AUDIO GUARD — COVERAGE IS INCOMPLETE FROM HERE ON.\n"
+            f"    {source} replaced sys.modules['sounddevice'] with a "
+            f"{replacement['replaced_with']}.\n"
+            "    Code importing sounddevice after this point gets that object, "
+            "not the\n    guarded module, and this guard cannot see through "
+            "it.\n"
+            "    Fix the file (patch the seam you are testing, not the whole "
+            "module) or\n    accept the stated gap.\n"
+            f"{_BANNER}\n",
+            file=sys.stderr, flush=True,
+        )
+
     def _verify_still_armed(self, nodeid: str) -> None:
         if not STATE.get("armed"):
             return
+        self._check_sounddevice_module(nodeid)
         for layer, module in (("sounddevice", sounddevice_layer),
                               ("subprocess", subprocess_layer)):
+            if layer == "sounddevice" and STATE.get("sounddevice_module_replaced"):
+                # Already reported, and there is nothing here to verify: the
+                # name no longer resolves to the module we armed.
+                continue
             missing = module.verify_armed()
             if not missing and getattr(module, "reloaded", bool)():
                 # A reload writes straight into the module __dict__, so nothing
@@ -360,7 +458,21 @@ class _Reporter:
             for key, count in sorted(_group(sanctioned).items()):
                 write(f"    {key[1]}  ×{count}  <- {key[0]}")
 
+        replaced = STATE.get("sounddevice_module_replaced")
+        if replaced:
+            write("")
+            write("⚠️  sounddevice was REPLACED in sys.modules by "
+                  f"{replaced['by']} (a {replaced['replaced_with']}). "
+                  "Everything importing sounddevice after that point bypassed "
+                  "this guard; the verdict below is scoped accordingly.")
+
         if not failing:
+            if replaced:
+                write("RESULT: GREEN, BUT COVERAGE WAS INCOMPLETE — nothing "
+                      "this guard could still see reached the real audio "
+                      "device. It stopped being able to see the sounddevice "
+                      f"path at {replaced['by']}.")
+                return
             # Scoped deliberately. "Nothing reached the device" is a bigger
             # claim than this instrument can make: it sees this process and
             # every thread in it, and it sees that a child was spawned, but
@@ -380,6 +492,7 @@ class _Reporter:
         if not path:
             return
         payload = report_payload({
+            "sounddevice_module_replaced": STATE.get("sounddevice_module_replaced"),
             "pytest_args": list(self.config.invocation_params.args),
             "subprocess_census": subprocess_layer.census_summary(),
             "spawns": subprocess_layer.SPAWNS,

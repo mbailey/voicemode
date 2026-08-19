@@ -96,6 +96,10 @@ _LIFTED: dict = {}             # attribute -> event, currently-lifted guards
 #: The class objects we patched, so a RELOAD is detectable: reload rebuilds
 #: every class, leaving our references pointing at objects nothing uses.
 _ARMED_CLASSES: dict = {}
+#: The module OBJECT we armed, so a WHOLESALE REPLACEMENT is detectable.
+#: ``sys.modules['sounddevice'] = MagicMock()`` is a different condition from a
+#: reload and needs a different answer -- see ``module_replaced()``.
+_ARMED_MODULE: dict = {"object": None}
 _STATE: dict = {}
 
 
@@ -312,9 +316,115 @@ class _WatchedModule(types.ModuleType):
         types.ModuleType.__setattr__(self, name, value)
 
 
+def _is_sounddevice_module(obj) -> bool:
+    """Is this object something we can actually derive guards from?
+
+    The discriminator is ``isinstance(obj, ModuleType)`` plus the three
+    attributes the derivation needs.  A ``MagicMock`` satisfies ``hasattr`` for
+    every name in the universe, so ``hasattr`` alone answers "yes" to a stand-in
+    that has no source, no ``_lib`` and no PortAudio behind it — which is
+    exactly how ``_enum.analyse()`` came to be handed one.
+    """
+    if not isinstance(obj, types.ModuleType):
+        return False
+    if getattr(obj, "__file__", None) is None:
+        return False
+    return all(hasattr(obj, name)
+               for name in ("_lib", "_StreamBase", "query_devices"))
+
+
+def module_replaced() -> dict | None:
+    """Has ``sys.modules['sounddevice']`` been swapped for a different object?
+
+    A DIFFERENT CONDITION FROM A RELOAD, WITH A DIFFERENT ANSWER.  A reload
+    re-executes the module body into the SAME module object, so re-deriving and
+    re-arming is exactly right.  A wholesale replacement --
+    ``sys.modules['sounddevice'] = MagicMock()``, which one test file in this
+    repo did at module level, i.e. during COLLECTION, i.e. for the rest of the
+    session -- leaves an object that is not sounddevice at all.  Re-deriving
+    against it is meaningless, and attempting it raises out of the teardown
+    hookwrapper: measured on 2026-08-19, one line put an ERROR on all 2116 tests
+    of a full run.  A guard that does that to a suite gets deleted within a
+    week, which is the decay this task exists to prevent, arriving through the
+    guard instead of through the marker.
+
+    So the two are told apart here and answered separately.  Returns ``None``
+    when the armed module is still in place, otherwise a description of what is
+    there now -- including whether it is a real sounddevice we could adopt.
+    """
+    armed = _ARMED_MODULE.get("object")
+    if armed is None:
+        return None
+    current = sys.modules.get("sounddevice")
+    if current is armed:
+        return None
+    return {
+        "replaced_with": "<removed from sys.modules>" if current is None
+                         else type(current).__name__,
+        "is_module": isinstance(current, types.ModuleType),
+        "adoptable": _is_sounddevice_module(current),
+        "armed_module_file": getattr(armed, "__file__", None),
+    }
+
+
+def adopt_replacement() -> bool:
+    """Arm a REAL sounddevice that has taken the armed module's place.
+
+    Only ever called for the ``adoptable`` case: someone put a genuine
+    sounddevice module object into ``sys.modules`` (a re-import, a restore).
+    That IS coverable, so it is covered rather than reported as a hole.
+    """
+    if not _is_sounddevice_module(sys.modules.get("sounddevice")):
+        return False
+    mode = _STATE.get("mode", MODE_BLOCK)
+    _forget_state()
+    arm(mode)
+    return True
+
+
+def _unarmed_state(mode: str, reason: str) -> dict:
+    """The coverage description for "we could not arm", with every key present.
+
+    Returning a shaped dict rather than raising is deliberate: every consumer of
+    this state is a REPORTING path, and a reporting path that explodes takes the
+    run's only record of what happened with it.
+    """
+    _STATE.update({
+        "sounddevice_version": None,
+        "sounddevice_file": None,
+        "derived_entry_points": 0,
+        "device_touching": 0,
+        "covered": {},
+        "guard_count": 0,
+        "mediated": {},
+        "rebound_aliases": [],
+        "backstop_installed": False,
+        "backstop_passthrough": BACKSTOP_PASSTHROUGH,
+        "rebinding_watcher": False,
+        "mode": mode,
+        "armed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "not_armed_reason": reason,
+    })
+    note("sounddevice-layer-not-armed", layer="sounddevice", detail=reason)
+    return dict(_STATE)
+
+
 def arm(mode: str = MODE_BLOCK) -> dict:
     """Install every layer.  Returns the coverage description for the report."""
-    import sounddevice as sd
+    sd = sys.modules.get("sounddevice")
+    if sd is None:
+        import sounddevice as sd  # noqa: F811 - first import, normal path
+    if not _is_sounddevice_module(sd):
+        # Never derive against a stand-in.  This is the arm-time half of
+        # module_replaced(): if something already occupies sounddevice's name
+        # before we get here, say so and stay unarmed rather than crash.
+        return _unarmed_state(
+            mode,
+            "sys.modules['sounddevice'] is a "
+            f"{type(sd).__name__}, not the sounddevice module: guards cannot be "
+            "derived from it and none were installed",
+        )
+    _ARMED_MODULE["object"] = sd
 
     report = _enum.analyse(sd)
     covered: dict = {}
@@ -363,6 +473,12 @@ def arm(mode: str = MODE_BLOCK) -> dict:
     # Layer 3 — the PortAudio boundary itself.
     backstop = None
     real_lib = getattr(sd, "_lib", None)
+    if isinstance(real_lib, _PortAudioBackstop):
+        # Arming again over a live backstop (a reload repair, or adopting a
+        # replacement) must not wrap a wrapper: unwrap to the real CFFI handle,
+        # so re-arming N times leaves exactly one layer between the caller and
+        # PortAudio.
+        real_lib = real_lib.__dict__["_vm2072_real"]
     if real_lib is not None:
         backstop = _PortAudioBackstop(real_lib, mode)
         _patch_attr(sd, "_lib", backstop)
@@ -434,8 +550,17 @@ def reloaded() -> bool:
     functions and silently leave the streams unguarded, which is a worse state
     than either: a guard that *looks* re-armed.  So a reload is detected as a
     reload and answered with a complete re-arm.
+
+    A WHOLESALE REPLACEMENT IS NOT A RELOAD and must not be answered as one:
+    this used to read ``import sounddevice as sd``, so a ``MagicMock`` sitting
+    in ``sys.modules`` answered every ``getattr`` with a fresh Mock, reported
+    itself as a reload, and sent ``rearm()`` into ``_enum.analyse(MagicMock)``.
+    The question is asked of the module we ARMED; replacement is
+    ``module_replaced()``'s question, and it has its own answer.
     """
-    import sounddevice as sd
+    sd = _ARMED_MODULE.get("object")
+    if sd is None or module_replaced() is not None:
+        return False
 
     for name, cls in _ARMED_CLASSES.items():
         if getattr(sd, name, None) is not cls:
@@ -448,6 +573,7 @@ def reloaded() -> bool:
 
 
 def _forget_state() -> None:
+    _ARMED_MODULE["object"] = None
     _ORIGINALS.clear()
     _INSTALLED.clear()
     _PATCHED_PAIRS.clear()
@@ -485,6 +611,7 @@ def rearm(missing: list) -> int:
 
 
 def disarm() -> None:
+    _ARMED_MODULE["object"] = None
     _INSTALLED.clear()
     while _ORIGINALS:
         owner, name, original, was_in_dict = _ORIGINALS.pop()
