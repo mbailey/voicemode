@@ -235,25 +235,40 @@ def _select_voice_for_endpoint(endpoint_info: EndpointInfo) -> str:
 
 
 def _select_model_for_endpoint(endpoint_info: EndpointInfo, requested_model: Optional[str] = None) -> str:
-    """Select the best available model for an endpoint."""
-    # If specific model requested and supported, use it
+    """Select the best available model for an endpoint.
+
+    Advertised/seeded models are filtered through :func:`_model_compatible`
+    first (VM-2156): an endpoint's model list can be stale -- seeded by an older
+    version, or discovered from a server that advertises ids it cannot load --
+    and handing an incompatible id to mlx-audio wedges its router thread. When
+    nothing advertised is usable we fall through to the provider-aware resolver
+    (VM-1390), the same one the live failover path uses.
+    """
+    provider_type = endpoint_info.provider_type or "unknown"
+
+    # If specific model requested and supported, use it (caller trust, step 1
+    # of the VM-1390 resolution order).
     if requested_model and requested_model in endpoint_info.models:
         return requested_model
 
+    # Only consider advertised models this provider can actually load.
+    compatible = [
+        model for model in endpoint_info.models
+        if _model_compatible(provider_type, model)
+    ]
+
     # Try to find a preferred model
     for model in TTS_MODELS:
-        if model in endpoint_info.models:
+        if model in compatible:
             return model
 
-    # Otherwise use first available model
-    if endpoint_info.models:
-        return endpoint_info.models[0]
+    # Otherwise use first available compatible model
+    if compatible:
+        return compatible[0]
 
     # Fallback: provider-aware default (VM-1390) instead of a hardcoded "tts-1",
     # so the registry path converges on the same resolver as the failover path.
-    return _select_tts_model_for_endpoint(
-        endpoint_info.provider_type or "unknown", requested_model
-    )
+    return _select_tts_model_for_endpoint(provider_type, requested_model)
 
 
 def _model_compatible(provider_type: str, model_id: str) -> bool:
