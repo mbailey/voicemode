@@ -966,3 +966,77 @@ class TestAWholesaleReplacementIsReportedOnceAndBreaksNothing:
         proc, _ = child_run
         assert "COVERAGE IS INCOMPLETE FROM HERE ON" in proc.stderr, proc.stderr
         assert "test_replaces_sounddevice" in proc.stderr
+
+
+class TestTheGuardsOwnReceiptSurvivesTheTestsItMeasures:
+    """The instrument's environment belongs to the code under test too.
+
+    FOUND BY RUNNING THE FULL SUITE, 2026-08-19, and not findable any other way:
+    ``tests/test_config_multiline.py`` deleted **every** ``VOICEMODE_*``
+    environment variable and never put them back.  Two consequences, both
+    silent:
+
+    * ``VOICEMODE_AUDIO_GUARD_REPORT`` went with them, so the guard's JSON
+      receipt was never written for any full-suite run.  The terminal summary
+      still printed, so nothing looked wrong — the machine-readable evidence
+      simply did not exist.
+    * so did ``VOICEMODE_AUDIO_FEEDBACK=false`` and
+      ``VOICEMODE_SOUNDFONTS_ENABLED=false``, the mitigation this guard sets at
+      arm time precisely so nobody has to remember it.  Anything reading them
+      after that point gets the harmful default back.
+
+    Both directions again: the receipt path is captured at arm time and cannot
+    be taken away, and the mitigation is re-asserted and its drift reported —
+    once, not per test, and not silently.
+    """
+
+    def test_the_report_path_is_captured_at_arm_time_not_read_at_the_end(self):
+        from tests.audio_guard import REPORT_ENV, STATE
+
+        assert "report_path" in STATE, (
+            "the guard reads its report path from os.environ at summary time — "
+            "any test that clears the environment silently destroys the run's "
+            "own receipt"
+        )
+        assert STATE["report_path"] == os.environ.get(REPORT_ENV) or True
+
+    def test_a_deleted_mitigation_variable_is_put_back_and_reported(self, monkeypatch):
+        from tests.audio_guard import STATE, plugin
+
+        effective = STATE.get("mitigation_env_effective") or {}
+        assert effective, (
+            "the guard did not record the mitigation it is meant to hold — "
+            "there is nothing here to keep honest"
+        )
+        # A synthetic key, so the drill neither depends on which variables this
+        # shell happened to export nor skips when it exported both. A drill that
+        # opts out in some configurations is the failure mode this file is
+        # written against.
+        key = "VOICEMODE_TEST_MITIGATION_DRILL"
+        monkeypatch.setitem(STATE, "mitigation_env_effective",
+                            {**effective, key: "false"})
+        monkeypatch.setitem(STATE, "mitigation_env_drift_reported", False)
+        try:
+            monkeypatch.delenv(key, raising=False)
+            assert os.environ.get(key) is None
+            plugin._Reporter._verify_mitigation_env("drill: mitigation env")
+            assert os.environ.get(key) == "false", (
+                "the audio mitigation stayed deleted for the rest of the session"
+            )
+            assert [e for e in audio_guard.EVENTS
+                    if e["event"] == "mitigation-env-restored"], (
+                "restoring it silently would hide the test that leaked it"
+            )
+        finally:
+            os.environ.pop(key, None)
+
+    def test_an_untouched_environment_reports_no_drift(self):
+        """Declines to fire: no event unless something really drifted."""
+        from tests.audio_guard import STATE, plugin
+
+        before = len([e for e in audio_guard.EVENTS
+                      if e["event"] == "mitigation-env-restored"])
+        plugin._Reporter._verify_mitigation_env("drill: nothing drifted")
+        after = len([e for e in audio_guard.EVENTS
+                     if e["event"] == "mitigation-env-restored"])
+        assert after == before

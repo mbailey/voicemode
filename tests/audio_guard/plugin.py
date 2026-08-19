@@ -105,6 +105,21 @@ def install(config) -> None:
     STATE["mode"] = mode
     STATE["mode_reason"] = reason
     STATE["mitigation_env_applied"] = applied_env
+    # The invariant is "these two hold their arm-time value for the whole run",
+    # not "what I set stays set" -- so verification is against the EFFECTIVE
+    # values, which is what a shell that already exported them chose. A test
+    # that deletes them mid-run is drift either way.
+    STATE["mitigation_env_effective"] = {
+        key: os.environ.get(key) for key in _MITIGATION_ENV
+    }
+    # READ THE REPORT PATH ONCE, HERE, AND KEEP IT.  os.environ belongs to the
+    # code under test as much as to us: tests/test_config_multiline.py deleted
+    # every VOICEMODE_* variable and did not put them back, so in every
+    # full-suite run this guard's JSON receipt was silently never written --
+    # the terminal summary printed, nobody noticed, and the machine-readable
+    # evidence simply did not exist.  An instrument's own receipt must not
+    # depend on what the things it is measuring do to the environment.
+    STATE["report_path"] = os.environ.get(REPORT_ENV)
 
     if mode == MODE_OFF:
         # The escape hatch announces itself.  A guard that can be absent
@@ -257,9 +272,43 @@ class _Reporter:
             file=sys.stderr, flush=True,
         )
 
+    @staticmethod
+    def _verify_mitigation_env(nodeid: str) -> None:
+        """Put back the two variables that keep this machine quiet.
+
+        The guard sets VOICEMODE_AUDIO_FEEDBACK=false and
+        VOICEMODE_SOUNDFONTS_ENABLED=false at arm time so nobody has to remember
+        to export them.  A test is free to delete them -- and one did, for the
+        whole session, as a side effect of testing the config loader.  Anything
+        that reads them AFTER that point (a reimport, a subprocess, a reloaded
+        config module) gets the harmful default back.
+
+        So they are re-asserted, and the drift is REPORTED ONCE: silently
+        restoring would hide a real class of test that leaks environment.
+        """
+        drifted = {}
+        for key, value in (STATE.get("mitigation_env_effective") or {}).items():
+            if value is None:
+                continue
+            if os.environ.get(key) != value:
+                drifted[key] = os.environ.get(key)
+                os.environ[key] = value
+        if drifted and not STATE.get("mitigation_env_drift_reported"):
+            STATE["mitigation_env_drift_reported"] = True
+            note(
+                "mitigation-env-restored",
+                nodeid=nodeid,
+                drifted=drifted,
+                detail="a test removed or changed the audio-mitigation "
+                       "environment the guard set at arm time; restored. "
+                       "Reported once -- anything reading these variables in "
+                       "the window got the harmful default",
+            )
+
     def _verify_still_armed(self, nodeid: str) -> None:
         if not STATE.get("armed"):
             return
+        self._verify_mitigation_env(nodeid)
         self._check_sounddevice_module(nodeid)
         for layer, module in (("sounddevice", sounddevice_layer),
                               ("subprocess", subprocess_layer)):
@@ -488,7 +537,7 @@ class _Reporter:
               "hit record, whatever the tests reported.")
 
     def _maybe_write_report(self, write) -> None:
-        path = os.environ.get(REPORT_ENV)
+        path = STATE.get("report_path") or os.environ.get(REPORT_ENV)
         if not path:
             return
         payload = report_payload({
