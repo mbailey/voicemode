@@ -57,6 +57,17 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# VM-2168: every test in this module drives converse inside a CHILD interpreter
+# (see _run_probe). VM-2072's audio guard arms in THIS process only and says so
+# in its own summary -- so these probes open Mike's real output device, the run
+# still reports GREEN, and he hears "Tell me everything." spoken aloud. Measured
+# 2026-08-19: 7 tests, 9 spawns (7 python3), guard GREEN, audibly speaking.
+#
+# Marked `audio` so the default run excludes them (pyproject addopts: -m "not
+# audio"). This is a MUTE, not a fix: the probes are still unguarded when you
+# opt in with `-m audio`. VM-2168 owns making the child inherit the guard.
+pytestmark = pytest.mark.audio
+
 # Result marker: probe stdout also carries voicemode's own log lines.
 MARKER = "VM2099_JSON "
 
