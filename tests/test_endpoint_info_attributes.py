@@ -114,8 +114,15 @@ class TestProviderToolsUsage:
         }
         mock_registry.initialize = AsyncMock()
 
+        # VM-2072: voice_status() also reports the host's default audio devices.
+        # This test asserts on an endpoint field, not on hardware, so the
+        # enumeration is mocked -- without it the test queried the live device.
+        mock_device = {'name': 'Mock Device', 'max_input_channels': 2,
+                       'max_output_channels': 2}
         # Patch at the location where it's imported (inside the function)
-        with patch('voice_mode.provider_discovery.provider_registry', mock_registry):
+        with patch('voice_mode.provider_discovery.provider_registry', mock_registry), \
+             patch('voice_mode.tools.devices.sd.query_devices',
+                   return_value=mock_device):
             # Import here to apply the patch
             from voice_mode.tools.devices import voice_status
 

@@ -191,6 +191,12 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--ignore=tests/manual",
+    # VM-2072: audio-touching tests are excluded from a default run. This is the
+    # CONVENIENCE layer only -- it can be forgotten on the next test written, and
+    # a `-m` on the command line replaces it entirely. The layer that actually
+    # keeps the real device shut is the guard in tests/audio_guard/, which arms
+    # at pytest_configure and needs nobody to remember anything.
+    "-m", "not audio",
     "--cov=voice_mode",
     "--cov-branch",
     "--cov-report=term-missing:skip-covered",
@@ -202,6 +208,7 @@ markers = [
     "integration: Integration tests (may interact with services)",
     "slow: Tests that take > 1s",
     "manual: Manual tests requiring human interaction",
+    "audio: Touches the audio stack (VM-2072). Excluded from a default run; opt in with `-m audio`, which runs MUTED -- the guard substitutes inert stand-ins so no real device is opened. A real-device run needs VOICEMODE_TEST_AUDIO_GUARD=off, which announces itself loudly.",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

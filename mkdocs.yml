@@ -107,6 +107,7 @@ nav:
     - Voices Resource: reference/voices-resource.md
   - Development:
     - Local Development: tutorials/development-setup.md
+    - Audio Test Isolation: reference/audio-test-isolation.md
     - Tool Loading Architecture: reference/tool-loading-architecture.md
     - PR Review Rubric: maintainers/pr-review-rubric.md
   - Troubleshooting:

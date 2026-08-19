@@ -9,6 +9,18 @@ from voice_mode.tools.voice_registry import voice_registry
 from voice_mode.tools.dependencies import check_audio_dependencies
 
 
+# VM-2072: check_audio_dependencies() enumerates the host's real audio devices
+# through the lazy `import sounddevice` at voice_mode/tools/dependencies.py:78.
+# These tests are about PLATFORM DETECTION, not about this machine's hardware,
+# so they mock the enumeration. Without this they queried the live device six
+# times per run -- and the tool's `except Exception` swallowed the guard, so the
+# tests still passed while the device was being touched.
+MOCK_AUDIO_DEVICES = [
+    {"name": "Mock Input", "max_input_channels": 2, "max_output_channels": 0},
+    {"name": "Mock Output", "max_input_channels": 0, "max_output_channels": 2},
+]
+
+
 class TestDiagnosticTools:
     """Test diagnostic tool functions."""
 
@@ -143,7 +155,8 @@ class TestDiagnosticTools:
         """Test check_audio_dependencies on Linux."""
         # Since platform is imported inside the function, we need to ensure
         # the function reloads it with our mock
-        with patch("voice_mode.tools.dependencies.diagnose_audio_setup", return_value=[]):
+        with patch("voice_mode.tools.dependencies.diagnose_audio_setup", return_value=[]), \
+             patch("sounddevice.query_devices", return_value=MOCK_AUDIO_DEVICES):
             import sys
             import importlib
             
@@ -200,7 +213,8 @@ class TestDiagnosticTools:
     @pytest.mark.asyncio
     async def test_check_audio_dependencies_macos(self):
         """Test check_audio_dependencies on macOS."""
-        with patch("voice_mode.tools.dependencies.diagnose_audio_setup", return_value=[]):
+        with patch("voice_mode.tools.dependencies.diagnose_audio_setup", return_value=[]), \
+             patch("sounddevice.query_devices", return_value=MOCK_AUDIO_DEVICES):
             import sys
             import importlib
             
@@ -246,6 +260,7 @@ class TestDiagnosticTools:
     async def test_check_audio_dependencies_windows(self):
         """Test check_audio_dependencies on Windows/WSL."""
         with patch("platform.system", return_value="Linux"), \
+             patch("sounddevice.query_devices", return_value=MOCK_AUDIO_DEVICES), \
              patch("pathlib.Path.exists") as mock_exists:
             
             # Mock WSL detection
