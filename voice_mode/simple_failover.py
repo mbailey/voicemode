@@ -23,15 +23,16 @@ logger = logging.getLogger("voicemode")
 
 
 class UnmappedProviderVoiceError(RuntimeError):
-    """Defensive backstop (VM-1901 design.md §3.2.7).
+    """Loud per-endpoint refusal (VM-1901 design.md §3.2.7, scope per VM-2190).
 
-    ``resolve_voice()``'s provider-native whitelist should have already
-    accepted or rejected any voice name before it reaches this endpoint's
-    mapping table — if an unrecognised name gets here anyway, that is a bug
-    upstream (whitelist/mapping-table drift), not a legitimate fallback
-    case. Raising turns that gap into a loud, traceable failure for THIS
-    endpoint (failover continues to the next one) instead of silently
-    substituting "alloy".
+    Raised when a provider-native voice reaches an OpenAI endpoint that has
+    no mapping for it. Since VM-2190 widened ``resolve_voice()``'s gate to
+    every voice a configured endpoint claims (the full kokoro set, not just
+    the 7 mapped names), this is an EXPECTED failover case, not only upstream
+    drift: ``voice="af_nicole"`` with kokoro/mlx-audio down legitimately lands
+    here. Raising skips THIS endpoint (failover continues to the next one)
+    instead of silently substituting "alloy" — the identity break VM-1901
+    exists to prevent.
     """
 
 
@@ -159,15 +160,17 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                 }
                 # VM-1901: this used to default unrecognised names to
                 # "alloy" — the mechanism the alloy-fallback bug actually
-                # rode in on. resolve_voice() now gates everything reaching
-                # here to its provider-native whitelist, so an unmapped name
-                # is upstream drift, not a real fallback; raise instead of
-                # substituting (belt to the resolver's braces).
+                # rode in on. Raise instead of substituting; failover skips
+                # this endpoint and moves on. VM-2190: with the resolver now
+                # accepting every voice a configured endpoint claims, an
+                # unmapped kokoro voice landing here (kokoro/mlx unreachable,
+                # chain reached OpenAI) is an expected, loud skip — not
+                # necessarily upstream drift.
                 if voice not in voice_mapping:
                     raise UnmappedProviderVoiceError(
                         f"Voice {voice!r} has no OpenAI mapping and isn't an "
-                        f"OpenAI-native name — resolve_voice() should not have "
-                        f"accepted it as provider-native for this endpoint."
+                        f"OpenAI-native name — this endpoint cannot speak it; "
+                        f"skipping (no silent substitution)."
                     )
                 selected_voice = voice_mapping[voice]
                 # VM-1901: this IS the one legitimate fallback left in the

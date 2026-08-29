@@ -111,6 +111,15 @@ OPENAI_NATIVE_VOICES = frozenset({"alloy", "echo", "fable", "nova", "onyx", "shi
 # name in this set is legitimate provider-native usage, not an unresolved
 # reference — kept as a single source of truth so voice_profiles' whitelist
 # and simple_failover's mapping table can't drift apart silently.
+#
+# VM-2190: this set is NOT the resolver's kokoro gate anymore — for five weeks
+# it accidentally was, which made the other 60 kokoro voices (af_nicole,
+# af_heart, ...) "Unresolvable" even though both local endpoints serve them.
+# _is_provider_native now asks provider_discovery.known_provider_voices() what
+# the configured endpoints actually claim; this mapping subset survives only
+# as simple_failover's OpenAI-equivalence table (an unmapped kokoro voice
+# reaching an OpenAI endpoint on failover raises UnmappedProviderVoiceError
+# there, skipping that endpoint loudly — still never a silent alloy).
 KOKORO_MAPPED_VOICES = frozenset({
     "af_sky", "af_sarah", "af_alloy", "am_adam", "am_echo", "am_onyx", "bm_fable",
 })
@@ -891,6 +900,19 @@ def _is_provider_native(name: str) -> bool:
         if name in getattr(_vm_config, "TTS_VOICES", ()):
             return True
     except Exception:  # pragma: no cover — never let a config import break resolution
+        pass
+    # VM-2190: accept any voice a configured TTS endpoint claims to serve.
+    # The static whitelists above only covered 7 of the 67 kokoro voices, so
+    # from VM-1901's landing every other kokoro voice (af_nicole, af_heart,
+    # ...) was "Unresolvable" while both local endpoints happily served it.
+    # known_provider_voices() is sync, network-free, and falls back to the
+    # registry's own seed lists when discovery hasn't run — so this stays a
+    # real gate: with only OpenAI configured, a kokoro name still fails loudly.
+    try:
+        from .provider_discovery import known_provider_voices
+        if name in known_provider_voices():
+            return True
+    except Exception:  # pragma: no cover — never let registry state break resolution
         pass
     return False
 

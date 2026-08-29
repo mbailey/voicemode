@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **All 67 Kokoro voices work again in `converse` (VM-2190)** — since the
+  voice-resolution overhaul landed on 2026-07-25 (VM-1901), asking for any
+  Kokoro voice outside a 7-name whitelist (`af_sky`, `af_sarah`, `af_alloy`,
+  `am_adam`, `am_echo`, `am_onyx`, `bm_fable`) failed with
+  `Unresolvable voice` even though the local kokoro-fastapi and mlx-audio
+  endpoints serve the full set — `voice="af_nicole"` was the report that
+  surfaced it. The resolver's provider-native check now asks the provider
+  registry what the configured endpoints actually claim
+  (`known_provider_voices()`), so every voice a configured endpoint can say
+  resolves, and a name nothing can say still fails loudly — VM-1901's
+  no-silent-substitution guarantee is unchanged, including the loud
+  per-endpoint skip when an unmapped Kokoro voice reaches OpenAI on failover.
+  The Kokoro voice list is now a single constant
+  (`provider_discovery.KNOWN_KOKORO_VOICES`) instead of three inline copies.
+
 - **The test suite can no longer open the machine's real audio device (VM-2072)** —
   running `pytest` on this repo used to open the microphone and put sound
   through the speakers of whoever was at the machine: chimes, start/stop beeps,
