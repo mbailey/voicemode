@@ -15,6 +15,7 @@ from .provider_discovery import is_local_provider
 from .config import (
     TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE,
     STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX,
+    TTS_VOICE_SUBSTITUTION,
 )
 from .provider_discovery import detect_provider_type, EndpointInfo
 from .providers import _select_stt_model_for_endpoint, _select_tts_model_for_endpoint
@@ -80,9 +81,19 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
         # explicit caller model still wins inside the resolver.
         selected_model = _select_tts_model_for_endpoint(provider_type, model)
         if provider_type == "openai":
-            # Map Kokoro voices to OpenAI equivalents, or use OpenAI default
             openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
-            if voice in openai_voices:
+            if voice in openai_voices or not TTS_VOICE_SUBSTITUTION:
+                # Pass the requested voice through. If OpenAI does not own it the
+                # request fails loudly, which surfaces the local-TTS outage that
+                # caused the fallback instead of masking it as a voice change.
+                #
+                # Substituting silently is worse than failing here: nothing in the
+                # return value or the logs told the user their voice changed, the
+                # first signal was auditory and mid-conversation, and it converts a
+                # free local failure into a billed cloud call nobody asked for. It
+                # also collapses distinct voices onto one (af_sky and af_sarah both
+                # became nova), which matters when several agents share a channel
+                # and the voice is how you tell them apart.
                 selected_voice = voice
             else:
                 voice_mapping = {
@@ -95,7 +106,10 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                     "bm_fable": "fable"
                 }
                 selected_voice = voice_mapping.get(voice, "alloy")  # Default to alloy
-                logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
+                logger.warning(
+                    f"Substituted voice {voice} -> {selected_voice} for OpenAI "
+                    f"(VOICEMODE_TTS_VOICE_SUBSTITUTION is enabled)"
+                )
         else:
             selected_voice = voice  # Use original voice for Kokoro
     logger.info(f"Endpoint {base_url} ({provider_type}): model={selected_model}")
