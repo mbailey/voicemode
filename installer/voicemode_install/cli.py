@@ -237,6 +237,10 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive, model):
 
     # Initialize logger
     logger = InstallLogger()
+    # Optional services are allowed to fail without aborting the run, but the
+    # final status has to reflect it -- previously a failed component was logged
+    # and then forgotten, and the run still reported success and exited 0.
+    failed_components = []
 
     try:
         # Clear screen and show logo
@@ -435,38 +439,36 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive, model):
                     if model != 'base':
                         whisper_cmd.extend(['--model', model])
                     try:
-                        result = subprocess.run(whisper_cmd, check=True)
-                        if result.returncode == 0:
-                            print_success("Whisper STT service installed")
-                            logger.log_install('whisper', ['whisper'], True)
-                        else:
-                            print_warning("Whisper installation may not have completed successfully")
-                            logger.log_install('whisper', ['whisper'], False)
+                        # check=True, so run() only returns on success -- the
+                        # former `else` branch here was unreachable.
+                        subprocess.run(whisper_cmd, check=True)
+                        print_success("Whisper STT service installed")
+                        logger.log_install('whisper', ['whisper'], True)
                     except subprocess.CalledProcessError as e:
                         print_error(f"Whisper installation failed: {e}")
-                        logger.log_install('whisper', ['whisper'], False)
-                    except FileNotFoundError:
+                        logger.log_install('whisper', ['whisper'], False, error=str(e))
+                        failed_components.append('whisper')
+                    except FileNotFoundError as e:
                         print_error("VoiceMode command not found. Cannot install Whisper.")
-                        logger.log_install('whisper', ['whisper'], False)
+                        logger.log_install('whisper', ['whisper'], False, error=str(e))
+                        failed_components.append('whisper')
 
                     # Install Kokoro
                     click.echo()
                     print_step("Installing Kokoro TTS service...")
                     kokoro_cmd = ['voicemode', 'service', 'install', 'kokoro']
                     try:
-                        result = subprocess.run(kokoro_cmd, check=True)
-                        if result.returncode == 0:
-                            print_success("Kokoro TTS service installed")
-                            logger.log_install('kokoro', ['kokoro'], True)
-                        else:
-                            print_warning("Kokoro installation may not have completed successfully")
-                            logger.log_install('kokoro', ['kokoro'], False)
+                        subprocess.run(kokoro_cmd, check=True)
+                        print_success("Kokoro TTS service installed")
+                        logger.log_install('kokoro', ['kokoro'], True)
                     except subprocess.CalledProcessError as e:
                         print_error(f"Kokoro installation failed: {e}")
-                        logger.log_install('kokoro', ['kokoro'], False)
-                    except FileNotFoundError:
+                        logger.log_install('kokoro', ['kokoro'], False, error=str(e))
+                        failed_components.append('kokoro')
+                    except FileNotFoundError as e:
                         print_error("VoiceMode command not found. Cannot install Kokoro.")
-                        logger.log_install('kokoro', ['kokoro'], False)
+                        logger.log_install('kokoro', ['kokoro'], False, error=str(e))
+                        failed_components.append('kokoro')
             else:
                 click.echo("Cloud services recommended for your system configuration.")
                 click.echo("Local services can still be installed if desired:")
@@ -477,11 +479,18 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive, model):
         # Completion summary
         click.echo()
         click.echo("━" * 70)
-        click.echo(click.style("Installation Complete!", fg='green', bold=True))
+        if failed_components:
+            click.echo(click.style("Installation Completed With Failures", fg='red', bold=True))
+        else:
+            click.echo(click.style("Installation Complete!", fg='green', bold=True))
         click.echo("━" * 70)
         click.echo()
 
-        logger.log_complete(success=True, voicemode_installed=True)
+        logger.log_complete(
+            success=not failed_components,
+            voicemode_installed=True,
+            failed_components=failed_components,
+        )
 
         if dry_run:
             click.echo("DRY RUN: No changes were made to your system")
@@ -495,6 +504,16 @@ def main(dry_run, voice_mode_version, skip_services, non_interactive, model):
             click.echo("     claude mcp add --scope user voicemode -- uvx voice-mode")
             click.echo()
             click.echo(f"Installation log: {logger.get_log_path()}")
+
+        if failed_components:
+            click.echo()
+            print_warning(f"Completed with failures: {', '.join(failed_components)}")
+            click.echo("VoiceMode itself is installed; retry the failed components with:")
+            for component in failed_components:
+                click.echo(f"  voicemode service install {component}")
+            # SystemExit derives from BaseException, so the `except Exception`
+            # below does not swallow this.
+            sys.exit(1)
 
     except KeyboardInterrupt:
         click.echo("\n\nInstallation cancelled by user")

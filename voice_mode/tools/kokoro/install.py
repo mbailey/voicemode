@@ -435,7 +435,14 @@ async def kokoro_install(
         return {
             "success": False,
             "error": f"Command failed: {e.cmd}",
-            "stderr": e.stderr.decode() if e.stderr else None
+            # Byte-for-byte the same trap as the whisper installer had: this only
+            # avoids raising today because none of the checked calls above
+            # capture output, so e.stderr is always None.
+            "stderr": (
+                e.stderr.decode(errors="replace")
+                if isinstance(e.stderr, bytes)
+                else e.stderr
+            ),
         }
     except Exception as e:
         return {

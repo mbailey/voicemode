@@ -8,7 +8,10 @@ from voice_mode.utils.dependencies.package_managers import (
     BrewManager,
     AptManager,
     DnfManager,
-    get_package_manager
+    OstreeBrewManager,
+    RpmOstreeManager,
+    get_package_manager,
+    translate_to_brew,
 )
 
 
@@ -148,19 +151,31 @@ class TestPackageManagers:
         assert manager.check_package("ffmpeg") is True
 
 
+@patch('voice_mode.utils.dependencies.package_managers.platform.system', return_value='Linux')
+@patch('voice_mode.utils.dependencies.package_managers.is_ostree_system', return_value=False)
 class TestPackageManagerSelection:
-    """Test automatic package manager selection."""
+    """Test automatic package manager selection on a traditional Linux distro.
+
+    Both the OS and the ostree probe are pinned so these assert the intended
+    branch on any host. Without that, they read the machine they run on: on a
+    Fedora Atomic host the ostree branch returns before the dnf/apt/brew list is
+    ever consulted, and on macOS the Darwin branch does.
+    """
 
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
-    def test_get_package_manager_brew(self, mock_brew):
-        """Test getting Brew manager when available."""
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
+    @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available')
+    def test_get_package_manager_brew(self, mock_apt, mock_dnf, mock_brew, _ostree, _sys):
+        """Brew is the fallback when no native package manager is present."""
         mock_brew.return_value = True
+        mock_dnf.return_value = False
+        mock_apt.return_value = False
         manager = get_package_manager()
         assert isinstance(manager, BrewManager)
 
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
-    def test_get_package_manager_dnf(self, mock_dnf, mock_brew):
+    def test_get_package_manager_dnf(self, mock_dnf, mock_brew, _ostree, _sys):
         """Test getting DNF manager when Brew not available."""
         mock_brew.return_value = False
         mock_dnf.return_value = True
@@ -169,8 +184,20 @@ class TestPackageManagerSelection:
 
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
+    def test_dnf_preferred_over_brew(self, mock_dnf, mock_brew, _ostree, _sys):
+        """The native manager wins when both are installed.
+
+        dependencies.yaml supplies distro package names, so preferring Homebrew
+        would hand it names it cannot resolve on a machine that has both.
+        """
+        mock_brew.return_value = True
+        mock_dnf.return_value = True
+        assert isinstance(get_package_manager(), DnfManager)
+
+    @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available')
-    def test_get_package_manager_apt(self, mock_apt, mock_dnf, mock_brew):
+    def test_get_package_manager_apt(self, mock_apt, mock_dnf, mock_brew, _ostree, _sys):
         """Test getting APT manager when others not available."""
         mock_brew.return_value = False
         mock_dnf.return_value = False
@@ -181,7 +208,7 @@ class TestPackageManagerSelection:
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available')
-    def test_get_package_manager_none_available(self, mock_apt, mock_dnf, mock_brew):
+    def test_get_package_manager_none_available(self, mock_apt, mock_dnf, mock_brew, _ostree, _sys):
         """Test error when no package manager is available."""
         mock_brew.return_value = False
         mock_dnf.return_value = False
@@ -189,3 +216,55 @@ class TestPackageManagerSelection:
 
         with pytest.raises(RuntimeError, match="No supported package manager found"):
             get_package_manager()
+
+
+@patch('voice_mode.utils.dependencies.package_managers.platform.system', return_value='Linux')
+@patch('voice_mode.utils.dependencies.package_managers.is_ostree_system', return_value=True)
+class TestPackageManagerSelectionOstree:
+    """Selection on Fedora Atomic (Silverblue, Kinoite, Bazzite, Bluefin).
+
+    `dnf install` can never succeed there -- /usr is read-only and Bazzite ships
+    a dnf shim that refuses it -- so DnfManager must never be selected even
+    though `dnf` is on PATH.
+    """
+
+    @patch('voice_mode.utils.dependencies.package_managers.get_homebrew_prefix')
+    def test_ostree_with_homebrew(self, mock_prefix, _ostree, _sys):
+        """Homebrew is the install path when present: no root, no reboot."""
+        mock_prefix.return_value = '/home/linuxbrew/.linuxbrew'
+        assert isinstance(get_package_manager(), OstreeBrewManager)
+
+    @patch('voice_mode.utils.dependencies.package_managers.get_homebrew_prefix')
+    def test_ostree_without_homebrew(self, mock_prefix, _ostree, _sys):
+        """Without Homebrew, fall back to the manager that explains the options."""
+        mock_prefix.return_value = None
+        assert isinstance(get_package_manager(), RpmOstreeManager)
+
+    @patch('voice_mode.utils.dependencies.package_managers.get_homebrew_prefix')
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available',
+           return_value=True)
+    def test_ostree_never_selects_dnf(self, _dnf, mock_prefix, _ostree, _sys):
+        """dnf on PATH must not win on Atomic -- installing with it cannot work."""
+        mock_prefix.return_value = None
+        assert not isinstance(get_package_manager(), DnfManager)
+
+
+class TestBrewNameTranslation:
+    """dependencies.yaml uses Fedora RPM names; Homebrew formulae differ."""
+
+    def test_devel_suffix_is_stripped(self):
+        """`brew install portaudio-devel` fails -- the formula is `portaudio`."""
+        formulae, unmappable = translate_to_brew(['portaudio-devel', 'alsa-lib-devel'])
+        assert formulae == ['portaudio', 'alsa-lib']
+        assert unmappable == []
+
+    def test_cargo_and_rust_collapse_to_one_formula(self):
+        """cargo has no formula of its own; it ships inside rust."""
+        formulae, unmappable = translate_to_brew(['cargo', 'rust'])
+        assert formulae == ['rust']
+        assert unmappable == []
+
+    def test_unmappable_names_are_reported_not_guessed(self):
+        formulae, unmappable = translate_to_brew(['portaudio', 'no-such-package'])
+        assert formulae == ['portaudio']
+        assert unmappable == ['no-such-package']

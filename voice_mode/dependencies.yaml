@@ -124,7 +124,7 @@ voicemode:
         - name: pulseaudio
           description: PulseAudio sound server
           required: wsl  # Required for WSL, optional for native Linux
-          check_command: pulseaudio --version
+          check_command: pulseaudio --version || pactl --version
           note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
 
         - name: pulseaudio-utils
@@ -143,7 +143,7 @@ voicemode:
         - name: python3-devel
           description: Python development headers (needed for building extensions)
           required: true
-          check_command: rpm -q python3-devel
+          check_command: ${VOICEMODE_PYTHON:-python3} -c "import os, sys, sysconfig; sys.exit(0 if os.path.exists(sysconfig.get_path('include') + '/Python.h') else 1)"
           note: Required for compiling webrtcvad (C extension used for silence detection)
 
         - name: gcc
@@ -161,30 +161,30 @@ voicemode:
         - name: alsa-lib-devel
           description: ALSA development files (audio support)
           required: true
-          check_command: rpm -q alsa-lib-devel
+          check_command: pkg-config --exists alsa
           note: Required for compiling simpleaudio (C extension used for audio playback)
 
         - name: portaudio
           description: PortAudio library (for sounddevice runtime)
           required: true
-          check_command: rpm -q portaudio
+          check_command: python3 -c "import ctypes.util, sys; sys.exit(0 if ctypes.util.find_library('portaudio') else 1)"
 
         - name: portaudio-devel
           description: PortAudio development files
           required: false
-          check_command: rpm -q portaudio-devel
+          check_command: pkg-config --exists portaudio-2.0
           note: Optional - only needed for building, not runtime
 
         - name: pulseaudio
           description: PulseAudio sound server
           required: wsl  # Required for WSL, optional for native Linux
-          check_command: pulseaudio --version
+          check_command: pulseaudio --version || pactl --version
           note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
 
         - name: pulseaudio-utils
           description: PulseAudio utilities
           required: wsl  # Required for WSL, optional for native Linux
-          check_command: rpm -q pulseaudio-utils
+          check_command: pactl --version
           note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
 
         - name: ffmpeg

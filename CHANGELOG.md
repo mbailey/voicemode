@@ -7,6 +7,206 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### Fedora Atomic support — Silverblue, Kinoite, Bazzite, Bluefin
+
+The installer previously ran `sudo dnf install` on anything reporting
+`ID=fedora`. On Atomic variants that can never succeed: `/usr` is read-only,
+and Bazzite ships a `dnf` shim that refuses `install` outright, so the
+dependency step failed and took the rest of the run with it.
+
+- **Atomic systems are now detected** via `/run/ostree-booted`, and reported in
+  the install log as `is_ostree` alongside the detected Homebrew prefix.
+- **Dependencies install through Homebrew** on these systems — no root, no
+  reboot — with a mapping from Fedora RPM names to their homebrew-core
+  formulae. Anything with no Homebrew equivalent now prints the
+  `rpm-ostree install` command plus the required reboot, and the `distrobox`
+  alternative, instead of failing with a bare `dnf` error.
+- **`python3-devel` is skipped** on Atomic: voice-mode installs via
+  `uv tool install`, which builds against uv's managed CPython and ships its
+  own headers.
+
+### Fixed
+
+#### Package-manager selection tests no longer depend on the host they run on
+
+`TestPackageManagerSelection` mocked the managers' availability but not the OS
+probes, so it asserted against whatever machine ran it: on macOS the Darwin
+branch returns first, and on a Fedora Atomic host the ostree branch does, so
+`test_get_package_manager_dnf` failed for any Silverblue/Bazzite contributor
+while passing in CI. Both probes are now pinned, and the Atomic branches have
+coverage of their own — including that `DnfManager` is never selected there even
+with `dnf` on PATH, and that RPM→Homebrew translation strips `-devel` and
+collapses `cargo`/`rust` onto the single `rust` formula.
+
+#### Failed installs report the real error instead of crashing the error handler
+
+`whisper_install`'s `except subprocess.CalledProcessError` handler called
+`e.stderr.decode()`, but the configure and build steps run with `text=True`, so
+`e.stderr` is already `str`. The handler therefore raised `AttributeError`
+itself. A sibling `except Exception` cannot catch an exception raised by a
+preceding handler, so it escaped the function entirely and destroyed the cmake
+output at the one moment it was needed — a failed GPU build printed a wall of
+linker noise followed by an unrelated `'str' object has no attribute 'decode'`.
+
+The same line exists verbatim in the Kokoro installer, where it does not crash
+today only because none of its checked calls capture output — so the handler
+silently reports `"stderr": None` for every failure, and would start crashing
+the moment anyone added `capture_output=True`. Both now decode only when handed
+bytes.
+
+Two more handlers that could raise over the top of the error they were meant to
+report:
+
+- `disable_sounddevice_stderr_redirect()` imported `sys` *inside* its `try`,
+  making it a function-local name. When the `sounddevice` import failed — the
+  exact case the handler exists for — `sys` was unbound and the handler raised
+  `UnboundLocalError` instead of logging and continuing. The imports the handler
+  depends on are now bound before the `try`.
+- `Exchange` tailing called `process.terminate()` from its `KeyboardInterrupt`
+  handler; a Ctrl-C during `Popen()` itself left `process` unbound. It is now
+  bound to `None` first and the handler guards on it.
+
+#### The installer no longer reports success after a component fails
+
+A run where Whisper failed and Kokoro succeeded logged
+`"Failed to install whisper packages"` and then, four lines later,
+`"Installation completed" {"success": true}` — and exited 0, so anything
+scripted around `voice-mode-install` saw a clean run. `log_complete` was called
+with the literal `True`; no component result could influence it. Optional
+services are still allowed to fail without aborting the run, but the failures
+are now collected, the final status reflects them, the summary names them with
+the command to retry each, and the process exits 1.
+
+The log also recorded only a success boolean, discarding the exception that was
+live in scope, which is what forced diagnosis back into terminal scrollback.
+`log_install` now accepts the error text and `log_complete` records which
+components failed.
+
+Removed the unreachable `else` branches that reported "may not have completed
+successfully" — those `subprocess.run` calls pass `check=True`, so they can only
+return when the command succeeded.
+
+#### CUDA builds no longer fail when the distribution's GCC outpaces nvcc
+
+`-DGGML_CUDA=ON` was passed with an unmodified environment, leaving nvcc to use
+whatever `g++` the distribution defaults to. nvcc rejects a host compiler newer
+than the version its headers were built against, so on any distribution that
+moves faster than CUDA the build aborted at configure time with `#error --
+unsupported GNU version!` — Fedora 44 defaults to GCC 16 while CUDA 13.3 stops
+at 15, and Arch and Fedora Rawhide hit the same wall.
+
+The supported ceiling is now read from CUDA's own `crt/host_config.h` rather
+than hardcoded, and the newest installed compiler at or below it (`g++-15`,
+`g++-14`, …, from Homebrew, Fedora's `gccN-c++` compat packages, or Debian's
+versioned packages) is passed as `CMAKE_CUDA_HOST_COMPILER`, with `CUDAHOSTCXX`
+and `NVCC_CCBIN` set to match so CMake and ggml's own nvcc calls cannot
+disagree. When the default is too new and nothing compatible is installed, the
+build now says so and names the package to install instead of failing with a
+wall of preprocessor output.
+
+#### CUDA guidance on Atomic systems pointed at a container that cannot help
+
+Atomic users missing the toolkit were told to build inside a distrobox
+container. A whisper binary built there links against the container's CUDA
+libraries, but voice-mode runs whisper as a host service, so the suggestion
+produced a binary the host could not run. The guidance now points at NVIDIA's
+runfile with `--toolkit --override`: `/usr/local` is a symlink to
+`/var/usrlocal` on these systems, so it is writable and persists across image
+updates, giving a host-native toolkit without layering or a reboot.
+
+#### Large dependency installs are no longer killed partway through
+
+Homebrew had the shortest install timeout of the three package managers (300s,
+against 600s for apt and dnf) despite doing the heaviest work -- it downloads
+large bottles and can build from source. Installing `rust` for Kokoro is a
+~400MB bottle that exceeded 300s on an ordinary connection, so the install was
+killed midway and reported a bare timeout. Raised to 1800s.
+
+#### `voicemode service install whisper` gained `--model` and `--no-gpu`
+
+`whisper_install()` has always accepted `model` and `use_gpu`, but the command
+passed neither. Two consequences: the CUDA error told users to "use --no-gpu"
+when no such flag existed, leaving no way to build CPU-only; and the standalone
+installer's `service install whisper --model <name>` was an unknown option,
+which would have failed for anyone choosing a non-default model.
+
+#### `voicemode service install` reported success after failing
+
+`voicemode service install whisper` printed its error and then exited **0**.
+The installer runs it with `subprocess.run(..., check=True)`, so nothing raised
+and it printed `✅ Whisper STT service installed` directly beneath
+`❌ Whisper installation failed` — leaving users believing a service was
+installed when it was not. The failure branches now exit non-zero.
+
+#### An auto-detected GPU no longer blocks the Whisper install
+
+`whisper_install()` auto-detects the GPU, then required `nvcc` and refused to
+install without it. Anyone with an NVIDIA card but no CUDA toolkit was blocked
+from installing Whisper at all -- even though whisper.cpp builds and runs fine
+on CPU, and even though nothing had asked for GPU support. On Fedora Atomic
+this was a dead end, since the CUDA toolkit cannot be installed there.
+
+When the GPU was auto-detected, a missing toolkit now warns and falls back to a
+CPU-only build. An explicit `--use-gpu` still errors, so a deliberate request is
+never silently downgraded.
+
+#### Install suggestions no longer point at dnf on Fedora Atomic
+
+The Whisper installer suggested `sudo dnf install cuda-toolkit` (and
+`apt-get install build-essential`) on any Linux. On Atomic that command always
+fails. It now suggests `--no-gpu` or a distrobox container for CUDA, and
+Homebrew or `rpm-ostree` for build tools.
+
+#### Dependency *installation* on Fedora Atomic and on Fedora + Homebrew
+
+`voicemode service install whisper` fed Homebrew the Fedora RPM names straight
+from `dependencies.yaml`, so it failed with *"No available formula with the
+name portaudio-devel"*. `cargo` was worse — it has no formula at all, because
+cargo ships inside `rust`.
+
+- RPM names are now translated to homebrew-core formulae before install, and
+  de-duplicated (`cargo` + `rust` collapse to a single `rust`). Names with no
+  formula report the `rpm-ostree install` and `distrobox` alternatives instead
+  of a bare brew error.
+- **`get_package_manager()` tried Homebrew first on every platform.** Any
+  Fedora user with Homebrew installed — Atomic or not — got brew selected and
+  handed RPM names it could not resolve. The native manager is now preferred on
+  Linux, with Homebrew as the fallback, and Atomic systems route to Homebrew
+  deliberately rather than by accident.
+
+#### Dependency checks no longer report false negatives
+
+Applies to both dependency paths — the `voicemode deps` CLI
+(`voice_mode/utils/dependencies/`) and the standalone installer
+(`installer/voicemode_install/`), which carry separate copies of
+`dependencies.yaml`.
+
+Several checks asked `rpm -q` whether a package was installed, which reports
+missing whenever the dependency was satisfied by anything other than an RPM —
+Homebrew, Nix, or a bundled toolchain. On Bazzite this reported 7 of 7 core
+dependencies missing on a working install. Checks now test for the capability
+rather than the packaging:
+
+- `alsa-lib-devel` → `pkg-config --exists alsa` (the check the whisper section
+  already used).
+- `python3-devel` → probes for `Python.h` under `sysconfig`, using the
+  interpreter that would actually build the extensions (exported as
+  `VOICEMODE_PYTHON`) rather than whatever `python3` resolves to on `PATH`.
+  Under `uv tool install` those differ: uv's managed CPython ships headers
+  while the system `python3` often has none.
+- `portaudio` → probes for a loadable `libportaudio`, since `sounddevice`
+  dlopens it through cffi rather than linking at build time.
+- `portaudio-devel` → `pkg-config --exists portaudio-2.0`.
+- `pulseaudio` / `pulseaudio-utils` → accept `pactl`, which PipeWire provides
+  on modern Fedora without a `pulseaudio` binary or RPM.
+
+Homebrew's `pkgconfig` directories are now added to `PKG_CONFIG_PATH` when
+running check commands. Homebrew is not on pkg-config's default search path on
+Linux, so `brew install alsa-lib` was previously invisible to `pkg-config`
+even though the compiler would find the headers.
+
 ## [8.12.0] - 2026-07-21
 
 ### Fixed

@@ -1428,11 +1428,16 @@ def disable_sounddevice_stderr_redirect():
     This prevents sounddevice from redirecting stderr to /dev/null
     which can interfere with audio playback in MCP server context.
     """
+    # Imported before the try because the handler below writes to sys.stderr.
+    # Importing sys inside the try made it a function-local name, so the
+    # ImportError this handler exists to absorb left sys unbound and the handler
+    # raised UnboundLocalError over the top of it.
+    import sys
+    import atexit
+
     try:
         import sounddevice as sd
-        import sys
-        import atexit
-        
+
         # Method 1: Override _ignore_stderr in various locations
         if hasattr(sd, '_sounddevice'):
             if hasattr(sd._sounddevice, '_ignore_stderr'):

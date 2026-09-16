@@ -53,16 +53,23 @@ class InstallLogger:
             }
         )
 
-    def log_install(self, package_type: str, packages: list, success: bool):
+    def log_install(self, package_type: str, packages: list, success: bool,
+                    error: str = None):
         """Log package installation."""
+        details = {
+            'package_type': package_type,
+            'packages': packages,
+            'success': success
+        }
+        # Without this the log recorded only that something failed, never why,
+        # so diagnosing a failed run meant scrolling back through the terminal.
+        if error:
+            details['error'] = error
+
         self.log_event(
             'install',
             f'{"Successfully installed" if success else "Failed to install"} {package_type} packages',
-            {
-                'package_type': package_type,
-                'packages': packages,
-                'success': success
-            }
+            details
         )
 
     def log_error(self, message: str, error: Exception = None):
@@ -74,15 +81,20 @@ class InstallLogger:
 
         self.log_event('error', message, details)
 
-    def log_complete(self, success: bool, voicemode_installed: bool):
+    def log_complete(self, success: bool, voicemode_installed: bool,
+                     failed_components: list = None):
         """Log installation completion."""
+        details = {
+            'success': success,
+            'voicemode_installed': voicemode_installed
+        }
+        if failed_components:
+            details['failed_components'] = failed_components
+
         self.log_event(
             'complete',
-            'Installation completed' if success else 'Installation failed',
-            {
-                'success': success,
-                'voicemode_installed': voicemode_installed
-            }
+            'Installation completed' if success else 'Installation completed with failures',
+            details
         )
 
     def get_log_path(self) -> str:

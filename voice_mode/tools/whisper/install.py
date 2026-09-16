@@ -1,6 +1,7 @@
 """Installation tool for whisper.cpp"""
 
 import os
+import re
 import sys
 import platform
 import subprocess
@@ -8,7 +9,7 @@ import shutil
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Tuple, Union
 import asyncio
 try:
     from importlib.resources import files
@@ -27,6 +28,79 @@ from voice_mode.utils.migration_helpers import auto_migrate_if_needed
 from voice_mode.utils.gpu_detection import detect_gpu
 
 logger = logging.getLogger("voicemode")
+
+
+def _nvcc_max_gcc_major() -> Optional[int]:
+    """Highest GCC major version the installed nvcc will accept, if knowable.
+
+    CUDA records its ceiling in crt/host_config.h rather than exposing it via a
+    flag, so read that instead of hardcoding a table that goes stale with every
+    CUDA release.
+    """
+    nvcc = shutil.which("nvcc")
+    if not nvcc:
+        return None
+    header = Path(nvcc).resolve().parent.parent / "include" / "crt" / "host_config.h"
+    try:
+        text = header.read_text(errors="ignore")
+    except OSError:
+        return None
+    match = re.search(r"gcc versions later than (\d+)", text)
+    return int(match.group(1)) if match else None
+
+
+def _gxx_major(compiler: str) -> Optional[int]:
+    """Major version of a g++ binary, or None if it cannot be determined."""
+    try:
+        result = subprocess.run(
+            [compiler, "-dumpversion"], capture_output=True, text=True, timeout=10
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return int(result.stdout.strip().split(".")[0])
+    except (ValueError, IndexError):
+        return None
+
+
+def cuda_host_compiler_override() -> Tuple[Optional[str], Optional[str]]:
+    """Pick a C++ compiler that nvcc will accept for the CUDA build.
+
+    Distributions routinely ship a GCC newer than the current CUDA release
+    supports -- Fedora 44 defaults to GCC 16 while CUDA 13.3 stops at 15 -- and
+    nvcc then aborts with "unsupported GNU version", so ``-DGGML_CUDA=ON`` fails
+    at configure time on an otherwise correct setup.
+
+    Returns ``(compiler, problem)``. ``compiler`` is a path to hand to CMake, or
+    None when the default is already supported. ``problem`` is a warning for the
+    case where the default is too new and nothing compatible is installed.
+    """
+    ceiling = _nvcc_max_gcc_major()
+    if ceiling is None:
+        return None, None
+
+    default = shutil.which("g++") or shutil.which("c++")
+    default_major = _gxx_major(default) if default else None
+    if default_major is not None and default_major <= ceiling:
+        return None, None
+
+    # Fedora's compat packages install as g++-14, Homebrew's gcc@15 as g++-15,
+    # Debian's as g++-13. Walk down from the ceiling so the newest usable
+    # compiler wins.
+    for major in range(ceiling, 7, -1):
+        for name in (f"g++-{major}", f"g++{major}"):
+            found = shutil.which(name)
+            if found and _gxx_major(found) == major:
+                return found, None
+
+    return None, (
+        f"The default C++ compiler is GCC {default_major}, but nvcc supports at "
+        f"most GCC {ceiling}. Install a compatible compiler (e.g. "
+        f"`brew install gcc@{ceiling}` or `sudo dnf install gcc{ceiling}-c++`) "
+        f"and reinstall, or use --no-gpu to build CPU-only."
+    )
 
 
 async def update_whisper_service_files(
@@ -477,7 +551,11 @@ async def whisper_install(
                 "error": f"Unsupported operating system: {system}"
             }
         
-        # Auto-detect GPU if not specified
+        # Auto-detect GPU if not specified. Track whether this was a choice the
+        # user made explicitly: an auto-detected GPU should degrade to a CPU
+        # build when the CUDA toolkit is missing, but an explicit --use-gpu
+        # should still be an error rather than silently ignored.
+        gpu_auto_detected = use_gpu is None
         if use_gpu is None:
             use_gpu, gpu_type = detect_gpu()
             logger.info(f"Auto-detected GPU: {gpu_type} (enabled: {use_gpu})")
@@ -520,21 +598,73 @@ async def whisper_install(
                     missing_deps.append("cmake (run: brew install cmake)")
         
         elif is_linux:
+            from voice_mode.utils.dependencies.package_managers import is_ostree_system
+
+            # Fedora Atomic (Silverblue, Bazzite, Bluefin) reports ID=fedora and
+            # ships dnf, but `dnf install` cannot work there -- suggesting it
+            # sends the user down a path that always fails.
+            on_ostree = is_ostree_system()
+
             # Check for build essentials
             if not shutil.which("gcc") or not shutil.which("make"):
-                missing_deps.append("build-essential (run: sudo apt-get install build-essential)")
-            
+                if on_ostree:
+                    missing_deps.append(
+                        "gcc/make (run: brew install gcc make, "
+                        "or sudo rpm-ostree install gcc make && systemctl reboot)"
+                    )
+                elif shutil.which("apt-get"):
+                    missing_deps.append("build-essential (run: sudo apt-get install build-essential)")
+                else:
+                    missing_deps.append("gcc/make (install your distribution's build tools)")
+
+            if use_gpu and not shutil.which("nvcc") and gpu_auto_detected:
+                # The GPU was auto-detected, not asked for. A missing CUDA
+                # toolkit is not a reason to refuse to install -- whisper.cpp
+                # builds and runs fine on CPU. Failing here strands anyone with
+                # an NVIDIA card and no toolkit, and on Fedora Atomic the
+                # toolkit cannot be installed at all.
+                logger.warning(
+                    "GPU detected but the CUDA toolkit (nvcc) is not installed -- "
+                    "building CPU-only. Install the CUDA toolkit and reinstall with "
+                    "--use-gpu for GPU acceleration."
+                )
+                print(
+                    "⚠️  GPU detected but CUDA toolkit (nvcc) not found - building CPU-only.\n"
+                    "   Reinstall with --use-gpu after installing the CUDA toolkit to enable it."
+                )
+                use_gpu = False
+                gpu_type = "cpu"
+
             if use_gpu and not shutil.which("nvcc"):
                 # Suggest distro-appropriate install command, or --no-gpu as alternative
-                if shutil.which("apt-get"):
-                    cuda_install = "sudo apt-get install nvidia-cuda-toolkit"
-                elif shutil.which("dnf"):
-                    cuda_install = "sudo dnf install cuda-toolkit"
+                if on_ostree:
+                    # Layering the toolkit is unreliable (rpm-ostree struggles
+                    # with packages this large) and a container would leave the
+                    # binary linked against libraries the host does not have.
+                    # NVIDIA's runfile is the way in: /usr/local is a symlink to
+                    # /var/usrlocal, so it is writable and survives image
+                    # updates without layering anything.
+                    cuda_install = (
+                        "download NVIDIA's runfile from "
+                        "https://developer.nvidia.com/cuda-downloads and install "
+                        "the toolkit only -- /usr/local is a symlink to "
+                        "/var/usrlocal, so it is writable and persists across "
+                        "image updates: "
+                        "sudo sh cuda_<version>_linux.run --silent --toolkit --override. "
+                        "Then add /usr/local/cuda/bin to PATH. "
+                        "Or use --no-gpu for CPU-only"
+                    )
+                    missing_deps.append(f"CUDA toolkit ({cuda_install})")
                 else:
-                    cuda_install = "your distribution's CUDA toolkit package"
-                missing_deps.append(
-                    f"CUDA toolkit (run: {cuda_install}, or use --no-gpu for CPU-only)"
-                )
+                    if shutil.which("apt-get"):
+                        cuda_install = "sudo apt-get install nvidia-cuda-toolkit"
+                    elif shutil.which("dnf"):
+                        cuda_install = "sudo dnf install cuda-toolkit"
+                    else:
+                        cuda_install = "your distribution's CUDA toolkit package"
+                    missing_deps.append(
+                        f"CUDA toolkit (run: {cuda_install}, or use --no-gpu for CPU-only)"
+                    )
         
         if missing_deps:
             return {
@@ -604,6 +734,18 @@ async def whisper_install(
                 logger.info("Enabling Core ML support with fallback for Apple Silicon")
         elif is_linux and use_gpu:
             cmake_flags.append("-DGGML_CUDA=ON")
+            host_cxx, host_cxx_problem = cuda_host_compiler_override()
+            if host_cxx:
+                # CMake uses CMAKE_CUDA_HOST_COMPILER for its own compile tests;
+                # NVCC_CCBIN covers nvcc invocations ggml makes outside CMake's
+                # CUDA language support. Set both so they cannot disagree.
+                logger.info(f"Using {host_cxx} as the CUDA host compiler")
+                cmake_flags.append(f"-DCMAKE_CUDA_HOST_COMPILER={host_cxx}")
+                build_env["CUDAHOSTCXX"] = host_cxx
+                build_env["NVCC_CCBIN"] = host_cxx
+            elif host_cxx_problem:
+                logger.warning(host_cxx_problem)
+                print(f"⚠️  {host_cxx_problem}")
         
         # Get number of CPU cores for parallel build
         cpu_count = os.cpu_count() or 4
@@ -792,7 +934,15 @@ async def whisper_install(
         return {
             "success": False,
             "error": f"Command failed: {e.cmd}",
-            "stderr": e.stderr.decode() if e.stderr else None
+            # The build and configure steps run with text=True, so e.stderr is
+            # already str -- .decode() raised AttributeError *inside* this
+            # handler, which the sibling `except Exception` cannot catch, so the
+            # real cmake failure was destroyed at the moment it mattered most.
+            "stderr": (
+                e.stderr.decode(errors="replace")
+                if isinstance(e.stderr, bytes)
+                else e.stderr
+            ),
         }
     except Exception as e:
         if 'original_dir' in locals():

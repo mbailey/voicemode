@@ -116,6 +116,10 @@ class ExchangeReader:
             # Use tail -f for real-time following
             cmd = ["tail", "-n", str(lines) if lines > 0 else "+1", "-f", str(today_file)]
             
+            # Bound before the try: a Ctrl-C delivered during Popen() itself
+            # would otherwise leave the KeyboardInterrupt handler below reaching
+            # for an unbound name and raising UnboundLocalError instead.
+            process = None
             try:
                 process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 
@@ -130,8 +134,9 @@ class ExchangeReader:
                             logger.error(f"Error processing line: {e}")
             
             except KeyboardInterrupt:
-                process.terminate()
-                process.wait()
+                if process is not None:
+                    process.terminate()
+                    process.wait()
             except Exception as e:
                 logger.error(f"Error tailing file: {e}")
         else:
