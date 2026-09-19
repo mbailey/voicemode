@@ -938,6 +938,15 @@ SOUNDFONTS_ENABLED = env_bool("VOICEMODE_SOUNDFONTS_ENABLED", True)
 SAMPLE_RATE = 24000  # Standard TTS sample rate for both OpenAI and Kokoro
 CHANNELS = 1
 
+# Microphone capture rate, decoupled from SAMPLE_RATE (TTS/playback).
+# Requesting a rate the input device doesn't natively support is not
+# universally safe: some backends resample transparently, others reject the
+# rate outright or silently produce corrupted/aliased samples (see
+# https://github.com/mbailey/voicemode/issues/491 -- reported against a
+# 48kHz-native mic). Defaults to SAMPLE_RATE so behavior is unchanged unless
+# a user on affected hardware opts in.
+RECORDING_SAMPLE_RATE = int(os.getenv("VOICEMODE_RECORDING_SAMPLE_RATE", str(SAMPLE_RATE)))
+
 # ==================== SILENCE DETECTION CONFIGURATION ====================
 
 # Disable silence detection (useful for noisy environments)

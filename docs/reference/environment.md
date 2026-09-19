@@ -120,10 +120,19 @@ Supported formats: `pcm`, `opus`, `mp3`, `wav`, `flac`, `aac`
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
-| `VOICEMODE_SAMPLE_RATE` | Sample rate in Hz | `24000` | `48000` |
+| `VOICEMODE_RECORDING_SAMPLE_RATE` | Microphone capture rate in Hz | `24000` | `48000` |
 | `VOICEMODE_OPUS_BITRATE` | Opus bitrate in bps | `32000` | `64000` |
 | `VOICEMODE_MP3_BITRATE` | MP3 bitrate | `64k` | `128k` |
 | `VOICEMODE_AAC_BITRATE` | AAC bitrate | `64k` | `96k` |
+
+`VOICEMODE_RECORDING_SAMPLE_RATE` controls only microphone recording, decoupled from
+TTS/playback (fixed at 24kHz). If recordings sound corrupted, sped up, or slowed down,
+set this to your microphone's native sample rate (commonly `44100` or `48000` for USB
+mics) rather than leaving it at the TTS default. See
+[issue #491](https://github.com/mbailey/voicemode/issues/491).
+
+There is no `VOICEMODE_SAMPLE_RATE` variable — TTS playback rate is fixed and not
+independently configurable.
 
 ### Audio Feedback
 

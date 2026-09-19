@@ -221,8 +221,8 @@ export VOICEMODE_INPUT_DEVICE=0
 # Increase audio buffer size
 export VOICEMODE_AUDIO_BUFFER_SIZE=4096
 
-# Use different sample rate
-export VOICEMODE_SAMPLE_RATE=16000
+# Use different microphone recording rate (decoupled from TTS playback)
+export VOICEMODE_RECORDING_SAMPLE_RATE=16000
 
 # Enable verbose audio debugging
 export VOICEMODE_DEBUG=true
