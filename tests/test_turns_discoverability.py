@@ -39,6 +39,25 @@ def _collapse_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def _schema_description(schema: dict) -> str | None:
+    """Find a property's description wherever the schema generator put it.
+
+    An Optional parameter is emitted as an ``anyOf`` union, and which level
+    carries the ``description`` depends on the fastmcp/pydantic version: it sits
+    on the property itself in some, and on a nested ``anyOf`` member in others
+    (fastmcp 3.4.3 wraps it one level deeper). Reading only the top level makes
+    the assertion a version check rather than a description check, so search
+    recursively instead.
+    """
+    if "description" in schema:
+        return schema["description"]
+    for member in schema.get("anyOf", []):
+        found = _schema_description(member)
+        if found is not None:
+            return found
+    return None
+
+
 # Golden copy of README.md's "LITERAL SCHEMA-DESCRIPTION TEXT" for `turns`
 # (## Design section). Kept as a literal duplicate here (same convention as
 # the impl-003 golden tests for the survey JSON worked examples) so a change
@@ -98,7 +117,7 @@ async def test_turns_schema_property_carries_the_description():
     i.e. it's reachable via Annotated/Field, not just docstring prose."""
     tool = await mcp.get_tool("converse")
     turns_schema = tool.parameters["properties"]["turns"]
-    assert turns_schema["description"] == _TURNS_PARAM_DESCRIPTION
+    assert _schema_description(turns_schema) == _TURNS_PARAM_DESCRIPTION
 
 
 @pytest.mark.asyncio
@@ -106,7 +125,7 @@ async def test_turns_schema_description_covers_key_contract_points():
     """Spot-check the substance survives (verbs, controls, return shape) --
     guards against a future edit accidentally truncating the text."""
     tool = await mcp.get_tool("converse")
-    desc = tool.parameters["properties"]["turns"]["description"]
+    desc = _schema_description(tool.parameters["properties"]["turns"])
     for expected in (
         '"say": str',
         '"ask": str',

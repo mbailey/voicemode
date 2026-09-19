@@ -11,9 +11,17 @@ handler (e.g. VM-2015's orphaned recording thread).
 """
 
 import asyncio
+import sys
 
 import anyio
 import pytest
+
+if sys.version_info < (3, 11):
+    # ExceptionGroup only became a builtin in 3.11. anyio pulls the backport in
+    # on older interpreters (it is already locked for python < 3.11), so import
+    # it rather than leaving the name undefined -- without this the assertions
+    # below raise NameError on 3.10 instead of testing anything.
+    from exceptiongroup import ExceptionGroup
 
 from voice_mode.mcp_shutdown_patch import (
     TESTED_FASTMCP_VERSION,
