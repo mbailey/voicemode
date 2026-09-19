@@ -262,6 +262,12 @@ VOICEMODE_VOICES=af_sky
 # Default maximum listening duration in seconds (default: 120)
 # VOICEMODE_DEFAULT_LISTEN_DURATION=120.0
 
+# How far past listen_duration_max a recording may run while the user is still
+# speaking, in seconds (default: 300). The cap stops an idle microphone; this
+# stops it clipping someone mid-sentence. 0 restores a hard cap at
+# listen_duration_max.
+# VOICEMODE_LISTEN_OVERRUN=300.0
+
 # Disable silence detection for noisy environments (true/false)
 # VOICEMODE_DISABLE_SILENCE_DETECTION=false
 
@@ -953,6 +959,10 @@ INITIAL_SILENCE_GRACE_PERIOD = float(os.getenv("VOICEMODE_INITIAL_SILENCE_GRACE_
 
 # Default listen duration for converse tool
 DEFAULT_LISTEN_DURATION = float(os.getenv("VOICEMODE_DEFAULT_LISTEN_DURATION", "120.0"))  # Default 120s listening time
+
+# Grace beyond listen_duration_max for a recording where speech is in progress.
+# Bounds the extension so a microphone that never goes quiet still terminates.
+LISTEN_OVERRUN = float(os.getenv("VOICEMODE_LISTEN_OVERRUN", "300.0"))  # 0 = hard cap
 
 # Repeat phrase detection for audio replay
 REPEAT_PHRASES = parse_comma_list("VOICEMODE_REPEAT_PHRASES", "repeat,say that again,pardon,what,come again")

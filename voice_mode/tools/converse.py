@@ -58,6 +58,7 @@ from voice_mode.config import (
     VAD_CHUNK_DURATION_MS,
     INITIAL_SILENCE_GRACE_PERIOD,
     DEFAULT_LISTEN_DURATION,
+    LISTEN_OVERRUN,
     TTS_VOICES,
     REPEAT_PHRASES,
     WAIT_PHRASES,
@@ -1464,8 +1465,37 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                 AUDIO_STALL_TIMEOUT = 5.0
                 last_audio_time = time.monotonic()
 
-                while (recording_duration < max_duration and not stop_recording
+                # Speech in progress is not truncated at max_duration.
+                #
+                # max_duration (= listen_duration_max) is chosen by the calling
+                # agent before it knows how long the human will speak. Its job
+                # is to stop an *idle* microphone running forever. Applying it
+                # to speech that is actively in progress conflates "nobody is
+                # talking" with "somebody is still talking", and only the first
+                # is a runaway worth cutting: the user gets clipped mid-word and
+                # the agent answers half a sentence.
+                #
+                # So once speech has been detected the window extends and the
+                # normal silence exit ends the recording, bounded by a second,
+                # generous ceiling so a microphone that never goes quiet (a fan,
+                # an open call, a stuck VAD) still terminates.
+                # LISTEN_OVERRUN = 0 restores the previous hard-cap behaviour.
+                overrun = max(0.0, LISTEN_OVERRUN)
+                speech_max_duration = max_duration + overrun
+                overrun_logged = False
+
+                while (not stop_recording
+                       and recording_duration < (
+                           speech_max_duration if speech_detected else max_duration)
                        and time.monotonic() - last_audio_time < AUDIO_STALL_TIMEOUT):
+                    if (speech_detected and not overrun_logged
+                            and recording_duration >= max_duration):
+                        overrun_logged = True
+                        logger.info(
+                            f"🎤 Still speaking at listen_duration_max "
+                            f"({max_duration:.0f}s) - extending to "
+                            f"{speech_max_duration:.0f}s"
+                        )
                     # VM-2015: the awaiting coroutine was cancelled (ESC) --
                     # stop now instead of running to max_duration. Checked
                     # first (cheaper than the control-channel snapshot below)
