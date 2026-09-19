@@ -121,26 +121,48 @@ class TestTTSErrorHandling:
             assert config['base_url'] == 'https://api.openai.com/v1'
 
     @pytest.mark.asyncio
-    async def test_voice_mapping(self):
-        """Test that voices are mapped correctly for different providers."""
+    async def test_voice_is_passed_through_to_openai_by_default(self):
+        """A local voice is NOT silently remapped when falling back to OpenAI.
+
+        Substituting silently meant a Kokoro/Piper outage surfaced as the
+        assistant changing voice mid-conversation, with nothing in the result or
+        the logs to say why. Passing the voice through makes the request fail
+        loudly instead, which surfaces the real fault.
+        """
         with patch('voice_mode.simple_failover.TTS_BASE_URLS', ['https://api.openai.com/v1']), \
              patch('voice_mode.simple_failover.OPENAI_API_KEY', 'test-key'), \
+             patch('voice_mode.simple_failover.TTS_VOICE_SUBSTITUTION', False), \
              patch('voice_mode.core.text_to_speech') as mock_tts:
 
-            # Simulate successful TTS
             mock_tts.return_value = (True, {})
 
-            # Try with a Kokoro voice that should be mapped to OpenAI
             success, metrics, config = await simple_tts_failover(
                 text="Test",
                 voice="af_sky",  # Kokoro voice
                 model="tts-1"
             )
 
-            # Check that af_sky was mapped to nova for OpenAI
             mock_tts.assert_called_once()
-            call_args = mock_tts.call_args
-            assert call_args[1]['tts_voice'] == 'nova'  # af_sky maps to nova
+            assert mock_tts.call_args[1]['tts_voice'] == 'af_sky'
+
+    @pytest.mark.asyncio
+    async def test_voice_mapping_when_substitution_is_enabled(self):
+        """The old behaviour stays available behind the opt-in flag."""
+        with patch('voice_mode.simple_failover.TTS_BASE_URLS', ['https://api.openai.com/v1']), \
+             patch('voice_mode.simple_failover.OPENAI_API_KEY', 'test-key'), \
+             patch('voice_mode.simple_failover.TTS_VOICE_SUBSTITUTION', True), \
+             patch('voice_mode.core.text_to_speech') as mock_tts:
+
+            mock_tts.return_value = (True, {})
+
+            success, metrics, config = await simple_tts_failover(
+                text="Test",
+                voice="af_sky",  # Kokoro voice
+                model="tts-1"
+            )
+
+            mock_tts.assert_called_once()
+            assert mock_tts.call_args[1]['tts_voice'] == 'nova'  # af_sky maps to nova
 
     @pytest.mark.asyncio
     async def test_detailed_error_info(self):

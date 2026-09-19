@@ -777,6 +777,12 @@ def parse_provider_models(prefix: str) -> dict:
 TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
 STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
 TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
+
+# Silently remap a local voice to an OpenAI voice when TTS falls back to OpenAI
+# (af_sky -> nova, and so on). Off by default: a silent identity change costs
+# more to diagnose than the outage it hides, turns a free local failure into a
+# billed cloud call, and collapses distinct voices onto one.
+TTS_VOICE_SUBSTITUTION = env_bool("VOICEMODE_TTS_VOICE_SUBSTITUTION", False)
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
 STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
 STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
