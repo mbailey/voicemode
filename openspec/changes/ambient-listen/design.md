@@ -25,10 +25,18 @@ Code session; a returning tool call can.
 
 ### The writer: `listen`
 
-- An MCP tool in the VoiceMode server, beside `converse`, calling the same
-  capture code (`voice_mode/core.py`, the VAD, the STT client). It opens no
-  second microphone stream when a `converse` from the same session is
-  running; it shares.
+- An MCP tool in the VoiceMode server, beside `converse`, with its own
+  small capture loop (Mike, 03:32: a freshie). Voice activity by Silero or
+  a plain silence timer; transcription behind one interface with two
+  backends to start, whisper (today's server) and Apple's on-device
+  recogniser. The ground-truth comparison is
+  `~/.cora/apple-fm/research/streaming-eval.md` (19 Sep, m5): Apple
+  SpeechTranscriber 1.5-1.9% WER, tied with Parakeet v3; whisper large-v2
+  13.6% on 33 s turns. For previews, a Parakeet re-decode every 0.5 s beat
+  Apple's fast results (3.9% against 13% at the moment speech stops), so
+  the spike should try both for the `partial` line.
+  Whether it can run beside a `converse` on the same device is measured
+  in the spike, not assumed.
 - Backgrounded by the harness. On m5 `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`
   is 1000, so it leaves the foreground after one second; elsewhere the
   default is 120 s (Claude Code 2.1.270, `var V=120000`), which is still

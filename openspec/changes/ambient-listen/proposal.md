@@ -61,8 +61,11 @@ nothing that reads the log back into the agent.
    knows; VoiceMode does not pass it on (VM-1010).
 4. **Control words.** A wake word starts attention, an end word ends a turn.
    Both are events in the log; the model decides what they mean.
-5. **`listen` shares `converse`'s ears.** One capture path, one VAD, one
-   STT, one conch. Never a second copy of the pipeline.
+5. **`listen` is fresh.** A small, clean listener of its own, spiked on a
+   branch: Silero or plain silence for the turn, transcription pluggable
+   with Apple's on-device recogniser beside whisper. It borrows from the
+   old path where a piece is right and depends on none of it. It never
+   takes the conch.
 
 ## Ruled so far (Mike, by voice, Thu 2026-09-24)
 
@@ -99,13 +102,14 @@ each.
 - **Q1 The name.** RULED 03:27: *"So new tool, listen."* Speaking is
   `converse` with `wait_for_response: false` (*"it just speaks"*), which
   exists today; no new speaking tool.
-- **Q11 Fresh or shared.** He said at 03:27 *"listen can just be a fresh
-  ambient listener that can be written from scratch"*; the *listen* spec
-  says it must share `converse`'s capture path (one VAD, one STT client,
-  one microphone stream). These can both hold: a new tool with its own
-  loop, built on the same capture objects. They cannot if "from scratch"
-  means a separate listener process with its own VAD and STT. Rec: fresh
-  tool, shared ears; the second pipeline is the mistake kin already made.
+- **Q11 Fresh or shared.** RULED 03:32, fresh: *"why does it have to
+  share the same ears? This is an opportunity to write a freshie ... make
+  a small, clean, fresh thing."* A spike on a branch first; Silero VAD;
+  Apple on-device transcription as an option so whisper need not be
+  installed; echo cancellation on the list. I had recommended shared ears
+  on the strength of kin's second-pipeline problem; he weighed that and
+  chose fresh, because the old path is a year old and the field has
+  moved. The *listen* spec now says so.
 - **Q2 The end-of-turn age.** How old must a detected end of turn be before
   `listen` returns? Rec: 8 s default, configurable; short enough that an
   idle agent answers within a breath, long enough to ride out a pause.

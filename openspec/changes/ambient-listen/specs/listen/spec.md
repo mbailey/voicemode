@@ -48,28 +48,50 @@ in behaviour, so I do feel like we want to make a new tool"*. The name
 - AND the partials written so far are in the log, so the re-armed `listen`
   loses nothing already recognised
 
-### Requirement: listen shares converse's capture path and never copies it
+### Requirement: listen is a fresh, small listener, built as a spike on a branch, and it never takes the conch
 
-`listen` SHALL be built on the same microphone capture, voice activity
-detection, chunking and speech-to-text client that `converse` uses, in the
-same process, so that there is one pipeline in VoiceMode with two callers.
-It MUST NOT open a second capture stream on a device that a `converse`
-from the same session already has open; it SHALL share that stream. It
-MUST NOT take the conch to listen: the conch governs speaking, and a
-`listen` that held it would silence every other agent for its whole life.
-PROPOSED, from Pip's finding on kin (02:20 Thu 2026-09-24) that `calls.py`
-is a second copy of this pipeline and from Mike's aim (02:15) of one
-experience; a second copy inside VoiceMode would be the same mistake one
-repo over. Mike said at 03:27 that `listen` *"can be written from
-scratch"*; this requirement reads that as a fresh tool on shared capture
-objects, and the proposal's Q11 asks him whether that is what he meant.
+`listen` SHALL be a new, small implementation of its own: capture, voice
+activity detection, chunking and transcription chosen for this tool, not
+inherited from `converse`'s capture path. It MAY borrow pieces of the
+existing code where they are the right pieces, and it MUST NOT depend on
+`converse`'s internals in a way that makes either one hard to change. Its
+first form SHALL be a spike on a branch: a tool that does not return,
+detects an end of turn by silence (the current two seconds, or Silero
+VAD), and writes what it hears to the log. Transcription SHALL be
+pluggable, with Apple's on-device speech recognition as an option beside
+whisper, so that a user of `listen` need not install whisper. `listen`
+MUST NOT take the conch: the conch governs speaking, and a `listen` that
+held it would silence every other agent for its whole life. RULED by Mike,
+voice 03:29-03:32 Thu 2026-09-24: *"why does it have to share the same
+ears? This is an opportunity to write a freshie ... quite easy to do as a
+spike, on a branch: a listen tool that doesn't return ... we can use
+Silero, which is meant to be better ... learn from the old one and maybe
+use some of it, but not to save time and energy: make a small, clean,
+fresh thing."* Apple transcription: *"you did some experiments on Thursday
+and found that it had a much better accuracy rate"*. The measurement is
+`~/.cora/apple-fm/research/streaming-eval.md` (m5, Sat 2026-09-19
+02:50-04:50, ground truth on read speech): Apple SpeechTranscriber and
+Parakeet v3 tie at 1.5-1.9% WER; whisper large-v2, VoiceMode's model
+today, gets 2.2% on single sentences and 13.6% on 33 s turns. Apple's
+`.fastResults` streams first words 0.8 s in with a final 80 ms after
+speech stops; its live preview is 13% WER against 3.9% for a Parakeet
+re-decode every 0.5 s. Whether two capture
+streams on one device coexist on macOS is unmeasured (tasks 8.3); the
+spike measures it before `converse` and `listen` are run together.
 
-#### Scenario: converse during listen shares the microphone
+#### Scenario: The spike does the least that proves the shape
 
-- GIVEN `listen` is running on the Mac's microphone for session S
-- WHEN session S calls `converse`
-- THEN `converse` reads from the stream `listen` holds
-- AND no second stream is opened on the device
+- GIVEN the spike branch's `listen` on the Mac's microphone
+- WHEN the speaker talks, pauses two seconds, and talks again
+- THEN partials and one turn are in the log before anything returns
+- AND `listen` returns only when that turn is older than `age`
+
+#### Scenario: Transcription is chosen, not assumed
+
+- GIVEN a machine with no whisper installed and Apple speech available
+- WHEN `listen` starts with the Apple backend configured
+- THEN it transcribes and writes partials
+- AND no whisper endpoint is contacted
 
 #### Scenario: listen does not hold the conch
 

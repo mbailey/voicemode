@@ -33,21 +33,33 @@ VoiceMode card it belongs to. None started.
   next call resumes at the right `seq`. Charter 3: a gate never seen
   failing is a decoration.
 
-## 3. The `listen` tool (VM-2270)
+## 3. The `listen` tool, as a spike on a branch first (VM-2270)
 
+- [ ] 3.0 **The spike** (Mike, 03:31: "quite easy to do as a spike, on a
+  branch"): a `listen` tool that does not return; its own capture loop;
+  end of turn by the current two-second silence; partials and turns
+  written to the log; return on an aged turn. Nothing else. Measure it on
+  m5 with the AirPods and the Mac mic before anything below. (*listen*,
+  fresh)
 - [ ] 3.1 Register `listen` in the MCP server with `source`, `age`,
-  `ceiling`, `wake_on_partial`, `stop` parameters, sharing `converse`'s
-  capture objects; return `{reason, text, cursor}`. (*listen*, long-lived;
-  shares)
+  `ceiling`, `wake_on_partial`, `stop` parameters; return `{reason, text,
+  cursor}`. (*listen*, long-lived)
 - [ ] 3.2 Return only on aged turn, end word, ceiling, stop, error.
   (*listen*, long-lived)
 - [ ] 3.3 Advance the session cursor past a returned turn. (*conversation
   log*, cursor)
-- [ ] 3.4 Confirm sharing: `converse` during `listen` opens no second
-  stream (test with PortAudio on macOS; this is unmeasured). (*listen*,
-  shares)
-- [ ] 3.5 Confirm `listen` never takes the conch, with a second agent
-  speaking while it runs. (*listen*, shares)
+- [ ] 3.4 Silero VAD behind the same end-of-turn interface as the silence
+  timer; compare on the same recording. (*listen*, fresh)
+- [ ] 3.5 Transcription behind one interface: whisper (today's server),
+  Apple on-device speech, and Parakeet (MLX) for previews; the 19 Sep
+  ground-truth eval (`~/.cora/apple-fm/research/streaming-eval.md`) as the
+  yardstick: 1.5-1.9% WER for Apple and Parakeet, 3.9% for a Parakeet
+  preview at the moment speech stops. (*listen*, fresh)
+- [ ] 3.6 Confirm `listen` never takes the conch, with a second agent
+  speaking while it runs. (*listen*, fresh)
+- [ ] 3.7 Echo cancellation: list what the fresh loop needs so that its
+  own agent's speech is not heard back as the human's (kin's `echo.py`
+  is the prior art); build it in a later task if the spike shows echo.
 
 ## 4. Devices (VM-1010)
 
