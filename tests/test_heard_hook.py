@@ -301,3 +301,34 @@ def test_script_imports_nothing_from_voice_mode(base):
     assert r.returncode == 0 and r.stdout.strip() == "0"
     src = HEARD_PY.read_text()
     assert "from voice_mode" not in src and "import voice_mode" not in src
+
+
+# --- the waiter's half: pending() and take() --------------------------------
+
+def test_pending_does_not_move_the_cursor_take_does(base):
+    assert heard.pending("w") == []  # a new session: cursor at the end
+    heard.partial("wake", device="airpods")
+    t = heard.turn("wake up", device="airpods")
+    got = heard.pending("w")
+    assert [r["kind"] for r in got] == ["partial", "turn"]
+    assert heard.load_cursor("w").seq == 0
+    text, seq = heard.take("w")
+    assert re.sub(r"\d\d:\d\d:\d\d", "T", text) == "[heard mic/airpods T] wake up"
+    assert seq == t["seq"] == heard.load_cursor("w").seq
+    assert heard.pending("w") == []
+
+
+def test_what_the_waiter_took_the_hook_does_not_repeat(base):
+    start("idle")
+    heard.turn("said while the agent was idle")
+    text, _ = heard.take("idle")
+    assert text.endswith("said while the agent was idle")
+    assert hook("idle") is None
+
+
+def test_what_the_hook_showed_the_waiter_does_not_wake_for(base):
+    """The pager's rule: wake only for what the agent has not been shown."""
+    start("busy")
+    heard.turn("said while the agent was busy")
+    assert hook("busy").endswith("said while the agent was busy")
+    assert heard.pending("busy") == []

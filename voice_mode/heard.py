@@ -636,6 +636,84 @@ def hook_disabled() -> bool:
         "0", "off", "false", "no")
 
 
+def _init_cursor(session: str, log_directory: Optional[Path],
+                 cursor_directory: Optional[Path]) -> Cursor:
+    """A session with no cursor starts at the end of the log."""
+    files = log_files(log_directory)
+    if files:
+        recs, tail = read_after(-1, hint_file=files[-1].name, directory=log_directory,
+                                max_files=1)
+        seq = recs[-1].seq if recs else last_seq(log_directory)
+        cur = Cursor(seq, tail[0].name if tail else None, tail[1] if tail else 0)
+    else:
+        cur = Cursor(0)
+    save_cursor(session, cur, cursor_directory)
+    return cur
+
+
+def pending(session: str, *, log_directory: Optional[Path] = None,
+            cursor_directory: Optional[Path] = None, lock_timeout: float = 1.0
+            ) -> Optional[list[dict]]:
+    """Records past ``session``'s cursor, oldest first; the cursor does not move.
+
+    For a waiter (``pager listen``'s shape): poll this, decide whether an
+    aged turn is there, then ``take()``. A session with no cursor gets one
+    at the end of the log, and ``[]``. None if the lock was not had.
+    """
+    with _SessionLock(session, lock_timeout, cursor_directory) as got:
+        if not got:
+            return None
+        cur = load_cursor(session, cursor_directory)
+        if cur is None:
+            _init_cursor(session, log_directory, cursor_directory)
+            return []
+        recs, _ = read_after(cur.seq, hint_file=cur.file, hint_offset=cur.offset,
+                             directory=log_directory)
+        return [r.rec for r in recs]
+
+
+def take(session: str, *, budget_tokens: Optional[int] = None,
+         max_lines: Optional[int] = None, log_directory: Optional[Path] = None,
+         cursor_directory: Optional[Path] = None, lock_timeout: float = 1.0
+         ) -> tuple[str, Optional[int]]:
+    """Render what ``session`` has not been shown, and advance its cursor.
+
+    Exactly what the hook prints (collapse, budget, cut line), as plain
+    text, plus the cursor's new seq. ``("", seq)`` when there is nothing
+    to show; ``("", None)`` when the lock was not had. A waiter that wakes
+    an idle agent prints this and exits, so the hook does not repeat it.
+    """
+    budget = budget_tokens if budget_tokens is not None else _env_int(
+        "VOICEMODE_HEARD_BUDGET", DEFAULT_BUDGET_TOKENS)
+    if max_lines is None:
+        max_lines = _env_int("VOICEMODE_HEARD_MAX_LINES", None)
+    with _SessionLock(session, lock_timeout, cursor_directory) as got:
+        if not got:
+            return "", None
+        cur = load_cursor(session, cursor_directory)
+        if cur is None:
+            cur = _init_cursor(session, log_directory, cursor_directory)
+            return "", cur.seq
+        recs, tail = read_after(cur.seq, hint_file=cur.file, hint_offset=cur.offset,
+                                directory=log_directory)
+        if not recs:
+            if tail and (tail[0].name != cur.file or tail[1] != cur.offset):
+                save_cursor(session, Cursor(cur.seq, tail[0].name, tail[1]), cursor_directory)
+            return "", cur.seq
+        items = collapse(recs, session)
+        text, new_seq = render(items, budget_tokens=budget, max_lines=max_lines,
+                               file_name=recs[-1].path.name)
+        if new_seq is not None and new_seq > cur.seq:
+            if new_seq == recs[-1].seq and tail:
+                where = (tail[0].name, tail[1])
+            else:
+                at = next((r for r in recs if r.seq == new_seq), None)
+                where = (at.path.name, at.end) if at else (None, 0)
+            save_cursor(session, Cursor(new_seq, where[0], where[1]), cursor_directory)
+            return text, new_seq
+        return text, cur.seq
+
+
 def run_hook(stdin_text: str, *, budget_tokens: Optional[int] = None,
              max_lines: Optional[int] = None, log_directory: Optional[Path] = None,
              cursor_directory: Optional[Path] = None, lock_timeout: float = 1.0
@@ -645,8 +723,8 @@ def run_hook(stdin_text: str, *, budget_tokens: Optional[int] = None,
     The session is the hook input's ``session_id`` (else the environment's).
     A session with no cursor starts at the end of the log and is shown
     nothing: a new session is not handed what was said before it existed.
-    If another hook of the same session holds the lock, this one is silent
-    (the holder is printing the same lines).
+    If another reader of the same session holds the lock, this one is
+    silent (the holder is printing the same lines).
     """
     try:
         data = json.loads(stdin_text) if stdin_text.strip() else {}
@@ -656,44 +734,9 @@ def run_hook(stdin_text: str, *, budget_tokens: Optional[int] = None,
         data = {}
     session = str(data.get("session_id") or caller_session() or "default")
     event_name = str(data.get("hook_event_name") or "PostToolUse")
-    budget = budget_tokens if budget_tokens is not None else _env_int(
-        "VOICEMODE_HEARD_BUDGET", DEFAULT_BUDGET_TOKENS)
-    if max_lines is None:
-        max_lines = _env_int("VOICEMODE_HEARD_MAX_LINES", None)
-
-    with _SessionLock(session, lock_timeout, cursor_directory) as got:
-        if not got:
-            return None
-        cur = load_cursor(session, cursor_directory)
-        if cur is None:
-            files = log_files(log_directory)
-            if files:
-                recs, tail = read_after(-1, hint_file=files[-1].name, directory=log_directory,
-                                        max_files=1)
-                seq = recs[-1].seq if recs else last_seq(log_directory)
-                save_cursor(session, Cursor(seq, tail[0].name if tail else None,
-                                            tail[1] if tail else 0), cursor_directory)
-            else:
-                save_cursor(session, Cursor(0), cursor_directory)
-            return None
-
-        recs, tail = read_after(cur.seq, hint_file=cur.file, hint_offset=cur.offset,
-                                directory=log_directory)
-        if not recs:
-            if tail and (tail[0].name != cur.file or tail[1] != cur.offset):
-                save_cursor(session, Cursor(cur.seq, tail[0].name, tail[1]), cursor_directory)
-            return None
-        items = collapse(recs, session)
-        file_name = recs[-1].path.name
-        text, new_seq = render(items, budget_tokens=budget, max_lines=max_lines,
-                               file_name=file_name)
-        if new_seq is not None and new_seq > cur.seq:
-            if new_seq == recs[-1].seq and tail:
-                where = (tail[0].name, tail[1])
-            else:
-                at = next((r for r in recs if r.seq == new_seq), None)
-                where = (at.path.name, at.end) if at else (None, 0)
-            save_cursor(session, Cursor(new_seq, where[0], where[1]), cursor_directory)
+    text, _ = take(session, budget_tokens=budget_tokens, max_lines=max_lines,
+                   log_directory=log_directory, cursor_directory=cursor_directory,
+                   lock_timeout=lock_timeout)
     if not text:
         return None
     return json.dumps({"hookSpecificOutput": {
