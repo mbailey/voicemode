@@ -124,7 +124,33 @@ class SilenceTurnDetector:
         return Verdict(speech=False, in_turn=True)
 
 
-DETECTORS = {SilenceTurnDetector.name: SilenceTurnDetector}
+class SileroTurnDetector(SilenceTurnDetector):
+    """``silero``: the same end-of-turn rule, with Silero VAD making the speech call.
+
+    Spec task 3.4 ("Silero VAD behind the same end-of-turn interface as the
+    silence timer"). Opt-in: needs onnxruntime and the model file (see
+    :mod:`voice_mode.listen.silero`). Its name is on every turn line it ends.
+    """
+
+    name = "silero"
+
+    def __init__(
+        self,
+        silence_s: float = DEFAULT_SILENCE_S,
+        *,
+        model: Optional[str] = None,
+        threshold: Optional[float] = None,
+        classifier: Optional[Classifier] = None,
+        start_s: float = 0.09,
+    ) -> None:
+        if classifier is None:
+            from .silero import DEFAULT_THRESHOLD, SileroClassifier  # onnxruntime only when asked for
+
+            classifier = SileroClassifier(model, threshold=DEFAULT_THRESHOLD if threshold is None else threshold)
+        super().__init__(silence_s, classifier=classifier, start_s=start_s)
+
+
+DETECTORS = {SilenceTurnDetector.name: SilenceTurnDetector, SileroTurnDetector.name: SileroTurnDetector}
 
 
 def make_detector(name: str = "vad-silence", **kwargs) -> TurnDetector:

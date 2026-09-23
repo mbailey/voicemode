@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .. import heard
 from .chunker import Chunker
-from .detector import DEFAULT_SILENCE_S, SilenceTurnDetector
+from .detector import DEFAULT_SILENCE_S, DETECTORS, SilenceTurnDetector, make_detector
 from .loop import DEFAULT_HEARTBEAT_S, DEFAULT_REDECODE_MAX_S, TURN_TEXT_MODES, capture
 from .sink import HeardSink
 from .sources import SourceError, open_source
@@ -44,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--heartbeat", type=float, default=DEFAULT_HEARTBEAT_S, help="heartbeat period, seconds; 0 disables (default: %(default)s)")
     c.add_argument("--ceiling", type=float, default=None, help="stop after this many seconds (default: none)")
     c.add_argument("--stop-file", default=None, help="stop (reason stop) once this file exists")
+    c.add_argument("--detector", choices=sorted(DETECTORS), default=SilenceTurnDetector.name,
+                   help="speech call behind the end-of-turn rule: webrtcvad ('vad-silence', the default) or Silero VAD "
+                        "('silero', spec 3.4; needs onnxruntime and --silero-model) (default: %(default)s)")
+    c.add_argument("--silero-model", default=None, help="silero_vad.onnx (v5) for --detector silero (default: $VOICEMODE_SILERO_MODEL)")
+    c.add_argument("--silero-threshold", type=float, default=0.5, help="Silero speech probability that starts speech (default: %(default)s)")
     c.add_argument("--silence", type=float, default=DEFAULT_SILENCE_S, help="silence that ends a turn, seconds (default: %(default)s)")
     c.add_argument("--quiet", type=float, default=0.35, help="quiet that cuts a partial chunk, seconds (default: %(default)s)")
     c.add_argument("--max-chunk", type=float, default=2.0, help="longest chunk before a soft cut, seconds; sets how soon a partial lands while speech goes on (default: %(default)s)")
@@ -74,6 +79,15 @@ def main(argv: list[str] | None = None) -> int:
     except SourceError as exc:
         print(_error_json(str(exc)))
         return 1
+    try:
+        if args.detector == SilenceTurnDetector.name:
+            detector = SilenceTurnDetector(args.silence)
+        else:
+            detector = make_detector(args.detector, silence_s=args.silence, model=args.silero_model, threshold=args.silero_threshold)
+    except Exception as exc:  # no onnxruntime, no model: say so, as JSON, before listening
+        source.close()
+        print(_error_json(f"detector {args.detector}: {exc}"))
+        return 1
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
@@ -85,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
             HeardSink(Path(args.log_dir) if args.log_dir else None),
             heartbeat=args.heartbeat,
             ceiling=args.ceiling,
-            detector=SilenceTurnDetector(args.silence),
+            detector=detector,
             chunker=Chunker(quiet_s=args.quiet, max_s=args.max_chunk, cut_window_s=args.cut_window),
             stop=stop,
             stop_file=args.stop_file,

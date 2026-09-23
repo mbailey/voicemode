@@ -140,7 +140,7 @@ def test_detector_defaults_to_two_seconds_and_is_named_vad_silence():
     det = make_detector("vad-silence", classifier=EnergyClassifier())
     assert det.name == "vad-silence" and det.silence_s == 2.0
     with pytest.raises(ValueError):
-        make_detector("silero")
+        make_detector("rnnoise")  # unknown names are refused ("silero" is known since do-009)
 
 
 def test_webrtc_classifier_hears_silence_as_silence():
