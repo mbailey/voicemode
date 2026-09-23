@@ -60,7 +60,7 @@ def test_add_heard_installs_the_script_on_two_events(env):
     assert script.read_text() == Path(heard.__file__).read_text()
     assert os.access(script, os.X_OK)
     for event in ("PostToolUse", "PostToolBatch"):
-        assert cmds(env, event) == [f"{script} hook || true"]
+        assert cmds(env, event) == [f"{script} hook || exit 1"]
     assert get_installed_hook_names("user") == {"heard"}
 
 
@@ -133,3 +133,11 @@ def test_the_installed_copy_runs_as_the_hook(env, tmp_path):
                             env=run_env, timeout=30)
     ctx = json.loads(second.stdout)["hookSpecificOutput"]["additionalContext"]
     assert ctx.endswith("] through the installed copy")
+
+
+def test_a_missing_script_fails_loud_with_1_never_2(env, tmp_path):
+    """exit 2 would stop the agent's turn; the command clamps to 1."""
+    from voice_mode.cli_commands.claude import heard_hook_command
+    cmd = heard_hook_command(tmp_path / "gone" / "voicemode-heard-hook")
+    r = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, timeout=30)
+    assert r.returncode == 1

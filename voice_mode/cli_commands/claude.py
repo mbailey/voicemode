@@ -173,7 +173,11 @@ def install_heard_hook() -> Path:
 
 
 def heard_hook_command(path: Path) -> str:
-    return f'{shlex.quote(str(path))} hook || true'
+    """``|| exit 1``, not ``|| true``: a broken ride-along must show as a
+    hook error, not pass for a quiet room; and never exit 2, which stops
+    the agent's turn (python itself exits 2 when the script is missing).
+    Measured 04:11 Thu 2026-09-24."""
+    return f'{shlex.quote(str(path))} hook || exit 1'
 
 
 def read_settings(scope: str) -> dict:

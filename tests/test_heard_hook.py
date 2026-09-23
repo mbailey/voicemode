@@ -340,3 +340,11 @@ def test_a_converse_turn_never_swallows_a_listeners_partials(base):
     heard.turn("pip's own reply", via="converse", session="pip")   # silent for pip
     out = hook("pip")
     assert out == "[heard mic T partial] mike still talking …"
+
+
+def test_script_failure_is_exit_1_with_stderr_never_silent(base, tmp_path):
+    not_a_dir = tmp_path / "file"
+    not_a_dir.write_text("x")
+    r = _script(["hook"], json.dumps({"session_id": "x"}), base_dir=not_a_dir)
+    assert r.returncode == 1 and r.stdout == ""
+    assert r.stderr.startswith("[heard] the hook failed:")

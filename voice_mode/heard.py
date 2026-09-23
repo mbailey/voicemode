@@ -779,23 +779,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     if verb == "hook":
         if hook_disabled():
             return 0
-        stdin_text = ""
-        event_name = "PostToolUse"
-        try:
-            stdin_text = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
-            parsed = json.loads(stdin_text) if stdin_text.strip() else {}
-            if isinstance(parsed, dict) and parsed.get("hook_event_name"):
-                event_name = str(parsed["hook_event_name"])
-        except Exception:
-            pass
+        stdin_text = "" if sys.stdin is None or sys.stdin.isatty() else sys.stdin.read()
         try:
             out = run_hook(stdin_text,
                            budget_tokens=int(opts["budget"]) if "budget" in opts else None,
                            max_lines=int(opts["max_lines"]) if "max_lines" in opts else None)
-        except Exception as e:  # a broken ride-along says so, once per call, and never blocks
-            out = json.dumps({"hookSpecificOutput": {
-                "hookEventName": event_name,
-                "additionalContext": f"[heard] the hook failed: {type(e).__name__}: {e}"}})
+        except Exception as e:
+            # Fail LOUD, but with 1, never 2. Measured 04:11 Thu 2026-09-24
+            # (claude -p, 2.1.280): exit 1 on PostToolUse/PostToolBatch shows
+            # as a hook error and the agent carries on; exit 2 STOPS the
+            # agent's turn after the tool. A zero here would claim a quiet
+            # room while the ride-along is broken (Charter 2).
+            sys.stderr.write(f"[heard] the hook failed: {type(e).__name__}: {e}\n")
+            return 1
         if out:
             print(out)
         return 0
