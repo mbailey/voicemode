@@ -1,4 +1,4 @@
-<!-- PROPOSED. Written by Cora 7, 03:25-03:45 Thu 2026-09-24, on Mike's word
+<!-- RULED in full 03:47 Thu 2026-09-24 (all questions), not yet built. Written by Cora 7, 03:25-03:45 Thu 2026-09-24, on Mike's word
      (voice 03:18: "Yes, I think yes" to openspec living in this repo with
      this as its first change; 03:24: "use your own judgment and you can
      write it, and then we can discuss tomorrow"). What he has said yes to
@@ -94,10 +94,9 @@ nothing that reads the log back into the agent.
   word. Control words: wake words and end words. Start with a listen that
   only appends to a file, as a new tool. (2280.10)
 
-## Open questions, for Mike
+## The questions, all ruled (Mike, voice 03:44-03:47 Thu 2026-09-24; Cora /RULINGS 3250)
 
-Numbered so a reply can rule them one line each. My recommendation follows
-each.
+Ruled as recommended, each with his time. The recommendation that was put to him follows each.
 
 - **Q1 The name.** RULED 03:27: *"So new tool, listen."* Speaking is
   `converse` with `wait_for_response: false` (*"it just speaks"*), which
@@ -110,29 +109,29 @@ each.
   on the strength of kin's second-pipeline problem; he weighed that and
   chose fresh, because the old path is a year old and the field has
   moved. The *listen* spec now says so.
-- **Q2 The end-of-turn age.** How old must a detected end of turn be before
+- **Q2 The end-of-turn age.** RULED 03:45: 8 s. How old must a detected end of turn be before
   `listen` returns? Rec: 8 s default, configurable; short enough that an
   idle agent answers within a breath, long enough to ride out a pause.
-- **Q3 Wake on partial.** Off by default? Rec: off; on only with a wake
+- **Q3 Wake on partial.** RULED 03:45: off by default. Off by default? Rec: off; on only with a wake
   word, which is what he floated at 03:21.
-- **Q4 The control words.** Defaults? Rec: wake "hey Claude" (his), end
+- **Q4 The control words.** RULED 03:45: "hey Claude", "over", "over and out". Defaults? Rec: wake "hey Claude" (his), end
   "over" and "over and out" (his); per-agent additions in config.
-- **Q5 The ceiling.** He put ~29 minutes on one MCP request; unmeasured.
+- **Q5 The ceiling.** RULED 03:45: re-arm on it, measure the real cap. He put ~29 minutes on one MCP request; unmeasured.
   Rec: `listen` re-arms itself on a ceiling the way pager does, so the
   ceiling is a restart, not a gap; measure the real number in task 8.
-- **Q6 One log or two.** Write the partials into `exchanges_*.jsonl`, or a
+- **Q6 One log or two.** RULED 03:46: separate (`heard_*.jsonl`); mirroring into the exchange log is optional. Write the partials into `exchanges_*.jsonl`, or a
   sibling `heard_*.jsonl`? Rec: a sibling; the exchange log is one line per
   exchange and every reader of it assumes so.
-- **Q7 The conch.** Does `listen` hold it for its whole life? Rec: no; the
+- **Q7 The conch.** RULED 03:46: never. Does `listen` hold it for its whole life? Rec: no; the
   conch is for speaking. `listen` holds the microphone, and a `converse`
   from the same session shares its capture rather than opening a second.
-- **Q8 The budget.** How much does the hook print per tool call? Rec: the
+- **Q8 The budget.** RULED 03:46: 400 tokens. How much does the hook print per tool call? Rec: the
   lines since the cursor, newest last, capped at N tokens with a "+k more"
   tail, N in config, default 400.
-- **Q9 Mail.** Ship the mail consumer in this change, or the next? Rec: the
+- **Q9 Mail.** RULED 03:47: the next change; file first, mail an extra output later. Ship the mail consumer in this change, or the next? Rec: the
   next. Files need nothing but VoiceMode, which is his reason for files
   first.
-- **Q10 Idle wake.** When `listen` returns to wake an idle session, does
+- **Q10 Idle wake.** RULED 03:47: yes, the turn's text and the cursor ("it is the thing doing it"). When `listen` returns to wake an idle session, does
   the return carry the turn's text, or only "there is a turn; read the
   log"? Rec: the text of the aged turn and the cursor, nothing older; the
   hook has already shown the rest.
