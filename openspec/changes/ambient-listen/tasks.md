@@ -21,7 +21,7 @@ VoiceMode card it belongs to. None started.
   where the stream opens. Pip, 04:07 Thu 2026-09-24.*
 - [ ] 1.3 `listen started`, `heartbeat`, `listen stopped` events.
   (*listen*, alive)
-- [ ] 1.4 `voicemode exchanges tail --heard` follows the new file, so the
+- [x] 1.4 `voicemode exchanges tail --heard` follows the new file, so the
   "tail the JSON logs" tool Mike remembers covers it.
 
 ## 2. The hook and the cursor (VM-2270)

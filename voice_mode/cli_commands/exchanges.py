@@ -42,8 +42,31 @@ def exchanges():
               type=click.Choice(['local', 'livekit', 'speak-only', 'all']),
               help='Filter by transport type')
 @click.option('--provider', help='Filter by provider')
-def tail(format, stt, tts, full, no_color, date, transport, provider):
-    """Real-time following of exchange logs."""
+@click.option('--heard', 'heard_log', is_flag=True,
+              help='Follow what VoiceMode hears (heard_*.jsonl: partials, turns, events) '
+                   'instead of the exchange log')
+@click.option('-n', '--lines', 'backlog', type=int, default=10, show_default=True,
+              help='With --heard: how many earlier lines to show first')
+def tail(format, stt, tts, full, no_color, date, transport, provider, heard_log, backlog):
+    """Real-time following of exchange logs.
+
+    With --heard, follows the heard log instead: every partial, turn and
+    event as it is written, across midnight. -f json/raw print the lines
+    as written.
+    """
+    if heard_log:
+        from voice_mode import heard
+        try:
+            for rec in heard.follow(backlog=backlog):
+                if format in ('json', 'raw'):
+                    print(json.dumps(rec, ensure_ascii=False))
+                else:
+                    print(heard.format_record(rec))
+                sys.stdout.flush()
+        except KeyboardInterrupt:
+            pass
+        return
+
     reader = ExchangeReader()
     formatter = ExchangeFormatter()
     filter_obj = ExchangeFilter()

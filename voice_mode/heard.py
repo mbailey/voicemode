@@ -569,6 +569,55 @@ def render(items: list[_Item], *, budget_tokens: int = DEFAULT_BUDGET_TOKENS,
 
 
 # --------------------------------------------------------------------------
+# Following: every line, for a human (`voicemode exchanges tail --heard`)
+# --------------------------------------------------------------------------
+
+def format_record(rec: dict) -> str:
+    """One log line, whole: every kind, quiet events included (this is the
+    diagnostic view; the hook is the context-conservative one)."""
+    kind = rec.get("kind") or "?"
+    head = f"#{rec.get('seq', '?')} {_hms(rec)} {kind:<7} {_where(rec)}{_via(rec)}"
+    if kind == EVENT:
+        body = " ".join(str(x) for x in (rec.get("event"), rec.get("word") or rec.get("text"),
+                                         f"({rec['reason']})" if rec.get("reason") else None) if x)
+    else:
+        body = rec.get("text", "")
+        if kind == TURN and rec.get("detector"):
+            body += f"  [{rec['detector']}]"
+    return f"{head}  {body}"
+
+
+def follow(*, backlog: int = 10, after_seq: Optional[int] = None, poll: float = 0.5,
+           directory: Optional[Path] = None, stop=None) -> Iterable[dict]:
+    """Yield records as they are written, across midnight, oldest first.
+
+    Starts with the last ``backlog`` records (or everything after
+    ``after_seq``), then polls every ``poll`` seconds. ``stop()`` returning
+    True ends it (tests); otherwise it runs until interrupted.
+    """
+    if after_seq is None:
+        recs, tail = read_after(-1, directory=directory, max_files=1)
+        for r in recs[-backlog:] if backlog > 0 else []:
+            yield r.rec
+        seq = recs[-1].seq if recs else last_seq(directory)
+    else:
+        recs, tail = [], None
+        seq = after_seq
+    hint = tail
+    while True:
+        recs, tail = read_after(seq, hint_file=hint[0].name if hint else None,
+                                hint_offset=hint[1] if hint else 0, directory=directory)
+        for r in recs:
+            yield r.rec
+            seq = r.seq
+        if tail:
+            hint = tail
+        if stop is not None and stop():
+            return
+        time.sleep(poll)
+
+
+# --------------------------------------------------------------------------
 # The ride-along hook
 # --------------------------------------------------------------------------
 
