@@ -17,6 +17,8 @@ import numpy as np
 import psutil
 import sounddevice as sd
 from scipy.io.wavfile import write
+# Imported here, not inside the recording loop: a first import mid-stream stalls the VAD on Windows (#545).
+from scipy import signal
 from pydub import AudioSegment
 from openai import AsyncOpenAI
 from pydantic import Field
@@ -1598,7 +1600,6 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                         
                         # For VAD, we need to downsample from 24kHz to 16kHz
                         # Use scipy's resample for proper downsampling
-                        from scipy import signal
                         # Calculate the number of samples we need after resampling
                         resampled_length = int(len(chunk_flat) * vad_sample_rate / SAMPLE_RATE)
                         vad_chunk = signal.resample(chunk_flat, resampled_length)
