@@ -46,6 +46,7 @@ DEFAULT_AGE = 8.0            # Q2, ruled as recommended
 DEFAULT_PERIOD = 30.0        # heartbeat period when the capture names none
 DEFAULT_GRACE = 30.0         # how long to wait for a capture that is not up yet
 DEFAULT_POLL = 0.25
+ARM_SLACK = 0.05             # a line stamped this close before arming counts as after it
 PERIOD_KEYS = ("period", "heartbeat_period", "period_s", "interval_s")
 
 EXIT_OK = 0
@@ -104,10 +105,18 @@ class Waiter:
         self.capture: Optional[str] = None      # None never seen | "up" | "down"
         self.stop_reason: Optional[str] = None
         self.last_alive: Optional[float] = None
+        # The newest line from ANY capture (alive or listen-stopped). Grace
+        # holds while nothing has been seen since arming: the log's history
+        # (yesterday's stop, a capture that crashed an hour ago) must not
+        # decide before a new capture has had its chance (engineer's refine
+        # of do-003, 04:27: arm-then-start failed once the log had history).
+        self.last_line_at: Optional[float] = None
         self.period: float = period or DEFAULT_PERIOD
         self._follow_seq = -1
         self._hint: Optional[tuple[Path, int]] = None
+        self._replayed = False
         self._follow()                           # the log's history, once
+        self._replayed = True
         heard.pending(session, log_directory=log_directory,
                       cursor_directory=cursor_directory)  # a new session's cursor starts now
 
@@ -122,13 +131,19 @@ class Waiter:
         for r in recs:
             rec = r.rec
             self._follow_seq = r.seq
+            t = _epoch(rec)
+            if t is None and self._replayed:
+                t = self.clock()   # a new line with no usable ts: seen now
+            is_stop = rec.get("kind") == heard.EVENT and rec.get("event") == heard.EV_LISTEN_STOPPED
             if rec.get("kind") == heard.EVENT and rec.get("event") == heard.EV_LISTEN_STARTED:
                 self.capture, self.stop_reason = "up", None
-            elif rec.get("kind") == heard.EVENT and rec.get("event") == heard.EV_LISTEN_STOPPED:
+            elif is_stop:
                 self.capture = "down"
                 self.stop_reason = rec.get("reason") or "listen-stopped"
+            if (is_stop or _alive_line(rec)) and t is not None:
+                if self.last_line_at is None or t > self.last_line_at:
+                    self.last_line_at = t
             if _alive_line(rec):
-                t = _epoch(rec)
                 if t is not None and (self.last_alive is None or t > self.last_alive):
                     self.last_alive = t
                 if self.capture is None:
@@ -142,12 +157,18 @@ class Waiter:
             self._hint = tail
 
     def _capture_down(self, now: float) -> Optional[str]:
+        seen_since_arm = (self.last_line_at is not None
+                          and self.last_line_at >= self.armed_at - ARM_SLACK)
+        if not seen_since_arm and now - self.armed_at < self.grace:
+            return None        # a capture may be starting: history does not decide yet
         if self.capture == "down":
-            return f"listen stopped ({self.stop_reason})"
+            tail = "" if seen_since_arm else f"; no new capture in the {self.grace:.0f}s since arming"
+            return f"listen stopped ({self.stop_reason}){tail}"
         if self.capture == "up":
-            if self.last_alive is not None and now - self.last_alive > 2 * self.period:
-                return (f"no heartbeat for {now - self.last_alive:.0f}s "
-                        f"(period {self.period:.0f}s)")
+            # no timed line at all: count from arming, so a dead ear still goes stale
+            ref = self.last_alive if self.last_alive is not None else self.armed_at
+            if now - ref > 2 * self.period:
+                return f"no heartbeat for {now - ref:.0f}s (period {self.period:.0f}s)"
             return None
         if now - self.armed_at >= self.grace:
             return f"no capture seen in the {self.grace:.0f}s since arming"
@@ -206,8 +227,14 @@ class Waiter:
             return self._result("timeout", "")
         return None
 
-    def run(self) -> dict:
+    def run(self, should_stop: Optional[Callable[[], Optional[str]]] = None) -> dict:
+        """Poll until a result. ``should_stop()`` returning a name (the
+        signal's) ends it between polls, never inside one: a signal that
+        lands mid-``take()`` must not consume a turn without printing it."""
         while True:
+            why = should_stop() if should_stop else None
+            if why:
+                return self._result("stopped", "", signal=why)
             got = self.check()
             if got:
                 return got
@@ -225,12 +252,11 @@ class Waiter:
                 f"age {self.age:g}s, {ears}")
 
 
-class _Stop(Exception):
-    pass
+_signalled: list[str] = []
 
 
 def _on_signal(signum, frame):
-    raise _Stop(signal.Signals(signum).name)
+    _signalled.append(signal.Signals(signum).name)   # a flag; run() stops between polls
 
 
 EXIT_BY_REASON = {"turn": EXIT_OK, "end-word": EXIT_OK, "stopped": EXIT_OK,
@@ -265,10 +291,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                    period=a.period, poll=a.poll)
         sys.stderr.write(w.banner() + "\n")
         sys.stderr.flush()
-        result = w.run()
-    except _Stop as s:
-        result = {"reason": "stopped", "text": "", "signal": str(s), "session": session,
-                  "rearm": REARM}
+        result = w.run(should_stop=lambda: _signalled[0] if _signalled else None)
     except OSError as e:
         sys.stderr.write(f"heard_wait: could not look: {e}\n")
         return EXIT_CANNOT_LOOK
