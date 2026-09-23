@@ -51,7 +51,7 @@ VoiceMode card it belongs to. None started.
   cursor}`. (*listen*, long-lived)
 - [ ] 3.2 Return only on aged turn, end word, ceiling, stop, error.
   (*listen*, long-lived)
-- [ ] 3.3 Advance the session cursor past a returned turn. (*conversation
+- [x] 3.3 Advance the session cursor past a returned turn. (*conversation
   log*, cursor)
 - [ ] 3.4 Silero VAD behind the same end-of-turn interface as the silence
   timer; compare on the same recording. (*listen*, fresh)

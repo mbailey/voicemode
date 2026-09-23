@@ -348,3 +348,16 @@ def test_script_failure_is_exit_1_with_stderr_never_silent(base, tmp_path):
     r = _script(["hook"], json.dumps({"session_id": "x"}), base_dir=not_a_dir)
     assert r.returncode == 1 and r.stdout == ""
     assert r.stderr.startswith("[heard] the hook failed:")
+
+
+def test_only_listed_events_are_shown_diagnostics_are_silent(base):
+    """A capture's turn-discarded / stt-error, and any event nobody listed,
+    move the cursor without costing context."""
+    start()
+    heard.event("turn-discarded", why="no text recognised")
+    heard.event("stt-error", detail="timeout")
+    e = heard.event("some-future-event")
+    assert hook() is None
+    assert cursor() == e["seq"]
+    heard.event(heard.EV_CALL_STARTED, source="call", device="delta:pip/12")
+    assert hook().endswith("call-started]")
