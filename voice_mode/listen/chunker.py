@@ -6,6 +6,15 @@ phoneme is not clipped) and is cut when a short quiet follows it
 ``max_s``, so a long unbroken utterance still yields partials while it
 goes on. Chunks with too little speech in them (a click) are dropped
 rather than sent to STT.
+
+The max cut is SOFT (VM-2274 do-007): when a chunk reaches ``max_s`` it
+is cut at the quietest frame (lowest RMS) in its last ``cut_window_s``,
+not at the hard edge, and the frames after that point open the next
+chunk. A 2 s max puts the first partial about 2 s after onset, while the
+speaker is still talking, and the quietest-frame cut usually lands between
+words instead of through one. No audio is dropped or sent twice: the
+chunks still tile the utterance, so partials stay CHUNKS under the heard
+contract.
 """
 
 from __future__ import annotations
@@ -31,15 +40,18 @@ class Chunker:
         self,
         *,
         quiet_s: float = 0.35,
-        max_s: float = 5.0,
+        max_s: float = 2.0,
         preroll_s: float = 0.15,
         min_speech_s: float = 0.12,
+        cut_window_s: float = 0.4,
     ) -> None:
         self._quiet_frames = max(1, int(round(quiet_s / FRAME_S)))
         self._max_frames = max(1, int(round(max_s / FRAME_S)))
         self._min_speech_frames = max(1, int(round(min_speech_s / FRAME_S)))
         self._preroll: deque = deque(maxlen=max(0, int(round(preroll_s / FRAME_S))))
+        self._window_frames = max(1, int(round(cut_window_s / FRAME_S)))
         self._frames: list = []
+        self._flags: list = []  # speech verdict per frame, parallel to _frames
         self._t0 = 0.0
         self._speech = 0
         self._quiet = 0
@@ -60,19 +72,46 @@ class Chunker:
                 self._preroll.append(frame)
                 return None
             self._frames = list(self._preroll)
+            self._flags = [False] * len(self._frames)
             self._preroll.clear()
             self._t0 = t - len(self._frames) * FRAME_S
             self._speech = 0
             self._quiet = 0
         self._frames.append(frame)
+        self._flags.append(bool(speech))
         if speech:
             self._speech += 1
             self._quiet = 0
         else:
             self._quiet += 1
-        if self._quiet >= self._quiet_frames or len(self._frames) >= self._max_frames:
+        if self._quiet >= self._quiet_frames:
             return self._cut(t + FRAME_S)
+        if len(self._frames) >= self._max_frames:
+            return self._soft_cut()
         return None
+
+    def _soft_cut(self) -> Optional[Chunk]:
+        """Cut at the quietest frame of the last window; carry the rest over."""
+        n = len(self._frames)
+        lo = max(1, n - self._window_frames)
+        rms = [float(np.sqrt(np.mean(np.square(self._frames[i].astype(np.float64)))))
+               for i in range(lo, n)]
+        k = lo + int(np.argmin(rms))            # cut AFTER frame k
+        rest, rest_flags = self._frames[k + 1:], self._flags[k + 1:]
+        t_cut = self._t0 + (k + 1) * FRAME_S
+        self._frames, self._flags = self._frames[: k + 1], self._flags[: k + 1]
+        self._speech = sum(self._flags)
+        chunk = self._cut(t_cut)
+        if rest:                                 # the next chunk opens with the carried frames
+            self._frames, self._flags = rest, rest_flags
+            self._t0 = t_cut
+            self._speech = sum(rest_flags)
+            self._quiet = 0
+            for f in reversed(rest_flags):
+                if f:
+                    break
+                self._quiet += 1
+        return chunk
 
     def flush(self, t: float) -> Optional[Chunk]:
         """Cut whatever is open (end of turn, end of listen)."""
@@ -81,6 +120,7 @@ class Chunker:
     def _cut(self, t_end: float) -> Optional[Chunk]:
         frames, speech = self._frames, self._speech
         self._frames = []
+        self._flags = []
         self._speech = 0
         self._quiet = 0
         if speech < self._min_speech_frames:

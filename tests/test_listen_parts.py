@@ -183,8 +183,48 @@ def test_chunker_cuts_on_a_short_quiet_with_preroll():
 
 
 def test_chunker_cuts_long_speech_at_max_s():
-    chunks = feed_all(Chunker(max_s=1.0), synth([("speech", 3.2)]))
+    # a one-frame cut window is the hard edge: every chunk is exactly max_s
+    chunks = feed_all(Chunker(max_s=1.0, cut_window_s=FRAME_S), synth([("speech", 3.2)]))
     assert [c.t1 - c.t0 for c in chunks] == pytest.approx([1.0, 1.0, 1.0], abs=FRAME_S)  # 33 frames
+
+
+def _speech_with_dip(total_s, dip_at_s, dip_s=0.06, loud=4000, soft=900):
+    """A loud tone with one quieter stretch (still speech to EnergyClassifier(500))."""
+    from tests.listen_helpers import SAMPLE_RATE
+    n = int(round(total_s * SAMPLE_RATE))
+    t = np.arange(n) / SAMPLE_RATE
+    amp = np.full(n, float(loud))
+    a, b = int(round(dip_at_s * SAMPLE_RATE)), int(round((dip_at_s + dip_s) * SAMPLE_RATE))
+    amp[a:b] = soft
+    return (amp * np.sin(2 * np.pi * 220 * t)).astype(np.int16)
+
+
+def test_soft_cut_lands_on_the_quietest_frame_in_the_window():
+    # do-007: max 2.0 s, window 0.4 s; the dip at 1.75 s is inside the window, so the
+    # first chunk ends just after the dip, not at the hard 2.0 s edge
+    samples = _speech_with_dip(3.0, dip_at_s=1.75)
+    chunks = feed_all(Chunker(max_s=2.0, cut_window_s=0.4, preroll_s=0.0), samples)
+    assert chunks, "no chunk was cut"
+    assert 1.75 <= chunks[0].t1 <= 1.75 + 0.06 + FRAME_S
+
+
+def test_soft_cut_chunks_tile_the_speech_without_gap_or_overlap():
+    samples = np.concatenate([_speech_with_dip(2.5, dip_at_s=1.7), synth([("silence", 0.5)])])
+    ch = Chunker(max_s=2.0, cut_window_s=0.4, preroll_s=0.0)
+    chunks = feed_all(ch, samples)
+    assert len(chunks) == 2
+    assert chunks[1].t0 == pytest.approx(chunks[0].t1)          # the carried frames open chunk 2
+    total = sum(len(c.audio) for c in chunks)
+    assert total == int(round((chunks[-1].t1 - chunks[0].t0) / FRAME_S)) * FRAME_SAMPLES
+
+
+def test_first_partial_chunk_is_cut_while_speech_goes_on():
+    # the M1 miss (F1): a 3.3 s unbroken utterance used to yield its first chunk only
+    # at its end; with the 2 s default it is cut at <= 2 s after onset
+    samples = synth([("silence", 1.0), ("speech", 3.3), ("silence", 1.0)])
+    chunks = feed_all(Chunker(), samples)
+    assert chunks[0].t1 <= 1.0 + 2.0 + FRAME_S
+    assert chunks[0].t1 < 1.0 + 3.3                              # before the utterance ends
 
 
 def test_chunker_drops_a_click():

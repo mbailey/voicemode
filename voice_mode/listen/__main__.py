@@ -46,7 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--stop-file", default=None, help="stop (reason stop) once this file exists")
     c.add_argument("--silence", type=float, default=DEFAULT_SILENCE_S, help="silence that ends a turn, seconds (default: %(default)s)")
     c.add_argument("--quiet", type=float, default=0.35, help="quiet that cuts a partial chunk, seconds (default: %(default)s)")
-    c.add_argument("--max-chunk", type=float, default=5.0, help="longest chunk before a forced cut, seconds (default: %(default)s)")
+    c.add_argument("--max-chunk", type=float, default=2.0, help="longest chunk before a soft cut, seconds; sets how soon a partial lands while speech goes on (default: %(default)s)")
+    c.add_argument("--cut-window", type=float, default=0.4, help="a max-length chunk is cut at the quietest frame of its last this-many seconds (default: %(default)s)")
     c.add_argument("--no-pace", action="store_true", help="feed a file source as fast as possible, not at real time")
     c.add_argument("--tail-silence", type=float, default=0.0, help="seconds of silence fed after a file source ends (default: %(default)s)")
     c.add_argument("--stt-url", default=DEFAULT_WHISPER_URL, help="OpenAI-compatible STT base URL (default: %(default)s)")
@@ -80,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
             heartbeat=args.heartbeat,
             ceiling=args.ceiling,
             detector=SilenceTurnDetector(args.silence),
-            chunker=Chunker(quiet_s=args.quiet, max_s=args.max_chunk),
+            chunker=Chunker(quiet_s=args.quiet, max_s=args.max_chunk, cut_window_s=args.cut_window),
             stop=stop,
             stop_file=args.stop_file,
             session=args.session,
