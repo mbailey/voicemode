@@ -488,7 +488,9 @@ def collapse(recs: list[_Rec], session: Optional[str] = None) -> list[_Item]:
     for r in recs:
         rec = r.rec
         kind = rec.get("kind")
-        key = (rec.get("source"), rec.get("device"))
+        # via is in the key: converse writes turns with no partials, so its
+        # turn must never subsume a listener's partials on the same mic.
+        key = (rec.get("source"), rec.get("device"), rec.get("via"))
         if kind == PARTIAL:
             pending.setdefault(key, []).append(rec)
         elif kind == TURN:

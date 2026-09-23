@@ -332,3 +332,11 @@ def test_what_the_hook_showed_the_waiter_does_not_wake_for(base):
     heard.turn("said while the agent was busy")
     assert hook("busy").endswith("said while the agent was busy")
     assert heard.pending("busy") == []
+
+
+def test_a_converse_turn_never_swallows_a_listeners_partials(base):
+    start("pip")
+    heard.partial("mike still talking")          # the listener: mic, no device
+    heard.turn("pip's own reply", via="converse", session="pip")   # silent for pip
+    out = hook("pip")
+    assert out == "[heard mic T partial] mike still talking …"
