@@ -21,15 +21,15 @@ VoiceMode card it belongs to. None started.
 
 ## 2. The hook and the cursor (VM-2270)
 
-- [ ] 2.1 A `heard` hook script under `voice_mode/data/hooks/`, installed
+- [x] 2.1 A `heard` hook script under `voice_mode/data/hooks/`, installed
   by `voicemode claude hooks add heard`, on `PostToolUse` (and
   `PostToolBatch` where offered). (*conversation log*, hook)
-- [ ] 2.2 Per-session cursor files under `~/.voicemode/state/heard-cursor/`.
+- [x] 2.2 Per-session cursor files under `~/.voicemode/state/heard-cursor/`.
   (*conversation log*, cursor)
-- [ ] 2.3 Print lines past the cursor, partials collapsed into their turn,
+- [x] 2.3 Print lines past the cursor, partials collapsed into their turn,
   device and time on each, within the budget; `+k more, seq a-b` on a cut;
   cursor never past what was printed. (*conversation log*, cursor)
-- [ ] 2.4 Watch it fail once: a budget of 1 line against 40, and prove the
+- [x] 2.4 Watch it fail once: a budget of 1 line against 40, and prove the
   next call resumes at the right `seq`. Charter 3: a gate never seen
   failing is a decoration.
 
