@@ -439,6 +439,13 @@ def advance_cursor(session: str, seq: int, directory: Optional[Path] = None,
 # --------------------------------------------------------------------------
 
 QUIET_EVENTS = frozenset({EV_HEARTBEAT, EV_LISTEN_STARTED, EV_LISTEN_STOPPED})
+# The hook shows ONLY these events; every other event (the quiet three, and
+# a capture's diagnostics such as turn-discarded or stt-error, and anything
+# added later) moves the cursor silently. Context-conservative by default:
+# a new event is invisible to agents until someone decides it should not be.
+# `exchanges tail --heard` still shows every line.
+SHOWN_EVENTS = frozenset({EV_WAKE_WORD, EV_END_WORD, EV_BARGE_IN, EV_DEVICE_CHANGED,
+                          EV_CALL_STARTED, EV_CALL_ENDED})
 DEFAULT_BUDGET_TOKENS = 400  # Q8, ruled as recommended 03:44-03:47
 _CUT_RESERVE_TOKENS = 20
 
@@ -504,7 +511,7 @@ def collapse(recs: list[_Rec], session: Optional[str] = None) -> list[_Item]:
                     first, rec["seq"]))
         elif kind == EVENT:
             name = rec.get("event") or "?"
-            if name in QUIET_EVENTS:
+            if name not in SHOWN_EVENTS:
                 items.append(_Item(None, rec["seq"], rec["seq"]))
                 continue
             detail = rec.get("word") or rec.get("text") or ""
