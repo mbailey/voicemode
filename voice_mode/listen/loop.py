@@ -141,6 +141,10 @@ class _Capture:
         self._turn_t0: Optional[float] = None
         self._stt_failures = 0
         self._level = _Level()
+        # The waiter's contract (do-003, FOREMAN 04:17): `period` on
+        # listen-started and every heartbeat; it calls capture down after 2x
+        # period with no line. No heartbeat, no period (heard drops None).
+        self._period = heartbeat if heartbeat > 0 else None
         self.cursor = 0
         self.t = 0.0
 
@@ -228,6 +232,7 @@ class _Capture:
                 detector=self.detector.name,
                 stt=getattr(self.stt, "name", type(self.stt).__name__),
                 heartbeat=self.heartbeat,
+                period=self._period,
                 ceiling=self.ceiling,
                 pid=os.getpid(),
             )
@@ -262,7 +267,7 @@ class _Capture:
                     break
                 if self.heartbeat > 0 and self.t >= next_hb - 1e-9:
                     next_hb += self.heartbeat
-                    self.event(heard.EV_HEARTBEAT, stream_s=_r(self.t), **self._level.fields())
+                    self.event(heard.EV_HEARTBEAT, period=self._period, stream_s=_r(self.t), **self._level.fields())
                     self._level.reset()
             # Nothing already heard is lost: finish the open chunk's partial,
             # and close a turn the source ended in the middle of.
@@ -270,6 +275,8 @@ class _Capture:
             self._collect(wait=True)
             if self.detector.in_turn or self._partials:
                 self._turn(self.t)
+        except KeyboardInterrupt:  # Ctrl-C outside the CLI's signal handler: a stop, and still logged
+            reason = "stop"
         except Exception as exc:  # the source died, STT kept failing, or the log cannot be written
             reason, error = "error", f"{type(exc).__name__}: {exc}"
         finally:

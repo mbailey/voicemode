@@ -318,3 +318,46 @@ def test_threaded_stt_keeps_order_and_joins_before_the_turn(tmp_path):
     result, lines, _ = run(tmp_path, segments, tail=3.0, stt=SlowSTT(), stt_workers=1)
     assert [p["text"] for p in of_kind(lines, "partial")] == ["w1", "w2", "w3"]
     assert [t["text"] for t in of_kind(lines, "turn")] == ["w1 w2 w3"]
+
+
+# -- the waiter's contract (FOREMAN 04:17): period, and stopped on every exit ---
+
+
+def test_period_is_on_listen_started_and_every_heartbeat(tmp_path):
+    result, lines, _ = run(tmp_path, [("silence", 3.5)], heartbeat=1.0)
+    started = of_kind(lines, "event", heard.EV_LISTEN_STARTED)[0]
+    beats = of_kind(lines, "event", heard.EV_HEARTBEAT)
+    assert started["period"] == 1.0
+    assert len(beats) == 3 and all(b["period"] == 1.0 for b in beats)
+
+
+def test_no_heartbeat_means_no_period(tmp_path):
+    result, lines, _ = run(tmp_path, [("silence", 3.5)], heartbeat=0)
+    assert "period" not in lines[0] and not of_kind(lines, "event", heard.EV_HEARTBEAT)
+
+
+def test_ctrl_c_inside_capture_is_a_stop_and_still_writes_stopped(tmp_path):
+    class Interrupted(CountingSource):
+        def frames(self):
+            yield from list(super().frames())[:5]
+            raise KeyboardInterrupt
+
+    source = Interrupted(synth([("silence", 1.0)]))
+    result = capture(source, FakeSTT(), RecordingSink(tmp_path / "logs", source), detector=energy_detector(), stt_workers=0)
+    assert result.reason == "stop"
+    assert stopped(read_lines(tmp_path / "logs"))["reason"] == "stop"
+
+
+@pytest.mark.parametrize(
+    "segments, kw, reason",
+    [
+        ([("speech", 1.0)], {}, "eof"),
+        ([("speech", 5.0)], {"ceiling": 2.0}, "ceiling"),
+        ([("speech", 5.0)], {"stop": lambda: True}, "stop"),
+        ([("speech", 0.5), ("silence", 0.5)] * 4, {"stt": FakeSTT(fail_always=True)}, "error"),
+    ],
+)
+def test_listen_stopped_with_its_reason_on_every_exit_path(tmp_path, segments, kw, reason):
+    result, lines, _ = run(tmp_path, segments, **kw)
+    assert result.reason == reason
+    assert stopped(lines)["reason"] == reason
