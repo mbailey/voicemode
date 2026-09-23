@@ -10,10 +10,15 @@ VoiceMode card it belongs to. None started.
 - [x] 1.1 Add the `heard_YYYY-MM-DD.jsonl` writer beside
   `conversation_logger.py`: append-only, `seq`, date rollover shared with
   the exchange log. (*conversation log*, shape)
-- [ ] 1.2 In the capture path `converse` already uses, append a `partial`
+- [x] 1.2 In the capture path `converse` already uses, append a `partial`
   line per STT chunk and a `turn` line at end of turn, with `via:
   "converse"` when the caller is `converse`. No behaviour change to
   `converse`'s return. (*conversation log*, shape)
+  *Landed as one `turn` per reply, at both `log_stt` sites (single listen
+  and survey): converse transcribes an utterance once, so it has no chunks
+  and writes no partials. No `device` yet: a PortAudio query in converse's
+  path tripped the test audio guard (46 blocked calls); task 4 names it
+  where the stream opens. Pip, 04:07 Thu 2026-09-24.*
 - [ ] 1.3 `listen started`, `heartbeat`, `listen stopped` events.
   (*listen*, alive)
 - [ ] 1.4 `voicemode exchanges tail --heard` follows the new file, so the
