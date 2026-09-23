@@ -45,6 +45,7 @@ class Chunker:
         min_speech_s: float = 0.12,
         cut_window_s: float = 0.4,
     ) -> None:
+        self.quiet_s = quiet_s  # read by the loop: the turn re-decode launches on this quiet (do-008)
         self._quiet_frames = max(1, int(round(quiet_s / FRAME_S)))
         self._max_frames = max(1, int(round(max_s / FRAME_S)))
         self._min_speech_frames = max(1, int(round(min_speech_s / FRAME_S)))

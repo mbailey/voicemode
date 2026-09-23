@@ -15,6 +15,18 @@ It does NOT return on a turn. It stops only on:
 - ``eof``: a file source ran out (the mic never does)
 - ``ceiling``: only if one was given
 
+Turn text (``turn_text``, VM-2274 do-008). ``joined`` -- the DEFAULT, and
+what spec conversation-log:12-13 says -- writes the turn as the join of its
+partials. ``redecode`` re-decodes the turn's WHOLE audio and writes that
+instead, because joined chunks split and duplicate words cut by the 2 s soft
+max ("build status? status", 17 of 32 turns in M4). The re-decode is launched
+speculatively once ``quiet_s`` of quiet follows speech inside the turn, so it
+runs inside the ``silence_s`` wait and costs no turn latency; speech resuming
+drops it. Partials are unchanged in both modes. A turn is still discarded when
+its partials heard nothing, so the mode changes turn TEXT, never turn COUNT.
+It is an option, not a spec change (cora 05:02, RULES 160): the default flips
+only if Mike rules Q24.
+
 Waking an agent on an aged turn is a separate waiter's job (do-003); its
 rule is :func:`voice_mode.listen.aged.aged_turn`.
 
@@ -47,6 +59,9 @@ from .sources import FRAME_S, Source
 from .stt import STT
 
 DEFAULT_HEARTBEAT_S = 60.0
+TURN_TEXT_MODES = ("joined", "redecode")
+DEFAULT_REDECODE_MAX_S = 60.0  # longer turns fall back to joined: bounded memory and whisper work
+_HISTORY_S = 4.0  # audio kept before a turn opens; covers pre-roll and a chunk opened up to max_s early
 STOP_FILE_CHECK_S = 0.3
 
 
@@ -122,7 +137,11 @@ class _Capture:
         agent: Optional[str],
         stt_workers: int,
         max_stt_failures: int,
+        turn_text: str = "joined",
+        redecode_max_s: float = DEFAULT_REDECODE_MAX_S,
     ) -> None:
+        if turn_text not in TURN_TEXT_MODES:
+            raise ValueError(f"turn_text must be one of {TURN_TEXT_MODES}, not {turn_text!r}")
         self.source = source
         self.sink = sink
         self.stt = stt
@@ -145,6 +164,16 @@ class _Capture:
         # listen-started and every heartbeat; it calls capture down after 2x
         # period with no line. No heartbeat, no period (heard drops None).
         self._period = heartbeat if heartbeat > 0 else None
+        # turn text re-decode (do-008); all unused when turn_text == "joined"
+        self.turn_text = turn_text
+        self._redecode = turn_text == "redecode"
+        self._redecode_max_frames = max(1, int(round(redecode_max_s / FRAME_S)))
+        self._history: deque = deque(maxlen=int(round(_HISTORY_S / FRAME_S)))
+        self._turn_audio: Optional[list] = None  # frames of the open turn (None: no turn open)
+        self._turn_too_long = False
+        self._quiet_run = 0  # non-speech frames since the turn's last speech frame
+        self._quiet_frames = max(1, int(round(getattr(chunker, "quiet_s", 0.35) / FRAME_S)))
+        self._spec: Optional[Future] = None  # the speculative whole-turn decode
         self.cursor = 0
         self.t = 0.0
 
@@ -165,6 +194,12 @@ class _Capture:
     def _turn(self, t_end_speech: float) -> None:
         text = " ".join(p for p in self._partials if p)
         self._partials = []
+        extra: dict = {}
+        if self._redecode:
+            # a turn whose partials heard nothing is discarded as before: the
+            # re-decode changes a turn's text, never whether it is one
+            text, extra = self._redecoded_text(text) if text else (text, {})
+            self._turn_audio, self._spec, self._turn_too_long, self._quiet_run = None, None, False, 0
         t0 = self._turn_t0 if self._turn_t0 is not None else t_end_speech
         self._turn_t0 = None
         if not text:
@@ -179,9 +214,71 @@ class _Capture:
                 "detector": self.detector.name,
                 "t0": _r(t0),
                 "t1": _r(t_end_speech),
+                **extra,
             }
         )
         self._turns.append(text)
+
+    # -- turn re-decode (do-008) -------------------------------------------
+
+    def _launch(self, audio: np.ndarray) -> Future:
+        if self._executor is not None:
+            return self._executor.submit(self.stt.transcribe, audio)
+        fut: Future = Future()  # inline STT (tests): the same shape, already done
+        try:
+            fut.set_result(self.stt.transcribe(audio))
+        except Exception as exc:
+            fut.set_exception(exc)
+        return fut
+
+    def _drop_spec(self) -> None:
+        if self._spec is not None:
+            self._spec.cancel()  # a no-op if whisper already has it; its result is ignored
+            self._spec = None
+
+    def _track_turn_audio(self, frame: np.ndarray, verdict) -> None:
+        """Keep the open turn's audio, and launch/drop the speculative re-decode."""
+        self._history.append(frame)
+        if verdict.turn_started:
+            # the turn began at _turn_t0 (the first chunk's pre-roll included)
+            back = int(round((self.t - self._turn_t0) / FRAME_S))
+            hist = list(self._history)
+            self._turn_audio = hist[-back:] if 0 < back < len(hist) else hist
+            self._turn_too_long = False
+            self._quiet_run = 0
+            self._drop_spec()
+            return
+        if self._turn_audio is None:
+            return
+        if not self._turn_too_long:
+            self._turn_audio.append(frame)
+            if len(self._turn_audio) > self._redecode_max_frames:
+                self._turn_too_long = True
+                self._turn_audio = []  # free it; this turn's text will be joined
+                self._drop_spec()
+        if verdict.speech:
+            self._quiet_run = 0
+            self._drop_spec()  # speech resumed: what was launched is now short
+        else:
+            self._quiet_run += 1
+            if self._quiet_run == self._quiet_frames and not self._turn_too_long:
+                self._spec = self._launch(np.concatenate(self._turn_audio))
+
+    def _redecoded_text(self, joined: str) -> tuple[str, dict]:
+        """The turn's text from its whole audio; the joined partials on any failure."""
+        audio, spec, too_long = self._turn_audio, self._spec, self._turn_too_long
+        if too_long or not audio:
+            return joined, {"text_from": "joined", "redecode": "too-long" if too_long else "no-audio"}
+        waited = time.monotonic()
+        fut = spec if spec is not None else self._launch(np.concatenate(audio))
+        try:
+            text = str(fut.result()).strip()
+        except Exception as exc:  # whisper hiccup: the turn still lands, with the joined text
+            return joined, {"text_from": "joined", "redecode": f"error: {exc}"}
+        info = {"redecode_wait_s": _r(time.monotonic() - waited), "speculative": spec is not None}
+        if not text:
+            return joined, {"text_from": "joined", "redecode": "empty", **info}
+        return text, {"text_from": "redecode", "joined": joined, **info}
 
     # -- transcription -----------------------------------------------------
 
@@ -248,6 +345,8 @@ class _Capture:
                 if verdict.turn_started and self.chunker.start_t is not None:
                     # the turn began where its first chunk did (pre-roll included)
                     self._turn_t0 = min(self._turn_t0, self.chunker.start_t)
+                if self._redecode:
+                    self._track_turn_audio(frame, verdict)
                 if verdict.end_of_turn:
                     self._submit(self.chunker.flush(self.t))
                     self._collect(wait=True)
@@ -311,12 +410,15 @@ def capture(
     agent: Optional[str] = None,
     stt_workers: int = 1,
     max_stt_failures: int = 3,
+    turn_text: str = "joined",
+    redecode_max_s: float = DEFAULT_REDECODE_MAX_S,
 ) -> CaptureResult:
     """Capture from ``source`` until stopped, an error, the end of a file, or ``ceiling``.
 
     Blocking; run it in its own process (the CLI) or off the event loop.
     ``sink`` defaults to :class:`HeardSink` (Pip's ``heard`` writer).
     ``stt_workers=0`` transcribes inline (deterministic, for tests).
+    ``turn_text`` is ``joined`` (the default, per the spec) or ``redecode``.
     """
     return _Capture(
         source,
@@ -331,4 +433,6 @@ def capture(
         agent=agent,
         stt_workers=stt_workers,
         max_stt_failures=max_stt_failures,
+        turn_text=turn_text,
+        redecode_max_s=redecode_max_s,
     ).run()

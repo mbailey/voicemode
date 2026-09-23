@@ -24,7 +24,7 @@ from pathlib import Path
 from .. import heard
 from .chunker import Chunker
 from .detector import DEFAULT_SILENCE_S, SilenceTurnDetector
-from .loop import DEFAULT_HEARTBEAT_S, capture
+from .loop import DEFAULT_HEARTBEAT_S, DEFAULT_REDECODE_MAX_S, TURN_TEXT_MODES, capture
 from .sink import HeardSink
 from .sources import SourceError, open_source
 from .stt import DEFAULT_WHISPER_MODEL, DEFAULT_WHISPER_URL, WhisperSTT
@@ -48,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--quiet", type=float, default=0.35, help="quiet that cuts a partial chunk, seconds (default: %(default)s)")
     c.add_argument("--max-chunk", type=float, default=2.0, help="longest chunk before a soft cut, seconds; sets how soon a partial lands while speech goes on (default: %(default)s)")
     c.add_argument("--cut-window", type=float, default=0.4, help="a max-length chunk is cut at the quietest frame of its last this-many seconds (default: %(default)s)")
+    c.add_argument("--turn-text", choices=TURN_TEXT_MODES, default="joined",
+                   help="turn line text: 'joined' partials (the spec's default) or a 'redecode' of the turn's whole audio, "
+                        "launched at the last quiet cut so it hides inside the silence wait (default: %(default)s)")
+    c.add_argument("--redecode-max", type=float, default=DEFAULT_REDECODE_MAX_S,
+                   help="with --turn-text redecode, a turn longer than this many seconds keeps its joined text (default: %(default)s)")
     c.add_argument("--no-pace", action="store_true", help="feed a file source as fast as possible, not at real time")
     c.add_argument("--tail-silence", type=float, default=0.0, help="seconds of silence fed after a file source ends (default: %(default)s)")
     c.add_argument("--stt-url", default=DEFAULT_WHISPER_URL, help="OpenAI-compatible STT base URL (default: %(default)s)")
@@ -86,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
             stop_file=args.stop_file,
             session=args.session,
             agent=args.agent,
+            turn_text=args.turn_text,
+            redecode_max_s=args.redecode_max,
         )
     finally:
         stt.close()
