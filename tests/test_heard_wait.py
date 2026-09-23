@@ -184,14 +184,103 @@ def test_listen_stopped_is_seen_even_after_the_hook_consumed_it(base):
 
 
 def test_no_heartbeat_for_twice_the_period_is_capture_down(base):
-    s = capture_up(period=10)
     clock = Clock()
+    w = waiter(clock)                              # armed, then the capture starts
+    s = capture_up(period=10)
     clock.t = ts(s) + 19
-    w = waiter(clock)
     assert w.check() is None
     clock.t = ts(s) + 21
     got = w.check()
     assert got["reason"] == "capture-down" and "no heartbeat for 21s (period 10s)" == got["detail"]
+
+
+# --- grace against the log's history (engineer's refine, 04:27) --------------
+
+def test_arm_after_a_clean_stop_then_restart_within_grace(base):
+    """Engineer's probe: history must not decide before a new capture can start."""
+    capture_up(period=10)
+    stop = heard.event(heard.EV_LISTEN_STOPPED, reason="stop")
+    clock = Clock(); clock.t = ts(stop) + 60      # a minute after the old capture stopped
+    w = waiter(clock)                             # arm FIRST (the M3 procedure) ...
+    assert w.check() is None
+    capture_up(period=10)                         # ... then the capture starts
+    clock.t += 25
+    assert w.check() is None                      # grace is over, and the ears are up
+
+
+def test_arm_after_a_crashed_capture_then_restart_within_grace(base):
+    """Engineer's probe: a capture that died hours ago with no listen-stopped."""
+    up = capture_up(period=10)
+    clock = Clock(); clock.t = ts(up) + 7200
+    w = waiter(clock)
+    assert w.check() is None
+
+
+def test_history_that_stays_dead_is_reported_when_grace_runs_out(base):
+    capture_up(period=10)
+    stop = heard.event(heard.EV_LISTEN_STOPPED, reason="stop")
+    clock = Clock(); clock.t = ts(stop) + 60
+    w = waiter(clock, grace=30)
+    clock.t += 29.9
+    assert w.check() is None
+    clock.t += 0.1
+    got = w.check()
+    assert got["reason"] == "capture-down"
+    assert got["detail"] == "listen stopped (stop); no new capture in the 30s since arming"
+
+
+def test_a_crash_that_stays_dead_is_reported_when_grace_runs_out(base):
+    up = capture_up(period=10)
+    clock = Clock(); clock.t = ts(up) + 7200
+    w = waiter(clock, grace=30)
+    clock.t += 30
+    assert w.check()["reason"] == "capture-down"
+
+
+def test_a_listen_started_with_no_ts_still_goes_stale(base):
+    clock = Clock()
+    w = waiter(clock, grace=30)
+    heard.log_dir().mkdir(parents=True, exist_ok=True)
+    with open(heard.log_path(), "a") as f:           # a writer that forgot ts
+        f.write(json.dumps({"seq": heard.last_seq() + 1, "kind": "event",
+                            "event": "listen-started", "period": 10, "source": "mic"}) + "\n")
+    assert w.check() is None                          # seen now: up
+    clock.t += 21
+    assert w.check()["reason"] == "capture-down"      # and silent since: stale, not forever
+
+
+# --- signals: between polls, never inside take() -------------------------------
+
+def test_a_stop_between_polls_returns_stopped_and_consumes_nothing(base):
+    capture_up()
+    clock = Clock()
+    w = waiter(clock)
+    t = heard.turn("not yet taken")
+    clock.t = ts(t) + 9
+    got = w.run(should_stop=lambda: "SIGTERM")
+    assert got["reason"] == "stopped" and got["signal"] == "SIGTERM"
+    assert heard.load_cursor("s").seq < t["seq"]      # the turn is still there for the hook
+
+
+def test_a_signal_during_a_take_still_prints_what_was_taken(base):
+    capture_up()
+    clock = Clock()
+    w = waiter(clock)
+    t = heard.turn("taken as the signal lands")
+    clock.t = ts(t) + 9
+    flags = []
+
+    real_take = heard.take
+    def take_then_signal(*a, **k):
+        out = real_take(*a, **k)
+        flags.append("SIGTERM")                         # the signal arrives inside take()
+        return out
+    heard.take, saved = take_then_signal, heard.take
+    try:
+        got = w.run(should_stop=lambda: flags[0] if flags else None)
+    finally:
+        heard.take = saved
+    assert got["reason"] == "turn" and got["text"].endswith("taken as the signal lands")
 
 
 def test_a_heartbeat_keeps_it_alive(base):
@@ -267,7 +356,8 @@ def test_cli_exit_codes_timeout_124_capture_down_3(base):
                        timeout=30)
     assert r.returncode == 124 and json.loads(r.stdout)["reason"] == "timeout"
     heard.event(heard.EV_LISTEN_STOPPED, reason="stop")
-    r = subprocess.run([sys.executable, "-m", "voice_mode.heard_wait", "--poll", "0.05"],
+    r = subprocess.run([sys.executable, "-m", "voice_mode.heard_wait", "--poll", "0.05",
+                        "--grace", "0.3"],
                        env=_env(base), capture_output=True, text=True, timeout=30)
     assert r.returncode == 3 and json.loads(r.stdout)["reason"] == "capture-down"
 
