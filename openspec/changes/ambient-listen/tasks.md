@@ -7,7 +7,7 @@ VoiceMode card it belongs to. None started.
 
 ## 1. Write during the listen (VM-2270)
 
-- [ ] 1.1 Add the `heard_YYYY-MM-DD.jsonl` writer beside
+- [x] 1.1 Add the `heard_YYYY-MM-DD.jsonl` writer beside
   `conversation_logger.py`: append-only, `seq`, date rollover shared with
   the exchange log. (*conversation log*, shape)
 - [ ] 1.2 In the capture path `converse` already uses, append a `partial`
