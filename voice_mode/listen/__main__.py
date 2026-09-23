@@ -1,10 +1,13 @@
-"""Arm ``listen`` from a shell and print its return as JSON.
+"""Run capture, "the ears", from a shell; print its result as JSON on exit.
 
-    python -m voice_mode.listen --source file:X.wav --age 8 --log PATH
+    python -m voice_mode.listen capture --source mic --device C930e
+    python -m voice_mode.listen capture --source file:X.wav [--tail-silence 10]
 
-Exit 0 on any clean return (turn, ceiling, stop, eof), 1 on reason
-``error``, 2 on bad arguments. SIGINT/SIGTERM ask it to stop (reason
-``stop``), so the ``listen stopped`` line is always written.
+It writes through ``heard`` (``$VOICEMODE_BASE_DIR/logs/conversations/``,
+or ``--log-dir``) and runs until stopped: SIGINT/SIGTERM or ``--stop-file``
+(reason ``stop``), an error, the end of a file source (``eof``), or
+``--ceiling`` if given. It does not return on a turn. Exit 0 on a clean
+stop, 1 on reason ``error``, 2 on bad arguments.
 
 It only ever opens an INPUT: no TTS, no playback, no conch.
 """
@@ -13,65 +16,73 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import signal
 import sys
 import threading
+from pathlib import Path
 
+from .. import heard
 from .chunker import Chunker
 from .detector import DEFAULT_SILENCE_S, SilenceTurnDetector
-from .loop import DEFAULT_AGE_S, DEFAULT_CEILING_S, DEFAULT_HEARTBEAT_S, listen
-from .sink import JsonlSink
+from .loop import DEFAULT_HEARTBEAT_S, capture
+from .sink import HeardSink
 from .sources import SourceError, open_source
 from .stt import DEFAULT_WHISPER_MODEL, DEFAULT_WHISPER_URL, WhisperSTT
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="python -m voice_mode.listen",
-        description="listen spike (VM-2274): write what is heard; return on an aged turn.",
+    p = argparse.ArgumentParser(prog="python -m voice_mode.listen", description="listen spike (VM-2274)")
+    sub = p.add_subparsers(dest="command", required=True)
+    c = sub.add_parser(
+        "capture",
+        help="the ears: capture and write what is heard until stopped",
+        description="Capture (M1): write started/heartbeat/partial/turn/stopped through heard, until stopped.",
     )
-    p.add_argument("--source", default="mic", help="'mic' or 'file:PATH.wav' (default: mic)")
-    p.add_argument("--log", required=True, help="JSONL file to append lines to (provisional sink)")
-    p.add_argument("--age", type=float, default=DEFAULT_AGE_S, help="return once the newest turn is this old, seconds (default: %(default)s)")
-    p.add_argument("--ceiling", type=float, default=DEFAULT_CEILING_S, help="return after this long regardless, seconds (default: %(default)s)")
-    p.add_argument("--heartbeat", type=float, default=DEFAULT_HEARTBEAT_S, help="heartbeat period, seconds; 0 disables (default: %(default)s)")
-    p.add_argument("--silence", type=float, default=DEFAULT_SILENCE_S, help="silence that ends a turn, seconds (default: %(default)s)")
-    p.add_argument("--quiet", type=float, default=0.35, help="quiet that cuts a partial chunk, seconds (default: %(default)s)")
-    p.add_argument("--max-chunk", type=float, default=5.0, help="longest chunk before a forced cut, seconds (default: %(default)s)")
-    p.add_argument("--no-pace", action="store_true", help="feed a file source as fast as possible, not at real time")
-    p.add_argument("--device", default=None, help="mic input device (index or name; default: the system input)")
-    p.add_argument("--stt-url", default=DEFAULT_WHISPER_URL, help="OpenAI-compatible STT base URL (default: %(default)s)")
-    p.add_argument("--stt-model", default=DEFAULT_WHISPER_MODEL, help="STT model name (default: %(default)s)")
-    p.add_argument("--keep-annotations", action="store_true", help="keep whisper's non-speech tags ('(static)', '[BLANK_AUDIO]') as text")
-    p.add_argument("--session", default=os.getenv("CLAUDE_SESSION_ID"), help="session id to stamp on lines")
-    p.add_argument("--agent", default=os.getenv("VOICEMODE_AGENT"), help="agent name to stamp on lines")
+    c.add_argument("--source", default="mic", help="'mic' or 'file:PATH.wav' (default: mic)")
+    c.add_argument("--device", default=None, help="mic input: an index, or a case-insensitive substring of its name (e.g. C930e)")
+    c.add_argument("--log-dir", default=None, help="write heard_YYYY-MM-DD.jsonl here instead of $VOICEMODE_BASE_DIR/logs/conversations")
+    c.add_argument("--heartbeat", type=float, default=DEFAULT_HEARTBEAT_S, help="heartbeat period, seconds; 0 disables (default: %(default)s)")
+    c.add_argument("--ceiling", type=float, default=None, help="stop after this many seconds (default: none)")
+    c.add_argument("--stop-file", default=None, help="stop (reason stop) once this file exists")
+    c.add_argument("--silence", type=float, default=DEFAULT_SILENCE_S, help="silence that ends a turn, seconds (default: %(default)s)")
+    c.add_argument("--quiet", type=float, default=0.35, help="quiet that cuts a partial chunk, seconds (default: %(default)s)")
+    c.add_argument("--max-chunk", type=float, default=5.0, help="longest chunk before a forced cut, seconds (default: %(default)s)")
+    c.add_argument("--no-pace", action="store_true", help="feed a file source as fast as possible, not at real time")
+    c.add_argument("--tail-silence", type=float, default=0.0, help="seconds of silence fed after a file source ends (default: %(default)s)")
+    c.add_argument("--stt-url", default=DEFAULT_WHISPER_URL, help="OpenAI-compatible STT base URL (default: %(default)s)")
+    c.add_argument("--stt-model", default=DEFAULT_WHISPER_MODEL, help="STT model name (default: %(default)s)")
+    c.add_argument("--keep-annotations", action="store_true", help="keep whisper's non-speech tags ('(static)', '[BLANK_AUDIO]') as text")
+    c.add_argument("--session", default=heard.caller_session(), help="session id stamped on lines (default: from the environment)")
+    c.add_argument("--agent", default=heard.caller_agent(), help="agent name stamped on lines (default: from the environment)")
     return p
+
+
+def _error_json(msg: str) -> str:
+    return json.dumps({"reason": "error", "text": "", "cursor": 0, "error": msg})
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    device = int(args.device) if args.device is not None and args.device.isdigit() else args.device
     try:
-        source = open_source(args.source, realtime=not args.no_pace, device=device)
+        source = open_source(args.source, realtime=not args.no_pace, device=args.device, tail_silence_s=args.tail_silence)
     except SourceError as exc:
-        print(json.dumps({"reason": "error", "text": "", "cursor": 0, "error": str(exc)}))
+        print(_error_json(str(exc)))
         return 1
     stop = threading.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: stop.set())
     stt = WhisperSTT(args.stt_url, model=args.stt_model, drop_annotations=not args.keep_annotations)
     try:
-        result = listen(
+        result = capture(
             source,
-            JsonlSink(args.log),
             stt,
-            age=args.age,
-            ceiling=args.ceiling,
+            HeardSink(Path(args.log_dir) if args.log_dir else None),
             heartbeat=args.heartbeat,
+            ceiling=args.ceiling,
             detector=SilenceTurnDetector(args.silence),
             chunker=Chunker(quiet_s=args.quiet, max_s=args.max_chunk),
             stop=stop,
+            stop_file=args.stop_file,
             session=args.session,
             agent=args.agent,
         )

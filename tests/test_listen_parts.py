@@ -22,7 +22,7 @@ from voice_mode.listen import (
     Chunker,
     EnergyClassifier,
     FileSource,
-    JsonlSink,
+    HeardSink,
     MemorySink,
     SilenceTurnDetector,
     SourceError,
@@ -34,6 +34,11 @@ from voice_mode.listen import (
 from voice_mode.listen import __main__ as cli
 from voice_mode.listen import detector as detector_mod
 from tests.listen_helpers import FakeSTT, read_lines, synth
+
+
+@pytest.fixture(autouse=True)
+def _no_real_voicemode_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("VOICEMODE_BASE_DIR", str(tmp_path / "vm"))
 
 
 def write_wav(path, samples, rate=SAMPLE_RATE, channels=1):
@@ -87,11 +92,13 @@ def test_file_source_converts_stereo_44k_to_16k_mono(tmp_path):
     assert src.duration_s == pytest.approx(1.0, abs=FRAME_S)
 
 
-def test_file_source_keeps_feeding_silence_after_the_wav_by_default(tmp_path):
+def test_file_source_ends_with_the_wav_by_default_and_can_pad_silence(tmp_path):
     path = write_wav(tmp_path / "s.wav", synth([("speech", 0.09)]))
-    frames = FileSource(path, realtime=False).frames()
-    got = [next(frames) for _ in range(50)]
-    assert len(got) == 50 and not got[-1].any()
+    assert sum(1 for _ in FileSource(path, realtime=False).frames()) == 3
+    padded = list(FileSource(path, realtime=False, tail_silence_s=0.3).frames())
+    assert len(padded) == 13 and not padded[-1].any()
+    endless = FileSource(path, realtime=False, tail_silence_s=None).frames()
+    assert len([next(endless) for _ in range(500)]) == 500
 
 
 def test_bad_wav_and_unknown_source_raise_source_error(tmp_path):
@@ -197,15 +204,18 @@ def test_chunker_flush():
 # -- sink ----------------------------------------------------------------------
 
 
-def test_jsonl_sink_stamps_ts_and_seq_and_resumes_seq(tmp_path):
-    path = tmp_path / "logs" / "heard.jsonl"
-    sink = JsonlSink(path)
-    assert sink.write({"kind": "event", "event": "a"}) == 1
-    assert sink.write({"kind": "event", "event": "b"}) == 2
-    assert JsonlSink(path).write({"kind": "event", "event": "c"}) == 3
-    lines = read_lines(path)
+def test_heard_sink_writes_through_heard_and_returns_its_seq(tmp_path):
+    from voice_mode import heard
+
+    sink = HeardSink(tmp_path)
+    assert sink.write({"kind": "event", "event": "a", "source": "mic", "device": "airpods"}) == 1
+    assert sink.write({"kind": "partial", "text": "hi", "source": "mic", "device": "airpods", "session": None}) == 2
+    assert HeardSink(tmp_path).write({"kind": "turn", "text": "hi", "detector": "vad-silence", "source": "mic", "device": "airpods"}) == 3
+    lines = read_lines(tmp_path)
     assert [ln["seq"] for ln in lines] == [1, 2, 3]
-    assert list(lines[0])[:3] == ["ts", "seq", "kind"]
+    assert heard.log_path(directory=tmp_path).exists()
+    assert lines[1]["final"] is False and "session" not in lines[1]  # heard drops None
+    assert lines[2]["final"] is True and lines[2]["detector"] == "vad-silence"
 
 
 def test_memory_sink():
@@ -250,28 +260,40 @@ def cli_fakes(monkeypatch):
     monkeypatch.setattr(detector_mod, "default_classifier", lambda: EnergyClassifier(500))
 
 
-def test_cli_arms_on_a_file_and_prints_the_return_json(tmp_path, capsys, cli_fakes):
-    wav = write_wav(tmp_path / "t.wav", synth([("silence", 0.5), ("speech", 1.5)]))
-    log = tmp_path / "heard.jsonl"
-    rc = cli.main(["--source", f"file:{wav}", "--age", "8", "--log", str(log), "--no-pace", "--heartbeat", "5"])
+def test_cli_capture_runs_a_file_to_its_end_and_prints_the_result_json(tmp_path, capsys, cli_fakes):
+    wav = write_wav(tmp_path / "t.wav", synth([("silence", 0.5), ("speech", 1.5), ("silence", 2.5), ("speech", 1.0)]))
+    logs = tmp_path / "logs"
+    rc = cli.main(["capture", "--source", f"file:{wav}", "--log-dir", str(logs), "--no-pace", "--tail-silence", "3"])
     out = json.loads(capsys.readouterr().out)
+    lines = read_lines(logs)
     assert rc == 0
-    assert out["reason"] == "turn" and out["text"] and out["cursor"] == read_lines(log)[-1]["seq"]
+    assert out["reason"] == "eof" and out["cursor"] == lines[-1]["seq"]
+    assert [ln["kind"] for ln in lines].count("turn") == 2  # it did not return on the first
 
 
-def test_cli_ceiling(tmp_path, capsys, cli_fakes):
+def test_cli_capture_writes_to_voicemode_base_dir_by_default(tmp_path, capsys, cli_fakes):
+    wav = write_wav(tmp_path / "t.wav", synth([("speech", 1.0)]))
+    assert cli.main(["capture", "--source", f"file:{wav}", "--no-pace"]) == 0
+    assert read_lines(tmp_path / "vm" / "logs" / "conversations")[0]["event"] == "listen-started"
+
+
+def test_cli_capture_ceiling_and_stop_file(tmp_path, capsys, cli_fakes):
     wav = write_wav(tmp_path / "quiet.wav", synth([("silence", 0.5)]))
-    rc = cli.main(["--source", f"file:{wav}", "--log", str(tmp_path / "h.jsonl"), "--no-pace", "--ceiling", "2"])
-    assert rc == 0 and json.loads(capsys.readouterr().out)["reason"] == "ceiling"
+    args = ["capture", "--source", f"file:{wav}", "--log-dir", str(tmp_path / "l"), "--no-pace", "--tail-silence", "30"]
+    assert cli.main(args + ["--ceiling", "2"]) == 0
+    assert json.loads(capsys.readouterr().out)["reason"] == "ceiling"
+    (tmp_path / "stop").touch()
+    assert cli.main(args + ["--stop-file", str(tmp_path / "stop")]) == 0
+    assert json.loads(capsys.readouterr().out)["reason"] == "stop"
 
 
 def test_cli_bad_source_is_an_error_json(tmp_path, capsys):
-    rc = cli.main(["--source", "file:/no/such.wav", "--log", str(tmp_path / "h.jsonl")])
+    rc = cli.main(["capture", "--source", "file:/no/such.wav"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 1 and out["reason"] == "error"
 
 
-def test_cli_requires_a_log(capsys):
+def test_cli_needs_the_capture_subcommand(capsys):
     with pytest.raises(SystemExit) as exc:
         cli.main(["--source", "mic"])
     assert exc.value.code == 2
@@ -309,8 +331,20 @@ class FakeSD:
         self.InputStream = InputStream
         self.stopped = False
 
+    DEVICES = [
+        {"name": "MacBook Pro Microphone", "max_input_channels": 1, "default_samplerate": 48000},
+        {"name": "MacBook Pro Speakers", "max_input_channels": 0, "default_samplerate": 48000},
+        {"name": "Logitech Webcam C930e", "max_input_channels": 2, "default_samplerate": 32000},
+        {"name": "airpods", "max_input_channels": 1, "default_samplerate": 24000},
+        {"name": "airpods pro", "max_input_channels": 1, "default_samplerate": 24000},
+    ]
+
     def query_devices(self, device=None, kind=None):
-        return {"name": self.name, "default_samplerate": self.default_rate}
+        if device is None and kind is None:
+            return self.DEVICES
+        if device is None:
+            return {"name": self.name, "default_samplerate": self.default_rate, "max_input_channels": 1}
+        return self.DEVICES[device]
 
 
 @pytest.fixture
@@ -348,12 +382,12 @@ def test_mic_source_falls_back_to_the_device_rate_and_resamples(fake_sd):
 
 
 def test_a_mic_that_goes_quiet_at_the_driver_is_an_error_not_a_silent_room(fake_sd, tmp_path):
-    from voice_mode.listen import MicSource, listen
+    from voice_mode.listen import MicSource, capture
 
     fake_sd.blocks = 2  # then nothing, ever
     mic = MicSource(stall_s=0.1)
-    result = listen(mic, JsonlSink(tmp_path / "h.jsonl"), FakeSTT(), stt_workers=0)
-    lines = read_lines(tmp_path / "h.jsonl")
+    result = capture(mic, FakeSTT(), HeardSink(tmp_path), stt_workers=0)
+    lines = read_lines(tmp_path)
     assert result.reason == "error" and "delivered no audio" in result.error
     assert lines[0]["source"] == "mic" and lines[0]["device"] == "airpods"
 
@@ -371,11 +405,45 @@ def test_an_unknown_mic_device_is_a_source_error(monkeypatch):
 
     class NoDevice(FakeSD):
         def query_devices(self, device=None, kind=None):
-            raise ValueError("No input device matching 'walkman'")
+            raise ValueError("PortAudio is gone")
 
     monkeypatch.setattr(sources, "_sd", lambda: NoDevice())
-    with pytest.raises(SourceError):
-        open_source("mic", device="walkman")
+    with pytest.raises(SourceError, match="PortAudio is gone"):
+        open_source("mic")
+
+
+@pytest.mark.parametrize(
+    "want, index, name",
+    [
+        ("C930e", 2, "Logitech Webcam C930e"),
+        ("c930E", 2, "Logitech Webcam C930e"),
+        ("macbook", 0, "MacBook Pro Microphone"),  # the speakers have no input channels
+        ("airpods", 3, "airpods"),  # an exact name beats the longer substring match
+        ("2", 2, "Logitech Webcam C930e"),
+        (3, 3, "airpods"),
+    ],
+)
+def test_device_is_an_index_or_a_substring_of_an_input_name(fake_sd, want, index, name):
+    from voice_mode.listen import MicSource, resolve_input_device
+
+    assert resolve_input_device(want) == (index, name)
+    mic = MicSource(want)
+    assert mic.device == name
+    next(mic.frames())
+    assert fake_sd.opened[0]["device"] == index
+    mic.close()
+
+
+@pytest.mark.parametrize("want, why", [("walkman", "no input device matches"), ("pro", "more than one"), ("1", "no input channels")])
+def test_a_device_that_matches_nothing_or_too_much_is_an_error_naming_the_inputs(fake_sd, want, why):
+    with pytest.raises(SourceError, match=why):
+        open_source("mic", device=want)
+
+
+def test_default_device_is_the_system_input(fake_sd):
+    from voice_mode.listen import resolve_input_device
+
+    assert resolve_input_device(None) == (None, "airpods")
 
 
 @pytest.mark.parametrize(

@@ -1,5 +1,6 @@
 """Shared helpers for the listen spike tests (VM-2274): a synthetic source,
-a fake STT and a sink that records when (in audio frames) each line landed.
+a fake STT and a sink that writes through ``heard`` into a tmp dir while
+recording when (in audio frames, and on the wall clock) each line landed.
 
 No real audio device and no real STT server is touched.
 """
@@ -13,7 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
-from voice_mode.listen import FRAME_S, SAMPLE_RATE, ArraySource, EnergyClassifier, JsonlSink, SilenceTurnDetector
+from voice_mode import heard
+from voice_mode.listen import FRAME_S, SAMPLE_RATE, ArraySource, EnergyClassifier, HeardSink, SilenceTurnDetector
 
 
 def synth(segments: list[tuple[str, float]]) -> np.ndarray:
@@ -36,9 +38,9 @@ def synth(segments: list[tuple[str, float]]) -> np.ndarray:
 
 
 class CountingSource(ArraySource):
-    """An unpaced ArraySource that counts the frames it has yielded."""
+    """An ArraySource (unpaced by default) that counts the frames it has yielded."""
 
-    def __init__(self, samples, *, tail_silence_s=None, realtime=False, device="synthetic"):
+    def __init__(self, samples, *, tail_silence_s=0.0, realtime=False, device="synthetic"):
         super().__init__(samples, name="file", device=device, realtime=realtime, tail_silence_s=tail_silence_s)
         self.yielded = 0
 
@@ -67,11 +69,11 @@ class FakeSTT:
         return f"w{self.calls}"
 
 
-class RecordingSink(JsonlSink):
-    """A JsonlSink that also notes, per line, the source's frame count and the wall clock."""
+class RecordingSink(HeardSink):
+    """Writes through ``heard`` into ``directory``; notes each line's frame count and wall time."""
 
-    def __init__(self, path, source: CountingSource | None = None):
-        super().__init__(path)
+    def __init__(self, directory, source: CountingSource | None = None):
+        super().__init__(Path(directory))
         self.source = source
         self.at_frames: dict[int, int] = {}
         self.at_wall: dict[int, float] = {}
@@ -89,8 +91,12 @@ def stream_s_at(sink: RecordingSink, seq: int) -> float:
     return sink.at_frames[seq] * FRAME_S
 
 
-def read_lines(path: Path) -> list[dict]:
-    return [json.loads(raw) for raw in Path(path).read_text().splitlines() if raw.strip()]
+def read_lines(directory: Path) -> list[dict]:
+    """Every line ``heard`` wrote in ``directory``, in seq order."""
+    out = []
+    for path in heard.log_files(Path(directory)):
+        out += [json.loads(raw) for raw in path.read_text().splitlines() if raw.strip()]
+    return sorted(out, key=lambda ln: ln["seq"])
 
 
 def energy_detector(silence_s: float = 2.0) -> SilenceTurnDetector:

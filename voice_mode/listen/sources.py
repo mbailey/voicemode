@@ -133,9 +133,9 @@ def _resample(data: np.ndarray, rate: int) -> np.ndarray:
 class FileSource(ArraySource):
     """``file:PATH.wav`` -- a WAV fed at real time (or unpaced, for tests).
 
-    After the WAV ends it keeps feeding silence, like a room that went
-    quiet, so the loop ends on one of its own reasons (an aged turn, the
-    ceiling, a stop) rather than on the end of the file.
+    It ends when the WAV does (capture then stops with reason ``eof``).
+    ``tail_silence_s`` pads that many seconds of silence after it first, as
+    a room going quiet would; ``None`` pads forever.
     """
 
     def __init__(
@@ -143,7 +143,7 @@ class FileSource(ArraySource):
         path: str | Path,
         *,
         realtime: bool = True,
-        tail_silence_s: Optional[float] = None,
+        tail_silence_s: Optional[float] = 0.0,
     ) -> None:
         self.path = Path(path).expanduser()
         super().__init__(
@@ -162,14 +162,46 @@ def _sd():
     return sounddevice
 
 
-def resolve_input_device_name(device: Optional[int | str] = None) -> str:
-    """The input device's name as ``sounddevice`` reports it (e.g. ``airpods``)."""
+def resolve_input_device(device: Optional[int | str] = None) -> tuple[Optional[int], str]:
+    """``(index, name)`` of an input device, the name as ``sounddevice`` reports it.
+
+    ``None`` is the system's default input (index ``None``: PortAudio's own
+    default). An ``int`` (or all-digit string) is a device index. Any other
+    string is a case-insensitive SUBSTRING of an input device's name
+    (``--device C930e``); an exact name wins over a substring, and more than
+    one substring match is an error that names them.
+    """
     sd = _sd()
     try:
-        info = sd.query_devices(device, kind="input") if device is None else sd.query_devices(device)
+        if device is None:
+            return None, str(sd.query_devices(kind="input")["name"])
+        if isinstance(device, int) or (isinstance(device, str) and device.isdigit()):
+            index = int(device)
+            info = sd.query_devices(index)
+            if int(info.get("max_input_channels", 1)) < 1:
+                raise SourceError(f"device {index} ({info['name']!r}) has no input channels")
+            return index, str(info["name"])
+        inputs = [(i, str(d["name"])) for i, d in enumerate(sd.query_devices()) if int(d.get("max_input_channels", 0)) > 0]
+    except SourceError:
+        raise
     except Exception as exc:  # PortAudio raises ValueError/PortAudioError
         raise SourceError(f"no input device {device!r}: {exc}") from exc
-    return str(info["name"])
+    want = str(device).lower()
+    exact = [(i, n) for i, n in inputs if n.lower() == want]
+    if exact:
+        return exact[0]
+    matches = [(i, n) for i, n in inputs if want in n.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    names = ", ".join(repr(n) for _, n in (matches or inputs))
+    if not matches:
+        raise SourceError(f"no input device matches {device!r}; inputs are: {names}")
+    raise SourceError(f"{device!r} matches more than one input device: {names}")
+
+
+def resolve_input_device_name(device: Optional[int | str] = None) -> str:
+    """The input device's name as ``sounddevice`` reports it (e.g. ``airpods``)."""
+    return resolve_input_device(device)[1]
 
 
 class MicSource:
@@ -184,8 +216,7 @@ class MicSource:
     name = "mic"
 
     def __init__(self, device: Optional[int | str] = None, *, stall_s: float = 5.0) -> None:
-        self._device_arg = device
-        self.device = resolve_input_device_name(device)
+        self._device_arg, self.device = resolve_input_device(device)
         self.stall_s = stall_s
         self._q: "queue.Queue[np.ndarray]" = queue.Queue()
         self._stream = None
@@ -245,10 +276,16 @@ class MicSource:
             self._stream = None
 
 
-def open_source(spec: str, *, realtime: bool = True, device: Optional[int | str] = None) -> Source:
-    """``mic`` or ``file:PATH.wav``."""
+def open_source(
+    spec: str,
+    *,
+    realtime: bool = True,
+    device: Optional[int | str] = None,
+    tail_silence_s: Optional[float] = 0.0,
+) -> Source:
+    """``mic`` (``device``: index or name substring) or ``file:PATH.wav``."""
     if spec == "mic":
         return MicSource(device)
     if spec.startswith("file:"):
-        return FileSource(spec[len("file:"):], realtime=realtime)
+        return FileSource(spec[len("file:"):], realtime=realtime, tail_silence_s=tail_silence_s)
     raise SourceError(f"unknown source {spec!r}: expected 'mic' or 'file:PATH.wav'")
