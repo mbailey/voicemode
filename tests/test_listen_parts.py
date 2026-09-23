@@ -137,6 +137,12 @@ def test_detector_defaults_to_two_seconds_and_is_named_vad_silence():
 
 
 def test_webrtc_classifier_hears_silence_as_silence():
+    import webrtcvad
+
+    if not hasattr(webrtcvad, "__file__"):
+        # tests/test_silence_detection.py:10 replaces sys.modules['webrtcvad']
+        # with a MagicMock at collection, for the whole session (pre-existing).
+        pytest.skip("webrtcvad is a session-wide MagicMock (tests/test_silence_detection.py:10)")
     assert WebRtcClassifier()(np.zeros(FRAME_SAMPLES, dtype=np.int16)) is False
 
 
