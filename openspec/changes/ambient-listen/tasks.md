@@ -7,29 +7,34 @@ VoiceMode card it belongs to. None started.
 
 ## 1. Write during the listen (VM-2270)
 
-- [ ] 1.1 Add the `heard_YYYY-MM-DD.jsonl` writer beside
+- [x] 1.1 Add the `heard_YYYY-MM-DD.jsonl` writer beside
   `conversation_logger.py`: append-only, `seq`, date rollover shared with
   the exchange log. (*conversation log*, shape)
-- [ ] 1.2 In the capture path `converse` already uses, append a `partial`
+- [x] 1.2 In the capture path `converse` already uses, append a `partial`
   line per STT chunk and a `turn` line at end of turn, with `via:
   "converse"` when the caller is `converse`. No behaviour change to
   `converse`'s return. (*conversation log*, shape)
+  *Landed as one `turn` per reply, at both `log_stt` sites (single listen
+  and survey): converse transcribes an utterance once, so it has no chunks
+  and writes no partials. No `device` yet: a PortAudio query in converse's
+  path tripped the test audio guard (46 blocked calls); task 4 names it
+  where the stream opens. Pip, 04:07 Thu 2026-09-24.*
 - [ ] 1.3 `listen started`, `heartbeat`, `listen stopped` events.
   (*listen*, alive)
-- [ ] 1.4 `voicemode exchanges tail --heard` follows the new file, so the
+- [x] 1.4 `voicemode exchanges tail --heard` follows the new file, so the
   "tail the JSON logs" tool Mike remembers covers it.
 
 ## 2. The hook and the cursor (VM-2270)
 
-- [ ] 2.1 A `heard` hook script under `voice_mode/data/hooks/`, installed
+- [x] 2.1 A `heard` hook script under `voice_mode/data/hooks/`, installed
   by `voicemode claude hooks add heard`, on `PostToolUse` (and
   `PostToolBatch` where offered). (*conversation log*, hook)
-- [ ] 2.2 Per-session cursor files under `~/.voicemode/state/heard-cursor/`.
+- [x] 2.2 Per-session cursor files under `~/.voicemode/state/heard-cursor/`.
   (*conversation log*, cursor)
-- [ ] 2.3 Print lines past the cursor, partials collapsed into their turn,
+- [x] 2.3 Print lines past the cursor, partials collapsed into their turn,
   device and time on each, within the budget; `+k more, seq a-b` on a cut;
   cursor never past what was printed. (*conversation log*, cursor)
-- [ ] 2.4 Watch it fail once: a budget of 1 line against 40, and prove the
+- [x] 2.4 Watch it fail once: a budget of 1 line against 40, and prove the
   next call resumes at the right `seq`. Charter 3: a gate never seen
   failing is a decoration.
 

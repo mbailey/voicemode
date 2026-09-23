@@ -1,0 +1,27 @@
+{
+  "description": "VoiceMode heard ride-along: after a tool call, print what VoiceMode heard since this session last looked (heard_YYYY-MM-DD.jsonl past the session's cursor), within a token budget. Opt-in: `voicemode claude hooks add heard`; a bare `hooks add` does not install it. Silent when nothing is new; never blocks; never claims a line; a failure exits 1 (a hook error, loud) and never 2 (which stops the agent's turn). VOICEMODE_HEARD_HOOK=off silences it per session.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "voicemode-heard-hook hook || exit 1",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "voicemode-heard-hook hook || exit 1",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
