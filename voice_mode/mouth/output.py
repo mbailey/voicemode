@@ -10,6 +10,7 @@ the ``Speakers + AirPods`` aggregate, which plays through the speakers too.
 
 from __future__ import annotations
 
+import queue
 import time
 from typing import Optional
 
@@ -49,15 +50,21 @@ def resolve(name: str) -> tuple[Optional[int], str]:
     raise DeviceAbsent(f"output device {name!r} is not present; present: {', '.join(names)}")
 
 
+class DeviceLost(RuntimeError):
+    """The device stopped taking audio mid-play (AirPods out of the ear, into the case)."""
+
+
 class NullOut:
     name = "null"
     latency = 0.0
 
     def __init__(self, sample_rate: int) -> None:
         self.sample_rate = sample_rate
+        self.frames_played = 0
 
     def write(self, block: np.ndarray) -> None:
         time.sleep(len(block) / self.sample_rate)
+        self.frames_played += len(block)
 
     def drain(self) -> None:
         pass
@@ -67,25 +74,72 @@ class NullOut:
 
 
 class DeviceOut:
+    """A callback stream fed from a short queue, so the player never blocks on the device.
+
+    A blocking ``stream.write`` can wait forever when CoreAudio stops pulling
+    (Cora's review of 598e54dd, 20:16): the player hangs, the queue stalls and
+    no ``said`` is written. Here ``write`` waits at most ``lost_after_s`` for
+    room in the queue, and ``drain`` at most the audio still queued plus
+    ``lost_after_s``; past either, ``DeviceLost``. ``frames_played`` counts
+    what the device actually pulled, not what was handed over.
+    """
+
+    queue_blocks = 4     # ~200 ms of 50 ms blocks between the player and the device
+    lost_after_s = 1.0   # Jefferson's "standard maximum" silence, as it happens
+
     def __init__(self, name: str, sample_rate: int) -> None:
         idx, self.name = resolve(name)
         sd = _sd()
         self.sample_rate = sample_rate
+        self.q: queue.Queue = queue.Queue(maxsize=self.queue_blocks)
+        self.frames_queued = 0
+        self.frames_played = 0
+        self._cur: Optional[np.ndarray] = None
+        self._pos = 0
         self.stream = sd.OutputStream(device=idx, samplerate=sample_rate, channels=1,
-                                      dtype="float32")
+                                      dtype="float32", callback=self._callback)
         self.stream.start()
-        self.latency = float(self.stream.latency or 0.0)
+        self.latency = float(getattr(self.stream, "latency", 0.0) or 0.0)
+
+    def _callback(self, outdata, frames, time_info, status) -> None:  # noqa: ARG002
+        filled = 0
+        while filled < frames:
+            if self._cur is None or self._pos >= len(self._cur):
+                try:
+                    self._cur, self._pos = self.q.get_nowait(), 0
+                except queue.Empty:
+                    break
+            n = min(frames - filled, len(self._cur) - self._pos)
+            outdata[filled:filled + n, 0] = self._cur[self._pos:self._pos + n]
+            self._pos += n
+            filled += n
+        if filled < frames:
+            outdata[filled:, 0] = 0
+        self.frames_played += filled
 
     def write(self, block: np.ndarray) -> None:
-        self.stream.write(block.reshape(-1, 1))
+        try:
+            self.q.put(block, timeout=self.lost_after_s)
+        except queue.Full:
+            raise DeviceLost(f"{self.name!r} took no audio for {self.lost_after_s:.1f}s") from None
+        self.frames_queued += len(block)
 
     def drain(self) -> None:
-        self.stream.stop()  # returns once what was written has played
-        self.stream.close()
+        left = (self.frames_queued - self.frames_played) / self.sample_rate
+        deadline = time.monotonic() + left + self.lost_after_s
+        while self.frames_played < self.frames_queued:
+            if time.monotonic() > deadline:
+                raise DeviceLost(f"{self.name!r} stopped pulling with "
+                                 f"{(self.frames_queued - self.frames_played) / self.sample_rate:.2f}s left")
+            time.sleep(0.01)
+        time.sleep(self.latency)  # the last frames are in the device's own buffer
+        self.abort()
 
     def abort(self) -> None:
-        self.stream.abort()  # drops what is still buffered
-        self.stream.close()
+        try:
+            self.stream.abort()
+        finally:
+            self.stream.close()
 
 
 def open_output(name: str, sample_rate: int):

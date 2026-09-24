@@ -195,3 +195,89 @@ def test_text_at_cuts_back_to_a_word():
     assert player.text_at("hello there world", 0.5) == "hello"
     assert player.text_at("hello there", 1.0) == "hello there"
     assert player.text_at("hello there", 0.0) == ""
+
+
+# -- a device that stops taking audio mid-play (Cora's review, 20:16) ---------
+
+class PullingSd(FakeSd):
+    """A fake PortAudio whose stream pulls in real time, until ``stall`` is set."""
+
+    def __init__(self):
+        self.stall = threading.Event()
+        self.streams = []
+
+    def OutputStream(self, *, device, samplerate, channels, dtype, callback):
+        import numpy as np
+
+        fake = self
+
+        class S:
+            latency = 0.01
+
+            def __init__(s):
+                s.run = True
+                fake.streams.append(s)
+
+            def start(s):
+                def loop():
+                    buf = np.zeros((1200, 1), dtype="float32")
+                    while s.run:
+                        if not fake.stall.is_set():
+                            callback(buf, 1200, None, None)
+                        time.sleep(1200 / samplerate)
+                threading.Thread(target=loop, daemon=True).start()
+
+            def abort(s):
+                s.run = False
+
+            def close(s):
+                s.run = False
+
+        return S()
+
+
+@pytest.fixture
+def fake_device(monkeypatch):
+    sd = PullingSd()
+    monkeypatch.setattr(output, "_sd", lambda: sd)
+    monkeypatch.setattr(output.DeviceOut, "lost_after_s", 0.3)
+    return sd
+
+
+def test_a_healthy_device_counts_what_it_pulled(box, fake_device):
+    item = say("Hello Mike.", device="MacBook Pro Speakers")
+    run_player(box.d).join(5)
+    said = [r for r in lines(box.logs) if r["kind"] == "said"][0]
+    assert (said["utt"], said["reason"], said["device"]) == (item["utt"], "done", "MacBook Pro Speakers")
+    assert said["played_s"] == pytest.approx(said["dur_s"], abs=0.06)
+
+
+def test_a_device_that_stops_pulling_is_lost_not_a_hang(box, fake_device):
+    lost = say("word " * 20, device="MacBook Pro Speakers")
+    after = say("next one", device="null")
+    th = run_player(box.d)
+    time.sleep(0.4)
+    fake_device.stall.set()          # the AirPods go into the case
+    th.join(5)
+    assert not th.is_alive()
+    said = {r["utt"]: r for r in lines(box.logs) if r["kind"] == "said"}
+    assert said[lost["utt"]]["reason"] == "device-lost" and said[lost["utt"]]["cut"] is True
+    assert 0.2 < said[lost["utt"]]["played_s"] < 0.7
+    assert said[after["utt"]]["reason"] == "done"  # the queue did not stall
+
+
+def test_one_bad_utterance_never_stalls_the_queue(box, monkeypatch):
+    real = player.play_one
+    calls = []
+
+    def flaky(item, d):
+        calls.append(item["utt"])
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return real(item, d)
+    monkeypatch.setattr(player, "play_one", flaky)
+    a, b = say("first"), say("second")
+    run_player(box.d).join(5)
+    said = {r["utt"]: r for r in lines(box.logs) if r["kind"] == "said"}
+    assert said[a["utt"]]["reason"] == "error" and "boom" in said[a["utt"]]["detail"]
+    assert said[b["utt"]]["reason"] == "done"

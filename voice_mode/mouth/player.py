@@ -9,7 +9,8 @@ heard log:
   ``utt text voice backend device requested_ts gen_s``
 - ``said`` when playback ends:
   ``utt played_s dur_s cut cut_at_s text_played_est reason``, where reason
-  is ``done``, ``stop``, ``barge-in``, ``device-absent`` or ``error``.
+  is ``done``, ``stop``, ``barge-in``, ``device-absent`` (not there at the
+  start), ``device-lost`` (stopped taking audio mid-play) or ``error``.
 
 ``text_played_est`` is an ESTIMATE: the text cut at the played fraction of
 the audio, back to a word boundary, until the backends give word timings.
@@ -41,6 +42,15 @@ from .paths import mouth_dir
 
 class _Cut(Exception):
     pass
+
+
+def _abort(out) -> None:
+    """Abort without trusting the device: a dead one may hang abort() too."""
+    import threading
+
+    t = threading.Thread(target=out.abort, daemon=True)
+    t.start()
+    t.join(1.0)
 
 
 def _read_stop(d: Path) -> Optional[dict]:
@@ -92,6 +102,8 @@ def play_one(item: dict, d: Path) -> dict:
         out = _output.open_output(item["device"], backend.sample_rate)
     except _output.DeviceAbsent as e:
         return said_unplayed(item, "device-absent", detail=str(e)[:300])
+    except Exception as e:  # noqa: BLE001 - PortAudio refusing to open is absent too
+        return said_unplayed(item, "device-absent", detail=f"{type(e).__name__}: {e}"[:300])
 
     sr = backend.sample_rate
     step = int(sr * _backends.BLOCK_S)
@@ -118,20 +130,21 @@ def play_one(item: dict, d: Path) -> dict:
         finished_gen = True
         out.drain()
     except _Cut:
-        out.abort()
+        _abort(out)
     except Exception as e:  # noqa: BLE001
         try:
-            out.abort()
+            _abort(out)
         except Exception:  # noqa: BLE001
             pass
         name = type(e).__name__
-        reason = "device-absent" if "PortAudio" in name else "error"
+        lost = isinstance(e, _output.DeviceLost) or "PortAudio" in name
+        reason = "device-lost" if lost else "error"
         detail = f"{name}: {e}"[:300]
     finally:
         gen.close()  # a cut must not leave the synthesis request open
 
     cut = reason != "done"
-    played = written / sr
+    played = getattr(out, "frames_played", written) / sr
     if cut:
         played = max(0.0, played - getattr(out, "latency", 0.0))
     dur = generated / sr if finished_gen else None
@@ -207,7 +220,10 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
                 except FileNotFoundError:
                     continue  # a stop flushed it first
                 item = json.loads(playing.read_text())
-                rec = play_one(item, d)
+                try:
+                    rec = play_one(item, d)
+                except Exception as e:  # noqa: BLE001 - one bad utterance must not stall the queue
+                    rec = said_unplayed(item, "error", detail=f"{type(e).__name__}: {e}"[:300])
                 playing.unlink(missing_ok=True)
                 _done(d, item, rec)
                 if rec.get("cut"):
