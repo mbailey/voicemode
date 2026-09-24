@@ -14,6 +14,7 @@ channel, Cora 20:07 Thu 2026-09-24.
 - It writes ``saying`` (first audio frame) and ``said`` (end, with the cut
   point) into the heard log, on the ears' timeline, through ``heard.append``.
 - ``stop`` cuts within 50 ms; ``reason`` says why (``stop``, ``barge-in``).
+- ``pan`` puts it in one ear: -1 left, 1 right (``--channel left|right``).
 - Backends are pluggable (``backends.py``): kokoro, clone, silence.
 
     python -m voice_mode.mouth say --device airpods --voice pip "Hello."
@@ -65,9 +66,26 @@ def ensure_player(d: Optional[Path] = None) -> bool:
     return True
 
 
+PAN_NAMES = {"left": -1.0, "right": 1.0, "both": None}
+
+
+def pan_value(pan) -> Optional[float]:
+    """A pan as given (-1..1, 'left', 'right', 'both'); None asks $VOICEMODE_MOUTH_PAN."""
+    if pan is None:
+        env = os.environ.get("VOICEMODE_MOUTH_PAN")
+        return pan_value(env) if env else None
+    if isinstance(pan, str):
+        if pan in PAN_NAMES:
+            return PAN_NAMES[pan]
+        pan = float(pan)
+    if not -1.0 <= float(pan) <= 1.0:
+        raise ValueError("mouth: pan is -1 (left) .. 1 (right)")
+    return float(pan)
+
+
 def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None,
         backend: Optional[str] = None, device: Optional[str] = None,
-        log_dir: Optional[Path] = None, wait: bool = False, timeout: float = 300.0,
+        pan=None, log_dir: Optional[Path] = None, wait: bool = False, timeout: float = 300.0,
         d: Optional[Path] = None, spawn: bool = True) -> dict:
     """Queue ``text``; return the queued item (``utt``), or with ``wait`` its ``said`` record."""
     device = device or os.environ.get("VOICEMODE_MOUTH_DEVICE")
@@ -87,6 +105,7 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         "speed": speed,
         "backend": backend or os.environ.get("VOICEMODE_MOUTH_BACKEND") or "auto",
         "device": device,
+        "pan": pan_value(pan),
         "requested_t": now,
         "requested_ts": datetime.fromtimestamp(now).astimezone().isoformat(timespec="milliseconds"),
         "agent": heard.caller_agent(),

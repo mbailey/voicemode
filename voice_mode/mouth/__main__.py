@@ -20,6 +20,9 @@ def main(argv=None) -> int:
     s.add_argument("--speed", type=float)
     s.add_argument("--backend", choices=["auto", "kokoro", "clone", "silence"])
     s.add_argument("--device", help="exact output device name, 'null', or 'default'; $VOICEMODE_MOUTH_DEVICE")
+    side = s.add_mutually_exclusive_group()
+    side.add_argument("--pan", type=float, help="-1 left ear only .. 1 right ear only; $VOICEMODE_MOUTH_PAN")
+    side.add_argument("--channel", choices=["left", "right", "both"], help="--pan -1 / 1 / none")
     s.add_argument("--log-dir", type=Path, help="write saying/said here, not the real heard log")
     s.add_argument("--wait", action="store_true", help="block until said; print it")
 
@@ -35,9 +38,10 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "say":
         text = sys.stdin.read() if a.text == ["-"] else " ".join(a.text)
+        pan = a.channel or a.pan
         try:
             r = say(text.strip(), voice=a.voice, speed=a.speed, backend=a.backend, device=a.device,
-                    log_dir=a.log_dir, wait=a.wait)
+                    pan=pan, log_dir=a.log_dir, wait=a.wait)
         except (ValueError, TimeoutError) as e:
             print(str(e), file=sys.stderr)
             return 2

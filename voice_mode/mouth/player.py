@@ -67,7 +67,7 @@ def _log_dir(item: dict) -> Optional[Path]:
 
 def _common(item: dict) -> dict:
     return {"utt": item["utt"], "voice": item.get("voice"), "backend": item.get("backend"),
-            "backend_asked": item.get("backend_asked"),
+            "backend_asked": item.get("backend_asked"), "pan": item.get("pan"),
             "session": item.get("session"), "agent": item.get("agent"),
             "requested_ts": item.get("requested_ts"), "directory": _log_dir(item)}
 
@@ -193,7 +193,7 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
     if backend.name != item.get("backend"):  # log what ran; keep what was asked (auto)
         item = {**item, "backend": backend.name, "backend_asked": item.get("backend")}
     try:
-        out = _output.open_output(item["device"], backend.sample_rate)
+        out = _output.open_output(item["device"], backend.sample_rate, item.get("pan"))
     except Exception as e:  # noqa: BLE001 - absent, or PortAudio refusing to open it
         synth.cancel()
         detail = str(e) if isinstance(e, _output.DeviceAbsent) else f"{type(e).__name__}: {e}"
@@ -221,7 +221,8 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
                 check_stop()
                 if not started:
                     heard.saying(text, **_common(item), device=getattr(out, "name", item["device"]),
-                                 speed=speed, gen_s=synth.gen_s, prefetched=prefetched or None)
+                                 speed=speed, gen_s=synth.gen_s, prefetched=prefetched or None,
+                                 pan_ignored=getattr(out, "pan_ignored", None))
                     started = True
                 sub = block[i:i + step]
                 out.write(sub)

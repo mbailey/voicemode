@@ -216,14 +216,17 @@ class PullingSd(FakeSd):
 
             def __init__(s):
                 s.run = True
+                s.channels = channels
+                s.peak = np.zeros(channels)
                 fake.streams.append(s)
 
             def start(s):
                 def loop():
-                    buf = np.zeros((1200, 1), dtype="float32")
+                    buf = np.zeros((1200, channels), dtype="float32")
                     while s.run:
                         if not fake.stall.is_set():
                             callback(buf, 1200, None, None)
+                            s.peak = np.maximum(s.peak, np.abs(buf).max(axis=0))
                         time.sleep(1200 / samplerate)
                 threading.Thread(target=loop, daemon=True).start()
 
@@ -313,3 +316,47 @@ def test_a_stop_cancels_the_prefetched_line_too(box):
     assert not [r for r in got if r["kind"] == "saying" and r["utt"] == queued["utt"]]
     said = {r["utt"]: r for r in got if r["kind"] == "said"}
     assert said[queued["utt"]]["reason"] == "stop" and said[queued["utt"]]["played_s"] == 0.0
+
+
+# -- one ear: --pan / --channel (Mike, voice 20:43) ---------------------------
+
+class Tone:
+    name, sample_rate = "tone", 24000
+
+    def stream(self, text, voice, speed):
+        import numpy as np
+        for _ in range(6):
+            yield np.full(1200, 0.5, dtype=np.float32)
+
+
+@pytest.fixture
+def tone(monkeypatch):
+    from voice_mode.mouth import backends
+    monkeypatch.setattr(backends, "resolve", lambda b, v: (Tone(), v))
+
+
+@pytest.mark.parametrize("pan,left,right", [(-1.0, 0.5, 0.0), (1.0, 0.0, 0.5), (0.0, 0.3536, 0.3536)])
+def test_pan_puts_the_voice_in_one_ear(box, fake_device, tone, pan, left, right):
+    say("hi", device="MacBook Pro Speakers", pan=pan)
+    run_player(box.d).join(5)
+    s = fake_device.streams[-1]
+    assert s.channels == 2
+    assert s.peak[0] == pytest.approx(left, abs=1e-3) and s.peak[1] == pytest.approx(right, abs=1e-3)
+    saying = next(r for r in lines(box.logs) if r["kind"] == "saying")
+    assert saying["pan"] == pan
+
+
+def test_no_pan_is_mono_as_before(box, fake_device, tone):
+    say("hi", device="MacBook Pro Speakers")
+    run_player(box.d).join(5)
+    assert fake_device.streams[-1].channels == 1
+    assert "pan" not in next(r for r in lines(box.logs) if r["kind"] == "saying")
+
+
+def test_channel_names_and_the_env_default(monkeypatch):
+    from voice_mode.mouth import pan_value
+    assert (pan_value("left"), pan_value("right"), pan_value("both")) == (-1.0, 1.0, None)
+    monkeypatch.setenv("VOICEMODE_MOUTH_PAN", "right")
+    assert pan_value(None) == 1.0 and pan_value("both") is None  # 'both' overrides the env
+    with pytest.raises(ValueError):
+        pan_value(1.5)
