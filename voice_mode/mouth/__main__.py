@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import say, status, stop
+from . import amend, retract, say, status, stop
 
 
 def main(argv=None) -> int:
@@ -25,6 +25,17 @@ def main(argv=None) -> int:
     side.add_argument("--channel", choices=["left", "right", "both"], help="--pan -1 / 1 / none")
     s.add_argument("--log-dir", type=Path, help="write saying/said here, not the real heard log")
     s.add_argument("--wait", action="store_true", help="block until said; print it")
+    pri = s.add_mutually_exclusive_group()
+    pri.add_argument("--next", dest="priority", action="store_const", const="next",
+                     help="the front of the queue")
+    pri.add_argument("--now", dest="priority", action="store_const", const="now",
+                     help="interrupt the line playing now, then speak")
+
+    m = sub.add_parser("amend", help="rewrite a queued line in place (before it is spoken)")
+    m.add_argument("utt")
+    m.add_argument("text", nargs="+")
+    r = sub.add_parser("retract", help="drop a queued line, or cut it if it is playing")
+    r.add_argument("utt")
 
     t = sub.add_parser("stop", help="cut what is playing, and flush the queue")
     t.add_argument("--reason", default="stop", help="stop (default) or barge-in")
@@ -41,12 +52,20 @@ def main(argv=None) -> int:
         pan = a.channel or a.pan
         try:
             r = say(text.strip(), voice=a.voice, speed=a.speed, backend=a.backend, device=a.device,
-                    pan=pan, log_dir=a.log_dir, wait=a.wait)
+                    pan=pan, log_dir=a.log_dir, wait=a.wait, priority=a.priority)
         except (ValueError, TimeoutError) as e:
             print(str(e), file=sys.stderr)
             return 2
         print(json.dumps(r) if a.wait else r["utt"])
         return 0 if not a.wait or r.get("reason") == "done" else 1
+    if a.cmd in ("amend", "retract"):
+        try:
+            r = amend(a.utt, " ".join(a.text)) if a.cmd == "amend" else retract(a.utt)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        print(json.dumps(r))
+        return 0
     if a.cmd == "stop":
         print(json.dumps(stop(a.reason, flush=not a.current)))
         return 0

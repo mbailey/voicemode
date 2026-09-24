@@ -43,6 +43,9 @@ from . import output as _output
 from .paths import mouth_dir
 
 
+_SYNTH_KEYS = ("text", "voice", "speed", "backend", "file", "start", "end")
+
+
 class _Cut(Exception):
     pass
 
@@ -210,7 +213,12 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
     def check_stop() -> None:
         nonlocal reason
         stop = _read_stop(d)
-        if stop and stop.get("t", 0) >= item["requested_t"]:
+        if not stop:
+            return
+        # A stop aimed at one line (retract, --now) cuts only that line;
+        # a general stop cuts every line requested at or before it.
+        hit = stop["utt"] == item["utt"] if stop.get("utt") else stop.get("t", 0) >= item["requested_t"]
+        if hit:
             reason = stop.get("reason") or "stop"
             raise _Cut
 
@@ -270,7 +278,7 @@ def _handle_stop(d: Path) -> None:
     stop = _read_stop(d)
     if not stop:
         return
-    if stop.get("flush", True):
+    if stop.get("flush", True) and not stop.get("utt"):
         for f in sorted((d / "queue").glob("*.json")):
             try:
                 item = json.loads(f.read_text())
@@ -349,7 +357,8 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
                 with guard:
                     synth, ahead["synth"] = ahead["synth"], None
                     ahead["playing"] = item.get("utt")
-                if synth is not None and synth.utt != item.get("utt"):
+                if synth is not None and (synth.utt != item.get("utt") or any(
+                        synth.item.get(k) != item.get(k) for k in _SYNTH_KEYS)):  # amended
                     synth.cancel()
                     synth = None
                 playing = d / "playing.json"

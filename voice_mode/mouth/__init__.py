@@ -14,6 +14,8 @@ channel, Cora 20:07 Thu 2026-09-24.
 - It writes ``saying`` (first audio frame) and ``said`` (end, with the cut
   point) into the heard log, on the ears' timeline, through ``heard.append``.
 - ``stop`` cuts within 50 ms; ``reason`` says why (``stop``, ``barge-in``).
+- ``amend``/``retract`` change a line before it is spoken; ``say --next``
+  jumps the queue and ``--now`` interrupts. See DESIGN.md.
 - ``pan`` puts it in one ear: -1 left, 1 right (``--channel left|right``).
 - Backends are pluggable (``backends.py``): kokoro, clone, silence.
 
@@ -86,8 +88,16 @@ def pan_value(pan) -> Optional[float]:
 def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None,
         backend: Optional[str] = None, device: Optional[str] = None,
         pan=None, log_dir: Optional[Path] = None, wait: bool = False, timeout: float = 300.0,
-        d: Optional[Path] = None, spawn: bool = True) -> dict:
-    """Queue ``text``; return the queued item (``utt``), or with ``wait`` its ``said`` record."""
+        priority: Optional[str] = None, d: Optional[Path] = None, spawn: bool = True,
+        extra: Optional[dict] = None) -> dict:
+    """Queue ``text``; return the queued item (``utt``), or with ``wait`` its ``said`` record.
+
+    ``priority``: None (the back of the queue), ``next`` (the front), or ``now``
+    (the front, and the line playing now is cut with ``reason=interrupted``;
+    only that line, never the queue behind it).
+    """
+    if priority not in (None, "next", "now"):
+        raise ValueError("mouth: priority is next or now")
     device = device or os.environ.get("VOICEMODE_MOUTH_DEVICE")
     if not device:
         raise ValueError("mouth: no device. Pass --device NAME or set VOICEMODE_MOUTH_DEVICE "
@@ -112,10 +122,17 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         "session": heard.caller_session(),
         "log_dir": str(log_dir) if log_dir else os.environ.get("VOICEMODE_MOUTH_LOG_DIR"),
         "wait": wait,
+        "priority": priority,
+        **(extra or {}),
     }
     part = q / f".{item['utt']}.part"
     part.write_text(json.dumps(item))
-    part.rename(q / f"{time.time_ns()}-{item['utt']}.json")
+    # Names sort into play order: '0-' (next, now) before plain time_ns.
+    part.rename(q / f"{'0-' if priority else ''}{time.time_ns()}-{item['utt']}.json")
+    if priority == "now":
+        cur = _playing(d)
+        if cur:
+            _stop_file(d, {"t": time.time(), "reason": "interrupted", "flush": False, "utt": cur["utt"]})
     if spawn:
         ensure_player(d)
     if not wait:
@@ -131,14 +148,74 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
     raise TimeoutError(f"mouth: no said for {item['utt']} within {timeout:.0f}s")
 
 
-def stop(reason: str = "stop", *, flush: bool = True, d: Optional[Path] = None) -> dict:
-    """Cut what is playing (and, with flush, what is queued) within 50 ms."""
-    d = d or mouth_dir()
+def _stop_file(d: Path, rec: dict) -> dict:
     d.mkdir(parents=True, exist_ok=True)
-    rec = {"t": time.time(), "reason": reason, "flush": flush}
-    part = d / ".stop.part"
+    part = d / f".stop.{os.getpid()}.part"
     part.write_text(json.dumps(rec))
     part.rename(d / "stop")
+    return rec
+
+
+def _playing(d: Path) -> Optional[dict]:
+    try:
+        return json.loads((d / "playing.json").read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _queued(d: Path, utt: str) -> Optional[Path]:
+    hits = sorted((d / "queue").glob(f"*-{utt}.json")) if (d / "queue").exists() else []
+    return hits[0] if hits else None
+
+
+def stop(reason: str = "stop", *, flush: bool = True, d: Optional[Path] = None) -> dict:
+    """Cut what is playing (and, with flush, what is queued) within 50 ms."""
+    return _stop_file(d or mouth_dir(), {"t": time.time(), "reason": reason, "flush": flush})
+
+
+def amend(utt: str, text: str, *, d: Optional[Path] = None) -> dict:
+    """Rewrite a queued line in place, keeping its place (the queue's ``Supersedes:``).
+
+    Refuses a line already playing (retract it instead) or already gone.
+    """
+    d = d or mouth_dir()
+    if not text.strip():
+        raise ValueError("mouth: nothing to say; retract it instead")
+    f = _queued(d, utt)
+    claim = d / "queue" / f".amend-{utt}"
+    try:
+        f.rename(claim)  # the player cannot take it while it is claimed
+    except (AttributeError, FileNotFoundError):
+        cur = _playing(d)
+        if cur and cur.get("utt") == utt:
+            raise ValueError(f"mouth: {utt} is already playing; retract it and say again") from None
+        raise ValueError(f"mouth: no queued line {utt}") from None
+    item = json.loads(claim.read_text())
+    item["amended_from"] = item.get("amended_from") or item["text"]
+    item["text"] = text
+    claim.write_text(json.dumps(item))
+    claim.rename(f)
+    return item
+
+
+def retract(utt: str, *, d: Optional[Path] = None) -> dict:
+    """Drop a queued line, or cut it if it is playing. Its ``said`` says ``retracted``."""
+    d = d or mouth_dir()
+    f = _queued(d, utt)
+    claim = d / "queue" / f".retract-{utt}"
+    try:
+        f.rename(claim)
+    except (AttributeError, FileNotFoundError):
+        cur = _playing(d)
+        if cur and cur.get("utt") == utt:
+            return _stop_file(d, {"t": time.time(), "reason": "retracted", "flush": False, "utt": utt})
+        raise ValueError(f"mouth: no queued or playing line {utt}") from None
+    item = json.loads(claim.read_text())
+    claim.unlink()
+    from .player import _done, said_unplayed
+
+    rec = said_unplayed(item, "retracted")
+    _done(d, item, rec)
     return rec
 
 

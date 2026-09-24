@@ -433,3 +433,73 @@ def test_rebuffer_turns_many_stutters_into_few_pauses(box, fake_device, monkeypa
     held = next(r for r in lines(tmp_path / "logs2") if r["kind"] == "said")
     assert held["reason"] == "done"
     assert held["underruns"] < plain["underruns"] / 2, (held["underruns"], plain["underruns"])
+
+
+# -- amend, retract, --next, --now (Mike, voice 21:21-21:25) -------------------
+
+def _said(logs):
+    return {r["utt"]: r for r in lines(logs) if r["kind"] == "said"}
+
+
+def test_next_jumps_the_queue(box):
+    a, b = say("aaa"), say("bbb")
+    c = say("ccc", priority="next")
+    run_player(box.d).join(8)
+    order = [r["utt"] for r in lines(box.logs) if r["kind"] == "saying"]
+    assert order == [c["utt"], a["utt"], b["utt"]]
+
+
+def test_now_interrupts_only_the_line_playing(box):
+    a, b = say("word " * 20), say("queued behind")
+    th = run_player(box.d)
+    time.sleep(0.4)
+    c = say("urgent", priority="now")
+    th.join(8)
+    said = _said(box.logs)
+    assert said[a["utt"]]["reason"] == "interrupted" and said[a["utt"]]["cut"] is True
+    assert said[c["utt"]]["reason"] == "done" and said[b["utt"]]["reason"] == "done"
+    order = [r["utt"] for r in lines(box.logs) if r["kind"] == "saying"]
+    assert order == [a["utt"], c["utt"], b["utt"]]
+
+
+def test_amend_rewrites_a_queued_line_even_if_prefetched(box):
+    a, b = say("word " * 10), say("the old words")
+    th = run_player(box.d)
+    time.sleep(0.3)                       # b is prefetched by now (silence synthesises at once)
+    mouth.amend(b["utt"], "the new words")
+    th.join(8)
+    saying_b = next(r for r in lines(box.logs) if r["kind"] == "saying" and r["utt"] == b["utt"])
+    assert saying_b["text"] == "the new words"
+    assert _said(box.logs)[b["utt"]]["text_played_est"] == "the new words"
+
+
+def test_amend_refuses_a_line_already_playing(box):
+    a = say("word " * 20)
+    th = run_player(box.d)
+    time.sleep(0.3)
+    with pytest.raises(ValueError, match="already playing"):
+        mouth.amend(a["utt"], "too late")
+    mouth.stop()
+    th.join(5)
+
+
+def test_retract_a_queued_line_and_a_playing_one(box):
+    a, b, c = say("word " * 20), say("never mind"), say("after")
+    th = run_player(box.d)
+    time.sleep(0.3)
+    mouth.retract(b["utt"])               # queued: dropped, closed with a said
+    time.sleep(0.2)
+    mouth.retract(a["utt"])               # playing: cut
+    th.join(8)
+    said = _said(box.logs)
+    assert said[b["utt"]]["reason"] == "retracted" and said[b["utt"]]["played_s"] == 0.0
+    assert said[a["utt"]]["reason"] == "retracted" and said[a["utt"]]["cut"] is True
+    assert said[c["utt"]]["reason"] == "done"
+    assert not [r for r in lines(box.logs) if r["kind"] == "saying" and r["utt"] == b["utt"]]
+
+
+def test_amend_or_retract_an_unknown_line_is_an_error(box):
+    with pytest.raises(ValueError):
+        mouth.amend("nope", "x")
+    with pytest.raises(ValueError):
+        mouth.retract("nope")
