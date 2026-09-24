@@ -14,6 +14,9 @@ coming back is what ``gen_s`` measures. Three ship:
   15 characters. For tests and dry runs.
 
 ``auto`` picks ``clone`` when the voice resolves to a clone, else ``kokoro``.
+
+``FileSound`` is not chosen by name: a queued item with ``file`` plays that
+file (or URL), or ``start``..``end`` seconds of it, decoded by ffmpeg.
 """
 
 from __future__ import annotations
@@ -120,3 +123,48 @@ def resolve(backend: str, voice: str) -> tuple[Backend, str]:
             os.environ.get("VOICEMODE_MOUTH_KOKORO_MODEL", "mlx-community/Kokoro-82M-bf16"),
         ), voice
     raise ValueError(f"unknown backend {backend!r}: auto, kokoro, clone or silence")
+
+
+class FileSound:
+    """A sound file or URL, or a section of one, decoded by ffmpeg to the mouth's format.
+
+    Mike, voice 21:21-21:25: "you should be able to play sounds ... a file
+    that should be played, or a section of a file".
+    """
+
+    name = "file"
+    sample_rate = SAMPLE_RATE
+
+    def __init__(self, path: str, start: Optional[float] = None, end: Optional[float] = None) -> None:
+        self.path, self.start, self.end = path, start, end
+
+    def stream(self, text: str, voice: str, speed: Optional[float]) -> Iterator[np.ndarray]:
+        import subprocess
+
+        cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error"]
+        if self.start:
+            cmd += ["-ss", f"{self.start:.3f}"]
+        cmd += ["-i", self.path]
+        if self.end is not None:
+            cmd += ["-t", f"{self.end - (self.start or 0.0):.3f}"]
+        cmd += ["-f", "s16le", "-ac", "1", "-ar", str(self.sample_rate), "-"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        got = 0
+        try:
+            carry = b""
+            while True:
+                chunk = proc.stdout.read(int(self.sample_rate * 0.1) * 2)
+                if not chunk:
+                    break
+                data = carry + chunk
+                cut = len(data) - (len(data) % 2)
+                carry = data[cut:]
+                if cut:
+                    got += cut
+                    yield np.frombuffer(data[:cut], dtype="<i2").astype(np.float32) / 32768.0
+            if proc.wait() != 0 and not got:
+                raise RuntimeError(f"ffmpeg: {proc.stderr.read().decode(errors='replace').strip()[:200]}")
+        finally:
+            if proc.poll() is None:  # a cut: stop decoding now
+                proc.kill()
+                proc.wait()

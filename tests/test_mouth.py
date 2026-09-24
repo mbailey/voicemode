@@ -503,3 +503,81 @@ def test_amend_or_retract_an_unknown_line_is_an_error(box):
         mouth.amend("nope", "x")
     with pytest.raises(ValueError):
         mouth.retract("nope")
+
+
+# -- sounds and ducking (Mike, voice 21:21-21:25) --------------------------------
+
+def _tone_wav(path, seconds=1.0, rate=24000):
+    import wave
+    import numpy as np
+    x = (0.3 * np.sin(2 * np.pi * 440 * np.arange(int(seconds * rate)) / rate) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(x.tobytes())
+    return path
+
+
+needs_ffmpeg = pytest.mark.skipif(__import__("shutil").which("ffmpeg") is None, reason="no ffmpeg")
+
+
+@needs_ffmpeg
+def test_play_a_section_of_a_file(box, tmp_path):
+    wav = _tone_wav(tmp_path / "tone.wav", seconds=1.0)
+    item = mouth.play(str(wav), start=0.25, end=0.75, device="null", spawn=False)
+    run_player(box.d).join(5)
+    got = lines(box.logs)
+    saying = next(r for r in got if r["kind"] == "saying")
+    said = next(r for r in got if r["kind"] == "said")
+    assert saying["text"] == "[sound tone.wav 0.25-0.75s]" and saying["file"] == str(wav)
+    assert (said["utt"], said["reason"], said["backend"]) == (item["utt"], "done", "file")
+    assert said["dur_s"] == pytest.approx(0.5, abs=0.03)
+
+
+@needs_ffmpeg
+def test_a_sound_is_cut_by_stop_like_a_line(box, tmp_path):
+    wav = _tone_wav(tmp_path / "long.wav", seconds=3.0)
+    mouth.play(str(wav), device="null", spawn=False)
+    th = run_player(box.d)
+    time.sleep(0.5)
+    mouth.stop()
+    th.join(5)
+    said = next(r for r in lines(box.logs) if r["kind"] == "said")
+    assert said["reason"] == "stop" and 0.3 < said["played_s"] < 0.8
+
+
+def test_play_refuses_a_missing_file(box):
+    with pytest.raises(ValueError, match="no such file"):
+        mouth.play("/nope/missing.wav", device="null", spawn=False)
+
+
+def test_ducking_lowers_the_dj_once_per_run_and_restores_after(box, monkeypatch):
+    import voice_mode.dj as dj
+    calls = []
+
+    class FakeDJ:
+        vol = 70
+
+        def volume(self, level=None):
+            if level is not None:
+                FakeDJ.vol = level
+                calls.append(level)
+            return FakeDJ.vol
+
+    monkeypatch.setattr(dj, "DJController", FakeDJ)
+    monkeypatch.setenv("VOICEMODE_MOUTH_DUCK", "20")
+    say("one"), say("two")
+    run_player(box.d, idle=0.5).join(5)
+    assert calls == [20, 70]              # down once for both lines, back up once
+
+
+def test_no_duck_setting_means_the_dj_is_never_touched(box, monkeypatch):
+    import voice_mode.dj as dj
+
+    class Boom:
+        def __init__(self):
+            raise AssertionError("touched the DJ")
+
+    monkeypatch.setattr(dj, "DJController", Boom)
+    monkeypatch.delenv("VOICEMODE_MOUTH_DUCK", raising=False)
+    say("quiet")
+    run_player(box.d).join(5)
+    assert next(r for r in lines(box.logs) if r["kind"] == "said")["reason"] == "done"

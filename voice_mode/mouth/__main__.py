@@ -7,7 +7,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import amend, retract, say, status, stop
+from . import amend, play, retract, say, status, stop
 
 
 def main(argv=None) -> int:
@@ -31,6 +31,20 @@ def main(argv=None) -> int:
     pri.add_argument("--now", dest="priority", action="store_const", const="now",
                      help="interrupt the line playing now, then speak")
 
+    pl = sub.add_parser("play", help="queue a sound file or URL, or a section of it")
+    pl.add_argument("source")
+    pl.add_argument("--start", type=float, help="seconds into the file")
+    pl.add_argument("--end", type=float, help="seconds into the file")
+    pl.add_argument("--device")
+    pside = pl.add_mutually_exclusive_group()
+    pside.add_argument("--pan", type=float)
+    pside.add_argument("--channel", choices=["left", "right", "both"])
+    pl.add_argument("--log-dir", type=Path)
+    pl.add_argument("--wait", action="store_true")
+    ppri = pl.add_mutually_exclusive_group()
+    ppri.add_argument("--next", dest="priority", action="store_const", const="next")
+    ppri.add_argument("--now", dest="priority", action="store_const", const="now")
+
     m = sub.add_parser("amend", help="rewrite a queued line in place (before it is spoken)")
     m.add_argument("utt")
     m.add_argument("text", nargs="+")
@@ -53,6 +67,15 @@ def main(argv=None) -> int:
         try:
             r = say(text.strip(), voice=a.voice, speed=a.speed, backend=a.backend, device=a.device,
                     pan=pan, log_dir=a.log_dir, wait=a.wait, priority=a.priority)
+        except (ValueError, TimeoutError) as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        print(json.dumps(r) if a.wait else r["utt"])
+        return 0 if not a.wait or r.get("reason") == "done" else 1
+    if a.cmd == "play":
+        try:
+            r = play(a.source, start=a.start, end=a.end, device=a.device, pan=a.channel or a.pan,
+                     log_dir=a.log_dir, wait=a.wait, priority=a.priority)
         except (ValueError, TimeoutError) as e:
             print(str(e), file=sys.stderr)
             return 2

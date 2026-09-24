@@ -12,20 +12,20 @@ proposed shape. Nothing here is live until Mike says so.
 2. **Status back.** Works NOW. `said` carries what played, where it was cut
    and why, and `say --wait` returns it. Over mail (8), the `said` becomes
    the reply.
-3. **Amend or retract before it's spoken.** BUILDING (dev):
+3. **Amend or retract before it's spoken.** BUILT (dev, `aa4af354`):
    `mouth amend UTT TEXT` rewrites a queued line in place, keeping its
    position. `mouth retract UTT` drops it, and if it's already playing, cuts
    it. Either way a `said reason=retracted` closes it. It's the `Supersedes:`
    of the queue.
-4. **Interrupts.** BUILDING (dev): `say --next` jumps the queue, and
+4. **Interrupts.** BUILT (dev, `aa4af354`): `say --next` jumps the queue, and
    `say --now` cuts the current line (`reason=interrupted`) and speaks at
    once. The cut is aimed at the one playing utterance, never the queue
    behind it.
-5. **Sounds, a file or part of one.** BUILDING (dev):
+5. **Sounds, a file or part of one.** BUILT (dev, this commit):
    `mouth play FILE|URL [--start S] [--end S]`. It decodes through ffmpeg
    into the same queue, so it gets the same stop, priority, pan and log.
 6. **DJ inside the mouth.** SPLIT:
-   - **ducking** is BUILDING (dev, opt-in `$VOICEMODE_MOUTH_DUCK=PCT`). The
+   - **ducking** is BUILT (dev, this commit, opt-in `$VOICEMODE_MOUTH_DUCK=PCT`). The
      DJ's mpv is lowered at `saying` and restored at `said`, through
      `DJController.volume()`. No mixing is needed, because mpv stays its own
      stream.

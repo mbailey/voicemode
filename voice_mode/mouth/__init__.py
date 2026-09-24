@@ -16,6 +16,8 @@ channel, Cora 20:07 Thu 2026-09-24.
 - ``stop`` cuts within 50 ms; ``reason`` says why (``stop``, ``barge-in``).
 - ``amend``/``retract`` change a line before it is spoken; ``say --next``
   jumps the queue and ``--now`` interrupts. See DESIGN.md.
+- ``play FILE [--start S] [--end S]`` queues a sound; ``$VOICEMODE_MOUTH_DUCK``
+  lowers the DJ's music while the mouth speaks.
 - ``pan`` puts it in one ear: -1 left, 1 right (``--channel left|right``).
 - Backends are pluggable (``backends.py``): kokoro, clone, silence.
 
@@ -166,6 +168,20 @@ def _playing(d: Path) -> Optional[dict]:
 def _queued(d: Path, utt: str) -> Optional[Path]:
     hits = sorted((d / "queue").glob(f"*-{utt}.json")) if (d / "queue").exists() else []
     return hits[0] if hits else None
+
+
+def play(source: str, *, start: Optional[float] = None, end: Optional[float] = None, **kw) -> dict:
+    """Queue a sound file or URL (or ``start``..``end`` seconds of it). Same queue, stop, log."""
+    if "://" not in source:
+        path = Path(source).expanduser().resolve()
+        if not path.is_file():
+            raise ValueError(f"mouth: no such file {source}")
+        source = str(path)
+    if start is not None and end is not None and end <= start:
+        raise ValueError("mouth: --end must be after --start")
+    span = f" {start or 0:g}-{end:g}s" if end is not None else (f" from {start:g}s" if start else "")
+    label = f"[sound {Path(source).name}{span}]"
+    return say(label, backend="file", extra={"file": source, "start": start, "end": end}, **kw)
 
 
 def stop(reason: str = "stop", *, flush: bool = True, d: Optional[Path] = None) -> dict:

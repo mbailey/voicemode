@@ -46,6 +46,42 @@ from .paths import mouth_dir
 _SYNTH_KEYS = ("text", "voice", "speed", "backend", "file", "start", "end")
 
 
+_duck: dict = {"prev": None, "ctl": None}
+
+
+def _duck_on() -> None:
+    """Lower the DJ's music while the mouth speaks ($VOICEMODE_MOUTH_DUCK, a volume 0-100).
+
+    mpv stays its own stream: no mixing, just its volume, through the DJ's
+    controller. Once per run of lines; _duck_off restores it when the queue
+    is empty, so stacked lines don't pump the music between them.
+    """
+    level = os.environ.get("VOICEMODE_MOUTH_DUCK")
+    if not level or _duck["prev"] is not None:
+        return
+    try:
+        from voice_mode.dj import DJController
+
+        ctl = DJController()
+        prev = ctl.volume()
+        if prev is not None and prev > int(level):
+            ctl.volume(int(level))
+            _duck.update(prev=prev, ctl=ctl)
+    except Exception:  # noqa: BLE001 - no DJ, no ducking; never a reason not to speak
+        pass
+
+
+def _duck_off() -> None:
+    if _duck["prev"] is None:
+        return
+    try:
+        _duck["ctl"].volume(_duck["prev"])
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        _duck.update(prev=None, ctl=None)
+
+
 class _Cut(Exception):
     pass
 
@@ -74,7 +110,8 @@ def _common(item: dict) -> dict:
     return {"utt": item["utt"], "voice": item.get("voice"), "backend": item.get("backend"),
             "backend_asked": item.get("backend_asked"), "pan": item.get("pan"),
             "session": item.get("session"), "agent": item.get("agent"),
-            "requested_ts": item.get("requested_ts"), "directory": _log_dir(item)}
+            "requested_ts": item.get("requested_ts"), "directory": _log_dir(item),
+            "file": item.get("file"), "start": item.get("start"), "end": item.get("end")}
 
 
 def text_at(text: str, fraction: float) -> str:
@@ -108,8 +145,12 @@ class Synth:
     def __init__(self, item: dict, on_done=None) -> None:
         self.item = item
         self.utt = item["utt"]
-        self.backend, self.voice = _backends.resolve(item.get("backend") or "auto",
-                                                     item.get("voice") or "af_sky")
+        if item.get("file"):
+            self.backend, self.voice = _backends.FileSound(item["file"], item.get("start"),
+                                                           item.get("end")), ""
+        else:
+            self.backend, self.voice = _backends.resolve(item.get("backend") or "auto",
+                                                         item.get("voice") or "af_sky")
         self.sample_rate = self.backend.sample_rate
         self.frames = 0
         self.t0 = time.monotonic()
@@ -230,6 +271,7 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
             for i in range(0, len(block), step):
                 check_stop()
                 if not started:
+                    _duck_on()
                     heard.saying(text, **_common(item), device=getattr(out, "name", item["device"]),
                                  speed=speed, gen_s=synth.gen_s, prefetched=prefetched or None,
                                  pan_ignored=getattr(out, "pan_ignored", None))
@@ -341,6 +383,7 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
             while True:
                 f = _oldest(q)
                 if f is None:
+                    _duck_off()
                     with guard:
                         if ahead["synth"] is not None:  # its item was flushed by a stop
                             ahead["synth"].cancel()
