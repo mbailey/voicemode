@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""heard - what VoiceMode hears, one JSON line per partial, turn or event.
+"""heard - what VoiceMode hears (and says), one JSON line per partial, turn,
+event, saying or said.
+
+The mouth (``voice_mode.mouth``) writes its speech here too, mirroring the
+ears: ``saying`` at the first audio frame (like a partial), ``said`` when the
+playback ends (like a turn), so a partial of his between the two IS a
+barge-in, visible on one timeline.
 
 The log is ``$VOICEMODE_BASE_DIR/logs/conversations/heard_YYYY-MM-DD.jsonl``,
 a sibling of ``exchanges_YYYY-MM-DD.jsonl`` that rolls at the same local
@@ -42,7 +48,9 @@ SCHEMA = 1
 PARTIAL = "partial"
 TURN = "turn"
 EVENT = "event"
-KINDS = (PARTIAL, TURN, EVENT)
+SAYING = "saying"   # the mouth: playback started (written at the first audio frame)
+SAID = "said"       # the mouth: playback ended (what played, and where it was cut)
+KINDS = (PARTIAL, TURN, EVENT, SAYING, SAID)
 
 # event names (kebab-case; the design's "listen started" etc.)
 EV_LISTEN_STARTED = "listen-started"
@@ -158,8 +166,9 @@ def append(kind: str,
            **extra: Any) -> dict:
     """Append one record and return it, ``seq`` and ``ts`` filled in.
 
-    ``kind`` is ``partial``, ``turn`` or ``event``. ``final`` defaults to
-    False for a partial and True for a turn. Extra keyword fields (``via``,
+    ``kind`` is ``partial``, ``turn``, ``event``, ``saying`` or ``said``.
+    ``final`` defaults to False for a partial or a saying, and True for a
+    turn or a said. Extra keyword fields (``via``,
     ``detector``, ``age_at_return``, ``word``, ``listen_id`` ...) are written
     as given; None values are dropped. Raises ValueError on a bad kind, and
     OSError if the log cannot be written: callers that must not fail
@@ -168,15 +177,17 @@ def append(kind: str,
     """
     if kind not in KINDS:
         raise ValueError(f"heard: kind must be one of {KINDS}, not {kind!r}")
-    if kind in (PARTIAL, TURN) and not isinstance(text, str):
+    if kind in (PARTIAL, TURN, SAYING) and not isinstance(text, str):
         raise ValueError(f"heard: a {kind} needs text")
+    if kind in (SAYING, SAID) and not extra.get("utt"):
+        raise ValueError(f"heard: a {kind} needs its utterance id (utt=...)")
     if kind == EVENT and not event:
         raise ValueError("heard: an event needs its name (event=...)")
     clash = RESERVED & extra.keys()
     if clash:
         raise ValueError(f"heard: {sorted(clash)} are the writer's to set, not the caller's")
     if final is None and kind != EVENT:
-        final = kind == TURN
+        final = kind in (TURN, SAID)
 
     d = directory or log_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -225,6 +236,16 @@ def turn(text: str, *, detector: Optional[str] = None, **kw: Any) -> dict:
 def event(name: str, **kw: Any) -> dict:
     """An event line: listen-started, heartbeat, listen-stopped, wake-word ..."""
     return append(EVENT, event=name, **kw)
+
+
+def saying(text: str, *, utt: str, **kw: Any) -> dict:
+    """The mouth started playing ``text`` (``final: false``): the fast line."""
+    return append(SAYING, text=text, utt=utt, source=kw.pop("source", "mouth"), **kw)
+
+
+def said(*, utt: str, **kw: Any) -> dict:
+    """The mouth stopped: what played, and where it was cut (``final: true``)."""
+    return append(SAID, utt=utt, source=kw.pop("source", "mouth"), **kw)
 
 
 # --------------------------------------------------------------------------
@@ -509,6 +530,13 @@ def collapse(recs: list[_Rec], session: Optional[str] = None) -> list[_Item]:
                 items.append(_Item(
                     f"[heard {_where(rec)} {_hms(rec)}{_via(rec)}] {rec.get('text', '')}",
                     first, rec["seq"]))
+        elif kind == SAYING:
+            items.append(_Item(None, rec["seq"], rec["seq"]))  # the said line carries it
+        elif kind == SAID:
+            if session and rec.get("session") == session:
+                items.append(_Item(None, rec["seq"], rec["seq"]))  # its own speech
+            else:
+                items.append(_Item(_said_line(rec), rec["seq"], rec["seq"]))
         elif kind == EVENT:
             name = rec.get("event") or "?"
             if name not in SHOWN_EVENTS:
@@ -581,6 +609,16 @@ def render(items: list[_Item], *, budget_tokens: int = DEFAULT_BUDGET_TOKENS,
 # Following: every line, for a human (`voicemode exchanges tail --heard`)
 # --------------------------------------------------------------------------
 
+def _said_line(rec: dict) -> str:
+    who = rec.get("agent") or "?"
+    text = rec.get("text_played_est") or ""
+    if rec.get("cut"):
+        tail = f" … (cut at {rec.get('cut_at_s', 0):.1f}s: {rec.get('reason', '?')})"
+    else:
+        tail = ""
+    return f"[said {who} {_where(rec)} {_hms(rec)}] {text}{tail}"
+
+
 def format_record(rec: dict) -> str:
     """One log line, whole: every kind, quiet events included (this is the
     diagnostic view; the hook is the context-conservative one)."""
@@ -589,6 +627,11 @@ def format_record(rec: dict) -> str:
     if kind == EVENT:
         body = " ".join(str(x) for x in (rec.get("event"), rec.get("word") or rec.get("text"),
                                          f"({rec['reason']})" if rec.get("reason") else None) if x)
+    elif kind == SAYING:
+        body = f"{rec.get('text', '')}  [{rec.get('voice', '?')} {rec.get('backend', '?')} utt {rec.get('utt')}]"
+    elif kind == SAID:
+        body = (f"{rec.get('text_played_est', '')}  [{rec.get('reason', '?')} "
+                f"{rec.get('played_s', 0):.1f}/{rec.get('dur_s') or 0:.1f}s utt {rec.get('utt')}]")
     else:
         body = rec.get("text", "")
         if kind == TURN and rec.get("detector"):
