@@ -360,3 +360,18 @@ def test_channel_names_and_the_env_default(monkeypatch):
     assert pan_value(None) == 1.0 and pan_value("both") is None  # 'both' overrides the env
     with pytest.raises(ValueError):
         pan_value(1.5)
+
+
+def test_a_term_leaves_no_stale_pid(tmp_path):
+    import os, signal, subprocess, sys
+    d = tmp_path / "mouth"
+    env = {**os.environ, "VOICEMODE_MOUTH_DIR": str(d), "PYTHONPATH": os.pathsep.join(sys.path)}
+    p = subprocess.Popen([sys.executable, "-m", "voice_mode.mouth", "serve", "--idle", "30"], env=env)
+    for _ in range(100):
+        if (d / "player.pid").exists():
+            break
+        time.sleep(0.05)
+    assert (d / "player.pid").read_text() == str(p.pid)
+    p.send_signal(signal.SIGTERM)
+    assert p.wait(5) == 0
+    assert not (d / "player.pid").exists()

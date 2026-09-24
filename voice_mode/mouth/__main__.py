@@ -59,8 +59,13 @@ def main(argv=None) -> int:
         print("\n".join(output_names(rescan=False)))
         return 0
     if a.cmd == "serve":
+        import signal
+
         from .player import serve
 
+        # A TERM (a restart between utterances) must run serve's cleanup:
+        # release the lock and remove player.pid, not leave a stale one.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         return serve(idle_exit_s=a.idle)
     return 1
 
