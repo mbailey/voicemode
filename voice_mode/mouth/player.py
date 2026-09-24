@@ -111,7 +111,8 @@ def _common(item: dict) -> dict:
             "backend_asked": item.get("backend_asked"), "pan": item.get("pan"),
             "session": item.get("session"), "agent": item.get("agent"),
             "requested_ts": item.get("requested_ts"), "directory": _log_dir(item),
-            "file": item.get("file"), "start": item.get("start"), "end": item.get("end")}
+            "file": item.get("file"), "start": item.get("start"), "end": item.get("end"),
+            "mail_id": item.get("mail_id")}
 
 
 def text_at(text: str, fraction: float) -> str:

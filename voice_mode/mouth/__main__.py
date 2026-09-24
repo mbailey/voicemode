@@ -56,6 +56,9 @@ def main(argv=None) -> int:
     t.add_argument("--current", action="store_true", help="cut only what is playing; keep the queue")
 
     sub.add_parser("status", help="player, queue, what is playing")
+    ml = sub.add_parser("mail", help="watch mouth@<host>: each mail becomes a line (mail feeds mouth)")
+    ml.add_argument("--box", type=Path, help="the maildir (default ~/.mail/agents/mouth)")
+    ml.add_argument("--once", action="store_true", help="one pass over new/, then exit")
     sub.add_parser("devices", help="output device names, exactly as --device takes them")
     v = sub.add_parser("serve", help="run the player in the foreground (say starts one for you)")
     v.add_argument("--idle", type=float, help="exit after this long with nothing queued (default 600 s)")
@@ -92,6 +95,14 @@ def main(argv=None) -> int:
     if a.cmd == "stop":
         print(json.dumps(stop(a.reason, flush=not a.current)))
         return 0
+    if a.cmd == "mail":
+        from .inbox import mail_box, process_new, watch
+
+        if a.once:
+            for r in process_new(a.box or mail_box()):
+                print(json.dumps(r))
+            return 0
+        return watch(a.box)
     if a.cmd == "status":
         print(json.dumps(status()))
         return 0

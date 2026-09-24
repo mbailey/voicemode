@@ -170,7 +170,8 @@ def _queued(d: Path, utt: str) -> Optional[Path]:
     return hits[0] if hits else None
 
 
-def play(source: str, *, start: Optional[float] = None, end: Optional[float] = None, **kw) -> dict:
+def play(source: str, *, start: Optional[float] = None, end: Optional[float] = None,
+         extra_tag: Optional[dict] = None, **kw) -> dict:
     """Queue a sound file or URL (or ``start``..``end`` seconds of it). Same queue, stop, log."""
     if "://" not in source:
         path = Path(source).expanduser().resolve()
@@ -181,7 +182,8 @@ def play(source: str, *, start: Optional[float] = None, end: Optional[float] = N
         raise ValueError("mouth: --end must be after --start")
     span = f" {start or 0:g}-{end:g}s" if end is not None else (f" from {start:g}s" if start else "")
     label = f"[sound {Path(source).name}{span}]"
-    return say(label, backend="file", extra={"file": source, "start": start, "end": end}, **kw)
+    return say(label, backend="file", extra={"file": source, "start": start, "end": end,
+                                             **(extra_tag or {})}, **kw)
 
 
 def stop(reason: str = "stop", *, flush: bool = True, d: Optional[Path] = None) -> dict:

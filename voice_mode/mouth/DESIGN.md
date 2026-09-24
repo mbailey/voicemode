@@ -39,17 +39,24 @@ proposed shape. Nothing here is live until Mike says so.
    (start at t, or at an offset from another utterance's start or end),
    with the player mixing. Big, and it wants the video use case in front
    of us.
-8. **Mail as the transport.** PROPOSED, waiting for his word:
-   - agents mail `mouth@m5`
-   - the body is the text, or a `File:` / `Start:` / `End:` header
-   - `Supersedes:` is amend (3), and a reply saying `retract` is retract
-   - `X-Mouth-Priority: next|now` is interrupts (4)
-   - the mouth replies with the `said` record as the receipt (2)
+8. **Mail as the transport.** RULED by Mike at 21:40 ("mail feeds mouth",
+   slipbox 515) and BUILT (dev, this commit): `mouth mail` watches
+   `~/.mail/agents/mouth` (`mouth@m5`, box made and mapped 21:42).
+   - body = the text (lightly un-markdowned); an empty body speaks the Subject
+   - `Supersedes:` amends a line not yet spoken; if it has been spoken, the
+     correction is queued as news
+   - `Supersedes:` with an empty body retracts
+   - `Importance: high` or `X-Mouth-Priority: next|now` sets the priority
+   - `X-Mouth-File` / `-Start` / `-End` plays a sound
+   - `X-Mouth-Voice|Speed|Device|Channel|Pan` set per-line options
+   - agent = From, session = `X-Session-From`, and `mail_id` goes on
+     saying/said
 
-   Mail lands in 0.20 s (Cora, corrected 21:27), so it's fast enough for
-   the queue. Keep `mouth say` as the direct path for openers. This needs
-   a box and a watcher on the crew's mail infrastructure, so it waits for
-   his word.
+   Only a From on this host, or in `$VOICEMODE_MOUTH_MAIL_ALLOW`, is
+   spoken. It's a From check; verifying the signature is the follow-up.
+   **Measured end to end through postfix at 21:47:** send to queued in
+   244 ms, then queued to first frame in 323 ms (cold player).
+   Not yet: a `said` mailed back as a reply (the heard log carries it).
 
 ## The shape it keeps
 
