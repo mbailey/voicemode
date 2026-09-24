@@ -117,7 +117,7 @@ def test_stop_cuts_within_a_block_and_flushes_the_queue(box):
     assert 0.3 < said[long["utt"]]["cut_at_s"] < 0.75
     est = said[long["utt"]]["text_played_est"]  # ~0.5 s at 15 chars/s: about one word
     assert est.startswith("word") and len(est) < 15
-    assert "dur_s" not in said[long["utt"]]  # synthesis never finished
+    assert said[long["utt"]]["dur_s"] == pytest.approx(100 / 15, abs=0.06)  # synthesis ran ahead
     assert said[queued["utt"]]["played_s"] == 0.0 and said[queued["utt"]]["reason"] == "stop"
     assert not [r for r in got if r["kind"] == "saying" and r["utt"] == queued["utt"]]
 
@@ -270,14 +270,46 @@ def test_one_bad_utterance_never_stalls_the_queue(box, monkeypatch):
     real = player.play_one
     calls = []
 
-    def flaky(item, d):
+    def flaky(item, d, *a):
         calls.append(item["utt"])
         if len(calls) == 1:
             raise RuntimeError("boom")
-        return real(item, d)
+        return real(item, d, *a)
     monkeypatch.setattr(player, "play_one", flaky)
     a, b = say("first"), say("second")
     run_player(box.d).join(5)
     said = {r["utt"]: r for r in lines(box.logs) if r["kind"] == "said"}
     assert said[a["utt"]]["reason"] == "error" and "boom" in said[a["utt"]]["detail"]
     assert said[b["utt"]]["reason"] == "done"
+
+
+# -- prefetch: the next line is synthesised while this one plays (Cora, 20:43) --
+
+def test_the_next_line_is_ready_when_this_one_ends(box, monkeypatch):
+    from voice_mode.mouth import backends
+    monkeypatch.setattr(backends.Silence, "__init__",
+                        lambda self, chars_per_s=15.0, gen_s=0.3: (setattr(self, "chars_per_s", chars_per_s),
+                                                                  setattr(self, "gen_s", gen_s))[0])
+    a, b = say("first line here"), say("second line")   # each takes 0.3 s to "synthesise"
+    run_player(box.d).join(8)
+    got = lines(box.logs)
+    said_a = next(r for r in got if r["kind"] == "said" and r["utt"] == a["utt"])
+    saying_b = next(r for r in got if r["kind"] == "saying" and r["utt"] == b["utt"])
+    saying_a = next(r for r in got if r["kind"] == "saying" and r["utt"] == a["utt"])
+    from datetime import datetime
+    gap = (datetime.fromisoformat(saying_b["ts"]) - datetime.fromisoformat(said_a["ts"])).total_seconds()
+    assert gap < 0.1, gap                      # was gen_s (0.3 s) of dead air
+    assert saying_b.get("prefetched") is True and "prefetched" not in saying_a
+    assert saying_b["gen_s"] == pytest.approx(0.3, abs=0.05)
+
+
+def test_a_stop_cancels_the_prefetched_line_too(box):
+    long, queued = say("word " * 20), say("prefetched but never heard")
+    th = run_player(box.d)
+    time.sleep(0.5)
+    mouth.stop()
+    th.join(5)
+    got = lines(box.logs)
+    assert not [r for r in got if r["kind"] == "saying" and r["utt"] == queued["utt"]]
+    said = {r["utt"]: r for r in got if r["kind"] == "said"}
+    assert said[queued["utt"]]["reason"] == "stop" and said[queued["utt"]]["played_s"] == 0.0

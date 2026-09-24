@@ -29,6 +29,7 @@ import fcntl
 import json
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -89,49 +90,148 @@ def said_unplayed(item: dict, reason: str, device: Optional[str] = None, detail:
                       cut=True, cut_at_s=0.0, text_played_est="", reason=reason, detail=detail)
 
 
-def play_one(item: dict, d: Path) -> dict:
-    """Play one queued utterance; return its ``said`` record."""
+class Synth:
+    """Synthesis in its own thread, running ahead of playback into a buffer.
+
+    Playback reads the buffer, so synthesis never waits on the device. When
+    one utterance's synthesis finishes, the player starts the NEXT one while
+    this one is still playing (Cora, 20:43: stacked lines had 0.3 s of dead
+    air between them, the next item's synthesis). One at a time on the TTS
+    server, never two at once.
+    """
+
+    def __init__(self, item: dict, on_done=None) -> None:
+        self.item = item
+        self.utt = item["utt"]
+        self.backend, self.voice = _backends.resolve(item.get("backend") or "auto",
+                                                     item.get("voice") or "af_sky")
+        self.sample_rate = self.backend.sample_rate
+        self.frames = 0
+        self.t0 = time.monotonic()
+        self.t_first: Optional[float] = None
+        self.done = False
+        self.finished = False  # every block synthesised: not cancelled first, no error
+        self.error: Optional[BaseException] = None
+        self._blocks: list = []
+        self._cond = threading.Condition()
+        self._cancel = threading.Event()
+        self._on_done = on_done
+        threading.Thread(target=self._run, daemon=True, name=f"synth-{self.utt}").start()
+
+    def _run(self) -> None:
+        gen = None
+        try:
+            gen = self.backend.stream(self.item["text"], self.voice, self.item.get("speed"))
+            for block in gen:
+                if self._cancel.is_set():
+                    break
+                with self._cond:
+                    if self.t_first is None:
+                        self.t_first = time.monotonic()
+                    self._blocks.append(block)
+                    self.frames += len(block)
+                    self._cond.notify_all()
+            else:
+                self.finished = True
+        except BaseException as e:  # noqa: BLE001 - surfaced to the player through blocks()
+            self.error = e
+        finally:
+            if gen is not None:
+                try:
+                    gen.close()  # a cancel must not leave the request open
+                except Exception:  # noqa: BLE001
+                    pass
+            with self._cond:
+                self.done = True
+                self._cond.notify_all()
+        if self.finished and self._on_done and not self._cancel.is_set():
+            try:
+                self._on_done(self)
+            except Exception:  # noqa: BLE001
+                pass
+
+    @property
+    def gen_s(self) -> Optional[float]:
+        return round(self.t_first - self.t0, 3) if self.t_first is not None else None
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def blocks(self, tick: float = _backends.BLOCK_S):
+        """Yield audio blocks as they arrive; ``None`` every ``tick`` while waiting,
+        so the player can look for a stop during a slow synthesis."""
+        i = 0
+        while True:
+            with self._cond:
+                if i >= len(self._blocks) and not self.done:
+                    self._cond.wait(tick)
+                if i < len(self._blocks):
+                    block = self._blocks[i]
+                    i += 1
+                elif self.done:
+                    if self.error is not None:
+                        raise self.error
+                    return
+                else:
+                    block = None
+            yield block
+
+
+def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: bool = False) -> dict:
+    """Play one queued utterance; return its ``said`` record.
+
+    ``synth`` is its synthesis if already started; ``prefetched`` says it was
+    started while the previous utterance played (logged on ``saying``).
+    """
     text, speed = item["text"], item.get("speed")
-    try:
-        backend, voice = _backends.resolve(item.get("backend") or "auto", item.get("voice") or "af_sky")
-    except Exception as e:  # noqa: BLE001 - a bad voice must still close the utterance
-        return said_unplayed(item, "error", detail=str(e)[:300])
+    if synth is None:
+        try:
+            synth = Synth(item)
+        except Exception as e:  # noqa: BLE001 - a bad voice must still close the utterance
+            return said_unplayed(item, "error", detail=str(e)[:300])
+    backend = synth.backend
     if backend.name != item.get("backend"):  # log what ran; keep what was asked (auto)
         item = {**item, "backend": backend.name, "backend_asked": item.get("backend")}
     try:
         out = _output.open_output(item["device"], backend.sample_rate)
-    except _output.DeviceAbsent as e:
-        return said_unplayed(item, "device-absent", detail=str(e)[:300])
-    except Exception as e:  # noqa: BLE001 - PortAudio refusing to open is absent too
-        return said_unplayed(item, "device-absent", detail=f"{type(e).__name__}: {e}"[:300])
+    except Exception as e:  # noqa: BLE001 - absent, or PortAudio refusing to open it
+        synth.cancel()
+        detail = str(e) if isinstance(e, _output.DeviceAbsent) else f"{type(e).__name__}: {e}"
+        return said_unplayed(item, "device-absent", detail=detail[:300])
 
     sr = backend.sample_rate
     step = int(sr * _backends.BLOCK_S)
-    written = generated = 0
-    reason, detail, finished_gen = "done", None, False
-    t0 = time.monotonic()
+    written = 0
+    reason, detail = "done", None
     started = False
-    gen = backend.stream(text, voice, speed)
+
+    def check_stop() -> None:
+        nonlocal reason
+        stop = _read_stop(d)
+        if stop and stop.get("t", 0) >= item["requested_t"]:
+            reason = stop.get("reason") or "stop"
+            raise _Cut
+
     try:
-        for block in gen:
-            generated += len(block)
+        for block in synth.blocks():
+            if block is None:
+                check_stop()
+                continue
             for i in range(0, len(block), step):
-                stop = _read_stop(d)
-                if stop and stop.get("t", 0) >= item["requested_t"]:
-                    reason = stop.get("reason") or "stop"
-                    raise _Cut
+                check_stop()
                 if not started:
                     heard.saying(text, **_common(item), device=getattr(out, "name", item["device"]),
-                                 speed=speed, gen_s=round(time.monotonic() - t0, 3))
+                                 speed=speed, gen_s=synth.gen_s, prefetched=prefetched or None)
                     started = True
                 sub = block[i:i + step]
                 out.write(sub)
                 written += len(sub)
-        finished_gen = True
         out.drain()
     except _Cut:
+        synth.cancel()
         _abort(out)
     except Exception as e:  # noqa: BLE001
+        synth.cancel()
         try:
             _abort(out)
         except Exception:  # noqa: BLE001
@@ -140,15 +240,13 @@ def play_one(item: dict, d: Path) -> dict:
         lost = isinstance(e, _output.DeviceLost) or "PortAudio" in name
         reason = "device-lost" if lost else "error"
         detail = f"{name}: {e}"[:300]
-    finally:
-        gen.close()  # a cut must not leave the synthesis request open
 
     cut = reason != "done"
     played = getattr(out, "frames_played", written) / sr
     if cut:
         played = max(0.0, played - getattr(out, "latency", 0.0))
-    dur = generated / sr if finished_gen else None
-    est_dur = dur or max(generated / sr, len(text) / 15.0 / (speed or 1.0))
+    dur = synth.frames / sr if synth.finished else None
+    est_dur = dur or max(synth.frames / sr, len(text) / 15.0 / (speed or 1.0))
     return heard.said(
         **_common(item), device=getattr(out, "name", item["device"]),
         played_s=round(played, 3), dur_s=round(dur, 3) if dur is not None else None,
@@ -205,23 +303,69 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
             return 0
         (d / "player.pid").write_text(str(os.getpid()))
         idle_since = time.monotonic()
+        ahead: dict = {"synth": None, "playing": None}
+        guard = threading.Lock()
+
+        def prefetch(_finished: Optional[Synth] = None) -> None:
+            """Start synthesising the next queued item, one ahead, never the one playing."""
+            with guard:
+                if ahead["synth"] is not None:
+                    return
+                for f in sorted(q.glob("*.json")):
+                    try:
+                        item = json.loads(f.read_text())
+                    except (FileNotFoundError, ValueError):
+                        continue
+                    if item.get("utt") == ahead["playing"]:
+                        continue
+                    try:
+                        ahead["synth"] = Synth(item, on_done=prefetch)
+                    except Exception:  # noqa: BLE001 - play_one reports it when its turn comes
+                        pass
+                    return
+
         try:
             while True:
                 f = _oldest(q)
                 if f is None:
+                    with guard:
+                        if ahead["synth"] is not None:  # its item was flushed by a stop
+                            ahead["synth"].cancel()
+                            ahead["synth"] = None
                     _handle_stop(d)
                     if time.monotonic() - idle_since > idle_exit_s:
                         break
                     time.sleep(poll_s)
                     continue
+                try:
+                    item = json.loads(f.read_text())
+                except (FileNotFoundError, ValueError):
+                    continue  # a stop flushed it first
+                with guard:
+                    synth, ahead["synth"] = ahead["synth"], None
+                    ahead["playing"] = item.get("utt")
+                if synth is not None and synth.utt != item.get("utt"):
+                    synth.cancel()
+                    synth = None
                 playing = d / "playing.json"
                 try:
                     f.rename(playing)
                 except FileNotFoundError:
-                    continue  # a stop flushed it first
-                item = json.loads(playing.read_text())
+                    if synth is not None:
+                        synth.cancel()
+                    continue
+                if synth is None:
+                    try:
+                        synth = Synth(item, on_done=prefetch)
+                    except Exception:  # noqa: BLE001 - play_one makes the said line
+                        synth = None
+                    prefetched = False
+                else:
+                    prefetched = True
+                if synth is not None and synth.finished:
+                    prefetch()
                 try:
-                    rec = play_one(item, d)
+                    rec = play_one(item, d, synth, prefetched)
                 except Exception as e:  # noqa: BLE001 - one bad utterance must not stall the queue
                     rec = said_unplayed(item, "error", detail=f"{type(e).__name__}: {e}"[:300])
                 playing.unlink(missing_ok=True)
