@@ -16,6 +16,7 @@ device plays mono and says so (``pan_ignored``) rather than dropping words.
 from __future__ import annotations
 
 import math
+import os
 import queue
 import time
 from typing import Optional
@@ -69,20 +70,32 @@ def pan_gains(pan: float) -> tuple[float, float]:
 
 
 class NullOut:
+    """Plays nothing, in real time, with a one-block buffer like a real device's."""
+
     name = "null"
-    latency = 0.0
+    latency = 0.05  # the writer may run this far ahead; a cut drops it
     pan_ignored = None
 
     def __init__(self, sample_rate: int, pan: Optional[float] = None) -> None:
         self.sample_rate = sample_rate
         self.frames_played = 0
+        self.underrun_frames = 0
+        self.underruns = 0
+        self._clock: Optional[float] = None  # when the audio written so far ends
 
     def write(self, block: np.ndarray) -> None:
-        time.sleep(len(block) / self.sample_rate)
+        now = time.monotonic()
+        if self._clock is not None and now > self._clock + 0.005:  # the buffer ran dry
+            self.underrun_frames += int((now - self._clock) * self.sample_rate)
+            self.underruns += 1
+        start = now if self._clock is None else max(now, self._clock)
+        self._clock = start + len(block) / self.sample_rate
+        time.sleep(max(0.0, self._clock - self.latency - now))
         self.frames_played += len(block)
 
     def drain(self) -> None:
-        pass
+        if self._clock is not None:
+            time.sleep(max(0.0, self._clock - time.monotonic()))
 
     def abort(self) -> None:
         pass
@@ -102,6 +115,13 @@ class DeviceOut:
     queue_blocks = 4     # ~200 ms of 50 ms blocks between the player and the device
     lost_after_s = 1.0   # Jefferson's "standard maximum" silence, as it happens
 
+    # Underruns: silence the device got MID-line because synthesis fell behind
+    # (21:05-21:08 Thu 2026-09-24: the clone dropped below real time and every
+    # line broke up, 1.5-8.2 s of gaps each). Always counted. With
+    # $VOICEMODE_MOUTH_REBUFFER_S > 0, a dry-out HOLDS until that much is
+    # buffered again: a few longer pauses instead of many 50 ms stutters. Off
+    # (0) by default: it changes how a line sounds, so it waits for a word.
+
     def __init__(self, name: str, sample_rate: int, pan: Optional[float] = None) -> None:
         idx, self.name = resolve(name)
         sd = _sd()
@@ -116,9 +136,16 @@ class DeviceOut:
                 self.gains = np.array(pan_gains(pan), dtype=np.float32)
             else:
                 self.pan_ignored = f"{have}-channel device"
-        self.q: queue.Queue = queue.Queue(maxsize=self.queue_blocks)
+        self.rebuffer_s = float(os.environ.get("VOICEMODE_MOUTH_REBUFFER_S") or 0)
+        self.q: queue.Queue = queue.Queue(
+            maxsize=max(self.queue_blocks, math.ceil(self.rebuffer_s / 0.05) + 2))
         self.frames_queued = 0
         self.frames_played = 0
+        self.underrun_frames = 0
+        self.underruns = 0
+        self.draining = False
+        self._dry = False
+        self._hold = False
         self._cur: Optional[np.ndarray] = None
         self._pos = 0
         self.stream = sd.OutputStream(device=idx, samplerate=sample_rate, channels=channels,
@@ -127,6 +154,14 @@ class DeviceOut:
         self.latency = float(getattr(self.stream, "latency", 0.0) or 0.0)
 
     def _callback(self, outdata, frames, time_info, status) -> None:  # noqa: ARG002
+        if self._hold:
+            ahead = (self.frames_queued - self.frames_played) / self.sample_rate
+            if ahead >= self.rebuffer_s or self.draining:
+                self._hold = False
+            else:
+                outdata[:] = 0
+                self.underrun_frames += frames
+                return
         filled = 0
         while filled < frames:
             if self._cur is None or self._pos >= len(self._cur):
@@ -140,6 +175,15 @@ class DeviceOut:
             filled += n
         if filled < frames:
             outdata[filled:] = 0
+            if self.frames_queued > 0 and not self.draining:
+                self.underrun_frames += frames - filled
+                if not self._dry:
+                    self.underruns += 1
+                    self._dry = True
+                if self.rebuffer_s > 0:
+                    self._hold = True
+        else:
+            self._dry = False
         self.frames_played += filled
 
     def write(self, block: np.ndarray) -> None:
@@ -153,6 +197,7 @@ class DeviceOut:
         self.frames_queued += len(block)
 
     def drain(self) -> None:
+        self.draining = True
         left = (self.frames_queued - self.frames_played) / self.sample_rate
         deadline = time.monotonic() + left + self.lost_after_s
         while self.frames_played < self.frames_queued:

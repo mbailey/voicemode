@@ -375,3 +375,61 @@ def test_a_term_leaves_no_stale_pid(tmp_path):
     p.send_signal(signal.SIGTERM)
     assert p.wait(5) == 0
     assert not (d / "player.pid").exists()
+
+
+# -- underruns: synthesis slower than real time (21:05-21:08, measured) ---------
+
+class Slow:
+    """Half real time: a 50 ms block every 100 ms."""
+    name, sample_rate = "slow", 24000
+
+    def __init__(self, blocks=10):
+        self.n = blocks
+
+    def stream(self, text, voice, speed):
+        import numpy as np
+        for _ in range(self.n):
+            time.sleep(0.1)
+            yield np.full(1200, 0.5, dtype=np.float32)
+
+
+def test_a_fast_line_has_no_underrun(box):
+    say("Hello Mike.")
+    run_player(box.d).join(5)
+    said = next(r for r in lines(box.logs) if r["kind"] == "said")
+    assert said["underrun_s"] == 0 and said["underruns"] == 0
+
+
+def test_a_slow_synthesis_is_logged_as_underrun_on_null(box, monkeypatch):
+    from voice_mode.mouth import backends
+    monkeypatch.setattr(backends, "resolve", lambda b, v: (Slow(), v))
+    say("slow")
+    run_player(box.d).join(5)
+    said = next(r for r in lines(box.logs) if r["kind"] == "said")
+    assert said["played_s"] == pytest.approx(0.5, abs=0.01)
+    assert 0.3 < said["underrun_s"] < 0.7 and said["underruns"] >= 5
+
+
+def _slow_on_device(box, monkeypatch, blocks=20):
+    from voice_mode.mouth import backends
+    monkeypatch.setattr(backends, "resolve", lambda b, v: (Slow(blocks), v))
+    say("slow", device="MacBook Pro Speakers")
+    run_player(box.d).join(10)
+    return next(r for r in lines(box.logs) if r["kind"] == "said")
+
+
+def test_a_slow_synthesis_is_logged_as_underrun_on_a_device(box, fake_device, monkeypatch):
+    said = _slow_on_device(box, monkeypatch)
+    assert said["reason"] == "done" and said["underrun_s"] > 0.5 and said["underruns"] >= 5
+
+
+def test_rebuffer_turns_many_stutters_into_few_pauses(box, fake_device, monkeypatch, tmp_path):
+    plain = _slow_on_device(box, monkeypatch)
+    monkeypatch.setenv("VOICEMODE_MOUTH_REBUFFER_S", "0.3")
+    monkeypatch.setenv("VOICEMODE_MOUTH_LOG_DIR", str(tmp_path / "logs2"))
+    from voice_mode.mouth import backends
+    say("slow again", device="MacBook Pro Speakers")
+    run_player(box.d).join(10)
+    held = next(r for r in lines(tmp_path / "logs2") if r["kind"] == "said")
+    assert held["reason"] == "done"
+    assert held["underruns"] < plain["underruns"] / 2, (held["underruns"], plain["underruns"])

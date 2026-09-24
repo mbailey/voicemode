@@ -8,7 +8,9 @@ heard log:
 - ``saying`` at the FIRST audio frame handed to the device:
   ``utt text voice backend device requested_ts gen_s``
 - ``said`` when playback ends:
-  ``utt played_s dur_s cut cut_at_s text_played_est reason``, where reason
+  ``utt played_s dur_s cut cut_at_s text_played_est underrun_s underruns
+  reason`` (``underrun_s``: silence the device got mid-line because synthesis
+  fell behind real time), where reason
   is ``done``, ``stop``, ``barge-in``, ``device-absent`` (not there at the
   start), ``device-lost`` (stopped taking audio mid-play) or ``error``.
 
@@ -253,6 +255,8 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
         played_s=round(played, 3), dur_s=round(dur, 3) if dur is not None else None,
         cut=cut, cut_at_s=round(played, 3) if cut else None,
         text_played_est=text if not cut else text_at(text, played / est_dur if est_dur else 0.0),
+        underrun_s=round(getattr(out, "underrun_frames", 0) / sr, 3),
+        underruns=getattr(out, "underruns", 0),
         reason=reason, detail=detail)
 
 
