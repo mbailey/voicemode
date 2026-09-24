@@ -127,6 +127,16 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         "priority": priority,
         **(extra or {}),
     }
+    from . import maillog
+
+    item["mail_log"] = maillog.box_from_env()
+    if item["mail_log"]:
+        # The thread root: the request mail if it came by mail, else this entry.
+        queued = maillog.entry({**item, "log_root": item.get("mail_id")}, "queued",
+                               {k: item.get(k) for k in ("utt", "text", "voice", "device", "pan",
+                                                         "priority", "agent", "session",
+                                                         "requested_ts", "file", "mail_id")})
+        item["log_root"] = item.get("mail_id") or queued
     part = q / f".{item['utt']}.part"
     part.write_text(json.dumps(item))
     # Names sort into play order: '0-' (next, now) before plain time_ns.

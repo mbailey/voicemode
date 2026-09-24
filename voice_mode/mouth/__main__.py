@@ -102,6 +102,9 @@ def main(argv=None) -> int:
             for r in process_new(a.box or mail_box()):
                 print(json.dumps(r))
             return 0
+        import signal
+
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # so 'disabled' is logged
         return watch(a.box)
     if a.cmd == "status":
         print(json.dumps(status()))

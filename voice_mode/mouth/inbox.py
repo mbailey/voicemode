@@ -226,13 +226,25 @@ def process_new(box: Optional[Path] = None, d: Optional[Path] = None) -> list[di
 
 def watch(box: Optional[Path] = None, poll_s: float = 0.05) -> int:
     """Forever: take mail from new/ as it lands (about 50 ms after delivery)."""
+    from . import maillog
+
     box = box or mail_box()
     (box / "new").mkdir(parents=True, exist_ok=True)
-    print(json.dumps({"watching": str(box), "mouth": str(mouth_dir())}), flush=True)
-    while True:
-        for r in process_new(box):
-            print(json.dumps({"t": time.strftime("%H:%M:%S"), **r}), flush=True)
-        time.sleep(poll_s)
+    # The watcher's box is its own log (Mike, 21:52-21:54), unless told otherwise.
+    os.environ.setdefault(maillog.LOG_VAR, str(box))
+    log = maillog.box_from_env()
+    started = time.strftime("%H:%M:%S")
+    if log:
+        maillog.write(log, "enabled", {"detail": f"watching {box}", "pid": os.getpid()})
+    print(json.dumps({"watching": str(box), "mouth": str(mouth_dir()), "log": log}), flush=True)
+    try:
+        while True:
+            for r in process_new(box):
+                print(json.dumps({"t": time.strftime("%H:%M:%S"), **r}), flush=True)
+            time.sleep(poll_s)
+    finally:
+        if log:
+            maillog.write(log, "disabled", {"detail": f"stopped; up since {started}", "pid": os.getpid()})
 
 
 if __name__ == "__main__":

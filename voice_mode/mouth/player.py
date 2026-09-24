@@ -39,6 +39,7 @@ from typing import Optional
 from voice_mode import heard
 
 from . import backends as _backends
+from . import maillog
 from . import output as _output
 from .paths import mouth_dir
 
@@ -128,9 +129,21 @@ def text_at(text: str, fraction: float) -> str:
     return head.rstrip()
 
 
+def _said(item: dict, **fields) -> dict:
+    rec = heard.said(**fields)
+    maillog.entry(item, "said", rec)
+    return rec
+
+
+def _saying(item: dict, text: str, **fields) -> dict:
+    rec = heard.saying(text, **fields)
+    maillog.entry(item, "saying", rec)
+    return rec
+
+
 def said_unplayed(item: dict, reason: str, device: Optional[str] = None, detail: Optional[str] = None) -> dict:
-    return heard.said(**_common(item), device=device or item.get("device"), played_s=0.0,
-                      cut=True, cut_at_s=0.0, text_played_est="", reason=reason, detail=detail)
+    return _said(item, **_common(item), device=device or item.get("device"), played_s=0.0,
+                 cut=True, cut_at_s=0.0, text_played_est="", reason=reason, detail=detail)
 
 
 class Synth:
@@ -273,7 +286,7 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
                 check_stop()
                 if not started:
                     _duck_on()
-                    heard.saying(text, **_common(item), device=getattr(out, "name", item["device"]),
+                    _saying(item, text, **_common(item), device=getattr(out, "name", item["device"]),
                                  speed=speed, gen_s=synth.gen_s, prefetched=prefetched or None,
                                  pan_ignored=getattr(out, "pan_ignored", None))
                     started = True
@@ -301,8 +314,8 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
         played = max(0.0, played - getattr(out, "latency", 0.0))
     dur = synth.frames / sr if synth.finished else None
     est_dur = dur or max(synth.frames / sr, len(text) / 15.0 / (speed or 1.0))
-    return heard.said(
-        **_common(item), device=getattr(out, "name", item["device"]),
+    return _said(
+        item, **_common(item), device=getattr(out, "name", item["device"]),
         played_s=round(played, 3), dur_s=round(dur, 3) if dur is not None else None,
         cut=cut, cut_at_s=round(played, 3) if cut else None,
         text_played_est=text if not cut else text_at(text, played / est_dur if est_dur else 0.0),

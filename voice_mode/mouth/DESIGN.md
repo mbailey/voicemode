@@ -58,6 +58,33 @@ proposed shape. Nothing here is live until Mike says so.
    244 ms, then queued to first frame in 323 ms (cold player).
    Not yet: a `said` mailed back as a reply (the heard log carries it).
 
+## 9. The mouth's mailbox is its own log, and its memory
+
+Mike, voice 21:52-21:55 (Cora `<1790250869.45008.5357@m5.session-mail>`,
+`<1790250964.54341.9598@m5.session-mail>`): "a mailbox basically for the log
+... it reads its own mailbox and it writes to its own mailbox ... the single
+source of truth ... like syslog but using the message format", then "it's
+mouth memory".
+
+PROTOTYPED (dev, opt-in, `$VOICEMODE_MOUTH_MAIL_LOG`; `mouth mail` turns it
+on for its own box):
+- each utterance is one thread: `queued` (the root, or a reply to the
+  request mail), then `saying`, then `said`, with subjects that carry the
+  point
+- `enabled`/`disabled` entries for the watcher
+- entries are written straight into `cur/`, already seen, so the watcher
+  never takes one for a request
+- the heard-log lines are kept until he rules
+
+**To be memory (MHS), not yet:**
+- a mouth ROOT hint and labels, e.g. `[CONVO]/[YYYY-MM-DD]`, with each
+  utterance thread under its day
+- signed entries (membership needs a verified signature)
+- `memory --box mouth` carried by sessionmail's transport (Cora, tested
+  21:56: not wired yet)
+
+Those are sessionmail's to decide, not the mouth's.
+
 ## The shape it keeps
 
 - One queue, one player, one line at a time. Stacked lines are gapless
