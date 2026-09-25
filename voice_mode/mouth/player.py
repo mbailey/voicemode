@@ -40,6 +40,7 @@ from typing import Optional
 
 from voice_mode import heard
 
+from . import audio as _audio
 from . import backends as _backends
 from . import box as _box
 from . import maillog
@@ -223,6 +224,11 @@ class Synth:
     def cancel(self) -> None:
         self._cancel.set()
 
+    def snapshot(self) -> list:
+        """The blocks synthesised so far (all of them once ``finished``)."""
+        with self._cond:
+            return list(self._blocks)
+
     def blocks(self, tick: float = _backends.BLOCK_S):
         """Yield audio blocks as they arrive; ``None`` every ``tick`` while waiting,
         so the player can look for a stop during a slow synthesis."""
@@ -352,8 +358,12 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
         played = max(0.0, played - getattr(out, "latency", 0.0))
     dur = synth.frames / sr if synth.finished else None
     est_dur = dur or max(synth.frames / sr, len(text) / 15.0 / (speed or 1.0))
+    # The mouth keeps what it says (audio.py): the whole line, once its
+    # synthesis finished, even if the playback was cut.
+    kept = _audio.keep(item, synth.snapshot(), sr, backend.name) if synth.finished else None
     return _said(
         item, **_common(item), device=getattr(out, "name", item["device"]),
+        audio=str(kept) if kept else None,
         played_s=round(played, 3), dur_s=round(dur, 3) if dur is not None else None,
         cut=cut, cut_at_s=round(played, 3) if cut else None,
         text_played_est=text if not cut else text_at(text, played / est_dur if est_dur else 0.0),

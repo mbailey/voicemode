@@ -117,3 +117,27 @@ using mail drop ... Yes"*. Detail: `box.py`.
   began is filed P and never spoken.
 - **Expiry of a held line** counts from the end of his turn, not from when
   it was queued.
+
+## Since 04:15 Sat 2026-09-26: the mouth keeps what it says (dev, not live)
+
+Cora's Samples section in the voice browser needs a line's audio after it
+has been spoken (her recap, 04:13; Mike's picker v2 wish for cached samples,
+03:33). Pip's answer to Mike's 04:14 question, "what do you finish before
+the Delta config spike?". Detail: `audio.py`.
+
+- **One WAV per line**, plus a JSON note beside it:
+  `<audio dir>/<YYYY-MM-DD>/<utt>.wav|json`. It's kept once the line's
+  synthesis FINISHED, even if the playback was cut, and the line's `said`
+  carries `audio` (the path).
+- **Not kept:** `mouth play` files (they already exist) and the `silence`
+  backend.
+- **Settings:**
+  - `$VOICEMODE_MOUTH_AUDIO_DIR`, else `<mouth dir>/audio`.
+  - `VOICEMODE_MOUTH_KEEP_AUDIO=0` turns it off.
+  - `$VOICEMODE_MOUTH_AUDIO_DAYS` (default 7) is how long it's kept. Older
+    day folders are pruned at most once an hour, and a folder whose name is
+    not a date is never touched.
+- **`mouth audio [--voice V] [--last N]`**: JSON lines, newest first. This
+  is what Samples reads.
+- **Cost:** 48 KB a second of speech at 24 kHz, so about 0.5 MB for a
+  10-second line.

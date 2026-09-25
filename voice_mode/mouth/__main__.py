@@ -1,4 +1,4 @@
-"""mouth CLI: say, stop, status, devices, voices, serve.  ``python -m voice_mode.mouth --help``"""
+"""mouth CLI: say, stop, status, devices, voices, audio, serve.  ``python -m voice_mode.mouth --help``"""
 
 from __future__ import annotations
 
@@ -71,6 +71,9 @@ def main(argv=None) -> int:
     ml.add_argument("--once", action="store_true", help="speak what is in new/, then exit")
     sub.add_parser("devices", help="output device names, exactly as --device takes them")
     sub.add_parser("voices", help="JSON: the default voice, where it came from, and every voice")
+    au = sub.add_parser("audio", help="JSON lines: the lines the mouth kept (a WAV each), newest first")
+    au.add_argument("--voice", help="only this voice's lines")
+    au.add_argument("--last", type=int, help="at most this many")
     v = sub.add_parser("serve", help="run the player in the foreground (say starts one for you)")
     v.add_argument("--idle", type=float, help="exit after this long with nothing queued (default 600 s)")
 
@@ -128,6 +131,12 @@ def main(argv=None) -> int:
         from .voices import voices
 
         print(json.dumps(voices()))
+        return 0
+    if a.cmd == "audio":
+        from .audio import kept
+
+        for meta in kept(voice=a.voice, last=a.last):
+            print(json.dumps(meta, ensure_ascii=False))
         return 0
     if a.cmd == "serve":
         import signal
