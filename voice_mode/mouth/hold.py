@@ -200,15 +200,89 @@ def is_echo(partial: str, line: str) -> bool:
     return best >= 2 and best / len(p) >= ECHO_RUN
 
 
+#: Mike's rule, 02:05 Sat: "remove stop words and then see if all the words
+#: ... exist in the previous message out ... there'd need to be enough unique
+#: words that are not in the set". And a backchannel is not a stop (Cora,
+#: 02:07: his one-word "Fantastic!" cut her follower at 1.45 s).
+STOP_WORDS = frozenset("""
+a about above after again all am an and any are as at be been being below both
+but by can could did do does doing down during each few for from further had
+has have having he her here hers him his how i if in into is it its itself just
+let me more most my myself no nor not now of off on once only or other our out
+over own same she should so some such than that the their them then there these
+they this those through to too under until up very was we were what when where
+which while who whom why will with would you your yours yourself d ll m re s t ve
+yeah yes yep yup ok okay mm mmm mhm hmm uh um ah oh huh right sure cool nice great
+fantastic brilliant awesome lovely good wow thanks thank really totally exactly
+indeed got see well like
+""".split())
+#: Words that ask the mouth to stop, whatever else was said.
+STOP_ASKS = frozenset("stop wait hang hold pause shush quiet enough interrupt".split())
+BARGE_WORDS = 3   # Mike, 02:09 Sat: "I should be able to say a certain amount
+                  # without you stopping" - $VOICEMODE_MOUTH_BARGE_WORDS tunes it
+RESUME_S = 20.0   # a cut line's unplayed rest waits this long for his turn to end
+
+
+def barge_words() -> int:
+    return int(os.environ.get("VOICEMODE_MOUTH_BARGE_WORDS", BARGE_WORDS))
+
+
+def resume_s() -> float:
+    return float(os.environ.get("VOICEMODE_MOUTH_RESUME_S", RESUME_S))
+
+
+def rest_of(text: str, played: str) -> str:
+    """What was not heard, from the start of the sentence it was cut in."""
+    cut = len(played or "")
+    start = max(text.rfind(c, 0, cut) for c in ".!?")
+    return text[start + 1:].strip() if start >= 0 else text.strip()
+
+
+def _mic_partials_since(since_t: float, directory: Optional[Path] = None) -> list:
+    out = []
+    for path in heard.log_files(directory)[-2:]:
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - _TAIL))
+                lines = f.read().split(b"\n")
+        except OSError:
+            continue
+        for raw in lines[:-1]:
+            try:
+                rec = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if isinstance(rec, dict) and rec.get("kind") == "partial" \
+                    and rec.get("source", "mic") == "mic" and str(rec.get("text") or "").strip():
+                t = _ts(rec)
+                if t is not None and t > since_t:
+                    out.append(rec)
+    return out
+
+
 def barge(since_t: float, line_text: str, directory: Optional[Path] = None,
           now: Optional[float] = None) -> Optional[dict]:
-    """His words since ``since_t`` (the line's first frame), or None."""
+    """His words since ``since_t`` (the line's first frame) that ask for the
+    floor, or None. Echo partials are ignored; then an explicit stop word
+    cuts at once, and otherwise BARGE_WORDS content words of his that are not
+    the line's own, counted across his partials so far."""
     if not barge_on():
         return None
     rec, _ = _look(directory, now)
     if rec is None or rec.get("kind") != "partial":
-        return None
+        return None                                  # cheap: nothing new from him
     t = _ts(rec)
-    if t is None or t <= since_t or is_echo(str(rec.get("text") or ""), line_text):
+    if t is None or t <= since_t:
         return None
-    return rec
+    have, novel, last = set(_words(line_text)), set(), None
+    for p in _mic_partials_since(since_t, directory):
+        text = str(p.get("text") or "")
+        if is_echo(text, line_text):
+            continue
+        words = _words(text)
+        if STOP_ASKS & set(words):
+            return p
+        novel |= {w for w in words if w not in STOP_WORDS and w not in have}
+        last = p
+    return last if len(novel) >= barge_words() else None

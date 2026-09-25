@@ -218,7 +218,8 @@ def headphones(monkeypatch):
     monkeypatch.setenv("VOICEMODE_MOUTH_BARGE_DEVICES", "null")
 
 
-def test_his_words_cut_the_line_and_the_stale_queue(box, ears, headphones):
+def test_his_words_cut_the_line_and_the_stale_queue(box, ears, headphones, monkeypatch):
+    monkeypatch.setenv("VOICEMODE_MOUTH_RESUME_S", "0")
     mouth.say(LONG, d=box.d, spawn=False)
     stale = mouth.say("queued before he spoke", d=box.d, spawn=False)
     th = run_player(box.d, idle=0.5)
@@ -292,3 +293,65 @@ def test_barge_devices():
     assert hold.barge_device("airpods") and hold.barge_device("Mike's AirPods Pro")
     assert not hold.barge_device("MacBook Pro Speakers")
     assert not hold.barge_device(None)
+
+
+def test_a_backchannel_is_not_a_barge(box, ears, headphones):
+    mouth.say(MID, d=box.d, spawn=False)
+    th = run_player(box.d, idle=0.3)
+    assert _wait_for(lambda: _saying(box, MID))
+    time.sleep(0.2)
+    ears("partial", text="Fantastic!")                 # Cora, 02:07: this cut her follower
+    ears("partial", text="yeah, mm, right")
+    th.join(15)
+    assert [x.get("reason") for x in lines(box.logs) if x["kind"] == "said"] == ["done"]
+
+
+def test_barge_rules(ears):
+    t0 = time.time() - 1
+    line = "the echo canceller is how FaceTime keeps your own voice out"
+    ears("partial", text="Fantastic!")
+    assert hold.barge(t0, line) is None                            # backchannel
+    ears("partial", text="hang on")
+    assert hold.barge(t0, line) is not None                        # a stop word, at once
+
+
+def test_his_words_add_up_across_partials(ears):
+    t0 = time.time() - 1
+    line = "the echo canceller is how FaceTime keeps your own voice out"
+    ears("partial", text="I'm actually")                           # 1 word of his
+    assert hold.barge(t0, line) is None
+    ears("partial", text="on a call now")                           # 2 words: not yet
+    assert hold.barge(t0, line) is None
+    ears("partial", text="with my AI")                              # 3: a barge
+    assert hold.barge(t0, line) is not None
+
+
+def test_ok_is_not_a_barge(ears):
+    # Cora, 02:10: "OK." cut a line at 1.59 s
+    ears("partial", text="OK.")
+    assert hold.barge(time.time() - 1, "No, I don't get told when I'm cut") is None
+
+
+def test_rest_of():
+    t = "First part. Second part is long. Third."
+    assert hold.rest_of(t, "First part. Second pa") == "Second part is long. Third."
+    assert hold.rest_of(t, "Fir") == t
+    assert hold.rest_of(t, t) == ""
+
+
+def test_a_cut_line_comes_back_after_his_turn(box, ears, headphones):
+    text = "This part you heard. This part you did not hear, it comes back after you."
+    mouth.say(text, d=box.d, spawn=False, extra={"agent": "cora"})
+    th = run_player(box.d, idle=0.5)
+    assert _wait_for(lambda: _saying(box, text))
+    time.sleep(0.3)
+    ears("partial", text="hang on")                    # cut
+    assert _wait_for(lambda: [x for x in lines(box.logs) if x["kind"] == "said" and x.get("reason") == "barge-in"])
+    time.sleep(0.5)
+    assert len(_saying(box)) == 1, "the rest played over him"
+    ears("turn", text="hang on")
+    th.join(15)
+    said = [x for x in lines(box.logs) if x["kind"] == "saying"]
+    assert len(said) == 2 and said[1]["text"].startswith("This part") and "comes back" in said[1]["text"]
+    assert said[1].get("agent") == "cora", "the resume must keep the cut line's agent"
+    assert said[1].get("hold") == "turn-end"

@@ -372,6 +372,30 @@ def _next(d: Path, q: Path) -> tuple[Optional[Path], bool]:
     return None, held
 
 
+def _resume(d: Path, item: dict, rec: dict) -> None:
+    """The fast follow (Mike, 02:08 Sat; Cora's split): a line his words cut is
+    queued again from the start of the sentence it was cut in, HELD for the
+    end of his turn and expiring in resume_s(). A short turn then hears it
+    with no agent round trip; its agent may amend or retract it meanwhile
+    (``resume_of`` names the cut line)."""
+    if _hold.resume_s() <= 0 or item.get("backend") == "file":
+        return
+    rest = _hold.rest_of(item["text"], rec.get("text_played_est") or "")
+    if not rest:
+        return
+    from . import say
+
+    try:
+        say(rest, voice=item.get("voice"), speed=item.get("speed"),
+            backend=item.get("backend_asked") or item.get("backend"), device=item.get("device"),
+            pan=item.get("pan"), log_dir=Path(item["log_dir"]) if item.get("log_dir") else None,
+            d=d, spawn=False, hold="turn-end", expires_s=_hold.resume_s(),
+            extra={"agent": item.get("agent"), "session": item.get("session"),
+                   "resume_of": item["utt"]})
+    except (ValueError, OSError) as e:  # a resume must never stall the player
+        print(json.dumps({"resume_failed": item["utt"], "error": str(e)[:200]}), flush=True)
+
+
 def _write_stop(d: Path, rec: dict) -> None:
     """The player's own stop (barge-in): the same file `mouth stop` writes."""
     part = d / f".stop.player.{os.getpid()}.part"
@@ -501,6 +525,8 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
                 _done(d, item, rec)
                 if rec.get("cut"):
                     _handle_stop(d)
+                if rec.get("reason") == "barge-in":
+                    _resume(d, item, rec)
                 print(json.dumps({k: rec.get(k) for k in ("seq", "utt", "reason", "played_s", "dur_s")}),
                       flush=True)
                 idle_since = time.monotonic()
