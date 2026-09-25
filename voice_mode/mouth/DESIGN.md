@@ -95,3 +95,25 @@ Those are sessionmail's to decide, not the mouth's.
   device-lost or error.
 - The heard log is the timeline, and the mouth writes to it only through
   `heard.append`.
+
+## Since 03:26 Sat 2026-09-26: the queue is a maildir
+
+Mike, voice 03:24-03:26: *"we may as well drop the files as mail, maybe
+using mail drop ... Yes"*. Detail: `box.py`.
+
+- **One box.** The live mouth's queue is its own mailbox,
+  `~/.mail/agents/mouth`. `new/` is to be spoken, and `cur/` is done,
+  flagged S (spoken), T (not spoken) or P (passed: expired or stale). The
+  log entries already lived in `cur/`.
+- **Every way in lands in `new/`.** `mouth say` drops a mail (tmp, then
+  rename). Postfix delivers mail to `mouth@<host>`. Nothing translates, so
+  the JSON queue and the `mouth mail` watcher are gone. `mouth mail` is now
+  the player, resident, run by `com.failmode.mouth-mail`.
+- **A playlist** (Mike, 03:07-03:12). `X-Mouth-Priority`: `now` -1, `next`
+  0, a number, none 50. Lower plays sooner, then arrival order.
+- **Replace is a supersede.** A newer mail takes the older one's place. An
+  empty body retracts. Nothing is edited in place.
+- **Stale** (Mike, 03:07-03:12). A held line queued before his current turn
+  began is filed P and never spoken.
+- **Expiry of a held line** counts from the end of his turn, not from when
+  it was queued.

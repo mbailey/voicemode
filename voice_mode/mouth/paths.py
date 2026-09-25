@@ -6,9 +6,14 @@ import os
 from pathlib import Path
 
 
+def default_mouth_dir() -> Path:
+    """``<VOICEMODE_BASE_DIR>/mouth``: the live mouth's, whatever $VOICEMODE_MOUTH_DIR says."""
+    base = os.environ.get("VOICEMODE_BASE_DIR") or "~/.voicemode"
+    return Path(base).expanduser() / "mouth"
+
+
 def mouth_dir() -> Path:
     env = os.environ.get("VOICEMODE_MOUTH_DIR")
     if env:
         return Path(env).expanduser()
-    base = os.environ.get("VOICEMODE_BASE_DIR") or "~/.voicemode"
-    return Path(base).expanduser() / "mouth"
+    return default_mouth_dir()

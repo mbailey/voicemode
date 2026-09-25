@@ -27,7 +27,14 @@ rule is the beat; $VOICEMODE_MOUTH_HOLD_GRACE_S sets one); a ``now`` line
 skips it. Lines queued behind a held one are never blocked.
 ``barge()`` is the other half: his words during a line cut it. One that arrives while he talks again waits for that turn.
 ``expires_s`` drops a line that has lost its moment: its ``said`` says
-``expired`` and it is never spoken.
+``expired`` and it is never spoken. For a held line the clock starts when
+his turn ENDS, not when the line was queued (an opener queued 30 s into a
+90 s turn must not die before he stops).
+
+**Stale** (Mike, voice 03:07-03:12 Sat, via Cora): a held line queued
+before his current turn BEGAN is old news once he starts talking again:
+*"chronology is important"*. It is kept (filed P) and never spoken, its
+``said`` says ``stale``.
 """
 
 from __future__ import annotations
@@ -49,7 +56,7 @@ _TAIL = 64 * 1024
 # Events that end speech without a turn record: a blip with no words
 # ("no text recognised", ~0.3 s; 46 on 25-26 Sep), or the ears stopping.
 _ENDS = ("turn-discarded", "listen-stopped")
-_cache: dict = {"t": 0.0, "v": None}
+_cache: dict = {"t": 0.0, "v": None}  # v = (newest floor record, turn start t, last end t)
 
 
 def idle_s() -> float:
@@ -58,6 +65,18 @@ def idle_s() -> float:
 
 def _newest_mic(directory: Optional[Path] = None) -> Optional[dict]:
     """The newest mic record that moves the floor, today's log then yesterday's."""
+    return _scan(directory)[0]
+
+
+def _is_end(rec: dict) -> bool:
+    return rec.get("kind") == "turn" or (rec.get("kind") == "event" and rec.get("event") in _ENDS)
+
+
+def _scan(directory: Optional[Path] = None) -> tuple:
+    """(the newest floor-moving mic record, when his current turn began, when
+    his last turn ended). Begin is the first worded partial after the last
+    end, and only while the newest record is a partial; either may be None."""
+    newest, start_t, end_t = None, None, None
     for path in reversed(heard.log_files(directory)[-2:]):
         try:
             with open(path, "rb") as f:
@@ -73,12 +92,22 @@ def _newest_mic(directory: Optional[Path] = None) -> Optional[dict]:
                 continue
             if not isinstance(rec, dict) or rec.get("source", "mic") != "mic":
                 continue
-            kind = rec.get("kind")
-            if kind == "partial" and str(rec.get("text") or "").strip():
-                return rec
-            if kind == "turn" or (kind == "event" and rec.get("event") in _ENDS):
-                return rec
-    return None
+            if rec.get("kind") == "partial" and str(rec.get("text") or "").strip():
+                if newest is None:
+                    newest = rec
+                start_t = _ts(rec) if _ts(rec) is not None else start_t
+                continue
+            if _is_end(rec):
+                if newest is None:
+                    return rec, None, _ts(rec)
+                end_t = _ts(rec) if end_t is None else end_t
+                # A pause inside the beat is the same turn (he went on before
+                # a held line could speak), so the turn began before it.
+                gap = (start_t - _ts(rec)) if start_t is not None and _ts(rec) is not None else None
+                if gap is not None and gap < grace_s():
+                    continue
+                return newest, start_t, end_t
+    return newest, start_t, end_t
 
 
 def _ts(rec: dict) -> Optional[float]:
@@ -91,13 +120,20 @@ def _ts(rec: dict) -> Optional[float]:
 def _look(directory: Optional[Path] = None, now: Optional[float] = None,
           max_age_s: float = 0.1) -> tuple[Optional[dict], float]:
     """The newest floor-moving mic record, and ``now``; cached for ``max_age_s``."""
+    rec, _, _, now = _look3(directory, now, max_age_s)
+    return rec, now
+
+
+def _look3(directory: Optional[Path] = None, now: Optional[float] = None,
+           max_age_s: float = 0.1) -> tuple:
+    """(newest floor record, turn start t, last end t, now); cached for ``max_age_s``."""
     now = time.time() if now is None else now
     if directory is None and _cache["v"] is not None and now - _cache["t"] < max_age_s:
-        return _cache["v"][0], now
-    rec = _newest_mic(directory)
+        return (*_cache["v"], now)
+    v = _scan(directory)
     if directory is None:
-        _cache.update(t=now, v=(rec,))
-    return rec, now
+        _cache.update(t=now, v=v)
+    return (*v, now)
 
 
 def floor(directory: Optional[Path] = None, now: Optional[float] = None,
@@ -118,14 +154,24 @@ def grace_s() -> float:
 
 
 def check(item: dict, now: Optional[float] = None, directory: Optional[Path] = None) -> str:
-    """What the player should do with a queued item: ``play``, ``wait`` or ``expire``."""
+    """What the player should do with a queued item: ``play``, ``wait``, ``expire`` or ``stale``."""
     now = time.time() if now is None else now
+    held = item.get("hold") == "turn-end"
+    exp_s = item.get("expires_s")
     exp = item.get("expires_t")
-    if exp is not None and now >= float(exp):
+    if (not held or exp_s is None) and exp is not None and now >= float(exp):
         return "expire"
-    if item.get("hold") == "turn-end":
+    if held:
+        _, start_t, end_t, _ = _look3(directory, now)
         if floor(directory, now) == "speaking":
+            asked = item.get("requested_t")
+            if asked is not None and start_t is not None and float(asked) < start_t:
+                return "stale"
             return "wait"
+        if exp_s is not None:
+            base = max(float(item.get("requested_t") or now), end_t or 0.0)
+            if now >= base + float(exp_s):
+                return "expire"
         rec, _ = _look(directory, now)
         t = _ts(rec) if rec is not None else None
         # The beat: a turn that ended less than grace_s ago might not be over.

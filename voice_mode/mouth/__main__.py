@@ -35,9 +35,11 @@ def main(argv=None) -> int:
                    help="drop the line, unspoken, if it has not started S seconds from now")
     pri = s.add_mutually_exclusive_group()
     pri.add_argument("--next", dest="priority", action="store_const", const="next",
-                     help="the front of the queue")
+                     help="the front of the queue (priority 0)")
     pri.add_argument("--now", dest="priority", action="store_const", const="now",
                      help="interrupt the line playing now, then speak")
+    pri.add_argument("--priority", dest="priority", metavar="N",
+                     help="a place in the playlist: lower plays sooner; next is 0, none is 50")
 
     pl = sub.add_parser("play", help="queue a sound file or URL, or a section of it")
     pl.add_argument("source")
@@ -64,9 +66,9 @@ def main(argv=None) -> int:
     t.add_argument("--current", action="store_true", help="cut only what is playing; keep the queue")
 
     sub.add_parser("status", help="player, queue, what is playing")
-    ml = sub.add_parser("mail", help="watch mouth@<host>: each mail becomes a line (mail feeds mouth)")
+    ml = sub.add_parser("mail", help="the player, resident on the queue maildir (mail to mouth@<host> lands there)")
     ml.add_argument("--box", type=Path, help="the maildir (default ~/.mail/agents/mouth)")
-    ml.add_argument("--once", action="store_true", help="one pass over new/, then exit")
+    ml.add_argument("--once", action="store_true", help="speak what is in new/, then exit")
     sub.add_parser("devices", help="output device names, exactly as --device takes them")
     sub.add_parser("voices", help="JSON: the default voice, where it came from, and every voice")
     v = sub.add_parser("serve", help="run the player in the foreground (say starts one for you)")
@@ -106,12 +108,10 @@ def main(argv=None) -> int:
         print(json.dumps(stop(a.reason, flush=not a.current)))
         return 0
     if a.cmd == "mail":
-        from .inbox import mail_box, process_new, watch
+        from .inbox import watch
 
         if a.once:
-            for r in process_new(a.box or mail_box()):
-                print(json.dumps(r))
-            return 0
+            return watch(a.box, once=True)
         import signal
 
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # so 'disabled' is logged

@@ -89,11 +89,9 @@ def test_held_opener_speaks_only_after_his_turn_ends(box, ears):
 def test_a_better_opener_supersedes_the_held_one(box, ears):
     ears("partial")
     first = deliver(box, "Hmm, let me think", X_Mouth_When="turn-end")
-    inbox.process_new(box.mail, box.d)
     th = run_player(box.d, idle=0.3)
     time.sleep(0.3)
     deliver(box, "Yes: the app reads the real store", Supersedes=first)
-    assert inbox.process_new(box.mail, box.d)[0]["action"] == "amended"
     ears("turn")
     th.join(8)
     spoken = [x["text"] for x in lines(box.logs) if x["kind"] == "saying"]
@@ -120,13 +118,50 @@ def test_an_ordinary_line_is_not_blocked_by_a_held_one(box, ears):
 
 
 def test_an_opener_that_lost_its_moment_expires_unspoken(box, ears):
+    """Held behind a line that outlasts its expiry, counted from his turn's end."""
     ears("partial")
+    mouth.say("word " * 9, d=box.d, spawn=False)            # about 3 s, not held
     deliver(box, "too late now", X_Mouth_When="turn-end", X_Mouth_Expires="0.3")
-    inbox.process_new(box.mail, box.d)
-    run_player(box.d, idle=0.3).join(8)
+    th = run_player(box.d, idle=0.3)
+    time.sleep(0.2)
+    ears("turn")
+    th.join(8)
     got = lines(box.logs)
-    assert not [x for x in got if x["kind"] == "saying"]
-    assert [x.get("reason") for x in got if x["kind"] == "said"] == ["expired"]
+    assert [x["text"] for x in got if x["kind"] == "saying"] == ["word " * 9]
+    assert [x.get("reason") for x in got if x["kind"] == "said"] == ["done", "expired"]
+
+
+def test_expiry_counts_from_the_end_of_his_turn(box, ears):
+    """Mike's flaw (Sat 01:xx): a 30 s opener died in a 90 s turn. Now the clock
+    starts when he stops: an opener that waits out a long turn still speaks."""
+    ears("partial")
+    mouth.say("Still with you", hold="turn-end", expires_s=0.5, d=box.d, spawn=False)
+    th = run_player(box.d, idle=0.3)
+    time.sleep(1.0)                                          # he talks past the 0.5 s
+    ears("partial")
+    ears("turn")
+    th.join(8)
+    assert [x["text"] for x in lines(box.logs) if x["kind"] == "saying"] == ["Still with you"]
+
+
+def test_a_held_line_from_before_his_turn_is_stale(box, ears):
+    """Mike, 03:07-03:12 Sat: lines queued before he started speaking are kept,
+    marked unspoken, and never played."""
+    ears("turn", age_s=5)                                    # his last turn ended
+    old = mouth.say("an answer to the last turn", hold="turn-end", d=box.d, spawn=False)
+    time.sleep(0.05)
+    ears("partial")                                          # he starts again first
+    th = run_player(box.d, idle=2.0)
+    time.sleep(0.4)
+    new = mouth.say("an opener for this turn", hold="turn-end", d=box.d, spawn=False)
+    ears("turn")
+    th.join(8)
+    got = lines(box.logs)
+    assert [x["text"] for x in got if x["kind"] == "saying"] == ["an opener for this turn"]
+    said = {x["utt"]: x["reason"] for x in got if x["kind"] == "said"}
+    assert said == {old["utt"]: "stale", new["utt"]: "done"}
+    cur = sorted(f.name.split(":2,")[1] for f in (box.mail / "cur").iterdir())
+    assert cur == ["P", "S"], "stale is kept (filed P), not deleted"
 
 
 def test_a_stop_flushes_held_lines(box, ears):

@@ -1,9 +1,11 @@
-"""The player: one resident process, one utterance at a time, oldest first.
+"""The player: one resident process, one utterance at a time, in playlist order.
 
-``say`` drops a JSON file into ``queue/`` and makes sure a player is running
-(the ``player.lock`` flock is held by whoever plays); it never waits for
-the audio. The player takes the oldest file, synthesises, and writes to the
-heard log:
+``say`` drops a mail into the queue maildir's ``new/`` (box.py) and makes
+sure a player is running (the ``player.lock`` flock is held by whoever
+plays); it never waits for the audio. Mail to mouth@<host> lands in the same
+``new/``. The player takes the first line in play order (priority, then
+arrival) to ``cur/``, synthesises, flags it when done (S spoken, T not, P
+passed), and writes to the heard log:
 
 - ``saying`` at the FIRST audio frame handed to the device:
   ``utt text voice backend device requested_ts gen_s``
@@ -39,6 +41,7 @@ from typing import Optional
 from voice_mode import heard
 
 from . import backends as _backends
+from . import box as _box
 from . import maillog
 from . import output as _output
 from . import hold as _hold
@@ -240,6 +243,19 @@ class Synth:
             yield block
 
 
+def _cut_by_mail(q: "_box.Queue", item: dict) -> Optional[str]:
+    """Why a mail that landed meanwhile cuts this line, if one does: a retract
+    naming it (``retracted``), or a ``now`` line queued after it
+    (``interrupted``). ``say --now`` and ``mouth retract`` cut at once instead."""
+    for e in q.entries():
+        if e["_retract"] and e["_sup"] and e["_sup"] == item.get("mail_id") and e["_allowed"]:
+            return "retracted"
+    for x in q.lines():
+        if x.get("priority") == "now" and x["requested_t"] > item["requested_t"] and x["utt"] != item["utt"]:
+            return "interrupted"
+    return None
+
+
 def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: bool = False) -> dict:
     """Play one queued utterance; return its ``said`` record.
 
@@ -270,9 +286,16 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
 
     first_frame_t = None
     barge_here = _hold.barge_device(getattr(out, "name", item["device"]))
+    nq = _box.Queue(d)
+    next_look = [0.0]
 
     def check_stop() -> None:
         nonlocal reason
+        if time.monotonic() >= next_look[0]:
+            next_look[0] = time.monotonic() + 0.1
+            why = None if (d / "stop").exists() else _cut_by_mail(nq, item)
+            if why:
+                _write_stop(d, {"t": time.time(), "reason": why, "flush": False, "utt": item["utt"]})
         if first_frame_t is not None and barge_here:
             est = max(synth.frames / sr, len(text) / 15.0 / (speed or 1.0))
             words = _hold.barge(first_frame_t, _hold.near(text, written / sr, est))
@@ -339,38 +362,42 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
         reason=reason, detail=detail)
 
 
-def _oldest(q: Path) -> Optional[Path]:
-    files = sorted(q.glob("*.json"))
-    return files[0] if files else None
-
-
-def _next(d: Path, q: Path) -> tuple[Optional[Path], bool]:
+def _next(d: Path, q: "_box.Queue") -> tuple[Optional[dict], bool]:
     """The first line that may play now, and whether any line is held back.
 
     A held line (hold.py) keeps its place and is skipped while he talks; a
-    line past its ``expires_t`` is dropped with ``said reason=expired``.
-    Lines with neither are checked by name only, as before.
+    line past its expiry is filed P with ``said reason=expired``, and a held
+    line queued before his turn began is filed P with ``reason=stale`` (kept,
+    never spoken: Mike 03:07-03:12 Sat). Lines with neither just play.
     """
     held = False
-    for f in sorted(q.glob("*.json")):
-        try:
-            item = json.loads(f.read_text())
-        except (FileNotFoundError, ValueError):
-            continue
-        if not item.get("hold") and item.get("expires_t") is None:
-            return f, held
-        verdict = _hold.check(item)
+    for x in q.lines(act=True, playing=_read_playing(d)):
+        if not x.get("hold") and x.get("expires_t") is None:
+            return x, held
+        verdict = _hold.check(x)
         if verdict == "play":
-            return f, held
-        if verdict == "expire":
-            try:
-                f.unlink()
-            except FileNotFoundError:
-                continue
-            _done(d, item, said_unplayed(item, "expired"))
+            return x, held
+        if verdict in ("expire", "stale"):
+            if q.drop_line(x, "P"):
+                item = _box.public(x)
+                _done(d, item, said_unplayed(item, "expired" if verdict == "expire" else "stale"))
             continue
         held = True
     return None, held
+
+
+def _read_playing(d: Path) -> Optional[dict]:
+    try:
+        return json.loads((d / "playing.json").read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _flags(rec: dict) -> str:
+    """S if any of it was heard; P if it passed its moment; else T."""
+    if (rec.get("played_s") or 0) > 0:
+        return "S"
+    return "P" if rec.get("reason") in ("expired", "stale") else "T"
 
 
 def _resume(d: Path, item: dict, rec: dict) -> None:
@@ -404,21 +431,17 @@ def _write_stop(d: Path, rec: dict) -> None:
     part.rename(d / "stop")
 
 
-def _handle_stop(d: Path) -> None:
+def _handle_stop(d: Path, q: "Optional[_box.Queue]" = None) -> None:
     """After a cut or while idle: flush what the stop covers, then retire it."""
     stop = _read_stop(d)
     if not stop:
         return
     if stop.get("flush", True) and not stop.get("utt"):
-        for f in sorted((d / "queue").glob("*.json")):
-            try:
-                item = json.loads(f.read_text())
-            except (FileNotFoundError, ValueError):
-                continue
-            if item.get("requested_t", 0) <= stop.get("t", 0):
-                f.unlink(missing_ok=True)
-                rec = said_unplayed(item, stop.get("reason") or "stop")
-                _done(d, item, rec)
+        q = q or _box.Queue(d)
+        for x in q.lines():
+            if x.get("requested_t", 0) <= stop.get("t", 0) and q.drop_line(x, "T"):
+                item = _box.public(x)
+                _done(d, item, said_unplayed(item, stop.get("reason") or "stop"))
     (d / "stop").unlink(missing_ok=True)
 
 
@@ -434,8 +457,10 @@ def _done(d: Path, item: dict, rec: dict) -> None:
 def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s: float = 0.02) -> int:
     """Play the queue until it has been empty ``idle_exit_s``. 0 if another player holds the lock."""
     d = d or mouth_dir()
-    q = d / "queue"
-    q.mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
+    q = _box.Queue(d)
+    _box.ensure(q.bx)
+    pq = _box.Queue(d)  # prefetch's own view (it runs on synth threads too)
     if idle_exit_s is None:
         idle_exit_s = float(os.environ.get("VOICEMODE_MOUTH_IDLE_S", "600"))
     while True:
@@ -455,11 +480,8 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
             with guard:
                 if ahead["synth"] is not None:
                     return
-                for f in sorted(q.glob("*.json")):
-                    try:
-                        item = json.loads(f.read_text())
-                    except (FileNotFoundError, ValueError):
-                        continue
+                for x in pq.lines():
+                    item = _box.public(x)
                     if item.get("utt") == ahead["playing"]:
                         continue
                     try:
@@ -474,7 +496,7 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
                 if f is None and held:
                     # Lines wait for the end of his turn: keep their synthesis
                     # warm, honour a stop, and do not idle out.
-                    _handle_stop(d)
+                    _handle_stop(d, q)
                     prefetch()
                     idle_since = time.monotonic()
                     time.sleep(poll_s)
@@ -485,15 +507,12 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
                         if ahead["synth"] is not None:  # its item was flushed by a stop
                             ahead["synth"].cancel()
                             ahead["synth"] = None
-                    _handle_stop(d)
+                    _handle_stop(d, q)
                     if time.monotonic() - idle_since > idle_exit_s:
                         break
                     time.sleep(poll_s)
                     continue
-                try:
-                    item = json.loads(f.read_text())
-                except (FileNotFoundError, ValueError):
-                    continue  # a stop flushed it first
+                item = _box.public(f)
                 with guard:
                     synth, ahead["synth"] = ahead["synth"], None
                     ahead["playing"] = item.get("utt")
@@ -502,12 +521,14 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
                     synth.cancel()
                     synth = None
                 playing = d / "playing.json"
-                try:
-                    f.rename(playing)
-                except FileNotFoundError:
+                taken = q.take(f)
+                if taken is None:  # retracted or flushed meanwhile
                     if synth is not None:
                         synth.cancel()
                     continue
+                tmp = d / ".playing.json.part"
+                tmp.write_text(json.dumps({**item, "box_file": str(taken)}))
+                tmp.rename(playing)
                 if synth is None:
                     try:
                         synth = Synth(item, on_done=prefetch)
@@ -522,10 +543,11 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
                     rec = play_one(item, d, synth, prefetched)
                 except Exception as e:  # noqa: BLE001 - one bad utterance must not stall the queue
                     rec = said_unplayed(item, "error", detail=f"{type(e).__name__}: {e}"[:300])
+                _box.file_to(taken, _flags(rec))
                 playing.unlink(missing_ok=True)
                 _done(d, item, rec)
                 if rec.get("cut"):
-                    _handle_stop(d)
+                    _handle_stop(d, q)
                 if rec.get("reason") == "barge-in":
                     _resume(d, item, rec)
                 print(json.dumps({k: rec.get(k) for k in ("seq", "utt", "reason", "played_s", "dur_s")}),
@@ -537,7 +559,7 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
             os.close(lock_fd)
         # A say that landed while we were letting go saw the lock held and did
         # not start a player: look once more before leaving.
-        if _oldest(q) is None:
+        if not q.lines():
             return 0
 
 

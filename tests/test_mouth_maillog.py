@@ -27,6 +27,7 @@ def box(tmp_path, monkeypatch):
     monkeypatch.setenv("VOICEMODE_MOUTH_DEVICE", "null")
     monkeypatch.setenv("VOICEMODE_MOUTH_BACKEND", "silence")
     monkeypatch.setenv("VOICEMODE_MOUTH_MAIL_LOG", str(mail))
+    monkeypatch.setenv("VOICEMODE_MOUTH_MAILBOX", str(mail))   # the queue and the log: one box
     monkeypatch.delenv("VOICEMODE_MOUTH_MAIL_ALLOW", raising=False)
     return SimpleNamespace(d=d, logs=logs, mail=mail, n=[0])
 
@@ -63,7 +64,6 @@ def test_a_direct_say_is_one_thread_queued_saying_said(box):
 
 def test_a_mailed_line_threads_under_the_request_mail(box):
     mid = deliver(box, "by mail")
-    inbox.process_new(box.mail, box.d)
     play_all(box.d)
     es = entries(box.mail)
     assert [e["X-Mouth-Log"] for e in es] == ["queued", "saying", "said"]

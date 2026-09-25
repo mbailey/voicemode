@@ -6,8 +6,9 @@ a stack, maybe a pluggable backend ... simple and new"). It replaces
 nothing yet; converse still speaks. Spec card: the commons [AMBIENT]
 channel, Cora 20:07 Thu 2026-09-24.
 
-- ``say`` queues and returns; ONE resident player speaks, oldest first,
-  so stacked openers come for free.
+- ``say`` queues and returns; ONE resident player speaks, in playlist
+  order, so stacked openers come for free. The queue is a maildir (box.py):
+  a line is a mail in ``new/``, done is ``cur/`` with a flag.
 - It speaks to ONE named device (``--device`` or
   ``$VOICEMODE_MOUTH_DEVICE``), exact name, and refuses when it is absent,
   with a ``said reason=device-absent``. Never the default by accident.
@@ -105,12 +106,12 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         expires_s: Optional[float] = None, interest: Optional[str] = None) -> dict:
     """Queue ``text``; return the queued item (``utt``), or with ``wait`` its ``said`` record.
 
-    ``priority``: None (the back of the queue), ``next`` (the front), or ``now``
-    (the front, and the line playing now is cut with ``reason=interrupted``;
+    ``priority`` (a playlist, lower plays sooner): None (50, the back of the
+    list), a number (10, 20, 30...), ``next`` (0, the front), or ``now`` (-1,
+    the front, and the line playing now is cut with ``reason=interrupted``;
     only that line, never the queue behind it).
     """
-    if priority not in (None, "next", "now"):
-        raise ValueError("mouth: priority is next or now")
+    priority = _priority(priority)
     from .hold import HOLDS
 
     if hold not in (None, *HOLDS):
@@ -126,8 +127,7 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
     if not text.strip():
         raise ValueError("mouth: nothing to say")
     d = d or mouth_dir()
-    q = d / "queue"
-    q.mkdir(parents=True, exist_ok=True)
+    d.mkdir(parents=True, exist_ok=True)
     now = time.time()
     item = {
         "utt": uuid.uuid4().hex[:12],
@@ -146,6 +146,7 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         "priority": priority,
         "hold": hold,
         "interest": interest,
+        "expires_s": expires_s,
         "expires_t": (now + expires_s) if expires_s is not None else None,
         **(extra or {}),
     }
@@ -160,10 +161,9 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
                                                          "agent", "session",
                                                          "requested_ts", "file", "mail_id")})
         item["log_root"] = item.get("mail_id") or queued
-    part = q / f".{item['utt']}.part"
-    part.write_text(json.dumps(item))
-    # Names sort into play order: '0-' (next, now) before plain time_ns.
-    part.rename(q / f"{'0-' if priority else ''}{time.time_ns()}-{item['utt']}.json")
+    from .box import box_dir, drop
+
+    drop(box_dir(d), item)
     if priority == "now":
         cur = _playing(d)
         if cur:
@@ -198,9 +198,15 @@ def _playing(d: Path) -> Optional[dict]:
         return None
 
 
-def _queued(d: Path, utt: str) -> Optional[Path]:
-    hits = sorted((d / "queue").glob(f"*-{utt}.json")) if (d / "queue").exists() else []
-    return hits[0] if hits else None
+def _priority(p):
+    """None, ``next``, ``now``, or a number (a numeric string counts); else ValueError."""
+    if p is None or p in ("next", "now"):
+        return p
+    try:
+        f = float(p)
+    except (TypeError, ValueError):
+        raise ValueError("mouth: priority is next, now, or a number (lower plays sooner)") from None
+    return int(f) if f == int(f) else f
 
 
 def play(source: str, *, start: Optional[float] = None, end: Optional[float] = None,
@@ -232,42 +238,43 @@ def amend(utt: str, text: str, *, d: Optional[Path] = None) -> dict:
     d = d or mouth_dir()
     if not text.strip():
         raise ValueError("mouth: nothing to say; retract it instead")
-    f = _queued(d, utt)
-    claim = d / "queue" / f".amend-{utt}"
-    try:
-        f.rename(claim)  # the player cannot take it while it is claimed
-    except (AttributeError, FileNotFoundError):
+    from .box import Queue, drop, public
+
+    q = Queue(d)
+    x = q.find(utt)
+    if x is None:
         cur = _playing(d)
         if cur and cur.get("utt") == utt:
-            raise ValueError(f"mouth: {utt} is already playing; retract it and say again") from None
-        raise ValueError(f"mouth: no queued line {utt}") from None
-    item = json.loads(claim.read_text())
-    item["amended_from"] = item.get("amended_from") or item["text"]
+            raise ValueError(f"mouth: {utt} is already playing; retract it and say again")
+        raise ValueError(f"mouth: no queued line {utt}")
+    # A new mail that supersedes the line: it takes the line's place and utt.
+    # If the player takes the old one first, this plays after it, as news.
+    item = public(x)
+    target = item.pop("mail_id")
+    item.pop("mail_from", None)
+    item["amended_from"] = x.get("amended_from") or x["text"]
     item["text"] = text
-    claim.write_text(json.dumps(item))
-    claim.rename(f)
+    drop(q.bx, item, supersedes=target)
     return item
 
 
 def retract(utt: str, *, d: Optional[Path] = None) -> dict:
     """Drop a queued line, or cut it if it is playing. Its ``said`` says ``retracted``."""
     d = d or mouth_dir()
-    f = _queued(d, utt)
-    claim = d / "queue" / f".retract-{utt}"
-    try:
-        f.rename(claim)
-    except (AttributeError, FileNotFoundError):
-        cur = _playing(d)
-        if cur and cur.get("utt") == utt:
-            return _stop_file(d, {"t": time.time(), "reason": "retracted", "flush": False, "utt": utt})
-        raise ValueError(f"mouth: no queued or playing line {utt}") from None
-    item = json.loads(claim.read_text())
-    claim.unlink()
+    from .box import Queue, public
     from .player import _done, said_unplayed
 
-    rec = said_unplayed(item, "retracted")
-    _done(d, item, rec)
-    return rec
+    q = Queue(d)
+    x = q.find(utt)
+    if x is not None and q.drop_line(x, "T"):
+        item = public(x)
+        rec = said_unplayed(item, "retracted")
+        _done(d, item, rec)
+        return rec
+    cur = _playing(d)
+    if cur and cur.get("utt") == utt:
+        return _stop_file(d, {"t": time.time(), "reason": "retracted", "flush": False, "utt": utt})
+    raise ValueError(f"mouth: no queued or playing line {utt}")
 
 
 def status(d: Optional[Path] = None) -> dict:
@@ -279,6 +286,8 @@ def status(d: Optional[Path] = None) -> dict:
     except (FileNotFoundError, ValueError):
         pass
     pid = (d / "player.pid").read_text().strip() if (d / "player.pid").exists() else None
-    return {"dir": str(d), "player": _player_running(d) if d.exists() else False, "pid": pid,
-            "queued": len(list((d / "queue").glob("*.json"))) if (d / "queue").exists() else 0,
-            "playing": playing}
+    from .box import Queue
+
+    q = Queue(d)
+    return {"dir": str(d), "box": str(q.bx), "player": _player_running(d) if d.exists() else False,
+            "pid": pid, "queued": len(q.lines()), "playing": playing}
