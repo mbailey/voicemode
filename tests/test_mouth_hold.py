@@ -27,9 +27,11 @@ def ears(tmp_path, monkeypatch):
     d = heard.log_dir()
     d.mkdir(parents=True, exist_ok=True)
 
-    def write(kind, age_s=0.0, source="mic"):
+    def write(kind, age_s=0.0, source="mic", text="x", event=None):
         ts = datetime.fromtimestamp(time.time() - age_s).astimezone().isoformat(timespec="milliseconds")
-        rec = {"ts": ts, "seq": 1, "kind": kind, "text": "x", "source": source}
+        rec = {"ts": ts, "seq": 1, "kind": kind, "text": text, "source": source}
+        if event:
+            rec["event"] = event
         with open(heard.log_path(), "a") as f:
             f.write(json.dumps(rec) + "\n")
         hold._cache.update(t=0.0, v=None)
@@ -133,3 +135,21 @@ def test_bad_hold_and_expiry_are_refused(box):
         mouth.say("x", hold="whenever", d=box.d, spawn=False)
     with pytest.raises(ValueError):
         mouth.say("x", expires_s=0, d=box.d, spawn=False)
+
+
+def test_speech_that_ends_without_a_turn_frees_the_floor(ears):
+    ears("partial")
+    ears("event", event="turn-discarded")              # a blip, no words recognised
+    assert hold.floor() == "free"
+    ears("partial")
+    ears("event", event="listen-stopped")              # the ears stopped
+    assert hold.floor() == "free"
+    ears("partial")
+    ears("event", event="heartbeat")                   # other events do not move it
+    assert hold.floor() == "speaking"
+
+
+def test_a_partial_with_no_words_is_not_speech(ears):
+    ears("turn")
+    ears("partial", text="  ")
+    assert hold.floor() == "free"

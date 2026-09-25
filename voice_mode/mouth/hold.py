@@ -9,8 +9,10 @@ A line with ``hold="turn-end"`` stays in the queue, keeps its place, and is
 synthesised ahead so it starts at once, until the floor is free:
 
 - **speaking:** the newest mic record in the ears' heard log is a
-  ``partial`` (he is mid-turn).
-- **free:** the newest mic record is a ``turn`` (his turn has ended), or
+  ``partial`` with words in it (he is mid-turn).
+- **free:** the newest mic record is a ``turn`` (his turn has ended), a
+  ``turn-discarded`` or ``listen-stopped`` event (speech ended with no words,
+  or the ears stopped), or
   there has been no mic record for ``idle_s`` (the ears died, or nobody is
   talking), or there is no heard log at all.
 
@@ -39,6 +41,9 @@ from voice_mode import heard
 HOLDS = ("turn-end",)
 IDLE_S = 8.0
 _TAIL = 64 * 1024
+# Events that end speech without a turn record: a blip with no words
+# ("no text recognised", ~0.3 s; 46 on 25-26 Sep), or the ears stopping.
+_ENDS = ("turn-discarded", "listen-stopped")
 _cache: dict = {"t": 0.0, "v": None}
 
 
@@ -47,7 +52,7 @@ def idle_s() -> float:
 
 
 def _newest_mic(directory: Optional[Path] = None) -> Optional[dict]:
-    """The newest whole ``partial``/``turn`` record from the mic, today's log then yesterday's."""
+    """The newest mic record that moves the floor, today's log then yesterday's."""
     for path in reversed(heard.log_files(directory)[-2:]):
         try:
             with open(path, "rb") as f:
@@ -61,8 +66,12 @@ def _newest_mic(directory: Optional[Path] = None) -> Optional[dict]:
                 rec = json.loads(raw)
             except (ValueError, UnicodeDecodeError):
                 continue
-            if isinstance(rec, dict) and rec.get("kind") in ("partial", "turn") \
-                    and rec.get("source", "mic") == "mic":
+            if not isinstance(rec, dict) or rec.get("source", "mic") != "mic":
+                continue
+            kind = rec.get("kind")
+            if kind == "partial" and str(rec.get("text") or "").strip():
+                return rec
+            if kind == "turn" or (kind == "event" and rec.get("event") in _ENDS):
                 return rec
     return None
 
