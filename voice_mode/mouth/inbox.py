@@ -19,6 +19,10 @@ How a mail maps:
   ``X-Mouth-Priority: next|now`` says so exactly.
 - **a sound:** ``X-Mouth-File`` (path or URL), with optional
   ``X-Mouth-Start`` / ``X-Mouth-End`` seconds.
+- **stacked openers:** ``X-Mouth-When: turn-end`` holds the line until his
+  turn ends; ``X-Mouth-Expires: SECONDS`` drops it unspoken after that. A
+  ``Supersedes:`` mail amends a held line in place, so the latest opener is
+  the one spoken (hold.py).
 - **per-line options:** ``X-Mouth-Voice``, ``X-Mouth-Speed``,
   ``X-Mouth-Device``, ``X-Mouth-Channel`` (left|right|both) or
   ``X-Mouth-Pan``. Anything unset falls back to the watcher's
@@ -133,6 +137,9 @@ def handle(path: Path, d: Optional[Path] = None) -> dict:
     opts = dict(voice=h("X-Mouth-Voice"), speed=_float(h("X-Mouth-Speed")), device=h("X-Mouth-Device"),
                 pan=(h("X-Mouth-Channel") or _float(h("X-Mouth-Pan"))),
                 priority=pri if pri in ("next", "now") else None, d=d)
+    when = (h("X-Mouth-When") or "").lower()
+    hold_opts = dict(hold=when if when == "turn-end" else None,
+                     expires_s=_float(h("X-Mouth-Expires")))
     tag = {"mail_id": mail_id, "mail_from": sender}
     agent = sender.split("@")[0] or None
     session = h("X-Session-From")
@@ -163,7 +170,7 @@ def handle(path: Path, d: Optional[Path] = None) -> dict:
             else:
                 if not text:
                     return {"action": "empty", **tag}
-                item = say(text, extra=tag, **opts)
+                item = say(text, extra=tag, **opts, **hold_opts)
     except (ValueError, TimeoutError) as e:
         return {"action": "error", "error": str(e), **tag}
     _remember(d, mail_id, item["utt"])

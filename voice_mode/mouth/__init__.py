@@ -18,6 +18,8 @@ channel, Cora 20:07 Thu 2026-09-24.
   jumps the queue and ``--now`` interrupts. See DESIGN.md.
 - ``play FILE [--start S] [--end S]`` queues a sound; ``$VOICEMODE_MOUTH_DUCK``
   lowers the DJ's music while the mouth speaks.
+- ``hold="turn-end"`` waits for the end of his turn; ``expires_s`` drops a
+  line that lost its moment (hold.py: stacked openers).
 - ``pan`` puts it in one ear: -1 left, 1 right (``--channel left|right``).
 - Backends are pluggable (``backends.py``): kokoro, clone, silence.
 
@@ -91,7 +93,8 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         backend: Optional[str] = None, device: Optional[str] = None,
         pan=None, log_dir: Optional[Path] = None, wait: bool = False, timeout: float = 300.0,
         priority: Optional[str] = None, d: Optional[Path] = None, spawn: bool = True,
-        extra: Optional[dict] = None) -> dict:
+        extra: Optional[dict] = None, hold: Optional[str] = None,
+        expires_s: Optional[float] = None) -> dict:
     """Queue ``text``; return the queued item (``utt``), or with ``wait`` its ``said`` record.
 
     ``priority``: None (the back of the queue), ``next`` (the front), or ``now``
@@ -100,6 +103,12 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
     """
     if priority not in (None, "next", "now"):
         raise ValueError("mouth: priority is next or now")
+    from .hold import HOLDS
+
+    if hold not in (None, *HOLDS):
+        raise ValueError("mouth: hold is " + " or ".join(HOLDS))
+    if expires_s is not None and expires_s <= 0:
+        raise ValueError("mouth: expires is seconds from now, above 0")
     device = device or os.environ.get("VOICEMODE_MOUTH_DEVICE")
     if not device:
         raise ValueError("mouth: no device. Pass --device NAME or set VOICEMODE_MOUTH_DEVICE "
@@ -125,6 +134,8 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         "log_dir": str(log_dir) if log_dir else os.environ.get("VOICEMODE_MOUTH_LOG_DIR"),
         "wait": wait,
         "priority": priority,
+        "hold": hold,
+        "expires_t": (now + expires_s) if expires_s is not None else None,
         **(extra or {}),
     }
     from . import maillog
@@ -134,7 +145,8 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         # The thread root: the request mail if it came by mail, else this entry.
         queued = maillog.entry({**item, "log_root": item.get("mail_id")}, "queued",
                                {k: item.get(k) for k in ("utt", "text", "voice", "device", "pan",
-                                                         "priority", "agent", "session",
+                                                         "priority", "hold", "expires_t",
+                                                         "agent", "session",
                                                          "requested_ts", "file", "mail_id")})
         item["log_root"] = item.get("mail_id") or queued
     part = q / f".{item['utt']}.part"

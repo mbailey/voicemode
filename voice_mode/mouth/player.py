@@ -41,6 +41,7 @@ from voice_mode import heard
 from . import backends as _backends
 from . import maillog
 from . import output as _output
+from . import hold as _hold
 from .paths import mouth_dir
 
 
@@ -329,6 +330,35 @@ def _oldest(q: Path) -> Optional[Path]:
     return files[0] if files else None
 
 
+def _next(d: Path, q: Path) -> tuple[Optional[Path], bool]:
+    """The first line that may play now, and whether any line is held back.
+
+    A held line (hold.py) keeps its place and is skipped while he talks; a
+    line past its ``expires_t`` is dropped with ``said reason=expired``.
+    Lines with neither are checked by name only, as before.
+    """
+    held = False
+    for f in sorted(q.glob("*.json")):
+        try:
+            item = json.loads(f.read_text())
+        except (FileNotFoundError, ValueError):
+            continue
+        if not item.get("hold") and item.get("expires_t") is None:
+            return f, held
+        verdict = _hold.check(item)
+        if verdict == "play":
+            return f, held
+        if verdict == "expire":
+            try:
+                f.unlink()
+            except FileNotFoundError:
+                continue
+            _done(d, item, said_unplayed(item, "expired"))
+            continue
+        held = True
+    return None, held
+
+
 def _handle_stop(d: Path) -> None:
     """After a cut or while idle: flush what the stop covers, then retire it."""
     stop = _read_stop(d)
@@ -395,7 +425,15 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
 
         try:
             while True:
-                f = _oldest(q)
+                f, held = _next(d, q)
+                if f is None and held:
+                    # Lines wait for the end of his turn: keep their synthesis
+                    # warm, honour a stop, and do not idle out.
+                    _handle_stop(d)
+                    prefetch()
+                    idle_since = time.monotonic()
+                    time.sleep(poll_s)
+                    continue
                 if f is None:
                     _duck_off()
                     with guard:
