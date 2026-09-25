@@ -57,7 +57,9 @@ def test_check_play_wait_expire(ears):
     assert hold.check({}) == "play"                     # an ordinary line never waits
     assert hold.check({"hold": "turn-end", "expires_t": time.time() - 1}) == "expire"
     ears("turn")
-    assert hold.check({"hold": "turn-end"}) == "play"
+    assert hold.check({"hold": "turn-end"}) == "wait"          # the beat: he may go on
+    assert hold.check({"hold": "turn-end", "priority": "now"}) == "play"   # now skips it
+    assert hold.check({"hold": "turn-end"}, now=time.time() + hold.GRACE_S + 0.1) == "play"
 
 
 def test_held_opener_speaks_only_after_his_turn_ends(box, ears):
@@ -73,7 +75,8 @@ def test_held_opener_speaks_only_after_his_turn_ends(box, ears):
     assert [x["utt"] for x in saying] == [item["utt"]]
     assert saying[0].get("hold") == "turn-end", "the log should say the line was held"
     started = datetime.fromisoformat(saying[0]["ts"]).timestamp()
-    assert started - t_end < 0.5, f"slow release: {started - t_end:.2f}s"
+    gap = started - t_end
+    assert hold.GRACE_S <= gap < hold.GRACE_S + 0.5, f"release {gap:.2f}s after his turn"
 
 
 def test_a_better_opener_supersedes_the_held_one(box, ears):
@@ -154,3 +157,91 @@ def test_a_partial_with_no_words_is_not_speech(ears):
     ears("turn")
     ears("partial", text="  ")
     assert hold.floor() == "free"
+
+
+def test_the_beat_keeps_holding_if_he_starts_again(box, ears):
+    ears("partial")
+    mouth.say("held", hold="turn-end", d=box.d, spawn=False)
+    th = run_player(box.d, idle=0.3)
+    time.sleep(0.3)
+    ears("turn")                                       # a pause...
+    time.sleep(0.3)
+    ears("partial")                                    # ...and he goes on, inside the beat
+    time.sleep(1.0)
+    assert not [x for x in lines(box.logs) if x["kind"] == "saying"], "jumped in on a pause"
+    ears("turn")
+    th.join(8)
+    assert [x["text"] for x in lines(box.logs) if x["kind"] == "saying"] == ["held"]
+
+
+def test_now_skips_the_beat(box, ears):
+    ears("partial")
+    mouth.say("urgent", hold="turn-end", priority="now", d=box.d, spawn=False)
+    th = run_player(box.d, idle=0.3)
+    time.sleep(0.3)
+    t_end = time.time()
+    ears("turn")
+    th.join(8)
+    saying = [x for x in lines(box.logs) if x["kind"] == "saying"]
+    assert datetime.fromisoformat(saying[0]["ts"]).timestamp() - t_end < 0.5
+
+
+LONG = "one two three four five six seven eight nine ten " * 6   # ~20 s on the silence backend
+MID = "one two three four five six seven eight nine ten " * 2    # ~7 s: long enough to talk over
+
+
+def _saying(box, text=None):
+    return [x for x in lines(box.logs) if x["kind"] == "saying" and (text is None or x["text"] == text)]
+
+
+def _wait_for(pred, s=5.0):
+    end = time.time() + s
+    while time.time() < end:
+        if pred():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_his_words_cut_the_line_and_the_stale_queue(box, ears):
+    mouth.say(LONG, d=box.d, spawn=False)
+    stale = mouth.say("queued before he spoke", d=box.d, spawn=False)
+    th = run_player(box.d, idle=0.5)
+    assert _wait_for(lambda: _saying(box, LONG)), "the long line never started"
+    time.sleep(0.2)
+    ears("partial", text="hang on, wait")              # his words, mid-line
+    time.sleep(0.2)
+    fresh = mouth.say("an opener for what he just said", hold="turn-end", d=box.d, spawn=False)
+    ears("turn", text="hang on, wait")
+    th.join(10)
+    said = {x["utt"]: x for x in lines(box.logs) if x["kind"] == "said"}
+    first = [x for x in said.values() if x.get("reason") == "barge-in" and x.get("cut")]
+    assert first, f"the line was not cut by his words: {[(x.get('reason'), x.get('cut')) for x in said.values()]}"
+    assert said[stale["utt"]]["reason"] == "barge-in", "a line queued before his words was not flushed"
+    assert said[fresh["utt"]]["reason"] == "done", "the opener queued after his words was lost"
+
+
+def test_the_mouth_heard_through_the_mic_is_not_a_barge(box, ears):
+    mouth.say(MID, d=box.d, spawn=False)
+    th = run_player(box.d, idle=0.3)
+    assert _wait_for(lambda: _saying(box, MID))
+    time.sleep(0.2)
+    ears("partial", text="four five six seven")        # its own words, coming back
+    th.join(15)
+    assert [x.get("reason") for x in lines(box.logs) if x["kind"] == "said"] == ["done"]
+
+
+def test_barge_can_be_switched_off(box, ears, monkeypatch):
+    monkeypatch.setenv("VOICEMODE_MOUTH_BARGE", "off")
+    mouth.say(MID, d=box.d, spawn=False)
+    th = run_player(box.d, idle=0.3)
+    assert _wait_for(lambda: _saying(box, MID))
+    ears("partial", text="hang on, wait")
+    th.join(15)
+    assert [x.get("reason") for x in lines(box.logs) if x["kind"] == "said"] == ["done"]
+
+
+def test_is_echo():
+    assert hold.is_echo("four five six", LONG)
+    assert not hold.is_echo("hang on, wait", LONG)
+    assert not hold.is_echo("", LONG)

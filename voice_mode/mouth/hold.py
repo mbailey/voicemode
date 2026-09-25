@@ -21,8 +21,10 @@ lands 1.46 s after the last ``partial`` at p50, 3.72 s at p99, 7.8 s at
 worst; partials inside a turn are 3.39 s apart at p99. So the ``turn``
 record is the release, and ``idle_s`` (8 s) is only the safety net.
 
-An opener that arrives after his turn has ended plays at once: he is
-waiting. One that arrives while he talks again waits for that turn.
+An opener that arrives after his turn has ended plays once ``grace_s``
+(0.7 s) has passed since it ended, so he can jump back in first; a ``now``
+line skips the beat. Lines queued behind a held one are never blocked.
+``barge()`` is the other half: his words during a line cut it. One that arrives while he talks again waits for that turn.
 ``expires_s`` drops a line that has lost its moment: its ``said`` says
 ``expired`` and it is never spoken.
 """
@@ -40,6 +42,7 @@ from voice_mode import heard
 
 HOLDS = ("turn-end",)
 IDLE_S = 8.0
+GRACE_S = 0.7   # INFERENCE (Cora, 01:43): a beat, not yet measured
 _TAIL = 64 * 1024
 # Events that end speech without a turn record: a blip with no words
 # ("no text recognised", ~0.3 s; 46 on 25-26 Sep), or the ears stopping.
@@ -76,23 +79,40 @@ def _newest_mic(directory: Optional[Path] = None) -> Optional[dict]:
     return None
 
 
+def _ts(rec: dict) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(rec["ts"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _look(directory: Optional[Path] = None, now: Optional[float] = None,
+          max_age_s: float = 0.1) -> tuple[Optional[dict], float]:
+    """The newest floor-moving mic record, and ``now``; cached for ``max_age_s``."""
+    now = time.time() if now is None else now
+    if directory is None and _cache["v"] is not None and now - _cache["t"] < max_age_s:
+        return _cache["v"][0], now
+    rec = _newest_mic(directory)
+    if directory is None:
+        _cache.update(t=now, v=(rec,))
+    return rec, now
+
+
 def floor(directory: Optional[Path] = None, now: Optional[float] = None,
           max_age_s: float = 0.1) -> str:
     """``speaking`` or ``free`` (see the module doc). Cached for ``max_age_s``."""
-    now = time.time() if now is None else now
-    if directory is None and _cache["v"] is not None and now - _cache["t"] < max_age_s:
-        return _cache["v"]
-    rec = _newest_mic(directory)
-    v = "free"
+    rec, now = _look(directory, now, max_age_s)
     if rec is not None and rec.get("kind") == "partial":
-        try:
-            age = now - datetime.fromisoformat(rec["ts"]).timestamp()
-        except (KeyError, TypeError, ValueError):
-            age = 0.0
-        v = "speaking" if age < idle_s() else "free"
-    if directory is None:
-        _cache.update(t=now, v=v)
-    return v
+        t = _ts(rec)
+        age = now - t if t is not None else 0.0
+        return "speaking" if age < idle_s() else "free"
+    return "free"
+
+
+def grace_s() -> float:
+    """The beat a held line waits after his turn ends (Mike, 01:40 Sat: "let me
+    jump in first"). If he starts again inside it, the line keeps holding."""
+    return float(os.environ.get("VOICEMODE_MOUTH_HOLD_GRACE_S", GRACE_S))
 
 
 def check(item: dict, now: Optional[float] = None, directory: Optional[Path] = None) -> str:
@@ -101,6 +121,49 @@ def check(item: dict, now: Optional[float] = None, directory: Optional[Path] = N
     exp = item.get("expires_t")
     if exp is not None and now >= float(exp):
         return "expire"
-    if item.get("hold") == "turn-end" and floor(directory, now) == "speaking":
-        return "wait"
+    if item.get("hold") == "turn-end":
+        if floor(directory, now) == "speaking":
+            return "wait"
+        rec, _ = _look(directory, now)
+        t = _ts(rec) if rec is not None else None
+        # The beat: a turn that ended less than grace_s ago might not be over.
+        # ``now`` priority skips it (urgent lines do not wait a beat).
+        if t is not None and rec.get("kind") != "partial" and item.get("priority") != "now" \
+                and now - t < grace_s():
+            return "wait"
     return "play"
+
+
+# -- barge-in on words (Mike, 01:42 Sat 2026-09-26) ---------------------------
+# Stop the mouth when the ears log a PARTIAL - whisper decoded words - not on
+# voice activity, so road noise that trips the detector never cuts a line. A
+# partial that is the line itself coming back through the mic is not a barge.
+ECHO_SHARE = 0.6
+
+
+def barge_on() -> bool:
+    return os.environ.get("VOICEMODE_MOUTH_BARGE", "partial").lower() not in ("off", "0", "no")
+
+
+def _words(text: str) -> list:
+    return [w for w in "".join(c.lower() if c.isalnum() else " " for c in text).split() if w]
+
+
+def is_echo(partial: str, line: str) -> bool:
+    """Most of the partial's words are the line's own: the mic heard the mouth."""
+    p, have = _words(partial), set(_words(line))
+    return bool(p) and sum(w in have for w in p) / len(p) >= ECHO_SHARE
+
+
+def barge(since_t: float, line_text: str, directory: Optional[Path] = None,
+          now: Optional[float] = None) -> Optional[dict]:
+    """His words since ``since_t`` (the line's first frame), or None."""
+    if not barge_on():
+        return None
+    rec, _ = _look(directory, now)
+    if rec is None or rec.get("kind") != "partial":
+        return None
+    t = _ts(rec)
+    if t is None or t <= since_t or is_echo(str(rec.get("text") or ""), line_text):
+        return None
+    return rec

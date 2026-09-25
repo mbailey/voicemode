@@ -267,8 +267,17 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
     reason, detail = "done", None
     started = False
 
+    first_frame_t = None
+
     def check_stop() -> None:
         nonlocal reason
+        if first_frame_t is not None:
+            words = _hold.barge(first_frame_t, text)
+            if words is not None:
+                # His words cut the line, and every line queued before them
+                # (stale now); an opener queued after them survives.
+                _write_stop(d, {"t": _hold._ts(words) or time.time(), "reason": "barge-in",
+                                "flush": True, "heard": str(words.get("text") or "")[:120]})
         stop = _read_stop(d)
         if not stop:
             return
@@ -287,6 +296,7 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
             for i in range(0, len(block), step):
                 check_stop()
                 if not started:
+                    first_frame_t = time.time()
                     _duck_on()
                     _saying(item, text, **_common(item), device=getattr(out, "name", item["device"]),
                                  speed=speed, gen_s=synth.gen_s, prefetched=prefetched or None,
@@ -358,6 +368,13 @@ def _next(d: Path, q: Path) -> tuple[Optional[Path], bool]:
             continue
         held = True
     return None, held
+
+
+def _write_stop(d: Path, rec: dict) -> None:
+    """The player's own stop (barge-in): the same file `mouth stop` writes."""
+    part = d / f".stop.player.{os.getpid()}.part"
+    part.write_text(json.dumps(rec))
+    part.rename(d / "stop")
 
 
 def _handle_stop(d: Path) -> None:
