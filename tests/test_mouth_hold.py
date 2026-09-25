@@ -57,9 +57,16 @@ def test_check_play_wait_expire(ears):
     assert hold.check({}) == "play"                     # an ordinary line never waits
     assert hold.check({"hold": "turn-end", "expires_t": time.time() - 1}) == "expire"
     ears("turn")
-    assert hold.check({"hold": "turn-end"}) == "wait"          # the beat: he may go on
+    assert hold.check({"hold": "turn-end"}) == "play"          # beat 0 (Mike, 01:59)
+
+
+def test_a_beat_when_one_is_set(ears, monkeypatch):
+    monkeypatch.setenv("VOICEMODE_MOUTH_HOLD_GRACE_S", "0.7")
+    ears("partial")
+    ears("turn")
+    assert hold.check({"hold": "turn-end"}) == "wait"          # he may go on
     assert hold.check({"hold": "turn-end", "priority": "now"}) == "play"   # now skips it
-    assert hold.check({"hold": "turn-end"}, now=time.time() + hold.GRACE_S + 0.1) == "play"
+    assert hold.check({"hold": "turn-end"}, now=time.time() + 0.8) == "play"
 
 
 def test_held_opener_speaks_only_after_his_turn_ends(box, ears):
@@ -76,7 +83,7 @@ def test_held_opener_speaks_only_after_his_turn_ends(box, ears):
     assert saying[0].get("hold") == "turn-end", "the log should say the line was held"
     started = datetime.fromisoformat(saying[0]["ts"]).timestamp()
     gap = started - t_end
-    assert hold.GRACE_S <= gap < hold.GRACE_S + 0.5, f"release {gap:.2f}s after his turn"
+    assert gap < 0.5, f"release {gap:.2f}s after his turn"
 
 
 def test_a_better_opener_supersedes_the_held_one(box, ears):
@@ -159,7 +166,8 @@ def test_a_partial_with_no_words_is_not_speech(ears):
     assert hold.floor() == "free"
 
 
-def test_the_beat_keeps_holding_if_he_starts_again(box, ears):
+def test_the_beat_keeps_holding_if_he_starts_again(box, ears, monkeypatch):
+    monkeypatch.setenv("VOICEMODE_MOUTH_HOLD_GRACE_S", "0.7")
     ears("partial")
     mouth.say("held", hold="turn-end", d=box.d, spawn=False)
     th = run_player(box.d, idle=0.3)
@@ -174,7 +182,8 @@ def test_the_beat_keeps_holding_if_he_starts_again(box, ears):
     assert [x["text"] for x in lines(box.logs) if x["kind"] == "saying"] == ["held"]
 
 
-def test_now_skips_the_beat(box, ears):
+def test_now_skips_the_beat(box, ears, monkeypatch):
+    monkeypatch.setenv("VOICEMODE_MOUTH_HOLD_GRACE_S", "0.7")
     ears("partial")
     mouth.say("urgent", hold="turn-end", priority="now", d=box.d, spawn=False)
     th = run_player(box.d, idle=0.3)

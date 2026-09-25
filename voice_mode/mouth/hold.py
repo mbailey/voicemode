@@ -22,8 +22,9 @@ worst; partials inside a turn are 3.39 s apart at p99. So the ``turn``
 record is the release, and ``idle_s`` (8 s) is only the safety net.
 
 An opener that arrives after his turn has ended plays once ``grace_s``
-(0.7 s) has passed since it ended, so he can jump back in first; a ``now``
-line skips the beat. Lines queued behind a held one are never blocked.
+has passed since it ended (0 by default, Mike 01:59: the ears' 2 s silence
+rule is the beat; $VOICEMODE_MOUTH_HOLD_GRACE_S sets one); a ``now`` line
+skips it. Lines queued behind a held one are never blocked.
 ``barge()`` is the other half: his words during a line cut it. One that arrives while he talks again waits for that turn.
 ``expires_s`` drops a line that has lost its moment: its ``said`` says
 ``expired`` and it is never spoken.
@@ -42,7 +43,8 @@ from voice_mode import heard
 
 HOLDS = ("turn-end",)
 IDLE_S = 8.0
-GRACE_S = 0.7   # INFERENCE (Cora, 01:43): a beat, not yet measured
+GRACE_S = 0.0   # Mike, voice 01:59:19 Sat: "yes, beat 0" - the ears' 2 s silence
+                # rule already IS the beat; 0.7 s on top measured +0.7 s per opener
 _TAIL = 64 * 1024
 # Events that end speech without a turn record: a blip with no words
 # ("no text recognised", ~0.3 s; 46 on 25-26 Sep), or the ears stopping.
