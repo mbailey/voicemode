@@ -138,7 +138,8 @@ def check(item: dict, now: Optional[float] = None, directory: Optional[Path] = N
 # Stop the mouth when the ears log a PARTIAL - whisper decoded words - not on
 # voice activity, so road noise that trips the detector never cuts a line. A
 # partial that is the line itself coming back through the mic is not a barge.
-ECHO_SHARE = 0.6
+ECHO_RUN = 0.7     # share of a partial that must be ONE run of the line's words
+BACK_S, AHEAD_S = 8.0, 3.0   # the stretch of the line the mic could be hearing now
 
 
 def barge_on() -> bool:
@@ -149,10 +150,37 @@ def _words(text: str) -> list:
     return [w for w in "".join(c.lower() if c.isalnum() else " " for c in text).split() if w]
 
 
+def near(text: str, played_s: float, est_dur_s: float) -> str:
+    """The part of a line around the playhead: what the mic could be hearing."""
+    if not est_dur_s or est_dur_s <= 0:
+        return text
+    n = len(text)
+    a = int(n * max(0.0, (played_s - BACK_S) / est_dur_s))
+    b = int(n * min(1.0, (played_s + AHEAD_S) / est_dur_s))
+    return text[a:max(b, a + 1)]
+
+
 def is_echo(partial: str, line: str) -> bool:
-    """Most of the partial's words are the line's own: the mic heard the mouth."""
-    p, have = _words(partial), set(_words(line))
-    return bool(p) and sum(w in have for w in p) / len(p) >= ECHO_SHARE
+    """The mic heard the mouth: most of the partial is ONE run of the line's words.
+
+    Not a bag of words (Cora, 01:52 Sat, measured): against a whole 36 s line
+    every common word is "in" it, so "actually, I'm..." scored 3/3 as echo and
+    his barge-in took 7.9 s. A run keeps the words' order, and ``near()``
+    keeps it to what is being played now.
+    """
+    p, l = _words(partial), _words(line)
+    if not p or not l:
+        return False
+    best = 0
+    for i in range(len(l)):
+        for j in range(len(p)):
+            k = 0
+            while i + k < len(l) and j + k < len(p) and l[i + k] == p[j + k]:
+                k += 1
+            best = max(best, k)
+    if len(p) == 1:
+        return best == 1
+    return best >= 2 and best / len(p) >= ECHO_RUN
 
 
 def barge(since_t: float, line_text: str, directory: Optional[Path] = None,

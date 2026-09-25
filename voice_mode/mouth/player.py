@@ -272,7 +272,8 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
     def check_stop() -> None:
         nonlocal reason
         if first_frame_t is not None:
-            words = _hold.barge(first_frame_t, text)
+            est = max(synth.frames / sr, len(text) / 15.0 / (speed or 1.0))
+            words = _hold.barge(first_frame_t, _hold.near(text, written / sr, est))
             if words is not None:
                 # His words cut the line, and every line queued before them
                 # (stale now); an opener queued after them survives.

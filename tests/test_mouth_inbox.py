@@ -30,6 +30,9 @@ def box(tmp_path, monkeypatch):
     monkeypatch.setenv("VOICEMODE_MOUTH_LOG_DIR", str(logs))
     monkeypatch.setenv("VOICEMODE_MOUTH_DEVICE", "null")
     monkeypatch.setenv("VOICEMODE_MOUTH_BACKEND", "silence")
+    # A player spawned for a test's own queue must not idle 600 s after it
+    # (two were left running at 01:51 Sat).
+    monkeypatch.setenv("VOICEMODE_MOUTH_IDLE_S", "1")
     monkeypatch.delenv("VOICEMODE_MOUTH_MAIL_ALLOW", raising=False)
     return SimpleNamespace(d=d, logs=logs, mail=mail, n=[0])
 

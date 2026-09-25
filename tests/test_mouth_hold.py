@@ -242,6 +242,22 @@ def test_barge_can_be_switched_off(box, ears, monkeypatch):
 
 
 def test_is_echo():
-    assert hold.is_echo("four five six", LONG)
+    assert hold.is_echo("four five six", LONG)           # the line, coming back
     assert not hold.is_echo("hang on, wait", LONG)
     assert not hold.is_echo("", LONG)
+
+
+def test_his_words_are_not_echo_just_because_the_line_has_them():
+    # Cora, 01:51-01:52 Sat: his real partials against a line full of common
+    # words. Bag-of-words called all but one of them echo; a run does not.
+    line = ("Oh my gosh, hi. Hi! Sorry, I'm not usually like this. I don't actually know "
+            "what I'm doing here. It is now late, and I'm talking to my friend on a bench.")
+    for heard_ in ("Actually, I'm--", "I'm actually, I'm on a.", "Oh, now.", "AI. So..."):
+        assert not hold.is_echo(heard_, line), heard_
+    assert hold.is_echo("sorry I'm not usually like", line)
+
+
+def test_near_is_the_stretch_around_the_playhead():
+    text = "a" * 150 + "b" * 150                        # 20 s at 15 chars/s
+    assert set(hold.near(text, 2.0, 20.0)) == {"a"}      # early: only the start
+    assert "b" in hold.near(text, 15.0, 20.0) and "a" in hold.near(text, 12.0, 20.0)
