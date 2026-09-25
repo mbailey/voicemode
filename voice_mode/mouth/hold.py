@@ -148,6 +148,21 @@ def barge_on() -> bool:
     return os.environ.get("VOICEMODE_MOUTH_BARGE", "partial").lower() not in ("off", "0", "no")
 
 
+#: Barge-in only where the mic cannot hear the mouth (Cora, 02:02 Sat): on the
+#: MacBook speakers the mic hears the line GARBLED ("the echo canceler faced--
+#: time use" for "the echo canceller FaceTime uses"), no word match survives
+#: that, and two lines cut themselves. Headphones only, until a real echo
+#: canceller shares the output as its reference (/ASKS 4760).
+#: $VOICEMODE_MOUTH_BARGE_DEVICES is a regex over the output device's name.
+BARGE_DEVICES = r"airpods|headphone|headset|buds|beats"
+
+
+def barge_device(name: Optional[str]) -> bool:
+    import re
+    pat = os.environ.get("VOICEMODE_MOUTH_BARGE_DEVICES", BARGE_DEVICES)
+    return bool(name) and re.search(pat, str(name), re.I) is not None
+
+
 def _words(text: str) -> list:
     return [w for w in "".join(c.lower() if c.isalnum() else " " for c in text).split() if w]
 

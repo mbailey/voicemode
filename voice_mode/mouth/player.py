@@ -268,10 +268,11 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
     started = False
 
     first_frame_t = None
+    barge_here = _hold.barge_device(getattr(out, "name", item["device"]))
 
     def check_stop() -> None:
         nonlocal reason
-        if first_frame_t is not None:
+        if first_frame_t is not None and barge_here:
             est = max(synth.frames / sr, len(text) / 15.0 / (speed or 1.0))
             words = _hold.barge(first_frame_t, _hold.near(text, written / sr, est))
             if words is not None:

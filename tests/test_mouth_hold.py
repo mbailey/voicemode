@@ -212,7 +212,13 @@ def _wait_for(pred, s=5.0):
     return False
 
 
-def test_his_words_cut_the_line_and_the_stale_queue(box, ears):
+@pytest.fixture
+def headphones(monkeypatch):
+    # The null device stands in for headphones in these tests.
+    monkeypatch.setenv("VOICEMODE_MOUTH_BARGE_DEVICES", "null")
+
+
+def test_his_words_cut_the_line_and_the_stale_queue(box, ears, headphones):
     mouth.say(LONG, d=box.d, spawn=False)
     stale = mouth.say("queued before he spoke", d=box.d, spawn=False)
     th = run_player(box.d, idle=0.5)
@@ -230,7 +236,7 @@ def test_his_words_cut_the_line_and_the_stale_queue(box, ears):
     assert said[fresh["utt"]]["reason"] == "done", "the opener queued after his words was lost"
 
 
-def test_the_mouth_heard_through_the_mic_is_not_a_barge(box, ears):
+def test_the_mouth_heard_through_the_mic_is_not_a_barge(box, ears, headphones):
     mouth.say(MID, d=box.d, spawn=False)
     th = run_player(box.d, idle=0.3)
     assert _wait_for(lambda: _saying(box, MID))
@@ -240,7 +246,7 @@ def test_the_mouth_heard_through_the_mic_is_not_a_barge(box, ears):
     assert [x.get("reason") for x in lines(box.logs) if x["kind"] == "said"] == ["done"]
 
 
-def test_barge_can_be_switched_off(box, ears, monkeypatch):
+def test_barge_can_be_switched_off(box, ears, headphones, monkeypatch):
     monkeypatch.setenv("VOICEMODE_MOUTH_BARGE", "off")
     mouth.say(MID, d=box.d, spawn=False)
     th = run_player(box.d, idle=0.3)
@@ -270,3 +276,19 @@ def test_near_is_the_stretch_around_the_playhead():
     text = "a" * 150 + "b" * 150                        # 20 s at 15 chars/s
     assert set(hold.near(text, 2.0, 20.0)) == {"a"}      # early: only the start
     assert "b" in hold.near(text, 15.0, 20.0) and "a" in hold.near(text, 12.0, 20.0)
+
+
+def test_no_barge_on_speakers(box, ears):
+    # default device list: 'null' is not headphones, so his words do not cut
+    mouth.say(MID, d=box.d, spawn=False)
+    th = run_player(box.d, idle=0.3)
+    assert _wait_for(lambda: _saying(box, MID))
+    ears("partial", text="hang on, wait")
+    th.join(15)
+    assert [x.get("reason") for x in lines(box.logs) if x["kind"] == "said"] == ["done"]
+
+
+def test_barge_devices():
+    assert hold.barge_device("airpods") and hold.barge_device("Mike's AirPods Pro")
+    assert not hold.barge_device("MacBook Pro Speakers")
+    assert not hold.barge_device(None)
