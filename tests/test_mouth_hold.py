@@ -71,6 +71,7 @@ def test_held_opener_speaks_only_after_his_turn_ends(box, ears):
     th.join(8)
     saying = [x for x in lines(box.logs) if x["kind"] == "saying"]
     assert [x["utt"] for x in saying] == [item["utt"]]
+    assert saying[0].get("hold") == "turn-end", "the log should say the line was held"
     started = datetime.fromisoformat(saying[0]["ts"]).timestamp()
     assert started - t_end < 0.5, f"slow release: {started - t_end:.2f}s"
 
