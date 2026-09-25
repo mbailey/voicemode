@@ -355,3 +355,11 @@ def test_a_cut_line_comes_back_after_his_turn(box, ears, headphones):
     assert len(said) == 2 and said[1]["text"].startswith("This part") and "comes back" in said[1]["text"]
     assert said[1].get("agent") == "cora", "the resume must keep the cut line's agent"
     assert said[1].get("hold") == "turn-end"
+
+
+def test_interest_rides_on_the_saying_record(box, ears):
+    mouth.say("Which of the two?", interest="high", d=box.d, spawn=False)
+    run_player(box.d, idle=0.3).join(8)
+    assert [x.get("interest") for x in lines(box.logs) if x["kind"] == "saying"] == ["high"]
+    with pytest.raises(ValueError):
+        mouth.say("x", interest="some", d=box.d, spawn=False)

@@ -115,6 +115,7 @@ def _common(item: dict) -> dict:
             "requested_ts": item.get("requested_ts"), "directory": _log_dir(item),
             "file": item.get("file"), "start": item.get("start"), "end": item.get("end"),
             "mail_id": item.get("mail_id"), "hold": item.get("hold"),
+            "interest": item.get("interest"), "resume_of": item.get("resume_of"),
             "expires_t": item.get("expires_t")}
 
 

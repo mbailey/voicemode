@@ -74,6 +74,13 @@ def ensure_player(d: Optional[Path] = None) -> bool:
 
 PAN_NAMES = {"left": -1.0, "right": 1.0, "both": None}
 
+#: How much the speaker wants his reply (Mike, voice 02:42-02:45 Sat, via Cora:
+#: "speaking subscribes you ... there should be levels of your interest"):
+#: high - wake me on his partials as they pile up (I asked, "lay it on me");
+#: normal - wake me on his turn; low - signed off; zero - "speak and leave".
+#: Carried on saying/said so a waiter (heard-first reply:AGENT) can read it.
+INTERESTS = ("high", "normal", "low", "zero")
+
 
 def pan_value(pan) -> Optional[float]:
     """A pan as given (-1..1, 'left', 'right', 'both'); None asks $VOICEMODE_MOUTH_PAN."""
@@ -94,7 +101,7 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         pan=None, log_dir: Optional[Path] = None, wait: bool = False, timeout: float = 300.0,
         priority: Optional[str] = None, d: Optional[Path] = None, spawn: bool = True,
         extra: Optional[dict] = None, hold: Optional[str] = None,
-        expires_s: Optional[float] = None) -> dict:
+        expires_s: Optional[float] = None, interest: Optional[str] = None) -> dict:
     """Queue ``text``; return the queued item (``utt``), or with ``wait`` its ``said`` record.
 
     ``priority``: None (the back of the queue), ``next`` (the front), or ``now``
@@ -109,6 +116,8 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         raise ValueError("mouth: hold is " + " or ".join(HOLDS))
     if expires_s is not None and expires_s <= 0:
         raise ValueError("mouth: expires is seconds from now, above 0")
+    if interest not in (None, *INTERESTS):
+        raise ValueError("mouth: interest is " + ", ".join(INTERESTS))
     device = device or os.environ.get("VOICEMODE_MOUTH_DEVICE")
     if not device:
         raise ValueError("mouth: no device. Pass --device NAME or set VOICEMODE_MOUTH_DEVICE "
@@ -135,6 +144,7 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
         "wait": wait,
         "priority": priority,
         "hold": hold,
+        "interest": interest,
         "expires_t": (now + expires_s) if expires_s is not None else None,
         **(extra or {}),
     }

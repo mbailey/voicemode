@@ -27,6 +27,9 @@ def main(argv=None) -> int:
     s.add_argument("--wait", action="store_true", help="block until said; print it")
     s.add_argument("--hold", choices=["turn-end"],
                    help="wait for the end of his turn (the ears' heard log), then speak")
+    s.add_argument("--interest", choices=["high", "normal", "low", "zero"],
+                   help="how much you want his reply: high (wake on his partials), normal (his "
+                        "turn), low, zero (speak and leave); read by heard-first reply:AGENT")
     s.add_argument("--expires", type=float, metavar="S",
                    help="drop the line, unspoken, if it has not started S seconds from now")
     pri = s.add_mutually_exclusive_group()
@@ -74,7 +77,7 @@ def main(argv=None) -> int:
         try:
             r = say(text.strip(), voice=a.voice, speed=a.speed, backend=a.backend, device=a.device,
                     pan=pan, log_dir=a.log_dir, wait=a.wait, priority=a.priority,
-                    hold=a.hold, expires_s=a.expires)
+                    hold=a.hold, expires_s=a.expires, interest=a.interest)
         except (ValueError, TimeoutError) as e:
             print(str(e), file=sys.stderr)
             return 2

@@ -138,8 +138,10 @@ def handle(path: Path, d: Optional[Path] = None) -> dict:
                 pan=(h("X-Mouth-Channel") or _float(h("X-Mouth-Pan"))),
                 priority=pri if pri in ("next", "now") else None, d=d)
     when = (h("X-Mouth-When") or "").lower()
+    want = (h("X-Mouth-Interest") or "").lower()
     hold_opts = dict(hold=when if when == "turn-end" else None,
-                     expires_s=_float(h("X-Mouth-Expires")))
+                     expires_s=_float(h("X-Mouth-Expires")),
+                     interest=want if want in ("high", "normal", "low", "zero") else None)
     tag = {"mail_id": mail_id, "mail_from": sender}
     agent = sender.split("@")[0] or None
     session = h("X-Session-From")
