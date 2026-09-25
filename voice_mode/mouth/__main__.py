@@ -1,4 +1,4 @@
-"""mouth CLI: say, stop, status, devices, serve.  ``python -m voice_mode.mouth --help``"""
+"""mouth CLI: say, stop, status, devices, voices, serve.  ``python -m voice_mode.mouth --help``"""
 
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ def main(argv=None) -> int:
 
     s = sub.add_parser("say", help="queue TEXT ('-' reads stdin); prints the utterance id")
     s.add_argument("text", nargs="+")
-    s.add_argument("--voice", help="a clone (pip, laurie) or a kokoro voice (af_sky); $VOICEMODE_MOUTH_VOICE")
+    s.add_argument("--voice", help="a clone (pip, laurie) or a kokoro voice (af_sky); else the "
+                   "settings file's voice, $VOICEMODE_MOUTH_VOICE, af_sky (`mouth voices`)")
     s.add_argument("--speed", type=float)
     s.add_argument("--backend", choices=["auto", "kokoro", "clone", "silence"])
     s.add_argument("--device", help="exact output device name, 'null', or 'default'; $VOICEMODE_MOUTH_DEVICE")
@@ -67,6 +68,7 @@ def main(argv=None) -> int:
     ml.add_argument("--box", type=Path, help="the maildir (default ~/.mail/agents/mouth)")
     ml.add_argument("--once", action="store_true", help="one pass over new/, then exit")
     sub.add_parser("devices", help="output device names, exactly as --device takes them")
+    sub.add_parser("voices", help="JSON: the default voice, where it came from, and every voice")
     v = sub.add_parser("serve", help="run the player in the foreground (say starts one for you)")
     v.add_argument("--idle", type=float, help="exit after this long with nothing queued (default 600 s)")
 
@@ -121,6 +123,11 @@ def main(argv=None) -> int:
         from .output import output_names
 
         print("\n".join(output_names(rescan=False)))
+        return 0
+    if a.cmd == "voices":
+        from .voices import voices
+
+        print(json.dumps(voices()))
         return 0
     if a.cmd == "serve":
         import signal

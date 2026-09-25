@@ -43,6 +43,7 @@ from typing import Optional
 from voice_mode import heard
 
 from .paths import mouth_dir
+from .voices import default_voice
 
 
 def _player_running(d: Path) -> bool:
@@ -131,7 +132,7 @@ def say(text: str, *, voice: Optional[str] = None, speed: Optional[float] = None
     item = {
         "utt": uuid.uuid4().hex[:12],
         "text": text,
-        "voice": voice or os.environ.get("VOICEMODE_MOUTH_VOICE") or "af_sky",
+        "voice": voice or default_voice(d)[0],
         "speed": speed,
         "backend": backend or os.environ.get("VOICEMODE_MOUTH_BACKEND") or "auto",
         "device": device,
