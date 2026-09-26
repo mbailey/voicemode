@@ -57,22 +57,34 @@ _TAIL = 64 * 1024
 # ("no text recognised", ~0.3 s; 46 on 25-26 Sep), or the ears stopping.
 _ENDS = ("turn-discarded", "listen-stopped")
 _cache: dict = {"t": 0.0, "v": None}  # v = (newest floor record, turn start t, last end t)
+_caches: dict = {("mic",): _cache}     # one per set of ears (sources_for)
+
+MIC = ("mic",)
+
+
+def sources_for(device: Optional[str]) -> tuple:
+    """Whose ears decide the floor for a line on ``device``. A line into a call
+    (``call:<N>``) listens to the call as well as the room: on the phone, his
+    words arrive as ``source: "call"`` (kin M8). Every other device keeps the
+    room mic alone, as before - someone else's call must not hold his AirPods."""
+    d = str(device or "")
+    return ("mic", "call") if d == "call" or d.startswith("call:") else MIC
 
 
 def idle_s() -> float:
     return float(os.environ.get("VOICEMODE_MOUTH_HOLD_IDLE_S", IDLE_S))
 
 
-def _newest_mic(directory: Optional[Path] = None) -> Optional[dict]:
+def _newest_mic(directory: Optional[Path] = None, sources: tuple = MIC) -> Optional[dict]:
     """The newest mic record that moves the floor, today's log then yesterday's."""
-    return _scan(directory)[0]
+    return _scan(directory, sources)[0]
 
 
 def _is_end(rec: dict) -> bool:
     return rec.get("kind") == "turn" or (rec.get("kind") == "event" and rec.get("event") in _ENDS)
 
 
-def _scan(directory: Optional[Path] = None) -> tuple:
+def _scan(directory: Optional[Path] = None, sources: tuple = MIC) -> tuple:
     """(the newest floor-moving mic record, when his current turn began, when
     his last turn ended). Begin is the first worded partial after the last
     end, and only while the newest record is a partial; either may be None."""
@@ -90,7 +102,7 @@ def _scan(directory: Optional[Path] = None) -> tuple:
                 rec = json.loads(raw)
             except (ValueError, UnicodeDecodeError):
                 continue
-            if not isinstance(rec, dict) or rec.get("source", "mic") != "mic":
+            if not isinstance(rec, dict) or rec.get("source", "mic") not in sources:
                 continue
             if rec.get("kind") == "partial" and str(rec.get("text") or "").strip():
                 if newest is None:
@@ -118,28 +130,29 @@ def _ts(rec: dict) -> Optional[float]:
 
 
 def _look(directory: Optional[Path] = None, now: Optional[float] = None,
-          max_age_s: float = 0.1) -> tuple[Optional[dict], float]:
+          max_age_s: float = 0.1, sources: tuple = MIC) -> tuple[Optional[dict], float]:
     """The newest floor-moving mic record, and ``now``; cached for ``max_age_s``."""
-    rec, _, _, now = _look3(directory, now, max_age_s)
+    rec, _, _, now = _look3(directory, now, max_age_s, sources)
     return rec, now
 
 
 def _look3(directory: Optional[Path] = None, now: Optional[float] = None,
-           max_age_s: float = 0.1) -> tuple:
+           max_age_s: float = 0.1, sources: tuple = MIC) -> tuple:
     """(newest floor record, turn start t, last end t, now); cached for ``max_age_s``."""
     now = time.time() if now is None else now
-    if directory is None and _cache["v"] is not None and now - _cache["t"] < max_age_s:
-        return (*_cache["v"], now)
-    v = _scan(directory)
+    cache = _caches.setdefault(tuple(sources), {"t": 0.0, "v": None})
+    if directory is None and cache["v"] is not None and now - cache["t"] < max_age_s:
+        return (*cache["v"], now)
+    v = _scan(directory, tuple(sources))
     if directory is None:
-        _cache.update(t=now, v=v)
+        cache.update(t=now, v=v)
     return (*v, now)
 
 
 def floor(directory: Optional[Path] = None, now: Optional[float] = None,
-          max_age_s: float = 0.1) -> str:
+          max_age_s: float = 0.1, sources: tuple = MIC) -> str:
     """``speaking`` or ``free`` (see the module doc). Cached for ``max_age_s``."""
-    rec, now = _look(directory, now, max_age_s)
+    rec, now = _look(directory, now, max_age_s, sources)
     if rec is not None and rec.get("kind") == "partial":
         t = _ts(rec)
         age = now - t if t is not None else 0.0
@@ -156,14 +169,15 @@ def grace_s() -> float:
 def check(item: dict, now: Optional[float] = None, directory: Optional[Path] = None) -> str:
     """What the player should do with a queued item: ``play``, ``wait``, ``expire`` or ``stale``."""
     now = time.time() if now is None else now
+    ears = sources_for(item.get("device"))
     held = item.get("hold") == "turn-end"
     exp_s = item.get("expires_s")
     exp = item.get("expires_t")
     if (not held or exp_s is None) and exp is not None and now >= float(exp):
         return "expire"
     if held:
-        _, start_t, end_t, _ = _look3(directory, now)
-        if floor(directory, now) == "speaking":
+        _, start_t, end_t, _ = _look3(directory, now, sources=ears)
+        if floor(directory, now, sources=ears) == "speaking":
             asked = item.get("requested_t")
             if asked is not None and start_t is not None and float(asked) < start_t:
                 return "stale"
@@ -172,7 +186,7 @@ def check(item: dict, now: Optional[float] = None, directory: Optional[Path] = N
             base = max(float(item.get("requested_t") or now), end_t or 0.0)
             if now >= base + float(exp_s):
                 return "expire"
-        rec, _ = _look(directory, now)
+        rec, _ = _look(directory, now, sources=ears)
         t = _ts(rec) if rec is not None else None
         # The beat: a turn that ended less than grace_s ago might not be over.
         # ``now`` priority skips it (urgent lines do not wait a beat).
@@ -284,7 +298,8 @@ def rest_of(text: str, played: str) -> str:
     return text[start + 1:].strip() if start >= 0 else text.strip()
 
 
-def _mic_partials_since(since_t: float, directory: Optional[Path] = None) -> list:
+def _mic_partials_since(since_t: float, directory: Optional[Path] = None,
+                        sources: tuple = MIC) -> list:
     out = []
     for path in heard.log_files(directory)[-2:]:
         try:
@@ -300,7 +315,7 @@ def _mic_partials_since(since_t: float, directory: Optional[Path] = None) -> lis
             except (ValueError, UnicodeDecodeError):
                 continue
             if isinstance(rec, dict) and rec.get("kind") == "partial" \
-                    and rec.get("source", "mic") == "mic" and str(rec.get("text") or "").strip():
+                    and rec.get("source", "mic") in sources and str(rec.get("text") or "").strip():
                 t = _ts(rec)
                 if t is not None and t > since_t:
                     out.append(rec)
@@ -308,21 +323,21 @@ def _mic_partials_since(since_t: float, directory: Optional[Path] = None) -> lis
 
 
 def barge(since_t: float, line_text: str, directory: Optional[Path] = None,
-          now: Optional[float] = None) -> Optional[dict]:
+          now: Optional[float] = None, sources: tuple = MIC) -> Optional[dict]:
     """His words since ``since_t`` (the line's first frame) that ask for the
     floor, or None. Echo partials are ignored; then an explicit stop word
     cuts at once, and otherwise BARGE_WORDS content words of his that are not
     the line's own, counted across his partials so far."""
     if not barge_on():
         return None
-    rec, _ = _look(directory, now)
+    rec, _ = _look(directory, now, sources=sources)
     if rec is None or rec.get("kind") != "partial":
         return None                                  # cheap: nothing new from him
     t = _ts(rec)
     if t is None or t <= since_t:
         return None
     have, novel, last = set(_words(line_text)), set(), None
-    for p in _mic_partials_since(since_t, directory):
+    for p in _mic_partials_since(since_t, directory, sources):
         text = str(p.get("text") or "")
         if is_echo(text, line_text):
             continue

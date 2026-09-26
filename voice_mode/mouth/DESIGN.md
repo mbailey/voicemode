@@ -165,3 +165,27 @@ made from that one clip, made once and then only played.
   hash. Play it with `mouth play FILE`. The app keeps these under
   `<voice>/.auditions/` (voice-lab ignores it as generated scratch, VL-167),
   NOT `.samples/`, which holds unpromoted candidate references.
+
+## Since 12:56 Sat 2026-09-26: `call:<N>`, a live call as a device (dev, not live)
+
+Mike, voice 12:37-12:47 (the hero video): he calls the Kin bot, the call
+joins our ears, and our voices have to reach the call. `dc-say --call` puts
+words in a call, but the bot synthesises them, so nothing outside can hold,
+cut or queue them.
+
+- `--device call:<N>` (N = the call's id, as `dc-say --call` takes it;
+  `call` alone = the only live call). `mouth devices` lists live calls.
+- The bot holding the call serves a 0600 Unix socket (kin `mouthleg.py`,
+  `~/.<agent>/delta-chat[/<profile>]/call-mouth.sock`). One connection per
+  line: a JSON header (call, rate, text, who), then 48 kHz int16 frames, then
+  done or cut. EOF before done is a cut.
+- `CallOut` paces in real time, 0.2 s ahead, so a cut or retract drops a
+  fraction of a second. Resampling is linear (speech into Opus).
+- Refusals are `device-absent` with the live calls named; the call ending
+  mid-line is `device-lost`. Never a fallback to another device.
+- Hold and barge-in on a call line listen to the call AND the room
+  (`hold.sources_for`); every other device keeps the room mic alone.
+  Barge-in on a call stays OFF by default (the device regex), until it has
+  been heard working on a live call.
+- The bot's echo guard hears the line as source `mouth`; its transcript
+  keeps the line, marked `[cut]` when it was.

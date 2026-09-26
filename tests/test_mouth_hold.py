@@ -34,7 +34,8 @@ def ears(tmp_path, monkeypatch):
             rec["event"] = event
         with open(heard.log_path(), "a") as f:
             f.write(json.dumps(rec) + "\n")
-        hold._cache.update(t=0.0, v=None)
+        for c in hold._caches.values():
+            c.update(t=0.0, v=None)
     return write
 
 
@@ -49,6 +50,31 @@ def test_the_floor_from_the_heard_log(ears):
     ears("partial")
     ears("partial", source="call")                     # not the mic: does not count
     assert hold.floor() == "speaking"
+
+
+def test_a_call_line_listens_to_the_call_too(ears):
+    """call:<N> (Mike, 12:43 Sat 2026-09-26): on the phone his words arrive from
+    the call. A line into the call waits for them; a line on the AirPods does
+    not - someone else's call must not hold the room."""
+    assert hold.sources_for("call:5531") == ("mic", "call")
+    assert hold.sources_for("call") == ("mic", "call")
+    assert hold.sources_for("airpods") == ("mic",) and hold.sources_for(None) == ("mic",)
+    ears("partial", source="call")
+    assert hold.check({"hold": "turn-end", "device": "call:5531"}) == "wait"
+    assert hold.check({"hold": "turn-end", "device": "airpods"}) == "play"
+    ears("turn", source="call")
+    assert hold.check({"hold": "turn-end", "device": "call:5531"}) == "play"
+    ears("partial")                                    # the room mic still counts on a call
+    assert hold.check({"hold": "turn-end", "device": "call:5531"}) == "wait"
+
+
+def test_barge_in_on_a_call_hears_the_call(ears, monkeypatch):
+    monkeypatch.setenv("VOICEMODE_MOUTH_BARGE", "1")
+    t0 = time.time() - 1
+    ears("partial", source="call", text="stop")
+    assert hold.barge(t0, "a long line about the van") is None      # the mic heard nothing
+    got = hold.barge(t0, "a long line about the van", sources=hold.sources_for("call:5531"))
+    assert got is not None and got["text"] == "stop"
 
 
 def test_check_play_wait_expire(ears):

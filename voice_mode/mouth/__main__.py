@@ -20,7 +20,8 @@ def main(argv=None) -> int:
                    "settings file's voice, $VOICEMODE_MOUTH_VOICE, af_sky (`mouth voices`)")
     s.add_argument("--speed", type=float)
     s.add_argument("--backend", choices=["auto", "kokoro", "clone", "silence"])
-    s.add_argument("--device", help="exact output device name, 'null', or 'default'; $VOICEMODE_MOUTH_DEVICE")
+    s.add_argument("--device", help="exact output device name, 'null', 'default', or call:<N> (a live "
+                   "Delta Chat call, `mouth devices`); $VOICEMODE_MOUTH_DEVICE")
     side = s.add_mutually_exclusive_group()
     side.add_argument("--pan", type=float, help="-1 left ear only .. 1 right ear only; $VOICEMODE_MOUTH_PAN")
     side.add_argument("--channel", choices=["left", "right", "both"], help="--pan -1 / 1 / none")
@@ -135,9 +136,11 @@ def main(argv=None) -> int:
         print(json.dumps(status()))
         return 0
     if a.cmd == "devices":
-        from .output import output_names
+        from .output import live_calls, output_names
 
-        print("\n".join(output_names(rescan=False)))
+        names = output_names(rescan=False)
+        names += [f"call:{c}\t# live call, {who}" for c, who, _ in live_calls()]
+        print("\n".join(names))
         return 0
     if a.cmd == "voices":
         from .voices import voices

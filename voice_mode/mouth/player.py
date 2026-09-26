@@ -278,7 +278,8 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
     if backend.name != item.get("backend"):  # log what ran; keep what was asked (auto)
         item = {**item, "backend": backend.name, "backend_asked": item.get("backend")}
     try:
-        out = _output.open_output(item["device"], backend.sample_rate, item.get("pan"))
+        out = _output.open_output(item["device"], backend.sample_rate, item.get("pan"),
+                                  meta={"text": text, "who": item.get("agent")})
     except Exception as e:  # noqa: BLE001 - absent, or PortAudio refusing to open it
         synth.cancel()
         detail = str(e) if isinstance(e, _output.DeviceAbsent) else f"{type(e).__name__}: {e}"
@@ -304,7 +305,8 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
                 _write_stop(d, {"t": time.time(), "reason": why, "flush": False, "utt": item["utt"]})
         if first_frame_t is not None and barge_here:
             est = max(synth.frames / sr, len(text) / 15.0 / (speed or 1.0))
-            words = _hold.barge(first_frame_t, _hold.near(text, written / sr, est))
+            words = _hold.barge(first_frame_t, _hold.near(text, written / sr, est),
+                                sources=_hold.sources_for(item["device"]))
             if words is not None:
                 # His words cut the line, and every line queued before them
                 # (stale now); an opener queued after them survives.
