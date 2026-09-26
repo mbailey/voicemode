@@ -77,6 +77,46 @@ def pcm16(blocks: Iterable[np.ndarray]) -> bytes:
     return (a * 32767.0).round().astype("<i2").tobytes()
 
 
+def write_wav(path: Path, data: bytes, sample_rate: int) -> Path:
+    """16-bit mono PCM to PATH, whole: written beside it, then renamed."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.tmp"
+    with wave.open(str(tmp), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(int(sample_rate))
+        w.writeframes(data)
+    os.replace(tmp, path)
+    return path
+
+
+def render(voice: str, text: str, out: Path, *, backend: str = "auto",
+           speed: Optional[float] = None, if_missing: bool = False) -> dict:
+    """Synthesise TEXT in VOICE to the WAV file OUT, without playing it.
+
+    For the Settings audition (Mike 12:24-12:28 Sat 2026-09-26, Cora's 60.1
+    design): a clone of the phrase from ONE reference clip, made once and
+    then only played (``mouth play OUT``). ``if_missing`` makes nothing when
+    OUT exists. Raises ValueError for a voice that does not resolve.
+    """
+    from . import backends as _backends
+
+    out = Path(out).expanduser()
+    be, sends = _backends.resolve(backend, voice)
+    extra = getattr(be, "extra_body", {}) or {}
+    info = {"out": str(out), "voice": voice, "backend": be.name,
+            "ref_audio": extra.get("ref_audio"), "made": False}
+    if if_missing and out.exists():
+        return info
+    data = pcm16(be.stream(text, sends, speed))
+    if not data:
+        raise ValueError(f"{be.name} returned no audio for {voice!r}")
+    write_wav(out, data, be.sample_rate)
+    return {**info, "made": True, "dur_s": round(len(data) / 2 / be.sample_rate, 3),
+            "sample_rate": int(be.sample_rate)}
+
+
 def keep(item: dict, blocks: Iterable[np.ndarray], sample_rate: int, backend_name: str,
          *, root: Optional[Path] = None, now: Optional[float] = None) -> Optional[Path]:
     """Write ITEM's audio and its note; return the WAV path, or None. Never raises."""
@@ -92,13 +132,7 @@ def keep(item: dict, blocks: Iterable[np.ndarray], sample_rate: int, backend_nam
         day.mkdir(parents=True, exist_ok=True)
         utt = str(item["utt"])
         wav, note = day / f"{utt}.wav", day / f"{utt}.json"
-        tmp = day / f".{utt}.wav.tmp"
-        with wave.open(str(tmp), "wb") as w:
-            w.setnchannels(1)
-            w.setsampwidth(2)
-            w.setframerate(int(sample_rate))
-            w.writeframes(data)
-        os.replace(tmp, wav)
+        write_wav(wav, data, sample_rate)
         meta = {"utt": utt, "voice": item.get("voice"), "backend": backend_name,
                 "speed": item.get("speed"), "agent": item.get("agent"),
                 "session": item.get("session"), "text": item.get("text"),

@@ -1,4 +1,4 @@
-"""mouth CLI: say, stop, status, devices, voices, resolve, audio, serve.  ``python -m voice_mode.mouth --help``"""
+"""mouth CLI: say, stop, status, devices, voices, resolve, render, audio, serve.  ``python -m voice_mode.mouth --help``"""
 
 from __future__ import annotations
 
@@ -75,6 +75,14 @@ def main(argv=None) -> int:
                         "reference clip, or kokoro); exit 2, with the reason, if it does not resolve")
     rv.add_argument("voice", help="a name (pip, af_sky), group/voice, voice[N] or group/voice/clip.wav")
     rv.add_argument("--backend", default="auto", choices=["auto", "kokoro", "clone"])
+    rn = sub.add_parser("render", help="synthesise TEXT to a WAV file without playing it; "
+                        "JSON out (play it later with `mouth play FILE`)")
+    rn.add_argument("text", nargs="+")
+    rn.add_argument("--voice", required=True, help="as for say, e.g. group/voice/clip.wav")
+    rn.add_argument("--out", required=True, type=Path, help="the WAV to write")
+    rn.add_argument("--speed", type=float)
+    rn.add_argument("--backend", default="auto", choices=["auto", "kokoro", "clone"])
+    rn.add_argument("--if-missing", action="store_true", help="make nothing if --out exists")
     au = sub.add_parser("audio", help="JSON lines: the lines the mouth kept (a WAV each), newest first")
     au.add_argument("--voice", help="only this voice's lines")
     au.add_argument("--last", type=int, help="at most this many")
@@ -148,6 +156,18 @@ def main(argv=None) -> int:
         print(json.dumps({"voice": a.voice, "backend": be.name, "sends": voice,
                           "ref_audio": extra.get("ref_audio"), "ref_text": extra.get("ref_text")},
                          ensure_ascii=False))
+        return 0
+    if a.cmd == "render":
+        from .audio import render
+
+        text = sys.stdin.read() if a.text == ["-"] else " ".join(a.text)
+        try:
+            info = render(a.voice, text, a.out, backend=a.backend, speed=a.speed,
+                          if_missing=a.if_missing)
+        except ValueError as e:
+            print(f"mouth render: {e}", file=sys.stderr)
+            return 2
+        print(json.dumps(info, ensure_ascii=False))
         return 0
     if a.cmd == "audio":
         from .audio import kept

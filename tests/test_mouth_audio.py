@@ -182,3 +182,32 @@ def test_mouth_audio_prints_json_lines(box, tone, capsys):
     assert [m["utt"] for m in out] == [item["utt"]]
     assert main(["audio", "--voice", "nobody"]) == 0
     assert capsys.readouterr().out == ""
+
+
+# -- render: to a file, never to a device (the Settings audition, 60.1) ----------
+
+def test_render_writes_the_wav_and_plays_nothing(tmp_path, tone):
+    out = tmp_path / "leela" / ".samples" / "02-x.abc123.wav"
+    info = audio.render("dr-who/leela/02-x.wav", "They'll say this", out)
+    assert info["made"] and info["backend"] == "tone" and info["dur_s"] == 0.3
+    with wave.open(str(out)) as w:
+        assert (w.getnframes(), w.getframerate()) == (7200, 24000)
+
+
+def test_render_if_missing_makes_it_once(tmp_path, tone, monkeypatch):
+    out = tmp_path / "s.wav"
+    assert audio.render("pip", "hi", out, if_missing=True)["made"]
+    calls = []
+    monkeypatch.setattr(Tone, "stream", lambda self, *a: calls.append(a) or iter(()))
+    assert audio.render("pip", "hi", out, if_missing=True)["made"] is False
+    assert calls == []  # no synthesis at all the second time
+
+
+def test_render_cli_json_and_a_bad_voice_exits_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(backends, "resolve", lambda b, v: (Tone(), v) if v == "pip"
+                        else (_ for _ in ()).throw(ValueError(f"Unresolvable voice {v!r}")))
+    out = tmp_path / "r.wav"
+    assert main(["render", "--voice", "pip", "--out", str(out), "hello"]) == 0
+    assert json.loads(capsys.readouterr().out)["out"] == str(out) and out.exists()
+    assert main(["render", "--voice", "leela/02-x.wav", "--out", str(tmp_path / "n.wav"), "hi"]) == 2
+    assert "Unresolvable voice" in capsys.readouterr().err and not (tmp_path / "n.wav").exists()
