@@ -104,7 +104,15 @@ def resolve(backend: str, voice: str) -> tuple[Backend, str]:
         try:
             res = resolve_voice(voice)
         except VoiceResolutionError as e:
-            if backend == "clone":
+            # Only a voice the mouth's own Kokoro speaks may fall through to
+            # it (bf_isabella: VoiceMode's resolver does not know it). Anything
+            # else is refused, loudly, with the resolver's "did you mean":
+            # before 12:26 Sat 2026-09-26 a typo or a short-form reference
+            # (leela/02-x.wav for dr-who/leela/02-x.wav) went to Kokoro
+            # without a word (Cora: "make the silent Kokoro fallback an error").
+            from .voices import KOKORO
+
+            if backend == "clone" or voice not in KOKORO:
                 raise ValueError(str(e)) from e
             res = None
         if res is not None and res.profile is not None:

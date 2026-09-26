@@ -1,4 +1,4 @@
-"""mouth CLI: say, stop, status, devices, voices, audio, serve.  ``python -m voice_mode.mouth --help``"""
+"""mouth CLI: say, stop, status, devices, voices, resolve, audio, serve.  ``python -m voice_mode.mouth --help``"""
 
 from __future__ import annotations
 
@@ -71,6 +71,10 @@ def main(argv=None) -> int:
     ml.add_argument("--once", action="store_true", help="speak what is in new/, then exit")
     sub.add_parser("devices", help="output device names, exactly as --device takes them")
     sub.add_parser("voices", help="JSON: the default voice, where it came from, and every voice")
+    rv = sub.add_parser("resolve", help="JSON: what a --voice expression speaks with (a clone's "
+                        "reference clip, or kokoro); exit 2, with the reason, if it does not resolve")
+    rv.add_argument("voice", help="a name (pip, af_sky), group/voice, voice[N] or group/voice/clip.wav")
+    rv.add_argument("--backend", default="auto", choices=["auto", "kokoro", "clone"])
     au = sub.add_parser("audio", help="JSON lines: the lines the mouth kept (a WAV each), newest first")
     au.add_argument("--voice", help="only this voice's lines")
     au.add_argument("--last", type=int, help="at most this many")
@@ -131,6 +135,19 @@ def main(argv=None) -> int:
         from .voices import voices
 
         print(json.dumps(voices()))
+        return 0
+    if a.cmd == "resolve":
+        from .backends import resolve as _resolve
+
+        try:
+            be, voice = _resolve(a.backend, a.voice)
+        except ValueError as e:
+            print(f"mouth resolve: {e}", file=sys.stderr)
+            return 2
+        extra = getattr(be, "extra_body", {}) or {}
+        print(json.dumps({"voice": a.voice, "backend": be.name, "sends": voice,
+                          "ref_audio": extra.get("ref_audio"), "ref_text": extra.get("ref_text")},
+                         ensure_ascii=False))
         return 0
     if a.cmd == "audio":
         from .audio import kept
