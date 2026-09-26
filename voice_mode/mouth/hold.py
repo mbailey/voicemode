@@ -71,6 +71,16 @@ def sources_for(device: Optional[str]) -> tuple:
     return ("mic", "call") if d == "call" or d.startswith("call:") else MIC
 
 
+def barge_sources_for(device: Optional[str]) -> tuple:
+    """Whose words may CUT a line on ``device``. A call line is cut only by the
+    call: the phone cancels our echo there, but the room mic hears the call
+    played aloud (Delta open on the Mac) and writes our own line down as his.
+    Measured 14:01 Sat 2026-09-26: the mic's copy of a call line cut that line
+    13.7 s in. Every other device: the room mic, as before."""
+    d = str(device or "")
+    return ("call",) if d == "call" or d.startswith("call:") else MIC
+
+
 def idle_s() -> float:
     return float(os.environ.get("VOICEMODE_MOUTH_HOLD_IDLE_S", IDLE_S))
 

@@ -73,8 +73,20 @@ def test_barge_in_on_a_call_hears_the_call(ears, monkeypatch):
     t0 = time.time() - 1
     ears("partial", source="call", text="stop")
     assert hold.barge(t0, "a long line about the van") is None      # the mic heard nothing
-    got = hold.barge(t0, "a long line about the van", sources=hold.sources_for("call:5531"))
+    got = hold.barge(t0, "a long line about the van", sources=hold.barge_sources_for("call:5531"))
     assert got is not None and got["text"] == "stop"
+
+
+def test_the_room_mic_never_cuts_a_call_line(ears, monkeypatch):
+    """14:01 Sat 2026-09-26: Delta on the Mac played the call aloud, the room
+    mic wrote Pip's call line down as Mike's, and it cut the line 13.7 s in."""
+    monkeypatch.setenv("VOICEMODE_MOUTH_BARGE", "1")
+    t0 = time.time() - 1
+    ears("partial", source="mic", text="stop, three things now, a volume on each line")
+    assert hold.barge_sources_for("call:5531") == ("call",)
+    assert hold.barge_sources_for("airpods") == ("mic",)
+    assert hold.barge(t0, "a long line", sources=hold.barge_sources_for("call:5531")) is None
+    assert hold.barge(t0, "a long line", sources=hold.barge_sources_for("airpods")) is not None
 
 
 def test_check_play_wait_expire(ears):

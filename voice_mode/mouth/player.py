@@ -306,7 +306,7 @@ def play_one(item: dict, d: Path, synth: Optional[Synth] = None, prefetched: boo
         if first_frame_t is not None and barge_here:
             est = max(synth.frames / sr, len(text) / 15.0 / (speed or 1.0))
             words = _hold.barge(first_frame_t, _hold.near(text, written / sr, est),
-                                sources=_hold.sources_for(item["device"]))
+                                sources=_hold.barge_sources_for(item["device"]))
             if words is not None:
                 # His words cut the line, and every line queued before them
                 # (stale now); an opener queued after them survives.
