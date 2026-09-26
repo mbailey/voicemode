@@ -106,15 +106,48 @@ def render(voice: str, text: str, out: Path, *, backend: str = "auto",
     be, sends = _backends.resolve(backend, voice)
     extra = getattr(be, "extra_body", {}) or {}
     info = {"out": str(out), "voice": voice, "backend": be.name,
-            "ref_audio": extra.get("ref_audio"), "made": False}
+            "model": getattr(be, "model", None), "ref_audio": extra.get("ref_audio"),
+            "made": False}
     if if_missing and out.exists():
         return info
     data = pcm16(be.stream(text, sends, speed))
     if not data:
         raise ValueError(f"{be.name} returned no audio for {voice!r}")
-    write_wav(out, data, be.sample_rate)
+    if out.suffix.lower() == ".wav":
+        write_wav(out, data, be.sample_rate)
+    else:
+        encode(out, data, be.sample_rate)
     return {**info, "made": True, "dur_s": round(len(data) / 2 / be.sample_rate, 3),
             "sample_rate": int(be.sample_rate)}
+
+
+def encode(out: Path, data: bytes, sample_rate: int) -> Path:
+    """16-bit mono PCM to OUT in the format its suffix names (.mp3, .m4a, ...), by ffmpeg.
+
+    Whole or nothing: ffmpeg writes a dot-file beside OUT, which is renamed
+    only when ffmpeg succeeded. ValueError, with ffmpeg's last words, if not.
+    """
+    import subprocess
+
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.parent / f".{out.stem}.tmp{out.suffix}"
+    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+           "-f", "s16le", "-ar", str(int(sample_rate)), "-ac", "1", "-i", "pipe:0"]
+    if out.suffix.lower() == ".mp3":
+        cmd += ["-q:a", "2"]  # VBR ~130 kbps: ffmpeg's default for 24 kHz mono is 32 kbps, thin for an audition
+    cmd.append(str(tmp))
+    try:
+        r = subprocess.run(cmd, input=data, capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f"ffmpeg could not write {out.name}: {e}") from e
+    if r.returncode != 0 or not tmp.exists():
+        tmp.unlink(missing_ok=True)
+        raise ValueError(f"ffmpeg could not write {out.name}: "
+                         f"{r.stderr.decode(errors='replace').strip()[-300:]}")
+    os.replace(tmp, out)
+    return out
 
 
 def keep(item: dict, blocks: Iterable[np.ndarray], sample_rate: int, backend_name: str,

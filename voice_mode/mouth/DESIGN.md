@@ -141,3 +141,27 @@ the Delta config spike?". Detail: `audio.py`.
   is what Samples reads.
 - **Cost:** 48 KB a second of speech at 24 kHz, so about 0.5 MB for a
   10-second line.
+
+## Since 12:25 Sat 2026-09-26: voices are checked; `render` writes a file (dev, not live)
+
+For the Settings audition (Mike 12:24-12:32, Cora's 60.1 design v2):
+each reference row plays the original clip and a clone of the test line
+made from that one clip, made once and then only played.
+
+- **A voice that doesn't resolve is an error** (Cora 12:25: "make the silent
+  Kokoro fallback an error"). The line closes `said reason=error`, with the
+  resolver's "did you mean". The one fall-through left is a voice the
+  mouth's own Kokoro speaks that VoiceMode's resolver doesn't know
+  (`bf_isabella`).
+- **Picking a reference clip** is the voice expression: `leela[1]`, or better
+  `dr-who/leela/02-then-ill-face-it.wav` (an index moves when a clip is
+  added). The short form `leela/02-...wav` does not resolve.
+- **`mouth resolve EXPR`**: JSON (backend, ref_audio, ref_text), or exit 2
+  with the reason.
+- **`mouth render --voice EXPR --out FILE [--if-missing] TEXT`**: synthesises
+  to FILE and plays nothing. `.wav` is written directly; any other suffix
+  (`.mp3`, at VBR `-q:a 2`) goes through ffmpeg. `--if-missing` asks the
+  server nothing when FILE exists. The JSON carries `model`, for the cache
+  hash. Play it with `mouth play FILE`. The app keeps these under
+  `<voice>/.auditions/` (voice-lab ignores it as generated scratch, VL-167),
+  NOT `.samples/`, which holds unpromoted candidate references.

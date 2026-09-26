@@ -187,7 +187,7 @@ def test_mouth_audio_prints_json_lines(box, tone, capsys):
 # -- render: to a file, never to a device (the Settings audition, 60.1) ----------
 
 def test_render_writes_the_wav_and_plays_nothing(tmp_path, tone):
-    out = tmp_path / "leela" / ".samples" / "02-x.abc123.wav"
+    out = tmp_path / "leela" / ".auditions" / "02-x.abc123.wav"
     info = audio.render("dr-who/leela/02-x.wav", "They'll say this", out)
     assert info["made"] and info["backend"] == "tone" and info["dur_s"] == 0.3
     with wave.open(str(out)) as w:
@@ -211,3 +211,25 @@ def test_render_cli_json_and_a_bad_voice_exits_2(tmp_path, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["out"] == str(out) and out.exists()
     assert main(["render", "--voice", "leela/02-x.wav", "--out", str(tmp_path / "n.wav"), "hi"]) == 2
     assert "Unresolvable voice" in capsys.readouterr().err and not (tmp_path / "n.wav").exists()
+
+
+def test_render_encodes_by_suffix_and_reports_the_model(tmp_path, tone):
+    import shutil
+    if not shutil.which("ffmpeg"):
+        pytest.skip("no ffmpeg")
+    out = tmp_path / "leela" / ".auditions" / "02-x.abc123.mp3"
+    info = audio.render("dr-who/leela/02-x.wav", "They'll say this", out)
+    assert info["made"] and out.exists() and out.read_bytes()[:3] in (b"ID3", b"\xff\xfb", b"\xff\xf3")
+    assert "model" in info
+    assert not list(out.parent.glob(".*"))  # no dot-file left behind
+
+
+def test_render_a_format_ffmpeg_refuses_is_an_error_and_leaves_nothing(tmp_path, tone):
+    import shutil
+    if not shutil.which("ffmpeg"):
+        pytest.skip("no ffmpeg")
+    where = tmp_path / "auditions"
+    out = where / "x.notaformat"
+    with pytest.raises(ValueError, match="ffmpeg could not write"):
+        audio.render("pip", "hi", out)
+    assert not list(where.iterdir())
