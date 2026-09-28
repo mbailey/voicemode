@@ -88,6 +88,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **VoiceMode Connect documentation removed — the product was abandoned and the docs still described it as live (VM-2290)** —
+  VoiceMode Connect (remote voice through the app.voicemode.dev web app and
+  a hosted MCP server) was abandoned about four or five months ago, but the
+  plugin went on presenting it as a working install route: the bundled
+  `voicemode-connect` skill, a "Remote Voice with VoiceMode Connect" section
+  in the `voicemode` skill telling agents *when to suggest Connect*, a
+  "Use with VoiceMode Connect" Tailscale recipe, and a mkdocs "VoiceMode
+  Connect" nav block. An agent read that, believed it, and recommended
+  Connect to a user. VM-958 had already removed the Connect Python
+  integration and `docs/connect/`, so the skill and the nav were pointing at
+  pages that no longer existed. Removed: the `voicemode-connect` skill, the
+  Connect sections and cross-links in the `voicemode` skill and
+  `CLAUDE.md`, the mkdocs nav block, the Connect design note
+  `docs/architecture/tool-signature-alignment.md`, and the Connect tool-name
+  comment in the soundfonts hook receiver (its `*voicemode*converse*` match
+  is unchanged). **Not changed here:** the `voicemode connect auth` CLI
+  commands and `voice_mode/auth.py` are still in the code (a separate code
+  change), and the voicemode.dev domain is still the project website, email
+  and MCP registry namespace — only the Connect product is gone. Older
+  changelog entries that mention Connect are history and stay.
+
 - **Conch `callback` mode removed entirely — code, docs, and the agent-facing tool description (VM-2078)** —
   `converse(conch_mode="callback")` and `VOICEMODE_CONCH_MODE` are gone, and
   `conch(action="callback")` is renamed to `action="queue"`. Callback mode's
