@@ -103,11 +103,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CLAUDE.md`, the mkdocs nav block, the Connect design note
   `docs/architecture/tool-signature-alignment.md`, and the Connect tool-name
   comment in the soundfonts hook receiver (its `*voicemode*converse*` match
-  is unchanged). **Not changed here:** the `voicemode connect auth` CLI
-  commands and `voice_mode/auth.py` are still in the code (a separate code
-  change), and the voicemode.dev domain is still the project website, email
-  and MCP registry namespace — only the Connect product is gone. Older
-  changelog entries that mention Connect are history and stay.
+  is unchanged). Three deep links in the `voicemode://docs/parameters` MCP
+  resource (`voice_mode/resources/docs/parameters.md`) pointed at
+  voicemode.dev pages that return 404; they now point at the matching docs
+  on GitHub. **Not changed here:** the `voicemode connect auth` CLI group
+  (`voice_mode/auth.py`) remains for now — removing it is a code change,
+  tracked in VM-2314. The other voicemode.dev references are kept on
+  purpose: the domain is still the live project website, and it verifies
+  the MCP registry namespace `dev.voicemode/voicemode`. Only the Connect
+  product is gone. Older changelog entries that mention Connect are
+  history and stay.
 
 - **Conch `callback` mode removed entirely — code, docs, and the agent-facing tool description (VM-2078)** —
   `converse(conch_mode="callback")` and `VOICEMODE_CONCH_MODE` are gone, and
