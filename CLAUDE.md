@@ -211,7 +211,6 @@ This is the core Python package. VoiceMode is a suite of related projects:
 
 Quick reference:
 - **voicemode** (this repo) - Python MCP server for local voice mode
-- **voicemode-dev** - Cloudflare Workers backend for voicemode.dev
 - **voicemode-ios** - Native iOS app
 - **voicemode-macos** - Native macOS app
 - **voicemode-meta** - Project coordination and operations
@@ -219,7 +218,6 @@ Quick reference:
 ## See Also
 
 - **[skills/voicemode/SKILL.md](skills/voicemode/SKILL.md)** - Voice interaction usage and MCP tools
-- **[skills/voicemode-connect/SKILL.md](skills/voicemode-connect/SKILL.md)** - Remote voice via mobile/web clients
 - **[docs/tutorials/getting-started.md](docs/tutorials/getting-started.md)** - Installation guide
 - **[docs/guides/configuration.md](docs/guides/configuration.md)** - Configuration reference
 - **[docs/concepts/architecture.md](docs/concepts/architecture.md)** - Detailed architecture

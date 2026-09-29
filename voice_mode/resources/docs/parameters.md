@@ -227,9 +227,9 @@ Whisper uses the last 224 tokens of the prompt. In practice, this means:
 
 If a word is still misrecognized after adding it to the prompt, try including it in context: instead of just "Tali", use "my dog Tali" or "Tali is a Rottweiler".
 
-**See also:** Troubleshooting — "Words Misrecognized"
+**See also:** the Troubleshooting guide
 (`voicemode://docs/troubleshooting`, or
-[on the site](https://voicemode.dev/troubleshooting/))
+[on GitHub](https://github.com/mbailey/voicemode/blob/master/docs/troubleshooting/index.md))
 
 ## Audio Format & Feedback
 
@@ -302,7 +302,7 @@ whisper-cli ~/.voicemode/audio/latest-STT.wav
 See [STT Recovery](https://github.com/mbailey/voicemode/blob/master/.claude/skills/voicemode/SKILL.md#stt-recovery---manual-transcription)
 and Troubleshooting — "No Speech Detected"
 (`voicemode://docs/troubleshooting`, or
-[on the site](https://voicemode.dev/troubleshooting/#1-no-speech-detected))
+[on GitHub](https://github.com/mbailey/voicemode/blob/master/docs/troubleshooting/index.md#1-no-speech-detected))
 for details.
 
 ## Result Widgets
@@ -310,7 +310,7 @@ for details.
 `converse()` results can carry small, non-spoken, agent-facing one-liners in a
 trailing ` | Widgets: ...` segment appended to every return path (including
 error returns) — text-only, never passed to TTS/synthesis. See
-[Environment Variables](https://voicemode.dev/reference/environment/#result-widgets)
+[Environment Variables](https://github.com/mbailey/voicemode/blob/master/docs/reference/environment.md#result-widgets)
 for the underlying `VOICEMODE_*` toggles.
 
 ### time_in_response
