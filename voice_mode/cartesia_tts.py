@@ -78,6 +78,10 @@ def _build_body(
         },
     }
     if speed is not None:
+        # TODO(yakbarber): sonic-3.6 no longer documents a top-level "speed"
+        # control; speed/volume/emotion now live under "generation_config".
+        # Needs a person to decide the mapping — see
+        # https://docs.cartesia.ai/build-with-cartesia/capability-guides/volume-speed-emotion
         body["speed"] = speed
     return body
 
