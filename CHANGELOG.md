@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`voicemode service install mlx-audio` can install current mlx-audio again
+  (VM-2338)** — the installer pinned `mlx-audio>=0.4.3,<0.4.4` and then applied
+  a bundled `server.py` patch whose three hunks all fail against 0.4.4 and
+  later, so no release from 0.4.4 on could be installed. The pin is now
+  `mlx-audio>=0.5.7,<0.6`: 0.5.7 is the release measured in VM-2330 (the Kokoro
+  SineGen crash that caused the `<0.4.4` cap, VM-1547, is fixed upstream since
+  0.4.5), and the `<0.6` cap keeps untested minor releases out. The patch step
+  and `voice_mode/data/patches/mlx_audio_server.patch` are gone: upstream has
+  served OpenAI-style `response_format` on `/v1/audio/transcriptions` natively
+  since 0.4.4 (PR #704). The install result's `patch` key is replaced by a
+  `warnings` list.
+
+  One behaviour is lost: the old patch also dropped whisper's `""` / `"."` /
+  `"..."` silence-hallucination segments, and upstream does not. This does not
+  affect default installs, where STT uses whisper.cpp on :2022; it only shows
+  if you point STT at mlx-audio's whisper. Also, when a client omits
+  `response_format`, upstream answers with its native `ndjson` stream, where the
+  old patch answered `json`. voicemode's conversation STT always sends
+  `response_format`, so `converse` is unaffected. The voice-clone transcription
+  in `impressions` does not send it, so against an mlx-audio STT endpoint it now
+  gets the `ndjson` stream instead of `json`. Third-party clients that leave the
+  field out see the same change.
+
+  The installer now also warns (it does not fail) when the installed
+  `espeakng_loader/espeak-ng-data` path is 160 characters or longer. espeak-ng
+  truncates such a path and exits, taking the mlx-audio server down on the
+  first Kokoro request. The default `~/.local/share/uv/tools/...` path is far
+  shorter; a long `HOME`, `UV_TOOL_DIR` or `XDG_DATA_HOME` can reach it.
+
 - **All 67 Kokoro voices work again in `converse` (VM-2190)** — since the
   voice-resolution overhaul landed on 2026-07-25 (VM-1901), asking for any
   Kokoro voice outside a 7-name whitelist (`af_sky`, `af_sarah`, `af_alloy`,

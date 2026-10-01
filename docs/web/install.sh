@@ -729,7 +729,7 @@ install_whisper_cpp() {
 }
 
 # Install mlx-audio via the existing CLI primitive. install.sh stays a thin
-# orchestrator -- the uv tool install + bundled patch + launchd plist all
+# orchestrator -- the uv tool install + post-install checks + launchd plist all
 # live in `voicemode service install mlx-audio` (mlx_audio_install()),
 # which is already Apple-Silicon-gated. URL config is the caller's job
 # (see install_voice_services) so STT + TTS get written together.

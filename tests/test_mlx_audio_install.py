@@ -4,19 +4,26 @@ Covers:
 - Apple-Silicon hardware gate (short-circuits before any subprocess).
 - The ``MLX_AUDIO_EXTRAS`` list shape and the install-command generator.
 - Service config + template wiring (plist/systemd) for ``mlx_audio``.
+- The install flow uses upstream server.py unpatched (VM-2338).
+- The espeak-ng data-path length warning (VM-2338).
 """
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from voice_mode.tools.mlx_audio import install as install_mod
 from voice_mode.tools.mlx_audio.install import (
+    ESPEAK_DATA_PATH_MAX,
     MLX_AUDIO_DEFAULT_PORT,
     MLX_AUDIO_EXTRAS,
     MLX_AUDIO_PIP_PACKAGE,
     _build_install_cmd,
+    _find_espeak_data_dir,
     _is_apple_silicon,
+    _post_install_warnings,
+    espeak_data_path_warning,
     mlx_audio_install,
 )
 from voice_mode.tools.service import (
@@ -149,21 +156,25 @@ class TestExtrasList:
 
 
 class TestPipPackagePin:
-    """The pip-package spec must keep the ``>=0.4.3`` floor and ``<0.4.4`` cap."""
+    """The pip-package spec is ``>=0.5.7,<0.6`` (VM-2338)."""
 
-    def test_pip_package_specifier_pins_at_or_above_0_4_3(self):
-        # 0.4.3 is the first upstream release that absorbed the MLX Metal
-        # serialisation lock + OpenAI-style STT response_format fixes that
-        # voicemode used to ship as a bundled patch (see VM-1126). Older
-        # mlx-audio releases will misbehave on real workloads.
-        assert MLX_AUDIO_PIP_PACKAGE.startswith("mlx-audio")
-        assert ">=0.4.3" in MLX_AUDIO_PIP_PACKAGE
+    def test_pip_package_specifier_is_exact(self):
+        assert MLX_AUDIO_PIP_PACKAGE == "mlx-audio>=0.5.7,<0.6"
 
-    def test_pip_package_specifier_caps_below_0_4_4(self):
-        # mlx-audio 0.4.4 regressed the Kokoro istftnet SineGen decoder:
-        # a [broadcast_shapes] ValueError → HTTP 500 on longer utterances
-        # (VM-1547). Cap below it until a fixed upstream release ships.
-        assert "<0.4.4" in MLX_AUDIO_PIP_PACKAGE
+    def test_floor_is_the_measured_release(self):
+        # 0.5.7 is the release VM-2330 measured: the VM-1547 Kokoro SineGen
+        # crash (introduced in 0.4.4, fixed upstream in 0.4.5) is gone and
+        # response_format is native (since 0.4.4), so no patch is needed.
+        assert ">=0.5.7" in MLX_AUDIO_PIP_PACKAGE
+
+    def test_caps_below_next_minor(self):
+        # The 0.4.4 lesson: never let an untested minor release reach users.
+        assert "<0.6" in MLX_AUDIO_PIP_PACKAGE
+
+    def test_old_0_4_4_cap_is_gone(self):
+        # The <0.4.4 cap (VM-1550) blocked every release with the fixes.
+        assert "0.4.4" not in MLX_AUDIO_PIP_PACKAGE
+        assert "0.4.3" not in MLX_AUDIO_PIP_PACKAGE
 
 
 class TestInstallCommandShape:
@@ -190,11 +201,6 @@ class TestInstallCommandShape:
     def test_no_force_means_no_reinstall_flag(self):
         cmd = _build_install_cmd(force_reinstall=False)
         assert "--reinstall" not in cmd
-
-
-# (Removed VM-1126: server.py patch tests + _query_installed_version tests.
-# Both fixes were upstreamed in mlx-audio 0.4.3 so voicemode no longer
-# ships a patch nor needs to query the installed version.)
 
 
 # ============================================================================
@@ -301,54 +307,201 @@ class TestMlxAudioConfigEnvVars:
 
 
 # ============================================================================
-# Bundled patch resource (restored VM-1128)
+# No server.py patch (VM-2338)
 # ============================================================================
-# voice_mode/data/patches/mlx_audio_server.patch ships the OpenAI-style STT
-# response_format handling that mlx-audio 0.4.3 still does NOT provide.
-# (VM-1126 incorrectly removed it on the assumption that all fixes were
-# upstreamed; only the inference lock was. VM-1128 restores the
-# response_format half against the 0.4.3 endpoint shape.)
+# voicemode used to patch the installed server.py to add OpenAI-style STT
+# response_format (VM-1128). Upstream has shipped it natively since 0.4.4
+# (PR #704) and the patch's hunks all fail on >=0.4.4, so it was dropped.
+
+REPO_ROOT = Path(__file__).parent.parent
 
 
-class TestBundledPatchShips:
-    """The patch file and its sentinel must exist and be wired through."""
+class TestPatchIsGone:
+    """The patch file, its constants and its packaging glob are all removed."""
 
-    def test_patch_file_exists(self):
-        from voice_mode.tools.mlx_audio.install import _PATCH_RESOURCE
-        assert _PATCH_RESOURCE.exists(), (
-            f"Bundled patch missing at {_PATCH_RESOURCE}. "
-            "Wheel/sdist will ship without STT response_format support."
+    def test_patch_file_removed(self):
+        assert not (
+            REPO_ROOT / "voice_mode" / "data" / "patches" / "mlx_audio_server.patch"
+        ).exists()
+
+    def test_patch_machinery_removed_from_module(self):
+        for name in (
+            "PATCH_SENTINEL",
+            "_PATCH_RESOURCE",
+            "_BACKUP_NAME",
+            "_apply_server_patch",
+            "_query_installed_version",
+        ):
+            assert not hasattr(install_mod, name), f"{name} should be gone"
+
+    def test_pyproject_drops_patch_glob(self):
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        assert "voice_mode/data/**/*.patch" not in pyproject
+
+    def test_cli_no_longer_reports_patch_state(self):
+        cli = (REPO_ROOT / "voice_mode" / "cli.py").read_text(encoding="utf-8")
+        assert "already patched" not in cli
+
+
+@pytest.fixture
+def install_env(tmp_path, monkeypatch):
+    """Run mlx_audio_install with every side effect mocked out.
+
+    Nothing touches uv, launchctl, ~/.local or the real ~/.voicemode. The
+    caller sets ``server_py`` (or None) before awaiting ``run()``.
+    """
+    monkeypatch.setenv("VOICEMODE_BASE_DIR", str(tmp_path / "vm"))
+    # mlx_audio_install writes these; monkeypatch restores them afterwards.
+    monkeypatch.setenv("VOICEMODE_MLX_AUDIO_PORT", "8890")
+    monkeypatch.setenv("VOICEMODE_MLX_AUDIO_HOST", "127.0.0.1")
+
+    entry_point = tmp_path / "bin" / "mlx_audio.server"
+    entry_point.parent.mkdir()
+    entry_point.touch()
+
+    class Env:
+        server_py = None
+        run_mock = MagicMock()
+
+        async def run(self):
+            with patch.object(install_mod, "_is_apple_silicon", return_value=True), \
+                 patch.object(install_mod, "_ensure_uv_available", return_value=None), \
+                 patch.object(install_mod.subprocess, "run", self.run_mock), \
+                 patch.object(install_mod, "_entry_point_path", return_value=entry_point), \
+                 patch.object(install_mod, "_find_installed_server_py",
+                              return_value=self.server_py), \
+                 patch.object(install_mod, "_update_mlx_audio_service_files",
+                              AsyncMock(return_value={"success": True,
+                                                      "service_path": "/x.plist"})):
+                return await mlx_audio_install()
+
+    return Env()
+
+
+def _make_site_packages(root: Path, espeak: bool = True) -> Path:
+    """Build a fake tool-env site-packages; return its mlx_audio/server.py."""
+    site = root / "site-packages"
+    (site / "mlx_audio").mkdir(parents=True)
+    server_py = site / "mlx_audio" / "server.py"
+    server_py.write_text("# upstream server.py\n")
+    if espeak:
+        (site / "espeakng_loader" / "espeak-ng-data").mkdir(parents=True)
+    return server_py
+
+
+class TestInstallFlowDoesNotPatch:
+    """A successful install runs ``uv tool install`` and never ``patch``."""
+
+    @pytest.mark.asyncio
+    async def test_install_never_invokes_patch(self, install_env, tmp_path):
+        server_py = _make_site_packages(tmp_path)
+        original = server_py.read_text()
+        install_env.server_py = server_py
+        result = await install_env.run()
+
+        assert result["success"] is True
+        argvs = [c.args[0] for c in install_env.run_mock.call_args_list]
+        assert argvs == [_build_install_cmd(force_reinstall=False)]
+        assert not any(argv and argv[0] == "patch" for argv in argvs)
+        # server.py is left exactly as upstream shipped it, with no backup.
+        assert server_py.read_text() == original
+        assert list(server_py.parent.iterdir()) == [server_py]
+
+    @pytest.mark.asyncio
+    async def test_result_has_warnings_not_patch(self, install_env, tmp_path):
+        # No espeak dir: macOS tmp_path alone can push the fake espeak path
+        # past 160 chars, which would (correctly) warn.
+        install_env.server_py = _make_site_packages(tmp_path, espeak=False)
+        result = await install_env.run()
+        assert "patch" not in result
+        assert result["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_missing_server_py_warns_but_succeeds(self, install_env):
+        # Nothing needs server.py any more, so failing to find it is not
+        # a reason to fail the install; it only skips the espeak check.
+        install_env.server_py = None
+        result = await install_env.run()
+        assert result["success"] is True
+        assert len(result["warnings"]) == 1
+        assert "espeak-ng data path" in result["warnings"][0]
+
+
+# ============================================================================
+# espeak-ng data-path length guard (VM-2338, from VM-2330 investigate-002 §0)
+# ============================================================================
+
+
+class TestEspeakDataPathWarning:
+    """Pure length check: 159 chars passes, 160+ warns."""
+
+    def test_limit_is_160(self):
+        assert ESPEAK_DATA_PATH_MAX == 160
+
+    def test_159_chars_no_warning(self):
+        path = "/" + "a" * 158
+        assert len(path) == 159
+        assert espeak_data_path_warning(path) is None
+
+    def test_160_chars_warns(self):
+        path = "/" + "a" * 159
+        assert len(path) == 160
+        warning = espeak_data_path_warning(path)
+        assert warning is not None
+        assert path in warning
+        assert "160 characters" in warning
+
+    def test_long_path_warning_names_the_fix(self):
+        warning = espeak_data_path_warning(Path("/" + "b" * 300))
+        assert "301 characters" in warning
+        for knob in ("HOME", "UV_TOOL_DIR", "XDG_DATA_HOME"):
+            assert knob in warning
+
+    def test_default_uv_tool_path_is_fine(self):
+        # The live m5 path VM-2330 measured: 104 chars.
+        path = (
+            "/Users/admin/.local/share/uv/tools/mlx-audio/lib/python3.11/"
+            "site-packages/espeakng_loader/espeak-ng-data"
         )
+        assert espeak_data_path_warning(path) is None
 
-    def test_patch_sentinel_present_in_patch(self):
-        """The sentinel must literally appear in the patch -- otherwise
-        applying the patch can never satisfy the post-patch sanity check."""
-        from voice_mode.tools.mlx_audio.install import (
-            _PATCH_RESOURCE,
-            PATCH_SENTINEL,
-        )
-        text = _PATCH_RESOURCE.read_text(encoding="utf-8")
-        assert PATCH_SENTINEL in text, (
-            f"Sentinel {PATCH_SENTINEL!r} not found in patch content. "
-            "Either the sentinel constant or the patch comment has drifted."
-        )
+    def test_pure_does_not_need_path_to_exist(self):
+        assert espeak_data_path_warning("/nonexistent/" + "x" * 200) is not None
 
-    def test_patch_targets_response_format(self):
-        """Smoke test: patch should add response_format form param and the
-        text/json/verbose_json branching block."""
-        from voice_mode.tools.mlx_audio.install import _PATCH_RESOURCE
-        text = _PATCH_RESOURCE.read_text(encoding="utf-8")
-        assert "response_format: str = Form" in text
-        assert "PlainTextResponse" in text
-        assert "JSONResponse" in text
 
-    def test_pyproject_includes_patches_glob(self):
-        """The wheel target must include *.patch under data/ or the patch
-        file silently won't ship to PyPI."""
-        pyproject = (
-            Path(__file__).parent.parent / "pyproject.toml"
-        ).read_text(encoding="utf-8")
-        assert "voice_mode/data/**/*.patch" in pyproject, (
-            "pyproject.toml [tool.hatch.build.targets.wheel].include is "
-            "missing the *.patch glob -- the bundled patch will not ship."
-        )
+class TestEspeakDataDirLocator:
+    def test_missing_dir_returns_none(self, tmp_path):
+        assert _find_espeak_data_dir(tmp_path) is None
+
+    def test_present_dir_is_found(self, tmp_path):
+        server_py = _make_site_packages(tmp_path)
+        found = _find_espeak_data_dir(server_py.parent.parent)
+        assert found == tmp_path / "site-packages" / "espeakng_loader" / "espeak-ng-data"
+
+
+class TestPostInstallWarnings:
+    def test_missing_espeak_dir_does_not_crash(self, tmp_path):
+        server_py = _make_site_packages(tmp_path, espeak=False)
+        assert _post_install_warnings(server_py) == []
+
+    def test_long_espeak_path_warns(self, tmp_path):
+        deep = tmp_path / ("p" * 200)
+        server_py = _make_site_packages(deep)
+        warnings = _post_install_warnings(server_py)
+        assert len(warnings) == 1
+        assert "espeak-ng-data" in warnings[0]
+
+    def test_short_espeak_path_is_quiet(self, tmp_path, monkeypatch):
+        # tmp_path's own length varies by machine, so raise the limit rather
+        # than guess at it; the exact 159/160 boundary is covered above.
+        monkeypatch.setattr(install_mod, "ESPEAK_DATA_PATH_MAX", 10_000)
+        server_py = _make_site_packages(tmp_path)
+        assert _post_install_warnings(server_py) == []
+
+    @pytest.mark.asyncio
+    async def test_long_path_warns_but_install_succeeds(self, install_env, tmp_path):
+        install_env.server_py = _make_site_packages(tmp_path / ("q" * 200))
+        result = await install_env.run()
+        assert result["success"] is True
+        assert len(result["warnings"]) == 1
+        assert "espeak-ng data path" in result["warnings"][0]
