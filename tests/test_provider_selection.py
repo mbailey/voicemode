@@ -329,6 +329,45 @@ class TestSttModelSelection:
             cpp = self._make_endpoint("http://127.0.0.1:2022/v1", "whisper")
             assert _select_stt_model_for_endpoint(cpp) == "global-default"
 
+    # VM-2342: steps 4-5, the per-provider STT default for mlx-audio.
+
+    def test_mlx_audio_stock_default_replaces_whisper_1(self):
+        """VOICEMODE_STT_MODEL unset: the "whisper-1" fallback is an OpenAI id
+        mlx-audio 404s on, so the built-in mlx-audio default is sent."""
+        with patch("voice_mode.providers.STT_BASE_URLS", []), patch(
+            "voice_mode.providers.STT_MODELS", []
+        ), patch("voice_mode.providers.STT_MODEL", "whisper-1"), patch(
+            "voice_mode.providers.STT_MODEL_EXPLICIT", False
+        ):
+            mlx = self._make_endpoint("http://127.0.0.1:8890/v1", "mlx-audio")
+            assert (
+                _select_stt_model_for_endpoint(mlx)
+                == "mlx-community/whisper-large-v3-turbo-asr-4bit"
+            )
+            # Non-mlx providers keep the global fallback.
+            cpp = self._make_endpoint("http://127.0.0.1:2022/v1", "whisper")
+            assert _select_stt_model_for_endpoint(cpp) == "whisper-1"
+
+    def test_explicit_stt_model_beats_mlx_audio_default(self):
+        with patch("voice_mode.providers.STT_BASE_URLS", []), patch(
+            "voice_mode.providers.STT_MODELS", []
+        ), patch("voice_mode.providers.STT_MODEL", "whisper-1"), patch(
+            "voice_mode.providers.STT_MODEL_EXPLICIT", True
+        ):
+            mlx = self._make_endpoint("http://127.0.0.1:8890/v1", "mlx-audio")
+            assert _select_stt_model_for_endpoint(mlx) == "whisper-1"
+
+    def test_repo_id_stt_model_beats_mlx_audio_default(self):
+        """A global STT_MODEL mlx-audio can load (repo id) is used as-is."""
+        with patch("voice_mode.providers.STT_BASE_URLS", []), patch(
+            "voice_mode.providers.STT_MODELS", []
+        ), patch("voice_mode.providers.STT_MODEL", "org/some-asr"), patch(
+            "voice_mode.providers.STT_MODEL_EXPLICIT", False
+        ):
+            mlx = self._make_endpoint("http://127.0.0.1:8890/v1", "mlx-audio")
+            assert _select_stt_model_for_endpoint(mlx) == "org/some-asr"
+
+
 DEFAULT_TTS_MODELS = ["tts-1", "tts-1-hd", "gpt-4o-mini-tts"]
 
 

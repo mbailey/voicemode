@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **STT: a model the server does not know is no longer reported as a
+  connection failure (VM-2342)** — when an STT endpoint answered with an HTTP
+  4xx, `converse` said "STT service connection failed", sending you hunting a
+  network fault that did not exist. A 404 is now `model_not_found` and the
+  message names the model and the endpoint (for example `STT model 'whisper-1'
+  not found at http://127.0.0.1:8890/v1/audio/transcriptions (HTTP 404)`) and
+  points at `VOICEMODE_STT_MODELS`; any other 4xx is `request_rejected` with its
+  status. When several endpoints fail, a server's 4xx answer is reported ahead
+  of connection errors, and a 404 ahead of other 4xx. Refused connections,
+  timeouts and 5xx are still `connection_failed`, as before. The
+  `listen_and_transcribe` `error_kind` and the `ask_turns` stop reason are
+  `stt_model_not_found` / `stt_request_rejected` accordingly.
+
+  STT on mlx-audio now works without setting a model. With
+  `VOICEMODE_STT_MODEL` unset, an mlx-audio endpoint is sent
+  `mlx-community/whisper-large-v3-turbo-asr-4bit` instead of `whisper-1`, which
+  mlx-audio answers with 404. (The bare `mlx-community/whisper-large-v3-turbo`
+  is avoided on purpose: it fails with HTTP 500 "Processor not found" on a
+  stock Hugging Face cache.) A caller model, a positional `VOICEMODE_STT_MODELS`
+  entry or an explicit `VOICEMODE_STT_MODEL` still wins. With
+  `VOICEMODE_WHISPER_LANGUAGE=auto`, mlx-audio is now sent no `language`, so it
+  detects the language: it does not treat `auto` as a language code. whisper.cpp
+  still gets `auto`; an explicit language still goes to every endpoint.
+
 - **`voicemode service install mlx-audio` can install current mlx-audio again
   (VM-2338)** — the installer pinned `mlx-audio>=0.4.3,<0.4.4` and then applied
   a bundled `server.py` patch whose three hunks all fail against 0.4.4 and

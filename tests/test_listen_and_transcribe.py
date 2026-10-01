@@ -212,6 +212,78 @@ class TestListenAndTranscribe:
         # text-or-no-speech verdict) -- the rename documents this precisely.
         assert result.stt_classified is False
 
+    async def test_stt_model_not_found_names_model_and_endpoint(self):
+        """VM-2342: a 404 from the STT server is NOT a connection failure. The
+        message names the model and the endpoint, with its own error_kind."""
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        endpoint = "http://127.0.0.1:8890/v1/audio/transcriptions"
+
+        async def _stt(*_a, **_k):
+            return {
+                "error_type": "model_not_found",
+                "model": "whisper-1",
+                "endpoint": endpoint,
+                "status_code": 404,
+                "attempted_endpoints": [{
+                    "endpoint": endpoint, "provider": "mlx-audio",
+                    "error": "Error code: 404 - Not Found", "error_details": None,
+                    "error_type": "model_not_found", "model": "whisper-1",
+                    "status_code": 404,
+                }],
+            }
+
+        with patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt):
+            result = await listen_and_transcribe(**_listen_kwargs())
+
+        assert result.outcome == "stt_error"
+        assert result.error_kind == "stt_model_not_found"
+        assert "connection failed" not in result.error_message.lower()
+        assert "'whisper-1'" in result.error_message
+        assert endpoint in result.error_message
+        assert "404" in result.error_message
+        assert "VOICEMODE_STT_MODELS" in result.error_message
+        assert result.stt_classified is False
+
+    async def test_stt_request_rejected_has_its_own_kind(self):
+        """VM-2342: another 4xx (here 401) is reported as rejected, not as a
+        connection failure; OpenAI's parsed details are still shown."""
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        endpoint = "https://api.openai.com/v1/audio/transcriptions"
+
+        async def _stt(*_a, **_k):
+            return {
+                "error_type": "request_rejected",
+                "model": "whisper-1",
+                "endpoint": endpoint,
+                "status_code": 401,
+                "attempted_endpoints": [{
+                    "endpoint": endpoint, "provider": "openai",
+                    "error": "Error code: 401", "error_type": "request_rejected",
+                    "model": "whisper-1", "status_code": 401,
+                    "error_details": {"title": "Authentication Error",
+                                      "message": "Incorrect API key",
+                                      "suggestion": "Check OPENAI_API_KEY"},
+                }],
+            }
+
+        with patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt):
+            result = await listen_and_transcribe(**_listen_kwargs())
+
+        assert result.outcome == "stt_error"
+        assert result.error_kind == "stt_request_rejected"
+        assert "connection failed" not in result.error_message.lower()
+        assert "HTTP 401" in result.error_message
+        assert "Authentication Error" in result.error_message
+        assert "Check OPENAI_API_KEY" in result.error_message
+
     async def test_empty_buffer_without_skip_forward_is_stt_error(self):
         def _record(*_a, **_k):
             return (np.array([], dtype=np.int16), False)

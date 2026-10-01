@@ -1085,7 +1085,9 @@ async def speech_to_text(
         Dict with transcription result or error information:
         - Success: {"text": "...", "provider": "...", "endpoint": "..."}
         - No speech: {"error_type": "no_speech", "provider": "..."}
-        - All failed: {"error_type": "connection_failed", "attempted_endpoints": [...]}
+        - All failed: {"error_type": "connection_failed" | "model_not_found" |
+          "request_rejected", "attempted_endpoints": [...], ...} (see
+          simple_failover.simple_stt_failover, VM-2342)
     """
     import tempfile
     import io
@@ -1881,6 +1883,65 @@ async def _drain_skip_back(control_state, replay_cursor: int) -> int:
 # ask-turn survey loop (impl-002) will also call this once per ask turn.
 # ---------------------------------------------------------------------------
 
+# STT failure kinds returned by simple_stt_failover (error_type) mapped to the
+# stable ListenResult.error_kind each one surfaces as (VM-2342).
+_STT_FAILURE_KINDS = {
+    "connection_failed": "stt_connection_failed",
+    "model_not_found": "stt_model_not_found",
+    "request_rejected": "stt_request_rejected",
+}
+
+
+def _format_stt_failure(stt_result: Dict[str, Any]) -> Tuple[str, str]:
+    """Build the user-facing message and ``error_kind`` for a failed STT pass.
+
+    ``connection_failed`` keeps its historical wording. ``model_not_found``
+    and ``request_rejected`` (VM-2342) mean a server ANSWERED with an HTTP 4xx,
+    so the headline names the model, the endpoint and the status instead of
+    sending the user hunting a network fault that does not exist.
+    """
+    error_type = stt_result["error_type"]
+    error_kind = _STT_FAILURE_KINDS[error_type]
+    model = stt_result.get("model")
+    endpoint = stt_result.get("endpoint")
+    status = stt_result.get("status_code")
+
+    if error_type == "model_not_found":
+        error_lines = [
+            f"STT model {model!r} not found at {endpoint} (HTTP {status}).",
+            "The server answered: it does not serve this model (or the endpoint path is wrong).",
+            "Set VOICEMODE_STT_MODELS (one model per VOICEMODE_STT_BASE_URLS entry) "
+            "or VOICEMODE_STT_MODEL to a model that server serves.",
+        ]
+    elif error_type == "request_rejected":
+        error_lines = [
+            f"STT request rejected by {endpoint} (HTTP {status}, model {model!r}).",
+            "The server answered and refused the request; this is not a connection failure.",
+        ]
+    else:
+        error_lines = ["STT service connection failed:"]
+
+    if error_type != "connection_failed":
+        error_lines.append("Endpoints tried:")
+
+    openai_error_shown = False
+    for attempt in stt_result.get("attempted_endpoints", []):
+        if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
+            error_details = attempt['error_details']
+            error_lines.append("")
+            error_lines.append(error_details.get('title', 'OpenAI Error'))
+            error_lines.append(error_details.get('message', ''))
+            if error_details.get('suggestion'):
+                error_lines.append(f"💡 {error_details['suggestion']}")
+            if error_details.get('fallback'):
+                error_lines.append(f"ℹ️ {error_details['fallback']}")
+            openai_error_shown = True
+        else:
+            error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
+
+    return "\n".join(error_lines), error_kind
+
+
 @dataclass
 class ListenResult:
     """Classified result of one listen exchange.
@@ -1897,7 +1958,7 @@ class ListenResult:
             control-channel stop ended the exchange -- see ``control``),
             "skip_back" (a pending skip_back was detected post-recording --
             the caller should replay then call again), or "stt_error" (empty
-            recording buffer or an STT connection failure -- see
+            recording buffer or an STT service failure -- see
             ``error_message`` / ``error_kind``).
         text: transcribed reply text (set only when outcome == "answered").
         stt_provider: the STT provider name, else "unknown".
@@ -1912,8 +1973,10 @@ class ListenResult:
             progress review S2); use ``error_kind`` instead.
         error_kind: set when outcome == "stt_error" -- a stable machine
             classification: "record_failed" (empty recording buffer, not a
-            skip_forward "go now") or "stt_connection_failed" (STT service
-            unreachable). ``None`` for every other outcome.
+            skip_forward "go now"), "stt_connection_failed" (STT service
+            unreachable), "stt_model_not_found" (an STT server answered HTTP
+            404: unknown model, VM-2342) or "stt_request_rejected" (an STT
+            server answered another HTTP 4xx). ``None`` for every other outcome.
         stt_classified: True iff STT actually ran AND returned a definitive
             classification of the capture -- i.e. outcome is "answered", or
             outcome is "no_speech" *because STT itself* reported no speech
@@ -2118,29 +2181,12 @@ async def listen_and_transcribe(
 
             if "error_type" in stt_result:
                 # Handle connection failures vs no speech
-                if stt_result["error_type"] == "connection_failed":
-                    error_lines = ["STT service connection failed:"]
-                    openai_error_shown = False
-
-                    for attempt in stt_result.get("attempted_endpoints", []):
-                        if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
-                            error_details = attempt['error_details']
-                            error_lines.append("")
-                            error_lines.append(error_details.get('title', 'OpenAI Error'))
-                            error_lines.append(error_details.get('message', ''))
-                            if error_details.get('suggestion'):
-                                error_lines.append(f"💡 {error_details['suggestion']}")
-                            if error_details.get('fallback'):
-                                error_lines.append(f"ℹ️ {error_details['fallback']}")
-                            openai_error_shown = True
-                        else:
-                            error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
-
-                    error_msg = "\n".join(error_lines)
+                if stt_result["error_type"] in _STT_FAILURE_KINDS:
+                    error_msg, error_kind = _format_stt_failure(stt_result)
                     logger.error(error_msg)
                     return ListenResult(
                         outcome="stt_error", timings=timings, error_message=error_msg,
-                        error_kind="stt_connection_failed",
+                        error_kind=error_kind,
                     )
 
                 elif stt_result["error_type"] == "no_speech":
@@ -2716,9 +2762,12 @@ async def _ask_turns_pipeline(
                     # stable ``error_kind`` field, not a substring match on the
                     # human-readable ``error_message`` (a rewording there used
                     # to be able to silently misclassify survey aborts).
+                    # VM-2342: every STT-service kind passes through as its own
+                    # reason (stt_connection_failed / stt_model_not_found /
+                    # stt_request_rejected); only record_failed is a device error.
                     reason = (
-                        "stt_connection_failed"
-                        if listen_result.error_kind == "stt_connection_failed"
+                        listen_result.error_kind
+                        if listen_result.error_kind in _STT_FAILURE_KINDS.values()
                         else "audio_device_error"
                     )
                     stopped_at = {"turn": idx, "phase": "listening", "reason": reason}
