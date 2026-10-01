@@ -487,6 +487,25 @@ def _is_transient_stt_error(e: Exception) -> bool:
     return False
 
 
+def _classify_stt_failure(e: Exception) -> Tuple[Optional[int], str]:
+    """Classify one STT endpoint's failure as ``(status_code, error_type)`` (VM-2342).
+
+    - HTTP 404 -> ``(404, "model_not_found")``: the server answered and does
+      not know the model (mlx-audio's reply to an unknown model id; a wrong
+      endpoint path also 404s, and the user-facing message says so).
+    - Any other HTTP 4xx -> ``(status, "request_rejected")``: the server
+      answered and refused the request (bad audio, auth, rate limit...).
+    - Everything else -> ``(status or None, "connection_failed")``: refused,
+      timed out, 5xx, or an unrecognised exception, as before VM-2342.
+    """
+    if isinstance(e, APIStatusError):
+        status = getattr(e, "status_code", None)
+        if isinstance(status, int) and 400 <= status < 500:
+            return status, ("model_not_found" if status == 404 else "request_rejected")
+        return (status if isinstance(status, int) else None), "connection_failed"
+    return None, "connection_failed"
+
+
 async def simple_stt_failover(
     audio_file,
     model: Optional[str] = None,
@@ -499,7 +518,22 @@ async def simple_stt_failover(
         Dict with transcription result or error information:
         - Success: {"text": "...", "provider": "...", "endpoint": "...", "metrics": {...}}
         - No speech: {"error_type": "no_speech", "provider": "...", "metrics": {...}}
-        - All failed: {"error_type": "connection_failed", "attempted_endpoints": [...]}
+        - All failed: {"error_type": <kind>, "attempted_endpoints": [...]}
+          where <kind> classifies the failures (VM-2342):
+            * "model_not_found" -- at least one endpoint ANSWERED with HTTP 404
+              (mlx-audio does this for a model it does not know, e.g. the
+              stock "whisper-1"). Adds top-level "model", "endpoint" and
+              "status_code" from the first 404.
+            * "request_rejected" -- no 404, but at least one endpoint answered
+              with another HTTP 4xx (400/401/403/422/429...). Adds the same
+              top-level fields from the first such answer.
+            * "connection_failed" -- no endpoint answered with a 4xx: refused,
+              timed out, 5xx, or an unrecognised error (unchanged behaviour).
+          Rule for a mixed chain: a server's 4xx answer outranks a connection
+          error, because it is the actionable fault (the server is up and
+          told us why). 404 outranks other 4xx. Every endpoint's own failure
+          stays in "attempted_endpoints", each entry carrying "error_type",
+          "model" (the id sent, or None) and "status_code" (or None).
 
         The metrics dict (when present) contains:
         - file_size_bytes: Size of audio file sent
@@ -535,6 +569,7 @@ async def simple_stt_failover(
 
     # Try each STT endpoint in order
     for i, base_url in enumerate(STT_BASE_URLS):
+        resolved_model = None  # recorded in the failure entry if we fail early
         try:
             # Detect provider type for logging
             provider_type = detect_provider_type(base_url)
@@ -584,13 +619,16 @@ async def simple_stt_failover(
             # Handle language parameter based on provider
             # - whisper.cpp: needs "auto" explicitly (default is "en")
             # - OpenAI API: omit for auto-detect (doesn't accept "auto")
+            # - mlx-audio: omit for auto-detect (VM-2342). It does not treat
+            #   "auto" as a language: 0.5.7 maps it to <|endoftext|> and skips
+            #   detection; only an unset language detects (VM-2334).
             if WHISPER_LANGUAGE and WHISPER_LANGUAGE != "auto":
                 # Explicit language set - pass to all providers
                 transcription_kwargs["language"] = WHISPER_LANGUAGE
-            elif is_local_provider(base_url):
+            elif is_local_provider(base_url) and provider_type != "mlx-audio":
                 # Local whisper.cpp with auto mode - must pass "auto" explicitly
                 transcription_kwargs["language"] = "auto"
-            # For OpenAI with "auto" - don't pass parameter (auto-detect by default)
+            # For OpenAI / mlx-audio with "auto" - don't pass the parameter
 
             # Bounded, transient-only retry with backoff for LOCAL STT (VM-926).
             # Local whisper.cpp does time out transiently and usually recovers on
@@ -618,7 +656,7 @@ async def simple_stt_failover(
                         continue
                     # Permanent error or retries exhausted: re-raise to the outer
                     # except, which records the failure and advances to the next
-                    # endpoint (or returns connection_failed).
+                    # endpoint (or returns the classified failure).
                     raise
             request_time_ms = (time.perf_counter() - request_start) * 1000
 
@@ -661,13 +699,18 @@ async def simple_stt_failover(
                     if error_details.get('suggestion'):
                         logger.info(f"  💡 {error_details['suggestion']}")
 
-            # Track connection/auth errors
+            # Track the failure, classified (VM-2342): an HTTP 4xx means the
+            # server ANSWERED, which is not a connection failure.
             full_endpoint = f"{base_url}/audio/transcriptions" if not base_url.endswith("/v1") else f"{base_url}/audio/transcriptions"
+            status_code, endpoint_error_type = _classify_stt_failure(e)
             connection_errors.append({
                 "endpoint": full_endpoint,
                 "provider": provider_type,
                 "error": error_str,
-                "error_details": error_details  # Include parsed error details
+                "error_details": error_details,  # Include parsed error details
+                "error_type": endpoint_error_type,
+                "model": resolved_model,
+                "status_code": status_code,
             })
 
             # Log failure with appropriate level based on whether we have fallbacks
@@ -690,8 +733,23 @@ async def simple_stt_failover(
             result["metrics"] = successful_metrics
         return result
     elif connection_errors:
-        # All endpoints failed with connection/auth errors
+        # All endpoints failed. Report a server's 4xx answer as what it is
+        # (VM-2342); see the docstring for the mixed-chain rule.
         logger.error(f"✗ All STT endpoints failed after {len(STT_BASE_URLS)} attempts")
+        for kind in ("model_not_found", "request_rejected"):
+            answered = next((a for a in connection_errors if a["error_type"] == kind), None)
+            if answered is not None:
+                logger.error(
+                    f"  {kind}: model {answered['model']!r} at {answered['endpoint']} "
+                    f"(HTTP {answered['status_code']})"
+                )
+                return {
+                    "error_type": kind,
+                    "model": answered["model"],
+                    "endpoint": answered["endpoint"],
+                    "status_code": answered["status_code"],
+                    "attempted_endpoints": connection_errors,
+                }
         return {"error_type": "connection_failed", "attempted_endpoints": connection_errors}
     else:
         # Should not reach here, but handle it gracefully

@@ -72,8 +72,21 @@ are unaffected — they always use their profile's pinned model.
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
 | `VOICEMODE_STT_BASE_URLS` | Comma-separated STT service URLs | `https://api.openai.com/v1` | `http://localhost:2022/v1` |
-| `VOICEMODE_STT_MODEL` | STT model | `whisper-1` | `whisper-1` |
+| `VOICEMODE_STT_MODEL` | STT model sent to every non-OpenAI endpoint. When unset, a per-provider default applies (see below) | `whisper-1` (mlx-audio: `mlx-community/whisper-large-v3-turbo-asr-4bit`) | `whisper-1` |
+| `VOICEMODE_STT_MODELS` | Comma-separated STT models, one per `VOICEMODE_STT_BASE_URLS` entry (positional) | None | `whisper-1,mlx-community/whisper-large-v3-turbo-asr-4bit` |
 | `VOICEMODE_STT_PROMPT` | Vocabulary biasing for Whisper (names, terms) | None | `tmux, Tali, kubectl` |
+
+STT model resolution, per endpoint: an OpenAI endpoint always gets `whisper-1`;
+otherwise a model passed by the caller wins, then the positional
+`VOICEMODE_STT_MODELS` entry, then `VOICEMODE_STT_MODEL` if you set it. With
+none of those, an mlx-audio endpoint (port 8890) gets
+`mlx-community/whisper-large-v3-turbo-asr-4bit`, because mlx-audio only serves
+Hugging Face repo ids and answers `whisper-1` with HTTP 404. It is an `-asr-*`
+repo on purpose: the bare `mlx-community/whisper-large-v3-turbo` fails with
+HTTP 500 "Processor not found" on a stock Hugging Face cache. Every other
+endpoint gets `whisper-1`. With `VOICEMODE_WHISPER_LANGUAGE=auto`, mlx-audio is
+sent no `language` at all, so it detects the language; whisper.cpp still gets
+`auto`.
 
 ### Whisper Configuration
 

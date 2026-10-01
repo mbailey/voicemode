@@ -147,6 +147,14 @@ def load_voicemode_env():
 # Comma-separated list of STT endpoints
 # VOICEMODE_STT_BASE_URLS=http://127.0.0.1:2022/v1,https://api.openai.com/v1
 
+# STT model id sent to each endpoint. Leave unset for the per-provider default:
+# OpenAI -> whisper-1, mlx-audio -> mlx-community/whisper-large-v3-turbo-asr-4bit
+# (mlx-audio 404s on whisper-1; use an -asr-* repo id), others -> whisper-1.
+# Setting VOICEMODE_STT_MODEL sends that id to every non-OpenAI endpoint;
+# VOICEMODE_STT_MODELS sets one model per VOICEMODE_STT_BASE_URLS entry.
+# VOICEMODE_STT_MODEL=whisper-1
+# VOICEMODE_STT_MODELS=
+
 # STT prompt for vocabulary biasing - helps Whisper recognize names and technical terms
 # Use when specific words are consistently misrecognized
 # Example: VOICEMODE_STT_PROMPT=tmux, Tali, kubectl, VoiceMode
@@ -770,7 +778,18 @@ STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:20
 TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
 STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
+# Whether the user set VOICEMODE_STT_MODEL themselves (env or voicemode.env).
+# When they did not, the "whisper-1" default above is only a fallback, and a
+# per-provider STT default (STT_MODEL_PROVIDER_DEFAULTS) may replace it (VM-2342).
+STT_MODEL_EXPLICIT = bool(os.getenv("VOICEMODE_STT_MODEL"))
 STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
+# Built-in per-provider STT defaults (VM-2342), mirroring
+# TTS_MODEL_PROVIDER_DEFAULTS. mlx-audio only knows Hugging Face repo ids, so
+# OpenAI's "whisper-1" 404s there. Use an "-asr-*" repo: the bare
+# "mlx-community/whisper-large-v3-turbo" returns HTTP 500 "Processor not
+# found" on a stock HF cache (measured, VM-2334). See
+# providers._select_stt_model_for_endpoint for the resolution order.
+STT_MODEL_PROVIDER_DEFAULTS = {"mlx-audio": "mlx-community/whisper-large-v3-turbo-asr-4bit"}
 
 # Per-provider TTS model overrides (VM-1390). Maps a provider_type (as returned
 # by detect_provider_type) to its preferred model list, parsed from
@@ -849,6 +868,7 @@ def reload_configuration():
     
     # Update global configuration variables
     global TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS
+    global STT_MODEL_EXPLICIT
     global TTS_MODELS_BY_PROVIDER
     global STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX
     TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
@@ -857,6 +877,7 @@ def reload_configuration():
     TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
     TTS_MODELS_BY_PROVIDER = parse_provider_models("VOICEMODE_TTS_MODELS")
     STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
+    STT_MODEL_EXPLICIT = bool(os.getenv("VOICEMODE_STT_MODEL"))
     STT_MODELS = parse_comma_list("VOICEMODE_STT_MODELS", "")
     STT_RETRY_ATTEMPTS = int(os.getenv("VOICEMODE_STT_RETRY_ATTEMPTS", "2"))
     STT_RETRY_BACKOFF = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF", "0.5"))

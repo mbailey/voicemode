@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 
 from .config import (
     TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS,
+    STT_MODEL_EXPLICIT, STT_MODEL_PROVIDER_DEFAULTS,
     TTS_MODELS_BY_PROVIDER, TTS_MODEL_PROVIDER_DEFAULTS, TTS_MODEL_DEFAULT,
     OPENAI_API_KEY, get_voice_preferences,
 )
@@ -325,7 +326,19 @@ def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model:
       1. provider_type == "openai" -> always "whisper-1" (OpenAI's only STT model id)
       2. caller-passed requested_model wins
       3. positional STT_MODELS entry matching this endpoint's index in STT_BASE_URLS
-      4. global STT_MODEL fallback
+      4. global STT_MODEL, if the user set VOICEMODE_STT_MODEL explicitly, or if
+         it is a plausible id for this provider (see :func:`_model_compatible`)
+      5. built-in per-provider default (``STT_MODEL_PROVIDER_DEFAULTS``:
+         mlx-audio -> ``mlx-community/whisper-large-v3-turbo-asr-4bit``)
+      6. global STT_MODEL fallback (``"whisper-1"`` unless configured)
+
+    Steps 4-5 exist for VM-2342: the stock STT_MODEL default ``"whisper-1"`` is
+    an OpenAI id that mlx-audio does not know (HTTP 404), so a stock install
+    pointing STT at mlx-audio now sends a repo id it can load. An explicit
+    VOICEMODE_STT_MODEL, or an HF repo id in STT_MODEL, still wins. The
+    default is an ``-asr-*`` repo because the bare
+    ``mlx-community/whisper-large-v3-turbo`` 500s ("Processor not found") on a
+    stock HF cache (VM-2334).
 
     Note: the OpenAI override keys off endpoint_info.provider_type. If an
     OpenAI-compatible endpoint ever sets provider_type="openai" this branch
@@ -342,5 +355,9 @@ def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model:
         if idx < len(STT_MODELS) and STT_MODELS[idx]:
             return STT_MODELS[idx]
 
-    return STT_MODEL
+    provider_type = endpoint_info.provider_type or "unknown"
+    if STT_MODEL_EXPLICIT or _model_compatible(provider_type, STT_MODEL):
+        return STT_MODEL
+
+    return STT_MODEL_PROVIDER_DEFAULTS.get(provider_type, STT_MODEL)
 
