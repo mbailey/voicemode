@@ -26,8 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   affect default installs, where STT uses whisper.cpp on :2022; it only shows
   if you point STT at mlx-audio's whisper. Also, when a client omits
   `response_format`, upstream answers with its native `ndjson` stream, where the
-  old patch answered `json`. voicemode always sends `response_format`, so only
-  third-party clients that leave it out see the change.
+  old patch answered `json`. voicemode's conversation STT always sends
+  `response_format`, so `converse` is unaffected. The voice-clone transcription
+  in `impressions` does not send it, so against an mlx-audio STT endpoint it now
+  gets the `ndjson` stream instead of `json`. Third-party clients that leave the
+  field out see the same change.
 
   The installer now also warns (it does not fail) when the installed
   `espeakng_loader/espeak-ng-data` path is 160 characters or longer. espeak-ng
