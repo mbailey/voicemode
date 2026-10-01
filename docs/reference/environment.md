@@ -74,6 +74,8 @@ are unaffected — they always use their profile's pinned model.
 | `VOICEMODE_STT_BASE_URLS` | Comma-separated STT service URLs | `https://api.openai.com/v1` | `http://localhost:2022/v1` |
 | `VOICEMODE_STT_MODEL` | STT model | `whisper-1` | `whisper-1` |
 | `VOICEMODE_STT_PROMPT` | Vocabulary biasing for Whisper (names, terms) | None | `tmux, Tali, kubectl` |
+| `VOICEMODE_STT_TIMEOUT` | STT request timeout in seconds, all endpoints | `60` | `30` |
+| `VOICEMODE_STT_TIMEOUT_LOCAL` | STT request timeout for local endpoints only; size it to your measured worst-case transcription (scales with audio length, CPU vs GPU) | `VOICEMODE_STT_TIMEOUT` | `15` |
 
 ### Whisper Configuration
 
