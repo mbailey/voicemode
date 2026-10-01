@@ -25,6 +25,7 @@ faithfully producing audio is irrelevant to the queue logic.
 """
 
 import asyncio
+import os
 
 import pytest
 from unittest.mock import patch
@@ -37,6 +38,12 @@ def _converse():
     """The undecorated converse coroutine (FastMCP wraps it as ``.fn``)."""
     from voice_mode.tools.converse import converse
     return getattr(converse, "fn", converse)
+
+
+def _agent_name():
+    """The conch name this session resolves to (see test_conch_session_name.py)."""
+    from voice_mode.tools.converse import _conch_agent_name
+    return _conch_agent_name(os.getcwd())
 
 
 def _sessions():
@@ -129,7 +136,7 @@ class TestCallbackMode:
         entry = _entry("sess-a")
         assert entry is not None, "callback waiter must remain registered"
         assert entry.mode == "callback"
-        assert entry.agent == "converse"
+        assert entry.agent == _agent_name()
 
     @pytest.mark.asyncio
     async def test_callback_message_is_truthful_about_delivery(self, clean_conch):
@@ -199,7 +206,7 @@ class TestCallbackMode:
         queued = {q["session_id"]: q for q in snap["queue"]}
         assert "sess-a" in queued, "a queued callback caller must appear in conch status"
         assert queued["sess-a"]["mode"] == "callback"
-        assert queued["sess-a"]["agent"] == "converse"
+        assert queued["sess-a"]["agent"] == _agent_name()
 
     @pytest.mark.asyncio
     async def test_callback_without_session_id_uses_process_fallback(
