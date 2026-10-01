@@ -1055,6 +1055,40 @@ def prepare_audio_for_stt(audio_data: np.ndarray, output_format: str = "mp3") ->
     return compressed_data
 
 
+def _heard_turn(text: Optional[str], *, session: Optional[str] = None,
+                detector: Optional[str] = None, transport: Optional[str] = None) -> None:
+    """Write converse's listen window into the heard log (ambient-listen 1.2).
+
+    One ``turn`` line with ``via: "converse"``, beside the exchange log's
+    ``log_stt`` entry: converse transcribes a whole utterance once, so it
+    has no chunks and writes no ``partial`` lines. The reading session's
+    own hook skips these (it has the text as converse's result); other
+    sessions see them. No speech, no line. Never raises and never changes
+    converse's return.
+    """
+    if not text or not text.strip() or text.strip() == "[no speech detected]":
+        return
+    try:
+        from voice_mode import heard
+        local = transport in (None, "local", "survey")
+        heard.turn(
+            text,
+            via="converse",
+            source="mic" if local else str(transport),
+            # No `device` yet: naming it here means a PortAudio query in
+            # converse's path, which the test audio guard rightly flags
+            # (46 blocked calls, measured 04:06 Thu 2026-09-24). Task 4
+            # (VM-1010) names the device once, where the stream opens, and
+            # hands it to both this line and converse's result.
+            session=session or heard.caller_session(),
+            agent=heard.caller_agent(),
+            detector=detector,
+            directory=Path(BASE_DIR) / "logs" / "conversations",
+        )
+    except Exception as heard_err:
+        logger.warning(f"heard: converse's turn was not written: {heard_err}")
+
+
 async def speech_to_text(
     audio_data: np.ndarray,
     save_audio: bool = False,
@@ -2857,6 +2891,11 @@ async def _ask_turns_pipeline(
                     )
                 except Exception as log_err:
                     logger.error(f"Survey turn {idx}: failed to log conversation STT: {log_err}")
+                _heard_turn(
+                    text,
+                    detector="max-duration" if disable_silence_detection else "converse-silence",
+                    transport="survey",
+                )
                 break
 
             results[idx] = entry
@@ -4246,6 +4285,14 @@ consult the MCP resources listed above.
                     )
                 except Exception as e:
                     logger.error(f"Failed to log STT to JSONL: {e}")
+                _heard_turn(
+                    response_text,
+                    session=resolved_session_id,
+                    detector=("max-duration"
+                              if (DISABLE_SILENCE_DETECTION or disable_silence_detection)
+                              else "converse-silence"),
+                    transport=transport,
+                )
             
             # Calculate total time (use tts_total instead of sub-metrics)
             main_timings = {k: v for k, v in timings.items() if k in ['tts_total', 'record', 'stt']}

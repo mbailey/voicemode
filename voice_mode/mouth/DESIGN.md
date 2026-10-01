@@ -1,0 +1,191 @@
+# mouth: design, against Mike's asks of 21:21-21:25 Thu 2026-09-24
+
+Pip, 21:28. The source is Cora's capture `<1790249197.4456.2038@m5.session-mail>`
+(heard seq 7207, walking back to the van). Each ask gets its status and a
+proposed shape. Nothing here is live until Mike says so.
+
+## Where each ask stands
+
+1. **Several agents, one mouth.** Works NOW. There is one queue, and each
+   line carries `agent` and `session`. `--channel` / `$VOICEMODE_MOUTH_PAN`
+   can give each agent its own ear.
+2. **Status back.** Works NOW. `said` carries what played, where it was cut
+   and why, and `say --wait` returns it. Over mail (8), the `said` becomes
+   the reply.
+3. **Amend or retract before it's spoken.** BUILT (dev, `aa4af354`):
+   `mouth amend UTT TEXT` rewrites a queued line in place, keeping its
+   position. `mouth retract UTT` drops it, and if it's already playing, cuts
+   it. Either way a `said reason=retracted` closes it. It's the `Supersedes:`
+   of the queue.
+4. **Interrupts.** BUILT (dev, `aa4af354`): `say --next` jumps the queue, and
+   `say --now` cuts the current line (`reason=interrupted`) and speaks at
+   once. The cut is aimed at the one playing utterance, never the queue
+   behind it.
+5. **Sounds, a file or part of one.** BUILT (dev, this commit):
+   `mouth play FILE|URL [--start S] [--end S]`. It decodes through ffmpeg
+   into the same queue, so it gets the same stop, priority, pan and log.
+6. **DJ inside the mouth.** SPLIT:
+   - **ducking** is BUILT (dev, this commit, opt-in `$VOICEMODE_MOUTH_DUCK=PCT`). The
+     DJ's mpv is lowered at `saying` and restored at `said`, through
+     `DJController.volume()`. No mixing is needed, because mpv stays its own
+     stream.
+   - **playlists** exist already: `voicemode dj play`.
+   - **the same music on several speakers, in time**, is NOT started. It
+     needs clock-aligned start across devices, which is the several-device
+     work (legs) plus an aligned start time. Big.
+7. **L-cuts and J-cuts** (sound leading or trailing the picture). NOT
+   started. It needs two streams overlapping on a timeline, i.e. a mixer.
+   Today's model is "one playing at a time". Proposal: a later `at:` field
+   (start at t, or at an offset from another utterance's start or end),
+   with the player mixing. Big, and it wants the video use case in front
+   of us.
+8. **Mail as the transport.** RULED by Mike at 21:40 ("mail feeds mouth",
+   slipbox 515) and BUILT (dev, this commit): `mouth mail` watches
+   `~/.mail/agents/mouth` (`mouth@m5`, box made and mapped 21:42).
+   - body = the text (lightly un-markdowned); an empty body speaks the Subject
+   - `Supersedes:` amends a line not yet spoken; if it has been spoken, the
+     correction is queued as news
+   - `Supersedes:` with an empty body retracts
+   - `Importance: high` or `X-Mouth-Priority: next|now` sets the priority
+   - `X-Mouth-File` / `-Start` / `-End` plays a sound
+   - `X-Mouth-Voice|Speed|Device|Channel|Pan` set per-line options
+   - agent = From, session = `X-Session-From`, and `mail_id` goes on
+     saying/said
+
+   Only a From on this host, or in `$VOICEMODE_MOUTH_MAIL_ALLOW`, is
+   spoken. It's a From check; verifying the signature is the follow-up.
+   **Measured end to end through postfix at 21:47:** send to queued in
+   244 ms, then queued to first frame in 323 ms (cold player).
+   Not yet: a `said` mailed back as a reply (the heard log carries it).
+
+## 9. The mouth's mailbox is its own log, and its memory
+
+Mike, voice 21:52-21:55 (Cora `<1790250869.45008.5357@m5.session-mail>`,
+`<1790250964.54341.9598@m5.session-mail>`): "a mailbox basically for the log
+... it reads its own mailbox and it writes to its own mailbox ... the single
+source of truth ... like syslog but using the message format", then "it's
+mouth memory".
+
+PROTOTYPED (dev, opt-in, `$VOICEMODE_MOUTH_MAIL_LOG`; `mouth mail` turns it
+on for its own box):
+- each utterance is one thread: `queued` (the root, or a reply to the
+  request mail), then `saying`, then `said`, with subjects that carry the
+  point
+- `enabled`/`disabled` entries for the watcher
+- entries are written straight into `cur/`, already seen, so the watcher
+  never takes one for a request
+- the heard-log lines are kept until he rules
+
+**To be memory (MHS), not yet:**
+- a mouth ROOT hint and labels, e.g. `[CONVO]/[YYYY-MM-DD]`, with each
+  utterance thread under its day
+- signed entries (membership needs a verified signature)
+- `memory --box mouth` carried by sessionmail's transport (Cora, tested
+  21:56: not wired yet)
+
+Those are sessionmail's to decide, not the mouth's.
+
+## The shape it keeps
+
+- One queue, one player, one line at a time. Stacked lines are gapless
+  (prefetch). 7 is the first ask that breaks "one at a time", and it
+  should be designed with a real video in hand.
+- Every utterance ends in exactly one `said`, whatever happens to it:
+  done, stop, barge-in, interrupted, retracted, device-absent,
+  device-lost or error.
+- The heard log is the timeline, and the mouth writes to it only through
+  `heard.append`.
+
+## Since 03:26 Sat 2026-09-26: the queue is a maildir
+
+Mike, voice 03:24-03:26: *"we may as well drop the files as mail, maybe
+using mail drop ... Yes"*. Detail: `box.py`.
+
+- **One box.** The live mouth's queue is its own mailbox,
+  `~/.mail/agents/mouth`. `new/` is to be spoken, and `cur/` is done,
+  flagged S (spoken), T (not spoken) or P (passed: expired or stale). The
+  log entries already lived in `cur/`.
+- **Every way in lands in `new/`.** `mouth say` drops a mail (tmp, then
+  rename). Postfix delivers mail to `mouth@<host>`. Nothing translates, so
+  the JSON queue and the `mouth mail` watcher are gone. `mouth mail` is now
+  the player, resident, run by `com.failmode.mouth-mail`.
+- **A playlist** (Mike, 03:07-03:12). `X-Mouth-Priority`: `now` -1, `next`
+  0, a number, none 50. Lower plays sooner, then arrival order.
+- **Replace is a supersede.** A newer mail takes the older one's place. An
+  empty body retracts. Nothing is edited in place.
+- **Stale** (Mike, 03:07-03:12). A held line queued before his current turn
+  began is filed P and never spoken.
+- **Expiry of a held line** counts from the end of his turn, not from when
+  it was queued.
+
+## Since 04:15 Sat 2026-09-26: the mouth keeps what it says (dev, not live)
+
+Cora's Samples section in the voice browser needs a line's audio after it
+has been spoken (her recap, 04:13; Mike's picker v2 wish for cached samples,
+03:33). Pip's answer to Mike's 04:14 question, "what do you finish before
+the Delta config spike?". Detail: `audio.py`.
+
+- **One WAV per line**, plus a JSON note beside it:
+  `<audio dir>/<YYYY-MM-DD>/<utt>.wav|json`. It's kept once the line's
+  synthesis FINISHED, even if the playback was cut, and the line's `said`
+  carries `audio` (the path).
+- **Not kept:** `mouth play` files (they already exist) and the `silence`
+  backend.
+- **Settings:**
+  - `$VOICEMODE_MOUTH_AUDIO_DIR`, else `<mouth dir>/audio`.
+  - `VOICEMODE_MOUTH_KEEP_AUDIO=0` turns it off.
+  - `$VOICEMODE_MOUTH_AUDIO_DAYS` (default 7) is how long it's kept. Older
+    day folders are pruned at most once an hour, and a folder whose name is
+    not a date is never touched.
+- **`mouth audio [--voice V] [--last N]`**: JSON lines, newest first. This
+  is what Samples reads.
+- **Cost:** 48 KB a second of speech at 24 kHz, so about 0.5 MB for a
+  10-second line.
+
+## Since 12:25 Sat 2026-09-26: voices are checked; `render` writes a file (dev, not live)
+
+For the Settings audition (Mike 12:24-12:32, Cora's 60.1 design v2):
+each reference row plays the original clip and a clone of the test line
+made from that one clip, made once and then only played.
+
+- **A voice that doesn't resolve is an error** (Cora 12:25: "make the silent
+  Kokoro fallback an error"). The line closes `said reason=error`, with the
+  resolver's "did you mean". The one fall-through left is a voice the
+  mouth's own Kokoro speaks that VoiceMode's resolver doesn't know
+  (`bf_isabella`).
+- **Picking a reference clip** is the voice expression: `leela[1]`, or better
+  `dr-who/leela/02-then-ill-face-it.wav` (an index moves when a clip is
+  added). The short form `leela/02-...wav` does not resolve.
+- **`mouth resolve EXPR`**: JSON (backend, ref_audio, ref_text), or exit 2
+  with the reason.
+- **`mouth render --voice EXPR --out FILE [--if-missing] TEXT`**: synthesises
+  to FILE and plays nothing. `.wav` is written directly; any other suffix
+  (`.mp3`, at VBR `-q:a 2`) goes through ffmpeg. `--if-missing` asks the
+  server nothing when FILE exists. The JSON carries `model`, for the cache
+  hash. Play it with `mouth play FILE`. The app keeps these under
+  `<voice>/.auditions/` (voice-lab ignores it as generated scratch, VL-167),
+  NOT `.samples/`, which holds unpromoted candidate references.
+
+## Since 12:56 Sat 2026-09-26: `call:<N>`, a live call as a device (dev, not live)
+
+Mike, voice 12:37-12:47 (the hero video): he calls the Kin bot, the call
+joins our ears, and our voices have to reach the call. `dc-say --call` puts
+words in a call, but the bot synthesises them, so nothing outside can hold,
+cut or queue them.
+
+- `--device call:<N>` (N = the call's id, as `dc-say --call` takes it;
+  `call` alone = the only live call). `mouth devices` lists live calls.
+- The bot holding the call serves a 0600 Unix socket (kin `mouthleg.py`,
+  `~/.<agent>/delta-chat[/<profile>]/call-mouth.sock`). One connection per
+  line: a JSON header (call, rate, text, who), then 48 kHz int16 frames, then
+  done or cut. EOF before done is a cut.
+- `CallOut` paces in real time, 0.2 s ahead, so a cut or retract drops a
+  fraction of a second. Resampling is linear (speech into Opus).
+- Refusals are `device-absent` with the live calls named; the call ending
+  mid-line is `device-lost`. Never a fallback to another device.
+- Hold and barge-in on a call line listen to the call AND the room
+  (`hold.sources_for`); every other device keeps the room mic alone.
+  Barge-in on a call stays OFF by default (the device regex), until it has
+  been heard working on a live call.
+- The bot's echo guard hears the line as source `mouth`; its transcript
+  keeps the line, marked `[cut]` when it was.
