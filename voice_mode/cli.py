@@ -670,12 +670,8 @@ def service_install(service_name, force):
                     click.echo(f"   Entry point: {result['entry_point']}")
                 if result.get('service_url'):
                     click.echo(f"   Service URL: {result['service_url']}")
-                patch = result.get('patch') or {}
-                if patch.get('already_patched'):
-                    click.echo("   server.py: already patched (sentinel present)")
-                elif patch.get('success'):
-                    click.echo("   server.py: patched (backup at "
-                               f"{patch.get('backup_path', '?')})")
+                for warning in result.get('warnings') or []:
+                    click.echo(f"⚠️  {warning}")
             else:
                 click.echo(f"❌ mlx-audio installation failed: {result.get('error', 'Unknown error')}")
                 _echo_missing_dependencies(result)
