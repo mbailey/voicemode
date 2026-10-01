@@ -10,7 +10,7 @@ voicemode service install mlx-audio
 
 What this does:
 
-1. `uv tool install mlx-audio>=0.4.3` (the bundled patch is gone as of VM-1126; pin floored).
+1. `uv tool install 'mlx-audio>=0.5.7,<0.6'` with the server extras. Upstream `server.py` is used as shipped; voicemode no longer patches it (VM-2338).
 2. Writes a launchd unit (`com.failmode.voicemode.mlx-audio.plist`) so the server starts on login.
 3. Pre-stages the runtime but does **not** download the Qwen3-TTS model. That happens lazily on the first synthesis call.
 

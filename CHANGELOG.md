@@ -24,7 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   One behaviour is lost: the old patch also dropped whisper's `""` / `"."` /
   `"..."` silence-hallucination segments, and upstream does not. This does not
   affect default installs, where STT uses whisper.cpp on :2022; it only shows
-  if you point STT at mlx-audio's whisper.
+  if you point STT at mlx-audio's whisper. Also, when a client omits
+  `response_format`, upstream answers with its native `ndjson` stream, where the
+  old patch answered `json`. voicemode always sends `response_format`, so only
+  third-party clients that leave it out see the change.
 
   The installer now also warns (it does not fail) when the installed
   `espeakng_loader/espeak-ng-data` path is 160 characters or longer. espeak-ng
