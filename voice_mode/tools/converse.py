@@ -2924,6 +2924,25 @@ _TURNS_PARAM_DESCRIPTION = (
 )
 
 
+def _conch_agent_name(project_path: Optional[str]) -> str:
+    """The name this session shows as in `voicemode conch status`.
+
+    With several agents taking turns on the conch, this is what tells them
+    apart -- and what `voicemode conch give <name>` matches on. Precedence:
+    VOICEMODE_SESSION_NAME > the project directory's basename (usually the
+    repo) > "converse". Like the session id, the env var is only meaningful
+    for stdio transport, where each session has its own server process.
+    """
+    name = os.environ.get("VOICEMODE_SESSION_NAME", "").strip()
+    if name:
+        return name
+    if project_path:
+        base = os.path.basename(os.path.normpath(project_path))
+        if base:  # empty for a filesystem root
+            return base
+    return "converse"
+
+
 async def _converse_core(
     message: Optional[str] = None,
     turns: Annotated[Optional[list], Field(description=_TURNS_PARAM_DESCRIPTION)] = None,
@@ -3180,6 +3199,7 @@ consult the MCP resources listed above.
         resolved_project_path = os.getcwd()
     except OSError:
         resolved_project_path = None
+    resolved_agent_name = _conch_agent_name(resolved_project_path)
     # The nominal voice this call will use (param, else the first configured
     # default). Resolved cheaply here (no provider/network) so it can go in the
     # conch for voice-clash avoidance (VM-914) — another agent can read the
@@ -3356,8 +3376,8 @@ consult the MCP resources listed above.
     
     result = None
     success = False
-    conch = Conch(  # Named for event logging
-        agent_name="converse",
+    conch = Conch(
+        agent_name=resolved_agent_name,
         session_id=resolved_session_id,
         project_path=resolved_project_path,
         voice=resolved_voice,
@@ -3421,7 +3441,7 @@ consult the MCP resources listed above.
                 try:
                     position = ConchQueue.register(
                         queue_session_id,
-                        agent="converse",
+                        agent=resolved_agent_name,
                         project_path=resolved_project_path,
                         voice=resolved_voice,
                         mode=resolved_conch_mode,

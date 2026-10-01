@@ -198,6 +198,10 @@ VOICEMODE_CONCH_MODE=wait            # Default mode when a busy converse() queue
                                      #   callback = return now with your position
 VOICEMODE_CONCH_REMOTE_TTL=90        # Heartbeat TTL (s) for a REMOTE MCP waiter
 VOICEMODE_CONCH_MCP_WAIT_CAP=25      # Hard cap (s) on a blocking MCP conch wait
+VOICEMODE_SESSION_NAME=              # Name shown in `conch status` and matched by
+                                     # `conch give`. Per-session: set it in the MCP
+                                     # server's env, not here. Default: the
+                                     # project directory name.
 ```
 
 #### The waiter queue: visibility, fairness, and overrides
