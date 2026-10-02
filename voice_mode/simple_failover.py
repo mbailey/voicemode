@@ -182,6 +182,21 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                 is_fallback = True
                 fallback_reason = f"endpoint-failover: {voice}→{selected_voice} (kokoro unreachable)"
                 logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
+        elif provider_type == "elevenlabs":
+            # ElevenLabs requires a 20-char alphanumeric voice ID.
+            # TTS_VOICES[0] defaults to af_sky (Kokoro) — substitute
+            # ELEVENLABS_VOICE_ID when the voice isn't a valid ElevenLabs ID
+            # so a mixed VOICEMODE_VOICES list doesn't break the request.
+            import re as _re
+            if _re.fullmatch(r"[A-Za-z0-9]{20}", voice):
+                selected_voice = voice
+            else:
+                from .config import ELEVENLABS_VOICE_ID
+                selected_voice = ELEVENLABS_VOICE_ID
+                logger.info(
+                    f"Voice '{voice}' is not an ElevenLabs ID; "
+                    f"using VOICEMODE_ELEVENLABS_VOICE_ID={ELEVENLABS_VOICE_ID}"
+                )
         else:
             selected_voice = voice  # Use original voice for Kokoro
     logger.info(f"Endpoint {base_url} ({provider_type}): model={selected_model}")
