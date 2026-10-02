@@ -22,6 +22,7 @@ ElevenLabs API diverges from OpenAI at every layer:
 from __future__ import annotations
 
 import logging
+import re
 from typing import AsyncIterator, List, Optional, Tuple
 
 import httpx
@@ -74,8 +75,7 @@ def _resolve_request(
         )
 
     # Validate voice is a 20-char alphanumeric ElevenLabs ID, not a Kokoro/OpenAI voice name
-    import re as _re
-    if not _re.fullmatch(r"[A-Za-z0-9]{20}", voice):
+    if not re.fullmatch(r"[A-Za-z0-9]{20}", voice):
         raise ElevenLabsError(
             f"'{voice}' is not a valid ElevenLabs voice ID (expected 20-char alphanumeric). "
             f"Set VOICEMODE_ELEVENLABS_VOICE_ID to your ElevenLabs voice ID "

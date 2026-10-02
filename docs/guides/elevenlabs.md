@@ -172,9 +172,6 @@ ElevenLabs voice ID (see [Free-tier voices](#free-tier-voices) above).
 **`402 Payment Required`** — The voice ID you set requires a paid ElevenLabs
 plan. Choose a different voice from the free-tier list above.
 
-**`401 Unauthorized`** — The API key is set but invalid or expired. Regenerate
-it in the ElevenLabs dashboard.
-
 **`unsupported_model`** — You passed a model name that ElevenLabs doesn't
 recognise. Valid TTS models: `eleven_flash_v2_5`, `eleven_multilingual_v2`,
 `eleven_turbo_v2_5`. Valid STT models: `scribe_v1`, `scribe_v2`.

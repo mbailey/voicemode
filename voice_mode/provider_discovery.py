@@ -10,6 +10,7 @@ This module handles automatic discovery of TTS/STT endpoints, including:
 
 import asyncio
 import logging
+import re
 import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
@@ -169,7 +170,6 @@ class ProviderRegistry:
                     if config.ELEVENLABS_VOICE_ID and config.ELEVENLABS_VOICE_ID not in voices:
                         voices.insert(0, config.ELEVENLABS_VOICE_ID)
                 elif provider_type == "cartesia":
-                    import re
                     uuid_re = re.compile(
                         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
                         re.IGNORECASE,
@@ -236,7 +236,6 @@ class ProviderRegistry:
         # VOICEMODE_VOICES as a Cartesia voice id so voice switching works
         # without re-registering the endpoint.
         if detect_provider_type(base_url) == "cartesia":
-            import re
             uuid_re = re.compile(
                 r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
                 re.IGNORECASE,
@@ -260,8 +259,7 @@ class ProviderRegistry:
         # STT is dispatched via elevenlabs_stt.py (deferrable — see tasks.md).
         if detect_provider_type(base_url) == "elevenlabs":
             if service_type == "tts":
-                import re as _re
-                el_id_re = _re.compile(r"^[A-Za-z0-9]{20}$")
+                el_id_re = re.compile(r"^[A-Za-z0-9]{20}$")
                 el_models = [config.ELEVENLABS_MODEL, config.ELEVENLABS_FALLBACK_MODEL]
                 el_voices = [v for v in config.TTS_VOICES if el_id_re.match(v)]
                 if config.ELEVENLABS_VOICE_ID and config.ELEVENLABS_VOICE_ID not in el_voices:
