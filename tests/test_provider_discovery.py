@@ -101,7 +101,7 @@ class TestElevenLabsProvider:
         registry = ProviderRegistry()
         with patch("voice_mode.provider_discovery.TTS_BASE_URLS", [el_tts_url]), \
              patch("voice_mode.provider_discovery.STT_BASE_URLS", []), \
-             patch("voice_mode.provider_discovery.config.TTS_VOICES", ["Rachel", "21m00Tcm4TlvDq8ikWAM"]):
+             patch("voice_mode.provider_discovery.config.TTS_VOICES", ["21m00Tcm4TlvDq8ikWAM", "af_sky"]):
             await registry.initialize()
 
         endpoint = registry.registry["tts"].get(el_tts_url)
@@ -109,9 +109,9 @@ class TestElevenLabsProvider:
         assert endpoint.provider_type == "elevenlabs"
         assert len(endpoint.models) >= 1
         assert endpoint.models[0] in ("eleven_flash_v2_5", "eleven_multilingual_v2")
-        # Voices come directly from TTS_VOICES — both names and IDs are valid
-        assert "Rachel" in endpoint.voices
+        # Voices come from TTS_VOICES filtered to 20-char IDs — af_sky excluded
         assert "21m00Tcm4TlvDq8ikWAM" in endpoint.voices
+        assert "af_sky" not in endpoint.voices
 
     @pytest.mark.asyncio
     async def test_registry_initializes_elevenlabs_stt(self):

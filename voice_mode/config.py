@@ -747,7 +747,7 @@ ELEVENLABS_API_KEY = (
     os.getenv("VOICEMODE_TTS_API_KEY")
     or os.getenv("ELEVENLABS_API_KEY")
 )
-ELEVENLABS_VOICE_ID = os.getenv("VOICEMODE_ELEVENLABS_VOICE_ID", "")
+ELEVENLABS_VOICE_ID = os.getenv("VOICEMODE_ELEVENLABS_VOICE_ID", "")  # No default — voice IDs are account-specific, see docs/guides/elevenlabs.md
 # eleven_flash_v2_5: ultra-low latency (~75ms), 32 languages — good default for real-time use.
 ELEVENLABS_MODEL = os.getenv("VOICEMODE_ELEVENLABS_MODEL", "eleven_flash_v2_5")
 ELEVENLABS_FALLBACK_MODEL = os.getenv("VOICEMODE_ELEVENLABS_FALLBACK_MODEL", "eleven_multilingual_v2")

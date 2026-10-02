@@ -10,9 +10,15 @@ ElevenLabs through its native REST API — no proxy required.
    from your [profile settings](https://elevenlabs.io/app/settings/api-keys).
    The free tier includes **10,000 characters per month** of TTS synthesis.
 
-2. Find a voice ID. Go to the [Voice Library](https://elevenlabs.io/app/voice-library),
-   click a voice, and copy the 20-character ID from the URL or voice detail panel
-   (e.g. `21m00Tcm4TlvDq8ikWAM` for Rachel).
+2. **Find a voice ID.** Voice availability depends on your account and tier —
+   there is no universal default. Go to
+   [My Voices](https://elevenlabs.io/app/voice-lab) in the ElevenLabs
+   dashboard, click a voice, then click **More actions → Copy voice ID** to
+   get the 20-character ID (e.g. `IKne3meq5aSn9XLyUdCD` for Charlie).
+
+   > **Free tier note:** Not all voices are accessible via the API on free
+   > accounts. If you get a `402 Payment Required` error, choose a different
+   > voice. See [Free-tier voices](#free-tier-voices) below for a verified list.
 
 3. Add the following to `~/.voicemode/voicemode.env`:
 
@@ -24,8 +30,8 @@ ElevenLabs through its native REST API — no proxy required.
    # API key
    ELEVENLABS_API_KEY=sk_...
 
-   # Voice ID (20-character alphanumeric, from the ElevenLabs dashboard)
-   VOICEMODE_ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+   # Voice ID — required, no default (voice availability is account-specific)
+   VOICEMODE_ELEVENLABS_VOICE_ID=IKne3meq5aSn9XLyUdCD
    ```
 
 4. Restart your MCP client (or run `/mcp` → reconnect) so the new config is
@@ -38,8 +44,8 @@ ElevenLabs through its native REST API — no proxy required.
 - **Expressive** — naturalness and emotional range well above most local models.
 - **Fast** — `eleven_flash_v2_5` has ~75ms median latency; `eleven_multilingual_v2`
   is slower but slightly higher quality.
-- **Voice cloning** — paste any 20-char voice ID from the library or your own
-  cloned voices into `VOICEMODE_ELEVENLABS_VOICE_ID`.
+- **Voice cloning** — paste any 20-char voice ID from your ElevenLabs dashboard
+  into `VOICEMODE_ELEVENLABS_VOICE_ID`.
 
 ## TTS Models
 
@@ -77,7 +83,7 @@ LLM to act as a live interpreter:
 VOICEMODE_TTS_BASE_URLS=https://api.elevenlabs.io/v1
 VOICEMODE_STT_BASE_URLS=https://api.elevenlabs.io/v1
 ELEVENLABS_API_KEY=sk_...
-VOICEMODE_ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+VOICEMODE_ELEVENLABS_VOICE_ID=IKne3meq5aSn9XLyUdCD   # Charlie — replace with your voice
 ```
 
 In the system prompt for your AI:
@@ -94,33 +100,49 @@ The same voice will deliver both languages naturally.
 | `VOICEMODE_TTS_BASE_URLS` | `https://api.elevenlabs.io/v1` | Activates ElevenLabs TTS |
 | `VOICEMODE_STT_BASE_URLS` | `https://api.elevenlabs.io/v1` | Activates ElevenLabs STT |
 | `ELEVENLABS_API_KEY` | `sk_...` | ElevenLabs API key |
-| `VOICEMODE_ELEVENLABS_VOICE_ID` | `21m00Tcm4TlvDq8ikWAM` | 20-char voice ID (required for TTS) |
+| `VOICEMODE_ELEVENLABS_VOICE_ID` | `IKne3meq5aSn9XLyUdCD` | **Required.** 20-char voice ID — no default, voice availability is account and tier-specific |
 | `VOICEMODE_ELEVENLABS_MODEL` | `eleven_flash_v2_5` | TTS model (default: `eleven_flash_v2_5`) |
 | `VOICEMODE_ELEVENLABS_FALLBACK_MODEL` | `eleven_multilingual_v2` | TTS fallback model |
 | `VOICEMODE_ELEVENLABS_STT_MODEL` | `scribe_v1` | STT model (default: `scribe_v1`) |
 
 ## Finding Voice IDs
 
-Voice IDs are 20-character alphanumeric strings (e.g. `21m00Tcm4TlvDq8ikWAM`).
-Find them in:
-- The [Voice Library](https://elevenlabs.io/app/voice-library) — click a voice,
-  copy the ID from the URL
-- The [ElevenLabs API](https://elevenlabs.io/docs/api-reference/voices/get-all) —
-  `GET /v1/voices` returns all voices with their IDs
+Voice IDs are 20-character alphanumeric strings. VoiceMode identifies ElevenLabs
+voices by this shape — entries in `VOICEMODE_VOICES` that are 20-char alphanumeric
+are routed to ElevenLabs; other formats (Kokoro `af_sky`, OpenAI `alloy`) route to
+their respective providers.
 
-A few well-known built-in IDs:
+To find your voice ID:
+- Go to [My Voices](https://elevenlabs.io/app/voice-lab) in the ElevenLabs dashboard
+- Click a voice → **More actions → Copy voice ID**
+- Or call `GET /v1/voices` via the [ElevenLabs API](https://elevenlabs.io/docs/api-reference/voices/get-all)
 
-| Name | Voice ID |
-|---|---|
-| Rachel | `21m00Tcm4TlvDq8ikWAM` |
-| Domi | `AZnzlk1XvdvUeBnXmlld` |
-| Bella | `EXAVITQu4vr4xnSDxMaL` |
-| Antoni | `ErXwobaYiN019PkySvjV` |
-| Elli | `MF3mGyEYCl7XYWbV9V6O` |
-| Josh | `TxGEqnHWrfWFTfGW9XjX` |
-| Arnold | `VR6AewLTigWG4xSOukaG` |
-| Adam | `pNInz6obpgDQGcFmaJgB` |
-| Sam | `yoZ06aMxZJJ28mfd3POQ` |
+## Free-tier voices
+
+The following voices are confirmed accessible via the API on free accounts
+(verified 2026-10-02). Voice availability may change — if a voice returns
+`402 Payment Required`, choose another from this list.
+
+| Name | Voice ID | Style |
+|---|---|---|
+| Alice | `Xb7hH8MSUJpSbSDYk0k2` | female, British, news |
+| Bill | `pqHfZKP75CvOlQylNhV4` | male, American, narration |
+| Brian | `nPczCjzI2devNBz1zQrb` | male, American, narration |
+| Callum | `N2lVS1w4EtoT3dr4eOWO` | male, Transatlantic, characters |
+| Charlie | `IKne3meq5aSn9XLyUdCD` | male, Australian, conversational |
+| Chris | `iP95p4xoKVk53GoZ742B` | male, American, conversational |
+| Daniel | `onwK4e9ZLuTAKqWW03F9` | male, British, news |
+| Eric | `cjVigY5qzO86Huf0OWal` | male, American, conversational |
+| George | `JBFqnCBsd6RMkjVDRZzb` | male, British, narration |
+| Jessica | `cgSgspJ2msm6clMCkdW9` | female, American, conversational |
+| Laura | `FGY2WhTYpPnrIDTdsKH5` | female, American, social media |
+| Liam | `TX3LPaxmHKxFdv7VOQHJ` | male, American, narration |
+| Lily | `pFZP5JQG7iQjIQuC4Bku` | female, British, narration |
+| Matilda | `XrExE9yKIg1WjnnlVkGX` | female, American, narration |
+| River | `SAz9YHcvj6GT2YYXdXww` | non-binary, American, social media |
+| Roger | `CwhRBWXzGAHq8TQ4Fs17` | male, American, social media |
+| Sarah | `EXAVITQu4vr4xnSDxMaL` | female, American, news |
+| Will | `bIHbv24MWmeRgasZH58o` | male, American, social media |
 
 ## Speed Control
 
@@ -131,8 +153,9 @@ automatically clamps `VOICEMODE_TTS_SPEED` to this range if it exceeds it.
 
 - `pcm_44100` output format requires a **Pro** tier subscription.
   The default (`mp3`) works on all tiers including free.
-- The Voice Library is not available via the API to free tier users,
-  but built-in voice IDs still work.
+- Not all voices are available on all tiers — the free-tier list above is
+  verified. Paid-plan-only voices (e.g. Aria, Charlotte, Rachel) return
+  `402 Payment Required` on free accounts.
 
 ## Troubleshooting
 
@@ -142,8 +165,15 @@ automatically clamps `VOICEMODE_TTS_SPEED` to this range if it exceeds it.
 **`401 Unauthorized`** — The API key is set but invalid or expired. Regenerate
 it in the ElevenLabs dashboard.
 
-**`No ElevenLabs voice ID available`** — Set `VOICEMODE_ELEVENLABS_VOICE_ID`
-to a 20-character voice ID from the ElevenLabs dashboard.
+**`'af_sky' is not a valid ElevenLabs voice ID`** — `VOICEMODE_VOICES` contains
+a Kokoro or OpenAI voice name. Set `VOICEMODE_ELEVENLABS_VOICE_ID` to a 20-char
+ElevenLabs voice ID (see [Free-tier voices](#free-tier-voices) above).
+
+**`402 Payment Required`** — The voice ID you set requires a paid ElevenLabs
+plan. Choose a different voice from the free-tier list above.
+
+**`401 Unauthorized`** — The API key is set but invalid or expired. Regenerate
+it in the ElevenLabs dashboard.
 
 **`unsupported_model`** — You passed a model name that ElevenLabs doesn't
 recognise. Valid TTS models: `eleven_flash_v2_5`, `eleven_multilingual_v2`,

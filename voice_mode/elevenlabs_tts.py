@@ -73,6 +73,15 @@ def _resolve_request(
             "or include one in VOICEMODE_VOICES (e.g. 21m00Tcm4TlvDq8ikWAM)."
         )
 
+    # Validate voice is a 20-char alphanumeric ElevenLabs ID, not a Kokoro/OpenAI voice name
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9]{20}", voice):
+        raise ElevenLabsError(
+            f"'{voice}' is not a valid ElevenLabs voice ID (expected 20-char alphanumeric). "
+            f"Set VOICEMODE_ELEVENLABS_VOICE_ID to your ElevenLabs voice ID "
+            f"(e.g. 21m00Tcm4TlvDq8ikWAM for Rachel)."
+        )
+
     primary = model or config.ELEVENLABS_MODEL
     fallback = config.ELEVENLABS_FALLBACK_MODEL
     models_to_try = [primary, fallback] if primary != fallback else [primary]

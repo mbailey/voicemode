@@ -40,16 +40,18 @@ OPENAI_TTS_VOICES = (
 # ``voice`` is the ID passed to the API path; ``name`` is the display label.
 # Both IDs and display names are accepted by the ElevenLabs API.
 #
-# Current professional voices (verified 2026-10-01):
+# Only voices confirmed free-tier accessible are listed (verified 2026-10-02).
+# Paid/library-only voices (HTTP 402 on free accounts) are excluded:
+#   Aria (9BWtsMINqrJLrRacOk9x), Charlotte (XB0fDUnXU5powFXDhCwa),
+#   Rachel (21m00Tcm4TlvDq8ikWAM).
+# Voice availability is account and tier-dependent — users must set
+# VOICEMODE_ELEVENLABS_VOICE_ID explicitly.
 ELEVENLABS_TTS_VOICES: tuple[tuple[str, str], ...] = (
-    # Professional voices (current — no expiry)
     ("Xb7hH8MSUJpSbSDYk0k2", "Alice"),       # female, British, confident, news
-    ("9BWtsMINqrJLrRacOk9x", "Aria"),         # female, American, expressive, social media
     ("pqHfZKP75CvOlQylNhV4", "Bill"),         # male, American, trustworthy, narration
     ("nPczCjzI2devNBz1zQrb", "Brian"),        # male, American, deep, narration
     ("N2lVS1w4EtoT3dr4eOWO",  "Callum"),     # male, Transatlantic, intense, characters
     ("IKne3meq5aSn9XLyUdCD",  "Charlie"),    # male, Australian, natural, conversational
-    ("XB0fDUnXU5powFXDhCwa",  "Charlotte"),  # female, Swedish, seductive, characters
     ("iP95p4xoKVk53GoZ742B",  "Chris"),      # male, American, casual, conversational
     ("onwK4e9ZLuTAKqWW03F9",  "Daniel"),     # male, British, authoritative, news
     ("cjVigY5qzO86Huf0OWal",  "Eric"),       # male, American, friendly, conversational
@@ -59,7 +61,6 @@ ELEVENLABS_TTS_VOICES: tuple[tuple[str, str], ...] = (
     ("TX3LPaxmHKxFdv7VOQHJ",  "Liam"),       # male, American, articulate, narration
     ("pFZP5JQG7iQjIQuC4Bku",  "Lily"),       # female, British, warm, narration
     ("XrExE9yKIg1WjnnlVkGX",  "Matilda"),    # female, American, friendly, narration
-    ("21m00Tcm4TlvDq8ikWAM",  "Rachel"),     # female, American, expressive (legacy default)
     ("SAz9YHcvj6GT2YYXdXww",  "River"),      # non-binary, American, confident, social media
     ("CwhRBWXzGAHq8TQ4Fs17",  "Roger"),      # male, American, confident, social media
     ("EXAVITQu4vr4xnSDxMaL",  "Sarah"),      # female, American, soft, news

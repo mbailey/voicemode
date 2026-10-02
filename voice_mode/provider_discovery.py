@@ -260,8 +260,10 @@ class ProviderRegistry:
         # STT is dispatched via elevenlabs_stt.py (deferrable — see tasks.md).
         if detect_provider_type(base_url) == "elevenlabs":
             if service_type == "tts":
+                import re as _re
+                el_id_re = _re.compile(r"^[A-Za-z0-9]{20}$")
                 el_models = [config.ELEVENLABS_MODEL, config.ELEVENLABS_FALLBACK_MODEL]
-                el_voices = list(config.TTS_VOICES)
+                el_voices = [v for v in config.TTS_VOICES if el_id_re.match(v)]
                 if config.ELEVENLABS_VOICE_ID and config.ELEVENLABS_VOICE_ID not in el_voices:
                     el_voices.insert(0, config.ELEVENLABS_VOICE_ID)
             else:
