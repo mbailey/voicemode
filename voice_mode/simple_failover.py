@@ -184,19 +184,6 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                 logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
         else:
             selected_voice = voice  # Use original voice for Kokoro
-
-        # ElevenLabs: if the voice isn't a 20-char alphanumeric ElevenLabs ID,
-        # substitute ELEVENLABS_VOICE_ID (default: Rachel). This handles the
-        # case where VOICEMODE_VOICES contains Kokoro/OpenAI voices like af_sky.
-        if provider_type == "elevenlabs":
-            import re as _re
-            if not _re.fullmatch(r"[A-Za-z0-9]{20}", selected_voice):
-                from .config import ELEVENLABS_VOICE_ID
-                logger.info(
-                    f"Voice '{selected_voice}' is not an ElevenLabs ID; "
-                    f"substituting ELEVENLABS_VOICE_ID={ELEVENLABS_VOICE_ID}"
-                )
-                selected_voice = ELEVENLABS_VOICE_ID
     logger.info(f"Endpoint {base_url} ({provider_type}): model={selected_model}")
 
     # Disable retries for local endpoints - they either work or don't

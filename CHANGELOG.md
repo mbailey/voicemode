@@ -29,7 +29,7 @@ a normal streaming provider.
 VOICEMODE_TTS_BASE_URLS=https://api.elevenlabs.io/v1
 VOICEMODE_STT_BASE_URLS=https://api.elevenlabs.io/v1
 ELEVENLABS_API_KEY=sk_...
-VOICEMODE_ELEVENLABS_VOICE_ID=onwK4e9ZLuTAKqWW03F9   # Daniel — or any voice ID
+VOICEMODE_ELEVENLABS_VOICE_ID=IKne3meq5aSn9XLyUdCD   # Charlie — replace with your voice ID
 ```
 
 Key details:
