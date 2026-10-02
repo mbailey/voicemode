@@ -192,11 +192,16 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                 selected_voice = voice
             else:
                 from .config import ELEVENLABS_VOICE_ID
-                selected_voice = ELEVENLABS_VOICE_ID
-                logger.info(
-                    f"Voice '{voice}' is not an ElevenLabs ID; "
-                    f"using VOICEMODE_ELEVENLABS_VOICE_ID={ELEVENLABS_VOICE_ID}"
-                )
+                if ELEVENLABS_VOICE_ID:
+                    selected_voice = ELEVENLABS_VOICE_ID
+                    logger.info(
+                        f"Voice '{voice}' is not an ElevenLabs ID; "
+                        f"using VOICEMODE_ELEVENLABS_VOICE_ID={ELEVENLABS_VOICE_ID}"
+                    )
+                else:
+                    # No valid voice available — pass through and let
+                    # elevenlabs_tts._resolve_request() raise a clear error.
+                    selected_voice = voice
         else:
             selected_voice = voice  # Use original voice for Kokoro
     logger.info(f"Endpoint {base_url} ({provider_type}): model={selected_model}")

@@ -184,8 +184,6 @@ def _elevenlabs_entries() -> list[dict[str, Any]]:
         return []
 
     # Build id→name map from built-ins
-    id_to_name: dict[str, str] = {vid: name for vid, name in ELEVENLABS_TTS_VOICES}
-
     # Collect all voice IDs to include: built-ins + user-configured
     all_voices: list[tuple[str, str]] = list(ELEVENLABS_TTS_VOICES)
     seen_ids = {vid for vid, _ in ELEVENLABS_TTS_VOICES}
