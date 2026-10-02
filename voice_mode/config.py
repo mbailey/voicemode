@@ -187,6 +187,7 @@ VOICEMODE_VOICES=af_sky
 # VOICEMODE_TTS_MODELS_MLX_AUDIO=mlx-community/Kokoro-82M-bf16
 # VOICEMODE_TTS_MODELS_KOKORO=tts-1
 # VOICEMODE_TTS_MODELS_OPENAI=tts-1
+# VOICEMODE_TTS_MODELS_ELEVENLABS=eleven_multilingual_v2
 
 # Prefer local providers over cloud (true/false)
 # VOICEMODE_PREFER_LOCAL=true
@@ -739,6 +740,19 @@ CARTESIA_VOICE_ID = os.getenv("VOICEMODE_CARTESIA_VOICE_ID", "")
 CARTESIA_MODEL = os.getenv("VOICEMODE_CARTESIA_MODEL", "sonic-3")
 CARTESIA_FALLBACK_MODEL = os.getenv("VOICEMODE_CARTESIA_FALLBACK_MODEL", "sonic-2")
 
+# ElevenLabs configuration (https://elevenlabs.io)
+# ELEVENLABS_API_KEY: no VOICEMODE_ prefix, matching CARTESIA_API_KEY / OPENAI_API_KEY convention.
+# VOICEMODE_TTS_API_KEY / VOICEMODE_STT_API_KEY are per-provider key overrides; check them first.
+ELEVENLABS_API_KEY = (
+    os.getenv("VOICEMODE_TTS_API_KEY")
+    or os.getenv("ELEVENLABS_API_KEY")
+)
+ELEVENLABS_VOICE_ID = os.getenv("VOICEMODE_ELEVENLABS_VOICE_ID", "")
+# eleven_flash_v2_5: ultra-low latency (~75ms), 32 languages — good default for real-time use.
+ELEVENLABS_MODEL = os.getenv("VOICEMODE_ELEVENLABS_MODEL", "eleven_flash_v2_5")
+ELEVENLABS_FALLBACK_MODEL = os.getenv("VOICEMODE_ELEVENLABS_FALLBACK_MODEL", "eleven_multilingual_v2")
+ELEVENLABS_STT_MODEL = os.getenv("VOICEMODE_ELEVENLABS_STT_MODEL", "scribe_v1")
+
 # Helper function to parse comma-separated lists
 def parse_comma_list(env_var: str, fallback: str) -> list:
     """Parse comma-separated list from environment variable."""
@@ -800,7 +814,7 @@ TTS_MODELS_BY_PROVIDER = parse_provider_models("VOICEMODE_TTS_MODELS")
 # Built-in per-provider defaults, used when neither an explicit caller model,
 # a per-provider env override, nor a compatible global TTS_MODELS entry applies.
 # Everything not listed falls back to "tts-1".
-TTS_MODEL_PROVIDER_DEFAULTS = {"mlx-audio": "mlx-community/Kokoro-82M-bf16"}
+TTS_MODEL_PROVIDER_DEFAULTS = {"mlx-audio": "mlx-community/Kokoro-82M-bf16", "elevenlabs": ELEVENLABS_MODEL}
 TTS_MODEL_DEFAULT = "tts-1"
 
 # STT prompt for vocabulary biasing (helps with specialized terminology)
@@ -1539,6 +1553,14 @@ def get_provider_supported_formats(provider: str, operation: str = "tts") -> lis
         "cartesia": {
             # Cartesia streaming emits raw PCM; buffered /tts/bytes returns WAV.
             "tts": ["pcm", "wav"],
+            "stt": []
+        },
+        "elevenlabs": {
+            # ElevenLabs native TTS. mp3 works on all tiers and is the preferred
+            # format — PCM playback via the streaming path has compatibility issues
+            # so it is excluded here, causing validate_audio_format to fall back
+            # to mp3 when the global TTS_AUDIO_FORMAT=pcm default is in effect.
+            "tts": ["mp3", "opus"],
             "stt": []
         },
         # STT providers
