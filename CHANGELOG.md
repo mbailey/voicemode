@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Impressions: voice-profile transcription asks the STT server for JSON
+  (VM-2346)**: it now sends `response_format=json`, because mlx-audio 0.4.4 and
+  later reply in ndjson when no format is given, which the profile helper could
+  not parse. whisper.cpp behaves as before.
+
 - **STT: a model the server does not know is no longer reported as a
   connection failure (VM-2342)** — when an STT endpoint answered with an HTTP
   4xx, `converse` said "STT service connection failed", sending you hunting a

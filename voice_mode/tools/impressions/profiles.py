@@ -137,6 +137,15 @@ def _transcribe_audio(audio_path: Path) -> str:
     body_parts.append(b"")
     body_parts.append(b"whisper-1")
 
+    # Response format field: ask for a single JSON object explicitly.
+    # mlx-audio >=0.4.4 defaults an omitted response_format to ndjson,
+    # which json.loads below cannot parse (VM-2346). whisper.cpp accepts
+    # json and already returns it by default, so this is a no-op there.
+    body_parts.append(f"--{boundary}".encode())
+    body_parts.append(b'Content-Disposition: form-data; name="response_format"')
+    body_parts.append(b"")
+    body_parts.append(b"json")
+
     # Closing boundary
     body_parts.append(f"--{boundary}--".encode())
     body_parts.append(b"")
