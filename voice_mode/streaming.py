@@ -1291,8 +1291,7 @@ async def stream_elevenlabs_audio(
                 continue
             if first_chunk_time is None:
                 first_chunk_time = time.perf_counter()
-                metrics.ttfa = first_chunk_time - start_time
-                logger.info(f"ElevenLabs first audio chunk after {metrics.ttfa:.3f}s")
+                logger.info(f"ElevenLabs first audio chunk after {first_chunk_time - start_time:.3f}s")
                 if event_logger:
                     event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
             raw_buffer.write(chunk)
@@ -1325,6 +1324,12 @@ async def stream_elevenlabs_audio(
         # Playback with full control-state handling (mirrors stream_cartesia_pcm)
         stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16")
         stream.start()
+
+        # TTFA is the time until audio actually starts playing (not first chunk
+        # received). Because the full MP3 must download and decode before pydub
+        # can play anything, stamp it here — right after stream.start().
+        metrics.ttfa = time.perf_counter() - start_time
+        logger.info(f"ElevenLabs TTFA (playback start): {metrics.ttfa:.3f}s")
 
         aborted = False
 

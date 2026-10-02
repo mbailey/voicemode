@@ -742,11 +742,7 @@ CARTESIA_FALLBACK_MODEL = os.getenv("VOICEMODE_CARTESIA_FALLBACK_MODEL", "sonic-
 
 # ElevenLabs configuration (https://elevenlabs.io)
 # ELEVENLABS_API_KEY: no VOICEMODE_ prefix, matching CARTESIA_API_KEY / OPENAI_API_KEY convention.
-# VOICEMODE_TTS_API_KEY / VOICEMODE_STT_API_KEY are per-provider key overrides; check them first.
-ELEVENLABS_API_KEY = (
-    os.getenv("VOICEMODE_TTS_API_KEY")
-    or os.getenv("ELEVENLABS_API_KEY")
-)
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.getenv("VOICEMODE_ELEVENLABS_VOICE_ID", "")  # No default — voice IDs are account-specific, see docs/guides/elevenlabs.md
 # eleven_flash_v2_5: ultra-low latency (~75ms), 32 languages — good default for real-time use.
 ELEVENLABS_MODEL = os.getenv("VOICEMODE_ELEVENLABS_MODEL", "eleven_flash_v2_5")
