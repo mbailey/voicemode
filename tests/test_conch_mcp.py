@@ -368,6 +368,24 @@ class TestSummon:
 
 class TestBump:
     @pytest.mark.asyncio
+    async def test_bump_reserves_first_waiter_during_clear_to_grant_gap(self, clean_conch, monkeypatch):
+        _make_holder(agent="holder", sid="holder-sess")
+        _register_local("bob", agent="bob")
+        _register_local("sam", agent="sam")
+        clear = conch_ops.force_clear_lock
+
+        def probe_gap():
+            clear()
+            assert ConchQueue.granted_to() == "bob"
+            assert Conch(agent_name="sam", session_id="sam").try_acquire() is False
+
+        monkeypatch.setattr(conch_ops, "force_clear_lock", probe_gap)
+        res = await call(action="bump")
+        assert res["ok"] is True
+        assert ConchQueue.granted_to() == "bob"
+        assert Conch(agent_name="bob", session_id="bob").try_acquire() is True
+
+    @pytest.mark.asyncio
     async def test_bump_drops_holder_and_promotes_head(self, clean_conch):
         _make_holder(agent="holder", sid="holder-sess")
         _register_local("next-1", agent="next")

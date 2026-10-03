@@ -9,6 +9,7 @@ isolated automatically. All commands are exercised through Click's
 
 import json
 import os
+import importlib
 
 import pytest
 from click.testing import CliRunner
@@ -375,6 +376,24 @@ class TestDiscovery:
 # --------------------------------------------------------------------------- #
 
 class TestBump:
+    def test_bump_reserves_first_waiter_during_clear_to_grant_gap(self, runner, monkeypatch):
+        _make_holder(agent="holder", sid="holder-sess")
+        _register("bob", agent="bob")
+        _register("sam", agent="sam")
+        cli = importlib.import_module("voice_mode.cli_commands.conch")
+        clear = cli._force_clear_lock
+
+        def probe_gap():
+            clear()
+            assert ConchQueue.granted_to() == "bob"
+            assert Conch(agent_name="sam", session_id="sam").try_acquire() is False
+
+        monkeypatch.setattr(cli, "_force_clear_lock", probe_gap)
+        result = runner.invoke(conch, ["bump"])
+        assert result.exit_code == 0, result.output
+        assert ConchQueue.granted_to() == "bob"
+        assert Conch(agent_name="bob", session_id="bob").try_acquire() is True
+
     def test_bump_live_holder_drops_and_promotes_head(self, runner):
         _make_holder(agent="cora", sid="cora-sess")
         _register("next-111", agent="nextagent")

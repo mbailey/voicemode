@@ -232,9 +232,11 @@ def conch_bump():
 
     bumped_agent = holder.get("agent") or "unknown"
     bumped_sid = holder.get("session_id")
-    _force_clear_lock()
     ConchQueue.clear_grant()
+    # Reserve the successor before unlinking the holder. Polling waiters can
+    # otherwise acquire in the gap between unlink and grant_next(), out of FIFO.
     head = ConchQueue.grant_next()
+    _force_clear_lock()
     if head is None:
         click.echo(
             f"Bumped {bumped_agent} (session {_short(bumped_sid)}); they must re-request. "
