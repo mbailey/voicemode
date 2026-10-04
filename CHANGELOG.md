@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Context diet for the agent-facing text (VM-2442).** What an agent reads to
+  use VoiceMode was measured and cut to what it needs, on Mike's brief: the
+  tool description is the shipwreck kit and must work alone; the skill
+  supplements it and never duplicates it.
+  - The `converse` tool description drops from ~2,400 to ~190 tokens; each
+    parameter is now described once, in the schema next to its type and
+    default, instead of in a prose list that repeated the schema. The MCP
+    connect cost for the default tool set falls from ~4,400 to ~2,170 tokens
+    (tiktoken o200k_base; the task directory has the full breakdown).
+  - `listen_duration_max` is unset on the wire (schema default `null`): the
+    user's `VOICEMODE_DEFAULT_LISTEN_DURATION` resolves it, so the schema no
+    longer shows a number for the listening ceiling.
+  - **Breaking for MCP callers:** `timeout` is removed from the `converse`
+    tool's schema. It has had no effect since the LiveKit transport left; the
+    schema is strict, so a caller still passing it now gets a validation
+    error. The CLI and `_converse_core` keep the argument.
+  - **The transcript echo is gone** (the `ASSISTANT/USER (voicemode)`
+    blockquotes), from both the tool description and the skill: it doubled
+    every exchange on screen, and the Talk app already shows the conversation.
+  - **One VoiceMode skill.** `converse` (a duplicate of the `/voicemode:converse`
+    command), `impressions` and `voicemode-dj` are folded into
+    `.claude/skills/voicemode/`; the `SKILL.md` body falls from ~5,600 to
+    under 500 tokens, and the detail moves to flat references, one level
+    down, each with front matter and a lead: `listening` (`wait_for_response`,
+    and how the turn stays with you after you speak), `surveys`, `conch`,
+    `voices`, `impressions`, `recovery`, `controls`, `music`.
+    `tests/test_skill_shape.py` keeps the shape.
+
 ### Fixed
 
 - **Impressions: voice-profile transcription asks the STT server for JSON
