@@ -62,7 +62,9 @@ def test_references_are_flat_with_front_matter_and_a_lead():
         lead = body.strip().split("\n\n", 1)[0]
         assert not lead.startswith("#"), f"{p}: the lead comes before the heading"
         assert len(lead.split()) <= MAX_LEAD_WORDS, f"{p}: lead is {len(lead.split())} words"
-    assert (REFS / "linger.md").exists(), "linger is the first concept page (the brief)"
+    assert (REFS / "listening.md").exists(), (
+        "listening (wait_for_response, and how the turn stays with you) is the first concept page"
+    )
 
 
 REF_DEFINITION = re.compile(r"^\[([^\]]+)\]:\s*(\S+)$", re.M)
@@ -71,7 +73,7 @@ REF_USE = re.compile(r"(?<!\\)\[([^\]\n]+)\](?![\(\[:])")
 
 def test_skill_links_resolve_one_level_down():
     """Mike's review (2026-10-04): the body points at a reference with a
-    shortcut reference link, `[linger]`, whose text IS the file's name, so a
+    shortcut reference link, `[listening]`, whose text IS the file's name, so a
     reader of the top alone knows where it lives; the `## References` list at
     the foot defines each name once so the links render (on GitHub too)."""
     text = SKILL.read_text(encoding="utf-8")

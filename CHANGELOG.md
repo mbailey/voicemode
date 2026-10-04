@@ -32,8 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     command), `impressions` and `voicemode-dj` are folded into
     `.claude/skills/voicemode/`; the `SKILL.md` body falls from ~5,600 to
     under 500 tokens, and the detail moves to flat references, one level
-    down, each with front matter and a lead: `linger` (after you speak, the
-    user's next turn is yours without your name), `surveys`, `conch`,
+    down, each with front matter and a lead: `listening` (`wait_for_response`,
+    and how the turn stays with you after you speak), `surveys`, `conch`,
     `voices`, `impressions`, `recovery`, `controls`, `music`.
     `tests/test_skill_shape.py` keeps the shape.
 
