@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The `simpleaudio` dependency is gone, so installing VoiceMode on a Mac no longer compiles
+  anything for core. Nothing imported it, and 1.0.4 has no Apple Silicon wheel, so every Mac
+  install needed a C compiler to build it. pydub's last-resort playback now uses `ffplay` from
+  FFmpeg. ALSA development headers (`libasound2-dev`, `alsa-lib-devel`) are now optional on
+  Linux. Thanks @rwunsch (#541, VM-2438).
+
 ## [9.0.2] - 2026-10-29
 
 ### Security
