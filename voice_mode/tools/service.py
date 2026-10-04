@@ -899,7 +899,7 @@ async def service(
     Manage Whisper (STT), Kokoro (TTS), and VoiceMode (HTTP MCP server) services.
 
     Args:
-        service_name: The service to manage ("whisper", "kokoro", or "voicemode")
+        service_name: The service to manage
         action: The action to perform (default: "status")
             - status: Show if service is running and resource usage
             - start: Start the service

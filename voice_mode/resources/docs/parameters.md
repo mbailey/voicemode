@@ -299,7 +299,7 @@ If STT fails but audio was recorded, manually transcribe:
 whisper-cli ~/.voicemode/audio/latest-STT.wav
 ```
 
-See [STT Recovery](https://github.com/mbailey/voicemode/blob/master/.claude/skills/voicemode/SKILL.md#stt-recovery---manual-transcription)
+See [Recovery](https://github.com/mbailey/voicemode/blob/master/.claude/skills/voicemode/references/recovery.md)
 and Troubleshooting — "No Speech Detected"
 (`voicemode://docs/troubleshooting`, or
 [on GitHub](https://github.com/mbailey/voicemode/blob/master/docs/troubleshooting/index.md#1-no-speech-detected))

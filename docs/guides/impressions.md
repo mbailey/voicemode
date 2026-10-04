@@ -119,7 +119,7 @@ The model copies what it hears. Garbage in, garbage out.
 - **Conversational delivery** — natural prosody outperforms read-aloud.
 - **WAV preferred**, but anything FFmpeg can decode works.
 
-For deeper guidance on ranking samples (mlx-whisper word-timestamp ranker, `ffmpeg loudnorm` recipes), see the [Impressions skill](../../.claude/skills/impressions/docs/finding-samples.md).
+For deeper guidance on ranking samples (mlx-whisper word-timestamp ranker, `ffmpeg loudnorm` recipes), see the [impressions reference](../../.claude/skills/voicemode/references/impressions.md) of the VoiceMode skill and the companion [voice-lab](https://github.com/mbailey/voice-lab) repo.
 
 ## Footguns
 
@@ -198,7 +198,5 @@ mlx-audio exposes an OpenAI-compatible `/v1/audio/speech` endpoint with two extr
 
 ## See also
 
-- [Impressions skill](../../.claude/skills/impressions/SKILL.md) — agent-facing reference for adding voices and troubleshooting on demand.
-- [Setup deep-dive](../../.claude/skills/impressions/docs/setup.md) — model quants, remote mlx-audio config, install troubleshooting.
-- [Finding good samples](../../.claude/skills/impressions/docs/finding-samples.md) — ranking heuristics, ffmpeg recipes, voice-lab tooling.
+- [Impressions reference](../../.claude/skills/voicemode/references/impressions.md) — the VoiceMode skill's agent-facing page: adding voices, clip requirements, model quants, remote mlx-audio, troubleshooting (folded from the former `impressions` skill, VM-2442).
 - [voice-lab](https://github.com/mbailey/voice-lab) — companion repo for curating reference clips and personas.

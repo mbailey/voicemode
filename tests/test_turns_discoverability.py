@@ -45,11 +45,14 @@ Covers:
     just prose in the docstring humans read).
   * The description still documents the turn vocabulary, per-turn overrides,
     survey controls and return shape (structural, not byte-for-byte).
-  * The tool-description "KEY PARAMETERS" bullet for `turns` was updated to
-    the say/ask line, not left describing the old speak-only P1 shape.
-  * The killed-call recovery note (replies persist in conversation logs,
-    even for a call that never returns) is documented somewhere reachable
-    from the tool description.
+  * The say/ask verbs, the survey controls and the killed-call recovery note
+    (replies persist in the conversation log, even for a call that never
+    returns) are documented on the surface the agent reads.
+
+VM-2442 (the context diet) moved every parameter's prose out of the docstring
+and into the schema: the docstring no longer has a "KEY PARAMETERS" section, so
+the checks below read `_TURNS_PARAM_DESCRIPTION`, which IS the schema text
+(the derived-equality test above proves it), not `converse.__doc__`.
 """
 
 import re
@@ -121,33 +124,39 @@ async def test_turns_schema_description_covers_key_contract_points():
         assert expected in desc, f"missing {expected!r} from turns schema description"
 
 
-def test_tool_description_turns_bullet_uses_say_ask_line():
-    """The docstring's KEY PARAMETERS `turns` bullet was updated off the old
-    P1 speak-only-only wording onto the say/ask line -- not left stale."""
-    doc = _collapse_whitespace(converse.__doc__)
-    assert '{"say": ...} speaks' in doc
-    assert '{"ask": ...} speaks then listens and collects the reply' in doc
-    # The old P1-only wording ("Speak-only (no reply collection in this
-    # version)") must be gone -- that claim is no longer true.
-    assert "Speak-only (no reply collection in this version)" not in doc
+def test_turns_description_uses_the_say_ask_verbs():
+    """Both verbs are documented where the agent reads them (the schema), and
+    the old P1 speak-only claim ("no reply collection in this version"), which
+    is no longer true, is gone from the tool entirely."""
+    desc = _collapse_whitespace(_TURNS_PARAM_DESCRIPTION)
+    assert '"say": str' in desc and '"ask": str' in desc
+    assert "Speak-only (no reply collection in this version)" not in desc
+    assert "Speak-only (no reply collection in this version)" not in converse.__doc__
 
 
-def test_tool_description_documents_killed_call_recovery():
-    """The docstring documents that already-collected replies survive a
-    killed/crashed call (Decision 7 crash persistence), not just the happy
-    path's JSON return."""
+def test_turns_description_documents_killed_call_recovery():
+    """Already-collected replies survive a killed/crashed call (Decision 7
+    crash persistence); the agent is told so on the schema, not just shown the
+    happy path's JSON return."""
+    desc = _TURNS_PARAM_DESCRIPTION.lower()
+    assert "conversation log" in desc
+    assert "killed" in desc or "crash" in desc
+
+
+def test_turns_description_names_break_and_skip_controls():
+    """The survey controls a user can exercise mid-run are named on the
+    schema text, so an agent can tell the user about them."""
+    desc = _TURNS_PARAM_DESCRIPTION
+    assert "skip-forward" in desc
+    assert "skip-back" in desc or "repeat" in desc
+    assert "break" in desc
+
+
+def test_tool_docstring_does_not_restate_the_parameters():
+    """VM-2442: one description per parameter, in the schema. The docstring
+    carries the contract in prose and points at the resources; it does not
+    grow a second, hand-maintained parameter list again."""
     doc = converse.__doc__
-    assert "conversation logs" in doc
-    assert "killed" in doc.lower() or "crash" in doc.lower()
-
-
-def test_tool_description_mentions_break_and_skip_controls_for_turns():
-    """The turns bullet at least names the survey controls (full detail
-    lives in the schema description itself, referenced from the bullet)."""
-    doc = converse.__doc__
-    turns_bullet_start = doc.index("• turns (list, optional)")
-    next_bullet = doc.index("\n• ", turns_bullet_start + 1)
-    turns_bullet = doc[turns_bullet_start:next_bullet]
-    assert "skip-forward" in turns_bullet
-    assert "skip-back" in turns_bullet or "repeat" in turns_bullet
-    assert "break" in turns_bullet
+    assert "KEY PARAMETERS" not in doc
+    assert "• " not in doc, "a bulleted parameter list is back in the docstring"
+    assert len(doc.split()) < 200, "the tool description has outgrown its brief (VM-2442)"
