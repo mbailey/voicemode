@@ -15,7 +15,7 @@ You speak with the `converse` tool. Its description and schema are the contract;
 - Leave `listen_duration_max` unset. The user owns that ceiling, and silence detection ends the turn for you.
 - Leave `voice` unset unless asked; a name is lowercase with its prefix (`bm_daniel`, `af_sky`). Personas, cloning, impressions: [voices].
 - Other agents on the channel: `hold_conch=true` when you will continue the thread; `wait_for_conch` to queue: [conch].
-- "Hang on" or "wait" at the end of a reply pauses and re-listens on its own. For minutes, `sleep N` in Bash, then converse again.
+- "Hang on" or "wait" at the end of a reply pauses and re-listens on its own. For minutes, run `sleep N` as a background Bash call; converse again when it finishes.
 
 ## When something is off
 

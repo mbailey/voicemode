@@ -12,7 +12,7 @@ The turn lingers only while a call is listening:
 
 - **Speak-only** (`wait_for_response=false`) ends with nobody listening. The user's reply goes nowhere. Narrate, do the work, then call again with a question, or a plain "done" that listens.
 - **Silence** ends a listening turn once the user stops, and the result carries their words. An empty result means they said nothing, or STT heard nothing ([recovery](recovery.md)): ask again or say what you will do next. Never invent a reply.
-- **"Wait."** When a reply ends with "hang on", "give me a sec" or "wait", the call pauses for the configured `VOICEMODE_WAIT_DURATION` and listens again by itself. For a longer pause, `sleep N` in Bash, then converse again.
+- **"Wait."** When a reply ends with "hang on", "give me a sec" or "wait", the call pauses for the configured `VOICEMODE_WAIT_DURATION` and listens again by itself. For a longer pause, run `sleep N` as a background Bash call (`run_in_background: true`): Claude Code refuses a long foreground sleep, and the background one wakes you when it ends. Then converse again.
 - **Several agents** share one channel through the conch, the floor lock. While you hold it the user's words reach you; when your call ends without `hold_conch` the floor lapses and another agent may take the next turn. Hold it when you will speak again straight away: [conch](conch.md).
 
 A spoken reply arrives as a tool result, not as a user message. Act on it exactly as you would on typed text, including loading a skill it calls for. Keep each utterance short: the user is listening, not reading.
