@@ -65,16 +65,33 @@ def test_references_are_flat_with_front_matter_and_a_lead():
     assert (REFS / "linger.md").exists(), "linger is the first concept page (the brief)"
 
 
+REF_DEFINITION = re.compile(r"^\[([^\]]+)\]:\s*(\S+)$", re.M)
+REF_USE = re.compile(r"(?<!\\)\[([^\]\n]+)\](?![\(\[:])")
+
+
 def test_skill_links_resolve_one_level_down():
+    """Mike's review (2026-10-04): the body points at a reference with a
+    shortcut reference link, `[linger]`, whose text IS the file's name, so a
+    reader of the top alone knows where it lives; the `## References` list at
+    the foot defines each name once so the links render (on GitHub too)."""
     text = SKILL.read_text(encoding="utf-8")
-    links = re.findall(r"\]\(([^)]+)\)", text)
-    assert links, "the body points at its references"
-    for link in links:
-        if link.startswith(("http://", "https://", "#")):
-            continue
+    definitions = REF_DEFINITION.findall(text)
+    assert definitions, "the References list at the foot defines the links"
+    defined = dict(definitions)
+    assert len(defined) == len(definitions), "a name used twice gets ONE definition"
+    for name, link in defined.items():
         target = (SKILL.parent / link).resolve()
-        assert target.is_file(), f"dangling link {link}"
-        assert target.parent == REFS, f"{link}: references live one level down, in references/"
+        assert target.is_file(), f"[{name}]: dangling link {link}"
+        assert target.parent == REFS, f"[{name}]: references live one level down, in references/"
+        assert target.stem == name, f"[{name}] must be named for its file, {target.name}"
+
+    body = REF_DEFINITION.sub("", text)
+    body = re.sub(r"`[^`\n]*`", "", body)  # a [bracket] inside code is not a link
+    used = set(REF_USE.findall(body))
+    assert used, "the body points at its references"
+    assert used <= set(defined), f"used without a definition: {sorted(used - set(defined))}"
+    assert set(defined) <= used, f"defined but never used: {sorted(set(defined) - used)}"
+    assert not re.search(r"\]\(references/", text), "inline links are gone; write [name] and define it at the foot"
 
 
 def test_the_echo_rule_is_gone_from_both_surfaces():
