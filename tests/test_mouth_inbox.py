@@ -40,7 +40,7 @@ def box(tmp_path, monkeypatch):
     return SimpleNamespace(d=d, logs=logs, mail=mail, n=[0])
 
 
-def deliver(box, body="", subject="hi", sender=f"cora@{HOST}.sparrow-hydra.ts.net", **headers) -> str:
+def deliver(box, body="", subject="hi", sender=f"cora@{HOST}.example-tailnet.ts.net", **headers) -> str:
     box.n[0] += 1
     m = EmailMessage()
     m["From"], m["To"], m["Subject"] = sender, f"mouth@{HOST}", subject
@@ -186,8 +186,8 @@ def test_a_stranger_is_refused_and_never_spoken(box):
 
 
 def test_the_allow_list_admits_a_named_sender(box, monkeypatch):
-    monkeypatch.setenv("VOICEMODE_MOUTH_MAIL_ALLOW", "mike@failmode.com,@ms2.sparrow-hydra.ts.net")
-    deliver(box, "from ms2", sender="cora@ms2.sparrow-hydra.ts.net")
+    monkeypatch.setenv("VOICEMODE_MOUTH_MAIL_ALLOW", "mike@failmode.com,@ms2.example-tailnet.ts.net")
+    deliver(box, "from ms2", sender="cora@ms2.example-tailnet.ts.net")
     deliver(box, "from mike", sender="mike@failmode.com")
     run_player(box.d).join(5)
     assert spoken(box) == ["from ms2", "from mike"]
