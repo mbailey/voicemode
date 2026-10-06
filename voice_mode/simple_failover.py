@@ -15,6 +15,7 @@ from .provider_discovery import is_local_provider
 from .config import (
     TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE,
     STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX,
+    STT_TIMEOUT, STT_TIMEOUT_LOCAL,
 )
 from .provider_discovery import detect_provider_type, EndpointInfo
 from .providers import _select_stt_model_for_endpoint, _select_tts_model_for_endpoint
@@ -464,6 +465,16 @@ async def simple_tts_synthesize(
     return False, None, None, None, error_config
 
 
+def _stt_timeout(base_url: str) -> float:
+    """Request timeout for an STT endpoint (VOICEMODE_STT_TIMEOUT[_LOCAL]).
+
+    A hung transcription costs exactly this long before the transient retry
+    below takes over, so it is worth sizing to the endpoint: local STT can be
+    bounded by its own measured worst case, remote keeps its own setting.
+    """
+    return STT_TIMEOUT_LOCAL if is_local_provider(base_url) else STT_TIMEOUT
+
+
 def _is_transient_stt_error(e: Exception) -> bool:
     """Classify an STT transcription exception as transient (retry) or permanent.
 
@@ -591,7 +602,7 @@ async def simple_stt_failover(
             client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url,
-                timeout=60.0,  # Allow time for slower transcriptions
+                timeout=_stt_timeout(base_url),  # VOICEMODE_STT_TIMEOUT[_LOCAL], default 60s
                 max_retries=max_retries
             )
 
