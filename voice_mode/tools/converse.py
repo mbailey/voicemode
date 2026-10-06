@@ -826,11 +826,24 @@ def _normalize_turns(
     return normalized
 
 
-def _play_samples_blocking(samples, sample_rate):
+def _play_samples_blocking(samples, sample_rate, stop_event: Optional[threading.Event] = None):
     """Play decoded samples to completion (blocking). Runs in a worker thread
-    via ``asyncio.to_thread`` so the producer keeps synthesizing during playback."""
+    via ``asyncio.to_thread`` so the producer keeps synthesizing during playback.
+
+    ``stop_event`` is the caller's side channel into this thread, as with the
+    recording stop flag (VM-2015): cancelling the awaiting coroutine abandons
+    the future but not the thread, so the caller sets the event and we stop the
+    player at the next poll instead of playing out the rest of the turn.
+    """
+    if stop_event is not None and stop_event.is_set():
+        return
     player = NonBlockingAudioPlayer()
-    player.play(samples, sample_rate, blocking=True)
+    player.play(samples, sample_rate, blocking=False)
+    while not player.playback_complete.wait(timeout=0.05):
+        if stop_event is not None and stop_event.is_set():
+            player.stop()
+            return
+    player.wait()
 
 
 async def _speak_turns_pipeline(
@@ -935,8 +948,19 @@ async def _speak_turns_pipeline(
                 rec["skipped"] = True
             elif item["success"] and item.get("samples") is not None:
                 play_start = time.perf_counter()
+                # Cancelling this await abandons the future, not the thread.
+                # Left running, the turn plays to the end after ESC, and on
+                # shutdown asyncio.Runner.close() joins the default executor,
+                # so mcp.run() cannot return and the process cannot exit.
+                stop_playback = threading.Event()
                 try:
-                    await asyncio.to_thread(_play_samples_blocking, item["samples"], item["sample_rate"])
+                    await asyncio.to_thread(
+                        _play_samples_blocking, item["samples"], item["sample_rate"],
+                        stop_event=stop_playback,
+                    )
+                except asyncio.CancelledError:
+                    stop_playback.set()
+                    raise
                 except Exception as e:
                     logger.error(f"Turn {idx} playback failed: {e}")
                     rec["success"] = False

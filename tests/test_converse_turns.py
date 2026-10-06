@@ -227,7 +227,7 @@ async def test_pipeline_plays_all_turns_in_order():
         synth_calls.append((message, voice))
         return (True, _samples(), 24000, {"generation": 0.01}, {})
 
-    def fake_play(samples, sr):
+    def fake_play(samples, sr, stop_event=None):
         play_calls.append((len(samples), sr))
 
     with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=fake_synth), \
@@ -267,7 +267,7 @@ async def test_pipeline_continues_past_a_failed_turn():
         return (True, _samples(), 24000, {"generation": 0.0}, {})
 
     with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=fake_synth), \
-         patch("voice_mode.tools.converse._play_samples_blocking", side_effect=lambda s, sr: play_calls.append(sr)), \
+         patch("voice_mode.tools.converse._play_samples_blocking", side_effect=lambda s, sr, stop_event=None: play_calls.append(sr)), \
          patch("voice_mode.tools.converse.asyncio.sleep", new=AsyncMock()):
         results = await _speak_turns_pipeline(
             turns, tts_model=None, tts_provider=None, audio_format=None,
