@@ -209,7 +209,8 @@ async def transcribe_with_whisper_cpp(
     # Convert audio to WAV if needed
     if audio_path.suffix.lower() != ".wav":
         # Use ffmpeg to convert
-        wav_path = Path(tempfile.mktemp(suffix=".wav"))
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as _tmp:
+            wav_path = Path(_tmp.name)
         try:
             subprocess.run([
                 "ffmpeg", "-i", str(audio_path),
