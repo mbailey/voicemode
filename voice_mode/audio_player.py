@@ -134,7 +134,8 @@ class NonBlockingAudioPlayer:
                 channels=channels,
                 callback=self._audio_callback,
                 blocksize=self.buffer_size,
-                dtype=np.float32
+                dtype=np.float32,
+                finished_callback=self.playback_complete.set,
             )
             self.stream.start()
 
