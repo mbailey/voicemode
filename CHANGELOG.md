@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+#### ElevenLabs as a native TTS and STT provider
+
+VoiceMode now speaks ElevenLabs directly — no proxy (litellm, GoModel, etc.)
+required. Point `VOICEMODE_TTS_BASE_URLS` at `https://api.elevenlabs.io/v1`
+and VoiceMode detects the provider, routes through its own `xi-api-key`
+adapter, and gives you the full playback control surface (pause, skip-back,
+skip-forward) that every other provider has.
+
+The integration follows the same pattern as Cartesia: a dedicated httpx
+adapter handles the API differences (voice-in-path URL, `text`/`model_id`
+body fields, `output_format` query param) so the rest of the codebase sees
+a normal streaming provider.
+
+**Configuration:**
+
+```bash
+# ~/.voicemode/voicemode.env
+VOICEMODE_TTS_BASE_URLS=https://api.elevenlabs.io/v1
+VOICEMODE_STT_BASE_URLS=https://api.elevenlabs.io/v1
+ELEVENLABS_API_KEY=sk_...
+VOICEMODE_ELEVENLABS_VOICE_ID=IKne3meq5aSn9XLyUdCD   # Charlie — replace with your voice ID
+```
+
+Key details:
+
+- **TTS** — `elevenlabs_tts.py` posts to `/v1/text-to-speech/{voice_id}` with
+  `xi-api-key` auth. Defaults to `eleven_flash_v2_5` (~75ms latency, 32
+  languages) with `eleven_multilingual_v2` as fallback. Speed is clamped to
+  the ElevenLabs-valid range `[0.7, 1.2]`.
+- **STT** — `elevenlabs_stt.py` posts multipart audio to `/v1/speech-to-text`
+  using the `scribe_v1` model (90+ languages).
+- **Streaming** — `stream_elevenlabs_audio()` buffers the MP3 response,
+  decodes to PCM, and plays with the same stop/pause/skip-back/skip-forward
+  control-state handling as `stream_cartesia_pcm()`. Skip-back replay works.
+- **Voice resource** — `voice://voices/elevenlabs` is populated from 18
+  verified built-in voice IDs with display names (Alice, Brian, Daniel,
+  George, …) plus any voices from `VOICEMODE_VOICES` /
+  `VOICEMODE_ELEVENLABS_VOICE_ID`. ElevenLabs accepts both IDs and display
+  names in the voice path.
+- **No new dependencies** — `httpx` is already declared.
+- **Backward compatible** — activates only when `api.elevenlabs.io` appears
+  in `VOICEMODE_TTS_BASE_URLS` or `VOICEMODE_STT_BASE_URLS`.
+
+See [docs/guides/elevenlabs.md](docs/guides/elevenlabs.md) for setup,
+voice IDs, model options, and troubleshooting.
+
 ### Changed
 
 - **Context diet for the agent-facing text (VM-2442).** What an agent reads to
@@ -327,6 +375,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   naming `"queue"` as the replacement, so no caller fails silently. Remote
   agents that need to queue for longer than the 25 s `conch(action="wait")`
   cap should use `action="queue"` + periodic `action="heartbeat"` instead.
+
+- **XSS in OAuth callback page** — `_callback_page()` in `auth.py`
+  interpolated the OAuth `error_description` query param into HTML without
+  escaping. A crafted redirect URL could inject arbitrary JS into the
+  browser during the OAuth flow. Fixed with `html.escape()`.
+
+- **Timing oracle in Bearer token comparison** — `TokenAuthMiddleware` in
+  `serve_middleware.py` used `!=` for token comparison, theoretically leaking
+  timing information. Replaced with `hmac.compare_digest()`.
+
+- **TOCTOU race in temp file creation** — `transcribe_with_whisper_cpp()` in
+  `backends.py` used `tempfile.mktemp()`, which generates a name without
+  creating the file and leaves a race window. Replaced with
+  `NamedTemporaryFile(delete=False)`.
 
 ## [8.12.0] - 2026-07-21
 

@@ -35,20 +35,53 @@ OPENAI_TTS_VOICES = (
     "nova", "onyx", "sage", "shimmer", "verse",
 )
 
-_PROBE_TIMEOUT = 5.0
+# ElevenLabs built-in voices. Source: https://elevenlabs.io/docs/voices
+# ElevenLabs does NOT expose /audio/voices, so this list is hand-maintained.
+# ``voice`` is the ID passed to the API path; ``name`` is the display label.
+# Both IDs and display names are accepted by the ElevenLabs API.
+#
+# Only voices confirmed free-tier accessible are listed (verified 2026-10-02).
+# Paid/library-only voices (HTTP 402 on free accounts) are excluded:
+#   Aria (9BWtsMINqrJLrRacOk9x), Charlotte (XB0fDUnXU5powFXDhCwa),
+#   Rachel (21m00Tcm4TlvDq8ikWAM).
+# Voice availability is account and tier-dependent — users must set
+# VOICEMODE_ELEVENLABS_VOICE_ID explicitly.
+ELEVENLABS_TTS_VOICES: tuple[tuple[str, str], ...] = (
+    ("Xb7hH8MSUJpSbSDYk0k2", "Alice"),       # female, British, confident, news
+    ("pqHfZKP75CvOlQylNhV4", "Bill"),         # male, American, trustworthy, narration
+    ("nPczCjzI2devNBz1zQrb", "Brian"),        # male, American, deep, narration
+    ("N2lVS1w4EtoT3dr4eOWO",  "Callum"),     # male, Transatlantic, intense, characters
+    ("IKne3meq5aSn9XLyUdCD",  "Charlie"),    # male, Australian, natural, conversational
+    ("iP95p4xoKVk53GoZ742B",  "Chris"),      # male, American, casual, conversational
+    ("onwK4e9ZLuTAKqWW03F9",  "Daniel"),     # male, British, authoritative, news
+    ("cjVigY5qzO86Huf0OWal",  "Eric"),       # male, American, friendly, conversational
+    ("JBFqnCBsd6RMkjVDRZzb",  "George"),     # male, British, warm, narration
+    ("cgSgspJ2msm6clMCkdW9",  "Jessica"),    # female, American, expressive, conversational
+    ("FGY2WhTYpPnrIDTdsKH5",  "Laura"),      # female, American, upbeat, social media
+    ("TX3LPaxmHKxFdv7VOQHJ",  "Liam"),       # male, American, articulate, narration
+    ("pFZP5JQG7iQjIQuC4Bku",  "Lily"),       # female, British, warm, narration
+    ("XrExE9yKIg1WjnnlVkGX",  "Matilda"),    # female, American, friendly, narration
+    ("SAz9YHcvj6GT2YYXdXww",  "River"),      # non-binary, American, confident, social media
+    ("CwhRBWXzGAHq8TQ4Fs17",  "Roger"),      # male, American, confident, social media
+    ("EXAVITQu4vr4xnSDxMaL",  "Sarah"),      # female, American, soft, news
+    ("bIHbv24MWmeRgasZH58o",  "Will"),       # male, American, friendly, social media
+)
+
+
 _CACHE_TTL = 60.0
+_PROBE_TIMEOUT = 5.0  # seconds; matches provider_discovery.py probe timeouts
 _IMPRESSION_PROVIDER = "mlx-audio"
 
 # Cache keyed by include_local_only → (monotonic timestamp, voice list).
 _cache: dict[bool, tuple[float, list[dict[str, Any]]]] = {}
 
 
-def _make_entry(provider: str, voice: str) -> dict[str, Any]:
+def _make_entry(provider: str, voice: str, name: str | None = None) -> dict[str, Any]:
     """Build a voice entry matching the locked v1 schema."""
     return {
         "id": f"{provider}:{voice}",
         "voice": voice,
-        "name": voice,
+        "name": name or voice,
         "provider": provider,
         "language": None,
         "gender": None,
@@ -102,6 +135,11 @@ async def _voices_for_endpoint(url: str) -> tuple[str, list[str]] | None:
         return None
     if provider == "openai":
         return provider, list(OPENAI_TTS_VOICES)
+    if provider == "elevenlabs":
+        # ElevenLabs does not expose /audio/voices. Return None here —
+        # enumerate_voices() injects ElevenLabs entries via _elevenlabs_entries()
+        # so they carry both the voice ID and display name.
+        return None
 
     try:
         voices = await _fetch_audio_voices(url)
@@ -128,6 +166,44 @@ async def _voices_for_endpoint(url: str) -> tuple[str, list[str]] | None:
         return None
 
     return provider, voices
+
+
+def _elevenlabs_entries() -> list[dict[str, Any]]:
+    """Build ElevenLabs voice entries when api.elevenlabs.io is configured.
+
+    Merges the built-in catalogue (ELEVENLABS_TTS_VOICES) with any voices
+    configured in VOICEMODE_VOICES / VOICEMODE_ELEVENLABS_VOICE_ID so
+    user-configured voices always appear even if not in the built-in list.
+    ``voice`` carries the ID (passed to the API path); ``name`` is the
+    display label.
+    """
+    from .config import TTS_VOICES, ELEVENLABS_VOICE_ID
+
+    # Check if any TTS_BASE_URL is an ElevenLabs endpoint
+    if not any(detect_provider_type(u) == "elevenlabs" for u in TTS_BASE_URLS):
+        return []
+
+    # Build id→name map from built-ins
+    # Collect all voice IDs to include: built-ins + user-configured
+    all_voices: list[tuple[str, str]] = list(ELEVENLABS_TTS_VOICES)
+    seen_ids = {vid for vid, _ in ELEVENLABS_TTS_VOICES}
+
+    # Add VOICEMODE_ELEVENLABS_VOICE_ID if set and not already present
+    if ELEVENLABS_VOICE_ID and ELEVENLABS_VOICE_ID not in seen_ids:
+        all_voices.insert(0, (ELEVENLABS_VOICE_ID, ELEVENLABS_VOICE_ID))
+        seen_ids.add(ELEVENLABS_VOICE_ID)
+
+    # Add any VOICEMODE_VOICES entries that look like ElevenLabs (names or IDs)
+    for v in TTS_VOICES:
+        if v not in seen_ids:
+            # Could be a display name or an unknown ID — include it either way
+            all_voices.append((v, v))
+            seen_ids.add(v)
+
+    return [
+        _make_entry("elevenlabs", voice_id, name)
+        for voice_id, name in all_voices
+    ]
 
 
 def _impression_entries() -> list[dict[str, Any]]:
@@ -175,6 +251,12 @@ async def enumerate_voices(*, include_local_only: bool) -> list[dict[str, Any]]:
         for voice in sorted(voices, key=str.casefold):
             entry = _make_entry(provider, voice)
             merged[entry["id"]] = entry
+
+    # ElevenLabs has no /audio/voices endpoint — inject from built-in catalogue
+    # + user-configured voices. Done before impressions so a cloned voice can
+    # override a built-in entry with the same id if they ever collide.
+    for entry in _elevenlabs_entries():
+        merged[entry["id"]] = entry
 
     if include_local_only:
         for entry in _impression_entries():

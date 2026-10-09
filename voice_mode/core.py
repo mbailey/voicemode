@@ -259,6 +259,10 @@ async def text_to_speech(
         # Determine provider from base URL (simple heuristic)
         if "api.cartesia.ai" in tts_base_url:
             provider = "cartesia"
+        elif "api.elevenlabs.io" in tts_base_url:
+            # NOTE: there is a second dispatch site ~line 709 (synthesize_tts_audio)
+            # that must be kept in sync with this one. Search for "second dispatch site".
+            provider = "elevenlabs"
         elif "openai" in tts_base_url:
             provider = "openai"
         else:
@@ -270,8 +274,10 @@ async def text_to_speech(
         # Use provided format or fall back to configured default
         format_to_use = audio_format if audio_format else TTS_AUDIO_FORMAT
         validated_format = validate_audio_format(format_to_use, provider, "tts")
-        
-        logger.debug("Making TTS API request...")
+        # ElevenLabs: always use mp3 regardless of global format setting.
+        # Opus and PCM don't play back correctly via the current streaming path.
+        if provider == "elevenlabs":
+            validated_format = "mp3"
         # Build request parameters
         request_params = {
             "model": tts_model,
@@ -323,6 +329,7 @@ async def text_to_speech(
         # PCM only, so we only stream when the validated format is pcm and
         # fall back to the buffered WAV path otherwise. OpenAI/Kokoro stream
         # over the OpenAI-compatible HTTP response.
+        # ElevenLabs streams via plain chunked HTTP (no SSE framing needed).
         if provider == "cartesia":
             use_streaming = STREAMING_ENABLED and validated_format == "pcm"
             if STREAMING_ENABLED and validated_format != "pcm":
@@ -330,6 +337,8 @@ async def text_to_speech(
                     f"Cartesia streaming only supports pcm; "
                     f"falling back to buffered playback for format {validated_format}"
                 )
+        elif provider == "elevenlabs":
+            use_streaming = STREAMING_ENABLED and validated_format in ["mp3", "pcm", "opus"]
         else:
             use_streaming = STREAMING_ENABLED and validated_format in [
                 "opus", "mp3", "pcm", "wav"
@@ -344,6 +353,17 @@ async def text_to_speech(
                     voice_id=tts_voice,
                     speed=speed,
                     sample_rate=SAMPLE_RATE,
+                    save_audio=save_audio,
+                    audio_dir=audio_dir,
+                    conversation_id=conversation_id,
+                )
+            elif provider == "elevenlabs":
+                from .streaming import stream_elevenlabs_audio
+                success, stream_metrics = await stream_elevenlabs_audio(
+                    text=text,
+                    voice_id=tts_voice,
+                    output_format=validated_format,
+                    speed=speed,
                     save_audio=save_audio,
                     audio_dir=audio_dir,
                     conversation_id=conversation_id,
@@ -404,6 +424,14 @@ async def text_to_speech(
                 speed=speed,
             )
             validated_format = "wav"
+        elif provider == "elevenlabs":
+            from . import elevenlabs_tts
+            response_content = await elevenlabs_tts.synthesize(
+                text=text,
+                voice_id=tts_voice,
+                output_format=validated_format,
+                speed=speed,
+            )
         else:
             # Use context manager to ensure response is properly closed
             async with openai_clients[client_key].audio.speech.with_streaming_response.create(
@@ -706,8 +734,11 @@ async def synthesize_tts_audio(
 
     try:
         # Determine provider from base URL (mirrors text_to_speech)
+        # NOTE: this is the second dispatch site — keep in sync with ~line 260.
         if "api.cartesia.ai" in tts_base_url:
             provider = "cartesia"
+        elif "api.elevenlabs.io" in tts_base_url:
+            provider = "elevenlabs"
         elif "openai" in tts_base_url:
             provider = "openai"
         else:
@@ -715,6 +746,8 @@ async def synthesize_tts_audio(
 
         format_to_use = audio_format if audio_format else TTS_AUDIO_FORMAT
         validated_format = validate_audio_format(format_to_use, provider, "tts")
+        if provider == "elevenlabs":
+            validated_format = "mp3"
 
         request_params = {
             "model": tts_model,
@@ -746,6 +779,14 @@ async def synthesize_tts_audio(
                 speed=speed,
             )
             validated_format = "wav"
+        elif provider == "elevenlabs":
+            from . import elevenlabs_tts
+            response_content = await elevenlabs_tts.synthesize(
+                text=text,
+                voice_id=tts_voice,
+                output_format=validated_format,
+                speed=speed,
+            )
         else:
             async with openai_clients[client_key].audio.speech.with_streaming_response.create(
                 **request_params

@@ -7,6 +7,7 @@ Connection refused errors are instant, so there's no performance penalty.
 
 import asyncio
 import logging
+import os
 from typing import Optional, Tuple, Dict, Any
 from openai import AsyncOpenAI, APIConnectionError, APIStatusError
 from .openai_error_parser import OpenAIErrorParser
@@ -181,6 +182,26 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                 is_fallback = True
                 fallback_reason = f"endpoint-failover: {voice}→{selected_voice} (kokoro unreachable)"
                 logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
+        elif provider_type == "elevenlabs":
+            # ElevenLabs requires a 20-char alphanumeric voice ID.
+            # TTS_VOICES[0] defaults to af_sky (Kokoro) — substitute
+            # ELEVENLABS_VOICE_ID when the voice isn't a valid ElevenLabs ID
+            # so a mixed VOICEMODE_VOICES list doesn't break the request.
+            import re as _re
+            if _re.fullmatch(r"[A-Za-z0-9]{20}", voice):
+                selected_voice = voice
+            else:
+                from .config import ELEVENLABS_VOICE_ID
+                if ELEVENLABS_VOICE_ID:
+                    selected_voice = ELEVENLABS_VOICE_ID
+                    logger.info(
+                        f"Voice '{voice}' is not an ElevenLabs ID; "
+                        f"using VOICEMODE_ELEVENLABS_VOICE_ID={ELEVENLABS_VOICE_ID}"
+                    )
+                else:
+                    # No valid voice available — pass through and let
+                    # elevenlabs_tts._resolve_request() raise a clear error.
+                    selected_voice = voice
         else:
             selected_voice = voice  # Use original voice for Kokoro
     logger.info(f"Endpoint {base_url} ({provider_type}): model={selected_model}")
@@ -640,27 +661,48 @@ async def simple_stt_failover(
             # so remote behaviour is unchanged.
             retries = STT_RETRY_ATTEMPTS if is_local_provider(base_url) else 0
             attempt = 0
-            while True:
-                try:
-                    transcription = await client.audio.transcriptions.create(**transcription_kwargs)
-                    break
-                except Exception as e:
-                    if attempt < retries and _is_transient_stt_error(e):
-                        delay = min(STT_RETRY_BACKOFF * (2 ** attempt), STT_RETRY_BACKOFF_MAX)
-                        logger.warning(
-                            f"STT transient failure on {base_url} "
-                            f"(try {attempt + 1}/{retries + 1}): {e}; retry in {delay:.1f}s"
-                        )
-                        await asyncio.sleep(delay)
-                        attempt += 1
-                        continue
-                    # Permanent error or retries exhausted: re-raise to the outer
-                    # except, which records the failure and advances to the next
-                    # endpoint (or returns the classified failure).
-                    raise
-            request_time_ms = (time.perf_counter() - request_start) * 1000
 
-            text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
+            # ElevenLabs STT uses a proprietary endpoint (/v1/speech-to-text)
+            # with xi-api-key auth — bypass the OpenAI client path entirely.
+            if provider_type == "elevenlabs":
+                from . import elevenlabs_stt
+                audio_file.seek(0)
+                audio_data = audio_file.read()
+                filename = getattr(audio_file, "name", "audio.mp3")
+                language_arg = None
+                if WHISPER_LANGUAGE and WHISPER_LANGUAGE != "auto":
+                    language_arg = WHISPER_LANGUAGE
+                text = await elevenlabs_stt.transcribe(
+                    audio_data=audio_data,
+                    filename=os.path.basename(filename) if filename else "audio.mp3",
+                    model=resolved_model,
+                    language=language_arg,
+                )
+                request_time_ms = (time.perf_counter() - request_start) * 1000
+                logger.info(
+                    f"STT: ElevenLabs transcribed in {request_time_ms:.0f}ms: '{text[:50]}'"
+                )
+            else:
+                while True:
+                    try:
+                        transcription = await client.audio.transcriptions.create(**transcription_kwargs)
+                        break
+                    except Exception as e:
+                        if attempt < retries and _is_transient_stt_error(e):
+                            delay = min(STT_RETRY_BACKOFF * (2 ** attempt), STT_RETRY_BACKOFF_MAX)
+                            logger.warning(
+                                f"STT transient failure on {base_url} "
+                                f"(try {attempt + 1}/{retries + 1}): {e}; retry in {delay:.1f}s"
+                            )
+                            await asyncio.sleep(delay)
+                            attempt += 1
+                            continue
+                        # Permanent error or retries exhausted: re-raise to the outer
+                        # except, which records the failure and advances to the next
+                        # endpoint (or returns connection_failed).
+                        raise
+                request_time_ms = (time.perf_counter() - request_start) * 1000
+                text = transcription.strip() if isinstance(transcription, str) else transcription.text.strip()
 
             # Build metrics dict
             is_local = is_local_provider(base_url)
