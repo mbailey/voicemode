@@ -2230,6 +2230,9 @@ async def listen_and_transcribe(
             else:
                 # Successful transcription
                 response_text = stt_result.get("text")
+                if response_text and pronounce_enabled():
+                    pronounce_mgr = get_pronounce_manager()
+                    response_text = pronounce_mgr.process_stt(response_text)
                 stt_provider = stt_result.get("provider", "unknown")
                 if stt_provider != "unknown":
                     logger.info(f"📡 STT Provider: {stt_provider}")
