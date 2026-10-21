@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `timeout` from the `converse` MCP schema (no effect since LiveKit left); passing it
   is now a validation error. The CLI keeps it. See Migration. (VM-2442)
 - VoiceMode Connect docs and the `voicemode-connect` skill: the product was abandoned.
-  `voicemode connect auth` stays for now (VM-2314). (VM-2290)
+  `voicemode connect auth` stays for now; its removal is VM-2314. (VM-2290)
 - The bundled mlx-audio `server.py` patch: upstream serves `response_format` natively
   since 0.4.4. (VM-2338)
 
@@ -64,8 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `listen_duration_max` / `listen_duration_min` have real descriptions. (VM-2099)
 - A silent `converse(hold_conch=true)` no longer holds the channel indefinitely: the
   hold is kept only when the turn spoke. (VM-2045)
-- Every conch grant is covered by the `CONCH_GRANT_TTL` self-heal, so an unclaimed
-  grant can no longer wedge the queue. (VM-2078)
+- Every conch grant is covered by the `VOICEMODE_CONCH_GRANT_TTL` self-heal, so an
+  unclaimed grant can no longer wedge the queue. (VM-2078)
 - `conch give` / `summon` to a session not in the queue grants only on a confirmed
   nudge; otherwise it returns `granted: false` and the operator relays. (VM-2078)
 - A grant issued mid-turn is no longer evicted as wedged before the floor frees;
