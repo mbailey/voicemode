@@ -1060,19 +1060,30 @@ def index():
         view_mode=view_mode
     )
 
+def contained_path(candidate: Path, base_dir: Path) -> Optional[str]:
+    """Return ``candidate`` resolved, or None if it lies outside ``base_dir``.
+
+    Resolves symlinks and ``..`` on both sides, then requires the result to sit
+    strictly under ``base_dir`` (VM-2484, CodeQL py/path-injection).
+    """
+    base = os.path.realpath(base_dir)
+    resolved = os.path.realpath(candidate)
+    if not resolved.startswith(base + os.sep):
+        return None
+    return resolved
+
+
 @app.route('/audio/<filename>')
 def serve_audio(filename):
-    """Serve audio files."""
-    # Try new path structure first
-    audio_path = get_audio_path(filename, AUDIO_DIR)
-    if audio_path.exists():
-        return send_file(audio_path)
-    
-    # Fall back to flat structure for older files
-    audio_path = AUDIO_DIR / filename
-    if audio_path.exists():
-        return send_file(audio_path)
-    
+    """Serve audio files from AUDIO_DIR, and only from AUDIO_DIR."""
+    # Try new path structure first, then the flat structure for older files
+    for candidate in (get_audio_path(filename, AUDIO_DIR), AUDIO_DIR / filename):
+        safe_path = contained_path(candidate, AUDIO_DIR)
+        if safe_path is None:
+            return "Invalid filename", 400
+        if os.path.isfile(safe_path):
+            return send_file(safe_path)
+
     return "Audio file not found", 404
 
 @app.route('/api/conversations')
@@ -1088,4 +1099,7 @@ if __name__ == '__main__':
     print(f"Audio files: {AUDIO_DIR}")
     print(f"\nOpen http://localhost:5000 in your browser\n")
     
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # The Werkzeug debugger executes arbitrary code for anyone who can reach
+    # it, so it is off unless asked for (VM-2484, CodeQL py/flask-debug).
+    debug = os.environ.get("VOICEMODE_BROWSER_DEBUG", "").lower() in ("1", "true", "yes")
+    app.run(debug=debug, host='0.0.0.0', port=5000)
