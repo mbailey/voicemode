@@ -87,6 +87,7 @@ from voice_mode.config import (
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
+from voice_mode.url_match import is_openai_url
 from voice_mode.core import (
     get_openai_clients,
     save_debug_file,
@@ -3791,7 +3792,7 @@ async def _converse_core(
 
                         result = "\n".join(error_lines)
                     # Check if we have config info that might indicate why it failed
-                    elif tts_config and 'openai.com' in tts_config.get('base_url', ''):
+                    elif tts_config and is_openai_url(tts_config.get('base_url')):
                         # Check if API key is missing for OpenAI
                         from voice_mode.config import OPENAI_API_KEY
                         if not OPENAI_API_KEY:

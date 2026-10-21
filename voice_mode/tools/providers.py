@@ -6,6 +6,7 @@ from typing import Optional, Union, Dict, Any
 from voice_mode.server import mcp
 from voice_mode.provider_discovery import provider_registry, detect_provider_type, _default_stt_models
 from voice_mode.config import TTS_BASE_URLS, STT_BASE_URLS
+from voice_mode.url_match import is_openai_url
 
 logger = logging.getLogger("voicemode")
 
@@ -66,8 +67,8 @@ async def refresh_provider_registry(
 
                     provider_registry.registry[service][url] = EndpointInfo(
                         base_url=url,
-                        models=_default_stt_models(url) if service == "stt" else (["tts-1", "tts-1-hd"] if "openai.com" in url else ["tts-1"]),
-                        voices=[] if service == "stt" else list(OPENAI_SEED_VOICES if "openai.com" in url else KNOWN_KOKORO_VOICES),
+                        models=_default_stt_models(url) if service == "stt" else (["tts-1", "tts-1-hd"] if is_openai_url(url) else ["tts-1"]),
+                        voices=[] if service == "stt" else list(OPENAI_SEED_VOICES if is_openai_url(url) else KNOWN_KOKORO_VOICES),
                         provider_type=detect_provider_type(url),
                         last_check=datetime.utcnow().isoformat() + "Z"
                     )
