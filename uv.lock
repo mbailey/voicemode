@@ -3346,6 +3346,7 @@ scripts = [
 ]
 test = [
     { name = "coverage", extra = ["toml"] },
+    { name = "flask" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -3363,6 +3364,7 @@ requires-dist = [
     { name = "coverage", extras = ["toml"], marker = "extra == 'test'", specifier = ">=7.4.0" },
     { name = "fastmcp", specifier = ">=3.2.0,<4" },
     { name = "flask", marker = "extra == 'scripts'", specifier = ">=3.0.0" },
+    { name = "flask", marker = "extra == 'test'", specifier = ">=3.0.0" },
     { name = "httpx" },
     { name = "keyring", specifier = ">=25.0.0" },
     { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.5.0" },

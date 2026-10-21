@@ -63,6 +63,7 @@ test = [
     "pytest-xdist>=3.5.0",  # For parallel testing
     "pytest-timeout>=2.2.0",  # For test timeouts
     "coverage[toml]>=7.4.0",
+    "flask>=3.0.0",  # VM-2484: runs the scripts/conversation_browser containment tests
 ]
 scripts = [
     "flask>=3.0.0",

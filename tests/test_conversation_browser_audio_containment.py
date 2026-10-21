@@ -2,8 +2,9 @@
 
 CodeQL py/path-injection flagged ``serve_audio``: the URL's filename went
 straight into a filesystem path. ``contained_path`` now resolves each candidate
-and refuses anything outside AUDIO_DIR. Flask is an optional extra
-(``voice-mode[scripts]``), so these tests skip without it.
+and refuses anything outside AUDIO_DIR. Flask is an optional runtime extra
+(``voice-mode[scripts]``) and is also in the ``[test]`` extra, so these tests
+run under ``make test``; they skip only in an environment without flask.
 """
 
 import importlib
