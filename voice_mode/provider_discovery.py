@@ -21,6 +21,7 @@ from openai import AsyncOpenAI
 
 from . import config
 from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
+from .url_match import is_openai_url
 
 logger = logging.getLogger("voicemode")
 
@@ -54,7 +55,7 @@ def detect_provider_type(base_url: str) -> str:
     """Detect provider type from base URL."""
     if not base_url:
         return "unknown"
-    if "openai.com" in base_url:
+    if is_openai_url(base_url):
         return "openai"
     elif "api.cartesia.ai" in base_url:
         return "cartesia"
@@ -318,7 +319,7 @@ class ProviderRegistry:
     async def _discover_voices(self, base_url: str, client: AsyncOpenAI) -> List[str]:
         """Discover available voices for a TTS endpoint."""
         # If it's OpenAI, use known voices (they don't expose a voices endpoint)
-        if "openai.com" in base_url:
+        if is_openai_url(base_url):
             return ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
         
         # Try standard OpenAI-compatible voices endpoint

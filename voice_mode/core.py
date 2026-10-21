@@ -19,6 +19,7 @@ import numpy as np
 from pydub import AudioSegment
 from openai import AsyncOpenAI
 from .provider_discovery import is_local_provider
+from .url_match import is_openai_url
 import httpx
 
 from .config import SAMPLE_RATE
@@ -635,11 +636,11 @@ async def text_to_speech(
 
             # Check for 401 Unauthorized specifically on OpenAI endpoints
             if hasattr(e.response, 'status_code') and e.response.status_code == 401:
-                if 'openai.com' in tts_base_url:
+                if is_openai_url(tts_base_url):
                     logger.error("⚠️  Authentication failed with OpenAI. Please set OPENAI_API_KEY environment variable.")
                     logger.error("   Alternatively, you can use local services (Kokoro) without an API key.")
         elif 'api key' in error_message or 'unauthorized' in error_message or 'authentication' in error_message:
-            if 'openai.com' in tts_base_url:
+            if is_openai_url(tts_base_url):
                 logger.error("⚠️  Authentication issue detected. Please check your OPENAI_API_KEY.")
                 logger.error("   For local-only usage, ensure Kokoro is running and configured.")
 
