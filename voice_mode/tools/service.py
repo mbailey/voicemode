@@ -69,6 +69,8 @@ def get_service_config_vars(service_name: str) -> Dict[str, Any]:
         start_script = None
         if platform.system() == "Darwin":
             start_script = Path(kokoro_dir) / "start-gpu_mac.sh"
+        elif platform.system() == "Windows":
+            start_script = Path(kokoro_dir) / "start-cpu.ps1"
         else:
             # On Linux, prefer GPU script if GPU is available, otherwise use CPU script
             if has_gpu_support():
@@ -483,6 +485,8 @@ async def start_service(service_name: str) -> str:
         # Use appropriate start script
         if platform.system() == "Darwin":
             start_script = Path(kokoro_dir) / "start-gpu_mac.sh"
+        elif platform.system() == "Windows":
+            start_script = Path(kokoro_dir) / "start-cpu.ps1"
         else:
             # On Linux, prefer GPU script if GPU is available, otherwise use CPU script
             if has_gpu_support():
@@ -497,17 +501,20 @@ async def start_service(service_name: str) -> str:
                     Path(kokoro_dir) / "start-cpu.sh",
                     Path(kokoro_dir) / "start-gpu.sh"  # might work with CPU fallback
                 ]
-            
+
             start_script = None
             for script in possible_scripts:
                 if script.exists():
                     start_script = script
                     break
-        
+
         if not start_script.exists():
             return f"❌ Start script not found: {start_script}"
 
-        cmd = [str(start_script)]
+        if start_script.suffix == ".ps1":
+            cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(start_script)]
+        else:
+            cmd = [str(start_script)]
 
     elif service_name == "mlx_audio":
         # mlx-audio installs via ``uv tool install`` -- the entry point

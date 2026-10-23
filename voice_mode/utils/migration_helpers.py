@@ -1,6 +1,6 @@
 """Helper functions for migrating old service installations."""
 
-import os
+import platform
 import subprocess
 import logging
 from pathlib import Path
@@ -13,7 +13,7 @@ def check_old_whisper_installations() -> List[Path]:
     """Check for old whisper service installations."""
     old_files = []
     
-    if os.uname().sysname == "Darwin":
+    if platform.system() == "Darwin":
         launchd_dir = Path.home() / "Library" / "LaunchAgents"
         old_names = [
             "com.voicemode.whisper-server.plist",
@@ -23,8 +23,8 @@ def check_old_whisper_installations() -> List[Path]:
             path = launchd_dir / name
             if path.exists():
                 old_files.append(path)
-    
-    elif os.uname().sysname == "Linux":
+
+    elif platform.system() == "Linux":
         systemd_dir = Path.home() / ".config" / "systemd" / "user"
         old_names = ["whisper-server.service"]
         for name in old_names:
@@ -39,13 +39,13 @@ def check_old_kokoro_installations() -> List[Path]:
     """Check for old kokoro service installations."""
     old_files = []
     
-    if os.uname().sysname == "Darwin":
+    if platform.system() == "Darwin":
         launchd_dir = Path.home() / "Library" / "LaunchAgents"
         # Check for any kokoro plist with port numbers
         for plist in launchd_dir.glob("com.voicemode.kokoro-*.plist"):
             old_files.append(plist)
-    
-    elif os.uname().sysname == "Linux":
+
+    elif platform.system() == "Linux":
         systemd_dir = Path.home() / ".config" / "systemd" / "user"
         old_names = ["kokoro-fastapi.service"]
         for name in old_names:
@@ -79,7 +79,7 @@ def auto_migrate_if_needed(service_name: str) -> Optional[str]:
     removed = []
     errors = []
     
-    system = os.uname().sysname
+    system = platform.system()
     
     for old_path in old_files:
         try:
