@@ -32,7 +32,9 @@ dependencies = [
     # VM-2492: security floors for pip/uvx installs, which ignore uv.lock.
     "certifi>=2026.10.19",  # critical emSign CA; httpx uses it for every TLS call
     "pyjwt>=2.15.0",  # transitive via fastmcp; clears every runtime PyJWT advisory
-    "fastmcp>=3.2.0,<4",  # Migrated to 3.x in VM-1242. Fixes CVSS 10.0 (GHSA-vv7q-7jx5-f767).
+    "fastmcp>=3.4.10,<4",  # Migrated to 3.x in VM-1242. Fixes CVSS 10.0 (GHSA-vv7q-7jx5-f767);
+                          # 3.4.10 fixes GHSA-7xgj-8392-5q4r (component authorization skipped).
+    "opentelemetry-api>=1.45.1",  # transitive via fastmcp; fixes GHSA-xcq7-p3pf-p88h (tracestate parsing)
     "numpy",
     "sounddevice",
     "scipy",
