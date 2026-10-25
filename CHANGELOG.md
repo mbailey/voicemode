@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The VoiceMode Connect login's callback page escapes the OAuth error text, so a crafted
+  redirect can't inject script; `voicemode serve` compares Bearer tokens in constant time.
+  Thanks @mcteamster (#558).
+
 ## [9.0.1] - 2026-10-26
 
 ### Security
