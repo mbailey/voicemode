@@ -106,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - If `converse` now fails with a voice-resolution error, fix the name it points at:
   qualify `group/member`, declare `default:` in the group's `voice.md`, or add
   `default.wav`. For undeclared groups only, `VOICEMODE_CAST_UNDECLARED_SEVERITY=warn`
-  restores a warning for one release. (VM-1901)
+  makes it a warning (the group's first member speaks) for one release. (VM-1901)
 
 ## [8.12.0] - 2026-07-21
 
