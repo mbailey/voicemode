@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - New runtime floors so `pip` and `uvx` installs get the 9.0.0 security fixes too:
   `certifi>=2026.10.19` (critical CA fix), `uv>=0.13.4` and `pyjwt>=2.15.0`. (VM-2492)
+- `fastmcp>=3.4.10` fixes GHSA-7xgj-8392-5q4r (component authorization skipped on direct calls),
+  and `opentelemetry-api>=1.45.1` fixes GHSA-xcq7-p3pf-p88h (unbounded tracestate parsing).
 
 ## [9.0.0] - 2026-10-25
 
