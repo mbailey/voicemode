@@ -27,6 +27,7 @@ Usage:
 """
 
 import ipaddress
+import hmac
 import logging
 import time
 from typing import Callable, List, Optional, Union
@@ -380,7 +381,7 @@ class TokenAuthMiddleware:
         # Extract and validate token
         provided_token = auth_header[7:]  # Remove "Bearer " prefix
 
-        if provided_token != self.token:
+        if not hmac.compare_digest(provided_token.encode("utf-8"), self.token.encode("utf-8")):
             # Note: We intentionally don't log the actual token values
             response = Response(
                 content="Unauthorized: Invalid token",
