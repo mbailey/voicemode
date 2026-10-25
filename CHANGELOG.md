@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.0.1] - 2026-10-26
+
 ### Security
 
 - New runtime floors so `pip` and `uvx` installs get the 9.0.0 security fixes too:
