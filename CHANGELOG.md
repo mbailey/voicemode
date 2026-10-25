@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- New runtime floors so `pip` and `uvx` installs get the 9.0.0 security fixes too:
+  `certifi>=2026.10.19` (critical CA fix), `uv>=0.13.4` and `pyjwt>=2.15.0`. (VM-2492)
+
 ## [9.0.0] - 2026-10-25
 
 ### Added
