@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Voice names resolve completely or fail: a `voice=` (or a `VOICEMODE_VOICES` default)
+  the resolver cannot place is now an error naming the cause, not silent Alloy. See
+  Migration. (VM-1901)
 - The `converse` tool description is cut from ~2,400 to ~190 tokens; the MCP connect
   cost of the default tool set falls from ~4,400 to ~2,170 tokens. (VM-2442)
 - `listen_duration_max` is unset in the `converse` schema by default, so your
@@ -100,6 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   periodic `action="heartbeat"`. (VM-2078)
 - MCP callers: stop passing `timeout` to `converse`; it is now a validation error.
   (VM-2442)
+- If `converse` now fails with a voice-resolution error, fix the name it points at:
+  qualify `group/member`, declare `default:` in the group's `voice.md`, or add
+  `default.wav`. For undeclared groups only, `VOICEMODE_CAST_UNDECLARED_SEVERITY=warn`
+  restores a warning for one release. (VM-1901)
 
 ## [8.12.0] - 2026-07-21
 
