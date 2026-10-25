@@ -255,8 +255,20 @@ clean-dist:
 	@rm -rf installer/dist/*.whl installer/dist/*.tar.gz
 	@echo "✅ Distribution artifacts cleaned!"
 
+# Security audit - every locked dependency (all extras, package and installer)
+# checked against PyPI's advisory service by pip-audit. Exits non-zero on any
+# finding, so the release targets below stop before they tag anything.
+# Daily in CI too: .github/workflows/audit.yml.
+audit:
+	@for dir in . installer; do \
+		echo "Auditing $$dir/uv.lock..."; \
+		reqs=$$(cd $$dir && uv export --frozen --no-hashes --all-extras --format requirements-txt --no-emit-project | grep -v '^-e') || exit 1; \
+		[ -n "$$reqs" ] || { echo "audit: empty export from $$dir/uv.lock"; exit 1; }; \
+		printf '%s\n' "$$reqs" | uvx pip-audit --disable-pip --no-deps --progress-spinner off -r /dev/stdin || exit 1; \
+	done
+
 # Release targets - Create a new release and tag
-release:
+release: audit
 	@echo "Creating unified release for voice-mode and voice-mode-install..."
 	@echo ""
 	@echo "Current version: $$(uv run python scripts/release.py --current)"
@@ -268,7 +280,7 @@ release:
 	fi; \
 	uv run python scripts/release.py $$version
 
-release-package:
+release-package: audit
 	@echo "Creating release for voice-mode package only..."
 	@echo ""
 	@echo "Current version: $$(uv run python scripts/release.py --current)"
@@ -280,7 +292,7 @@ release-package:
 	fi; \
 	uv run python scripts/release.py $$version --package package
 
-release-installer:
+release-installer: audit
 	@echo "Creating release for voice-mode-install package only..."
 	@echo ""
 	@echo "Current version: $$(uv run python scripts/release.py --current)"
