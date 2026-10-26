@@ -3359,6 +3359,12 @@ test = [
     { name = "pytest-xdist" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "aiohttp" },
@@ -3403,6 +3409,12 @@ requires-dist = [
     { name = "webrtcvad-wheels", specifier = ">=2.0.14" },
 ]
 provides-extras = ["dev", "docs", "scripts", "test"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-asyncio", specifier = ">=1.4.0" },
+]
 
 [[package]]
 name = "watchdog"

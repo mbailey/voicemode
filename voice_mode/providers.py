@@ -13,7 +13,7 @@ from .config import (
     TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS,
     STT_MODEL_EXPLICIT, STT_MODEL_PROVIDER_DEFAULTS,
     TTS_MODELS_BY_PROVIDER, TTS_MODEL_PROVIDER_DEFAULTS, TTS_MODEL_DEFAULT,
-    OPENAI_API_KEY, get_voice_preferences,
+    OPENAI_API_KEY, get_voice_preferences, ELEVENLABS_STT_MODEL,
 )
 from .provider_discovery import provider_registry, EndpointInfo, is_local_provider
 
@@ -346,6 +346,10 @@ def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model:
     """
     if endpoint_info.provider_type == "openai":
         return "whisper-1"
+
+    if endpoint_info.provider_type == "elevenlabs":
+        # ElevenLabs STT uses scribe_v1 by default — "whisper-1" is invalid.
+        return requested_model or ELEVENLABS_STT_MODEL
 
     if requested_model is not None:
         return requested_model
