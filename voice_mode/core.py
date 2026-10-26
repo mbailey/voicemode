@@ -19,7 +19,7 @@ import numpy as np
 from pydub import AudioSegment
 from openai import AsyncOpenAI
 from .provider_discovery import is_local_provider
-from .url_match import is_openai_url
+from .url_match import is_openai_url, is_elevenlabs_url
 import httpx
 
 from .config import SAMPLE_RATE
@@ -260,7 +260,7 @@ async def text_to_speech(
         # Determine provider from base URL (simple heuristic)
         if "api.cartesia.ai" in tts_base_url:
             provider = "cartesia"
-        elif "api.elevenlabs.io" in tts_base_url:
+        elif is_elevenlabs_url(tts_base_url):
             # NOTE: there is a second dispatch site ~line 709 (synthesize_tts_audio)
             # that must be kept in sync with this one. Search for "second dispatch site".
             provider = "elevenlabs"
@@ -738,7 +738,7 @@ async def synthesize_tts_audio(
         # NOTE: this is the second dispatch site — keep in sync with ~line 260.
         if "api.cartesia.ai" in tts_base_url:
             provider = "cartesia"
-        elif "api.elevenlabs.io" in tts_base_url:
+        elif is_elevenlabs_url(tts_base_url):
             provider = "elevenlabs"
         elif "openai" in tts_base_url:
             provider = "openai"

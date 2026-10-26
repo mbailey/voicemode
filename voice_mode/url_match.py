@@ -46,3 +46,11 @@ def host_matches(url: Optional[str], domain: str) -> bool:
 def is_openai_url(url: Optional[str]) -> bool:
     """True when ``url`` points at an OpenAI host (``openai.com`` or a subdomain)."""
     return host_matches(url, OPENAI_DOMAIN)
+
+
+ELEVENLABS_DOMAIN = "elevenlabs.io"
+
+
+def is_elevenlabs_url(url: Optional[str]) -> bool:
+    """True when ``url`` points at an ElevenLabs host (``elevenlabs.io`` or a subdomain)."""
+    return host_matches(url, ELEVENLABS_DOMAIN)

@@ -22,7 +22,7 @@ from openai import AsyncOpenAI
 
 from . import config
 from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
-from .url_match import is_openai_url
+from .url_match import is_openai_url, is_elevenlabs_url
 
 logger = logging.getLogger("voicemode")
 
@@ -60,7 +60,7 @@ def detect_provider_type(base_url: str) -> str:
         return "openai"
     elif "api.cartesia.ai" in base_url:
         return "cartesia"
-    elif "api.elevenlabs.io" in base_url:
+    elif is_elevenlabs_url(base_url):
         return "elevenlabs"
     elif ":8880" in base_url:
         return "kokoro"
