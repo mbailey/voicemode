@@ -9,6 +9,7 @@ successful response.
 
 import json
 import urllib.error
+from urllib.parse import urlparse
 import wave
 from unittest.mock import MagicMock, patch
 
@@ -53,7 +54,7 @@ def test_failover_success_uses_second_url(sample_audio, monkeypatch):
     def fake_urlopen(req, timeout=60):
         url = req.full_url
         seen_urls.append(url)
-        if url.startswith("http://unreachable.invalid"):
+        if urlparse(url).hostname == "unreachable.invalid":
             raise urllib.error.URLError("Connection refused")
         return _ok_response("Hello world")
 
@@ -141,7 +142,7 @@ def test_request_asks_for_json_on_every_failover_url(sample_audio, monkeypatch):
 
     def fake_urlopen(req, timeout=60):
         seen.append((req.full_url, _form_fields(req)))
-        if req.full_url.startswith("http://unreachable.invalid"):
+        if urlparse(req.full_url).hostname == "unreachable.invalid":
             raise urllib.error.URLError("Connection refused")
         return _ok_response("Hello world")
 

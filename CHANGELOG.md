@@ -55,326 +55,123 @@ Key details:
 See [docs/guides/elevenlabs.md](docs/guides/elevenlabs.md) for setup,
 voice IDs, model options, and troubleshooting.
 
+### Security
+
+- The VoiceMode Connect login's callback page escapes the OAuth error text, so a crafted
+  redirect can't inject script; `voicemode serve` compares Bearer tokens in constant time.
+  Thanks @mcteamster (#558).
+
+## [9.0.1] - 2026-10-26
+
+### Security
+
+- New runtime floors so `pip` and `uvx` installs get the 9.0.0 security fixes too:
+  `certifi>=2026.10.19` (critical CA fix), `uv>=0.13.4` and `pyjwt>=2.15.0`. (VM-2492)
+- `fastmcp>=3.4.10` fixes GHSA-7xgj-8392-5q4r (component authorization skipped on direct calls),
+  and `opentelemetry-api>=1.45.1` fixes GHSA-xcq7-p3pf-p88h (unbounded tracestate parsing).
+
+## [9.0.0] - 2026-10-25
+
+### Added
+
+- `conch(action="heartbeat")` now reports `granted` and `claim_window_remaining`, so a
+  queued remote agent sees its grant without an extra `status` call. (VM-2078)
+- `voicemode service install mlx-audio` warns when the espeak-ng data path is 160+
+  characters, which crashes the server on the first Kokoro request. (VM-2338)
+
 ### Changed
 
-- **Context diet for the agent-facing text (VM-2442).** What an agent reads to
-  use VoiceMode was measured and cut to what it needs, on Mike's brief: the
-  tool description is the shipwreck kit and must work alone; the skill
-  supplements it and never duplicates it.
-  - The `converse` tool description drops from ~2,400 to ~190 tokens; each
-    parameter is now described once, in the schema next to its type and
-    default, instead of in a prose list that repeated the schema. The MCP
-    connect cost for the default tool set falls from ~4,400 to ~2,170 tokens
-    (tiktoken o200k_base; the task directory has the full breakdown).
-  - `listen_duration_max` is unset on the wire (schema default `null`): the
-    user's `VOICEMODE_DEFAULT_LISTEN_DURATION` resolves it, so the schema no
-    longer shows a number for the listening ceiling.
-  - **Breaking for MCP callers:** `timeout` is removed from the `converse`
-    tool's schema. It has had no effect since the LiveKit transport left; the
-    schema is strict, so a caller still passing it now gets a validation
-    error. The CLI and `_converse_core` keep the argument.
-  - **The transcript echo is gone** (the `ASSISTANT/USER (voicemode)`
-    blockquotes), from both the tool description and the skill: it doubled
-    every exchange on screen, and the Talk app already shows the conversation.
-  - **One VoiceMode skill.** `converse` (a duplicate of the `/voicemode:converse`
-    command), `impressions` and `voicemode-dj` are folded into
-    `.claude/skills/voicemode/`; the `SKILL.md` body falls from ~5,600 to
-    under 500 tokens, and the detail moves to flat references, one level
-    down, each with front matter and a lead: `listening` (`wait_for_response`,
-    and how the turn stays with you after you speak), `surveys`, `conch`,
-    `voices`, `impressions`, `recovery`, `controls`, `music`.
-    `tests/test_skill_shape.py` keeps the shape.
-
-### Fixed
-
-- **Impressions: voice-profile transcription asks the STT server for JSON
-  (VM-2346)**: it now sends `response_format=json`, because mlx-audio 0.4.4 and
-  later reply in ndjson when no format is given, which the profile helper could
-  not parse. whisper.cpp behaves as before.
-
-- **STT: a model the server does not know is no longer reported as a
-  connection failure (VM-2342)** — when an STT endpoint answered with an HTTP
-  4xx, `converse` said "STT service connection failed", sending you hunting a
-  network fault that did not exist. A 404 is now `model_not_found` and the
-  message names the model and the endpoint (for example `STT model 'whisper-1'
-  not found at http://127.0.0.1:8890/v1/audio/transcriptions (HTTP 404)`) and
-  points at `VOICEMODE_STT_MODELS`; any other 4xx is `request_rejected` with its
-  status. When several endpoints fail, a server's 4xx answer is reported ahead
-  of connection errors, and a 404 ahead of other 4xx. Refused connections,
-  timeouts and 5xx are still `connection_failed`, as before. The
-  `listen_and_transcribe` `error_kind` and the `ask_turns` stop reason are
-  `stt_model_not_found` / `stt_request_rejected` accordingly.
-
-  STT on mlx-audio now works without setting a model. With
-  `VOICEMODE_STT_MODEL` unset, an mlx-audio endpoint is sent
-  `mlx-community/whisper-large-v3-turbo-asr-4bit` instead of `whisper-1`, which
-  mlx-audio answers with 404. (The bare `mlx-community/whisper-large-v3-turbo`
-  is avoided on purpose: it fails with HTTP 500 "Processor not found" on a
-  stock Hugging Face cache.) A caller model, a positional `VOICEMODE_STT_MODELS`
-  entry or an explicit `VOICEMODE_STT_MODEL` still wins. With
-  `VOICEMODE_WHISPER_LANGUAGE=auto`, mlx-audio is now sent no `language`, so it
-  detects the language: it does not treat `auto` as a language code. whisper.cpp
-  still gets `auto`; an explicit language still goes to every endpoint.
-
-- **`voicemode service install mlx-audio` can install current mlx-audio again
-  (VM-2338)** — the installer pinned `mlx-audio>=0.4.3,<0.4.4` and then applied
-  a bundled `server.py` patch whose three hunks all fail against 0.4.4 and
-  later, so no release from 0.4.4 on could be installed. The pin is now
-  `mlx-audio>=0.5.7,<0.6`: 0.5.7 is the release measured in VM-2330 (the Kokoro
-  SineGen crash that caused the `<0.4.4` cap, VM-1547, is fixed upstream since
-  0.4.5), and the `<0.6` cap keeps untested minor releases out. The patch step
-  and `voice_mode/data/patches/mlx_audio_server.patch` are gone: upstream has
-  served OpenAI-style `response_format` on `/v1/audio/transcriptions` natively
-  since 0.4.4 (PR #704). The install result's `patch` key is replaced by a
-  `warnings` list.
-
-  One behaviour is lost: the old patch also dropped whisper's `""` / `"."` /
-  `"..."` silence-hallucination segments, and upstream does not. This does not
-  affect default installs, where STT uses whisper.cpp on :2022; it only shows
-  if you point STT at mlx-audio's whisper. Also, when a client omits
-  `response_format`, upstream answers with its native `ndjson` stream, where the
-  old patch answered `json`. voicemode's conversation STT always sends
-  `response_format`, so `converse` is unaffected. The voice-clone transcription
-  in `impressions` does not send it, so against an mlx-audio STT endpoint it now
-  gets the `ndjson` stream instead of `json`. Third-party clients that leave the
-  field out see the same change.
-
-  The installer now also warns (it does not fail) when the installed
-  `espeakng_loader/espeak-ng-data` path is 160 characters or longer. espeak-ng
-  truncates such a path and exits, taking the mlx-audio server down on the
-  first Kokoro request. The default `~/.local/share/uv/tools/...` path is far
-  shorter; a long `HOME`, `UV_TOOL_DIR` or `XDG_DATA_HOME` can reach it.
-
-- **All 67 Kokoro voices work again in `converse` (VM-2190)** — since the
-  voice-resolution overhaul landed on 2026-07-25 (VM-1901), asking for any
-  Kokoro voice outside a 7-name whitelist (`af_sky`, `af_sarah`, `af_alloy`,
-  `am_adam`, `am_echo`, `am_onyx`, `bm_fable`) failed with
-  `Unresolvable voice` even though the local kokoro-fastapi and mlx-audio
-  endpoints serve the full set — `voice="af_nicole"` was the report that
-  surfaced it. The resolver's provider-native check now asks the provider
-  registry what the configured endpoints actually claim
-  (`known_provider_voices()`), so every voice a configured endpoint can say
-  resolves, and a name nothing can say still fails loudly — VM-1901's
-  no-silent-substitution guarantee is unchanged, including the loud
-  per-endpoint skip when an unmapped Kokoro voice reaches OpenAI on failover.
-  The Kokoro voice list is now a single constant
-  (`provider_discovery.KNOWN_KOKORO_VOICES`) instead of three inline copies.
-
-- **The test suite can no longer open the machine's real audio device (VM-2072)** —
-  running `pytest` on this repo used to open the microphone and put sound
-  through the speakers of whoever was at the machine: chimes, start/stop beeps,
-  volume swings, and a degraded voice channel. It ran that way for about 24
-  hours while three crews worked, and **it never presented as an audio bug** —
-  it presented as unexplained flakiness somewhere else, which the agent on the
-  receiving end rationalised and worked around. A default run now cannot reach
-  the device at all.
-
-  The protection is `tests/audio_guard/`, armed at `pytest_configure` before any
-  test module is imported — deliberately not an autouse fixture, because a
-  fixture is not in the room for module-level code that pytest runs at
-  collection time (this repo has such a file, and nobody can put a marker on a
-  module body). It guards the PortAudio path — every device-touching
-  `sounddevice` entry point, **derived at arm time** rather than listed, plus
-  the `_StreamBase` choke point every stream constructs through and a backstop
-  on the C library handle itself — and the process-spawn path, because
-  `paplay`/`mpv`/`afplay` make noise without touching `sounddevice` at all, so
-  a green device layer does not by itself prove silence.
-
-  Two design points worth knowing when you hit it:
-  **the exit status comes from the guard's own hit record, not from pytest's
-  pass/fail** (measured here: the code under test swallowed the guard's
-  exception and the run still said "10 passed"), and **a lifted guard is made
-  visible rather than prevented** — `mock.patch('sounddevice.wait')` really does
-  open an unguarded window, so it is recorded as an event and re-armed at
-  teardown.
-
-  `@pytest.mark.audio` and `-m "not audio"` are now registered and in `addopts`,
-  but they are the convenience layer: expect the marker to be forgotten on the
-  next audio-touching test, exactly as this repo's `slow` and `manual` markers
-  already have zero users. `pytest -m audio` runs **muted** — real calls at real
-  entry points, inert stand-ins, PortAudio never called — and
-  `VOICEMODE_TEST_AUDIO_GUARD=off` is the escape hatch, which announces itself
-  loudly. See `docs/reference/audio-test-isolation.md`.
-
-  Two limits are stated on **every run**, in the terminal summary and in every
-  JSON report, rather than left to be discovered: `pytest -m audio` **refuses**
-  an audio *subprocess* instead of muting it (a process cannot be muted, only
-  not started — `VOICEMODE_TEST_AUDIO_GUARD=off` is the door for a genuinely
-  live spawn), and the guard does not reach **inside a child process**: it
-  records every spawn and blocks judged-audio programs, but a child that opens
-  the device itself is outside it. Hence the verdict line reads *"nothing IN
-  THIS PROCESS reached the real audio device"*.
-
-  A third limit joins them when it applies: **a test file that replaces
-  `sys.modules['sounddevice']` wholesale** (`= MagicMock()` in a module body,
-  which pytest runs at collection time, i.e. for the rest of the session) takes
-  the sounddevice path out of the guard's reach for every test that follows.
-  That is now detected, reported **once**, named — including *which file did
-  it* — and the verdict downgrades to *"GREEN, BUT COVERAGE WAS INCOMPLETE"*
-  rather than claiming a boundary the instrument no longer had. If the
-  replacement is a real `sounddevice` module the guard simply adopts it and
-  carries on. **Patch the seam the code under test uses, not the module for
-  everybody** — a module-wide stand-in also makes tests pass in isolation and
-  fail, or silently stop testing anything, in a full run.
-
-  ⚠️ **Tool-use soundfonts are a separate noise source and are NOT fixed by
-  this.** `VOICEMODE_SOUNDFONTS_ENABLED` defaults to true and fires on **agent
-  tool calls**, not on test runs. If the machine still makes noise after this
-  lands, that is why — it is not this fix failing.
+- Voice names resolve completely or fail: a `voice=` (or a `VOICEMODE_VOICES` default)
+  the resolver cannot place is now an error naming the cause, not silent Alloy. See
+  Migration. (VM-1901)
+- The `converse` tool description is cut from ~2,400 to ~190 tokens; the MCP connect
+  cost of the default tool set falls from ~4,400 to ~2,170 tokens. (VM-2442)
+- `listen_duration_max` is unset in the `converse` schema by default, so your
+  `VOICEMODE_DEFAULT_LISTEN_DURATION` sets the listening ceiling. (VM-2442)
+- The transcript echo (`ASSISTANT/USER (voicemode)` blockquotes) is gone from the tool
+  description and the skill; the Talk app already shows the conversation. (VM-2442)
+- One VoiceMode skill: `converse`, `impressions` and `voicemode-dj` are folded into
+  `voicemode`, with the detail in its references. (VM-2442)
+- STT on mlx-audio needs no model setting: with `VOICEMODE_STT_MODEL` unset it is sent
+  `mlx-community/whisper-large-v3-turbo-asr-4bit` instead of `whisper-1`. (VM-2342)
+- With `VOICEMODE_WHISPER_LANGUAGE=auto`, mlx-audio is sent no `language` and detects
+  it; whisper.cpp still gets `auto`. (VM-2342)
+- STT 4xx get their own `listen_and_transcribe` `error_kind` and `ask_turns` stop reason:
+  `stt_model_not_found` (HTTP 404) and `stt_request_rejected` (other 4xx). (VM-2342)
+- mlx-audio STT no longer drops whisper's `""` / `"."` / `"..."` silence segments (the
+  old patch did); default whisper.cpp installs are unaffected. (VM-2338)
+- mlx-audio answers clients that omit `response_format` with ndjson, not json;
+  `converse` and `impressions` always send it. (VM-2338, VM-2346)
+- The mlx-audio install result has a `warnings` list in place of its `patch` key.
+  (VM-2338)
 
 ### Removed
 
-- **VoiceMode Connect documentation removed — the product was abandoned and the docs still described it as live (VM-2290)** —
-  VoiceMode Connect (remote voice through the app.voicemode.dev web app and
-  a hosted MCP server) was abandoned about four or five months ago, but the
-  plugin went on presenting it as a working install route: the bundled
-  `voicemode-connect` skill, a "Remote Voice with VoiceMode Connect" section
-  in the `voicemode` skill telling agents *when to suggest Connect*, a
-  "Use with VoiceMode Connect" Tailscale recipe, and a mkdocs "VoiceMode
-  Connect" nav block. An agent read that, believed it, and recommended
-  Connect to a user. VM-958 had already removed the Connect Python
-  integration and `docs/connect/`, so the skill and the nav were pointing at
-  pages that no longer existed. Removed: the `voicemode-connect` skill, the
-  Connect sections and cross-links in the `voicemode` skill and
-  `CLAUDE.md`, the mkdocs nav block, the Connect design note
-  `docs/architecture/tool-signature-alignment.md`, and the Connect tool-name
-  comment in the soundfonts hook receiver (its `*voicemode*converse*` match
-  is unchanged). Three deep links in the `voicemode://docs/parameters` MCP
-  resource (`voice_mode/resources/docs/parameters.md`) pointed at
-  voicemode.dev pages that return 404; they now point at the matching docs
-  on GitHub. **Not changed here:** the `voicemode connect auth` CLI group
-  (`voice_mode/auth.py`) remains for now — removing it is a code change,
-  tracked in VM-2314. The other voicemode.dev references are kept on
-  purpose: the domain is still the live project website, and it verifies
-  the MCP registry namespace `dev.voicemode/voicemode`. Only the Connect
-  product is gone. Older changelog entries that mention Connect are
-  history and stay.
-
-- **Conch `callback` mode removed entirely — code, docs, and the agent-facing tool description (VM-2078)** —
-  `converse(conch_mode="callback")` and `VOICEMODE_CONCH_MODE` are gone, and
-  `conch(action="callback")` is renamed to `action="queue"`. Callback mode's
-  own tool description was upfront about the discard — "your message is NOT
-  spoken now" — but promised that "when the conch is granted to you, your
-  turn is actively delivered out-of-band." **It never was.** "Delivery" was
-  a best-effort tmux pane nudge whose return value nothing checked; for a
-  remote grantee (no host PID) it delivered nothing at all, ever. The real
-  damage, though, wasn't the broken promise — it was the *other* half of
-  that same docstring working exactly as designed: "you stay registered —
-  that's the point," it said, and a registered, granted, never-claiming
-  waiter with no expiry sitting at the head of the queue is precisely what
-  wedged it. An unclaimed callback grant was deliberately exempted from the
-  `CONCH_GRANT_TTL` self-heal (VM-1967) on that same premise — claimed
-  "at agent/human pace," unclaimed for a while is normal there, not stuck —
-  so a single lost nudge could wedge the *entire* queue indefinitely, with
-  no error anywhere. This happened twice on one live session, each
-  recovered only by manual operator intervention. Every grant is now
-  covered by the TTL self-heal; there is no more exemption.
+- `converse(conch_mode=...)` and `VOICEMODE_CONCH_MODE`: callback mode never delivered
+  its turn and could wedge the conch queue. See Migration. (VM-2078)
+- `timeout` from the `converse` MCP schema (no effect since LiveKit left); passing it
+  is now a validation error. The CLI keeps it. See Migration. (VM-2442)
+- VoiceMode Connect docs and the `voicemode-connect` skill: the product was abandoned.
+  `voicemode connect auth` stays for now; its removal is VM-2314. (VM-2290)
+- The bundled mlx-audio `server.py` patch: upstream serves `response_format` natively
+  since 0.4.4. (VM-2338)
 
 ### Fixed
 
-- **The provider registry no longer advertises `tts-1` for mlx-audio, and selection never sends an id the endpoint cannot load (VM-2156)** —
-  when voicemode registered an endpoint it had not probed, everything that
-  wasn't OpenAI or Cartesia was seeded with the model list `["tts-1"]` —
-  including mlx-audio, which loads Hugging Face repos on demand and has no such
-  repo. mlx-audio's endpoints are now seeded with the same repo id the
-  per-endpoint resolver would pick (`mlx-community/Kokoro-82M-bf16`, from
-  VM-1390's built-in provider defaults, so there is one source of truth), the
-  treatment the STT side already had. Selection is hardened to match: a model
-  advertised by an endpoint is only chosen if it is plausible for that provider,
-  so even a stale registry entry left by an older install falls through to the
-  provider-aware default instead of being sent as-is. This closes a latent
-  defect on the seeded/diagnostics path — the live speech path already resolved
-  models through VM-1390's resolver — and it does not, on its own, address the
-  separate upstream mlx-audio bug where a bad model id kills the server's router
-  thread while `/v1/models` keeps answering 200.
+- All 67 Kokoro voices work in `converse` again, not just a 7-name whitelist; a voice
+  no configured endpoint serves still fails loudly. (VM-2190)
+- `voicemode service install mlx-audio` installs current mlx-audio again: the pin is
+  now `mlx-audio>=0.5.7,<0.6` (was `>=0.4.3,<0.4.4`). (VM-2338)
+- STT: an HTTP 4xx is no longer reported as "STT service connection failed"; a 404
+  names the model and endpoint and points at `VOICEMODE_STT_MODELS`. (VM-2342)
+- Impressions voice-profile transcription asks the STT server for JSON, so it works on
+  mlx-audio 0.4.4 and later. (VM-2346)
+- The docs no longer tell assistants to pass their own listening limit, which silently
+  overrode your `VOICEMODE_DEFAULT_LISTEN_DURATION` and cut you off. (VM-2099)
+- The parameter reference is one document for assistants and the docs site, and
+  `listen_duration_max` / `listen_duration_min` have real descriptions. (VM-2099)
+- A silent `converse(hold_conch=true)` no longer holds the channel indefinitely: the
+  hold is kept only when the turn spoke. (VM-2045)
+- Every conch grant is covered by the `VOICEMODE_CONCH_GRANT_TTL` self-heal, so an
+  unclaimed grant can no longer wedge the queue. (VM-2078)
+- `conch give` / `summon` to a session not in the queue grants only on a confirmed
+  nudge; otherwise it returns `granted: false` and the operator relays. (VM-2078)
+- A grant issued mid-turn is no longer evicted as wedged before the floor frees;
+  remote grantees get a heartbeat-scaled claim window. (VM-2078)
+- The provider registry no longer advertises `tts-1` for mlx-audio, and selection
+  never sends a model id the provider cannot load. (VM-2156)
+- Three dead voicemode.dev links in the `voicemode://docs/parameters` resource now
+  point at the docs on GitHub. (VM-2290)
+- Contributors: `pytest` can no longer reach the real microphone or speakers;
+  `pytest -m audio` runs muted. See `docs/reference/audio-test-isolation.md`. (VM-2072)
+- `VOICEMODE_TEST_AUDIO_GUARD=off` lifts the test audio guard. Tool-call soundfonts
+  (`VOICEMODE_SOUNDFONTS_ENABLED`, on by default) are separate and unchanged. (VM-2072)
 
-- **Voicemode no longer teaches assistants to invent a listening limit — you own it, and they stop cutting you off (VM-2099)** —
-  the ceiling on how long voicemode listens belongs to *you*, through
-  `VOICEMODE_DEFAULT_LISTEN_DURATION` in `~/.voicemode/voicemode.env`. It always
-  did; the trouble was that the tool's own documentation talked assistants into
-  passing their own value instead, and a value passed on the call replaces yours
-  silently, with no notice to you. One live session picked four different limits
-  across roughly fifteen calls with nobody having asked it to — every one of them
-  a fraction of the configured window — so being cut off mid-answer was
-  unpredictable by design. Notably, the shortest thing the docs actually
-  recommended would have truncated the very answer that reported this bug.
-  Every surface an assistant reads before speaking to you has been corrected in
-  place: the `turns` schema advice, the voicemode skill, the troubleshooting and
-  parameter references, the plugin guide, and the tool description itself — which
-  had also been advertising a default that was simply false once you configured
-  your own. Where a default has to be mentioned, the docs now name the config key
-  rather than a number, so they cannot go stale against your settings, and
-  `listen_duration_max`/`listen_duration_min` finally carry real descriptions in
-  the tool schema: leave the ceiling alone, it is yours. Raising the *floor*
-  (`listen_duration_min`) for thinking time is untouched — it cannot cut an
-  answer short.
-  A pattern-scanning test now fails the build if a listening-limit number
-  reappears in any documentation, example or prompt — including in files that do
-  not exist yet, which is how this came back the last time it was fixed.
-  The parameter reference itself was the reason stale advice could survive a fix:
-  it existed twice, hand-maintained, and the two copies had quietly drifted apart
-  for months — so a correction to one left the other still teaching the old thing.
-  They are now one document, served to assistants and published on the docs site
-  from the same file, and each copy gained what the other had been keeping to
-  itself: the site reference now documents vocabulary biasing, transport and the
-  result widgets, while the assistant-facing copy gained the audio-saving and
-  manual-transcription-recovery guidance. A test fails if a second copy appears.
+### Security
 
-- **`conch give`/operator `summon` could hand over the floor to a target it never confirmed was told (VM-2078)** —
-  this is the **summon fallback only**: `give`ing to a running session that
-  is *not already in the queue*. The old notify path there was best-effort
-  and its return value was never checked, so a nudge that silently failed
-  still granted the conch; nobody could tell "delivered" from "who knows."
-  That path now grants only on a confirmed-delivered nudge; a failed nudge,
-  or a remote target with no local PID to nudge at all, withholds the grant
-  entirely, returns `granted: false`, and tells the operator to relay the
-  message themselves rather than leaving an unpolled entry queued to block
-  everyone else. `give`ing to a session **already in the queue** is
-  unchanged — and, for a remote one, now works *better* (see the mid-turn
-  claim-window fix below): its claim window is heartbeat-scaled instead of
-  the short local poll window. The MCP `conch(action="heartbeat")` response also now
-  reports `granted` (and, once granted, `claim_window_remaining`), so a
-  queued remote agent discovers its grant on the very call it's told to
-  make every ~30 s, instead of needing an extra, un-instructed `status`
-  call.
-
-- **A silently held voice channel could lock out every other agent, including the user's own assistant (VM-2045)** —
-  `converse(hold_conch=true)` re-stamped the hold's idle-expiry TTL on every
-  call, whether or not anything was actually said. An agent using it to
-  "wait" (calling it repeatedly without ever speaking) could hold the
-  channel indefinitely, silently refusing every other agent's `converse()`
-  calls. A hold is now only kept when the turn actually spoke; a silent
-  `hold_conch=true` call falls through to a full release instead.
-- **A `conch give`/summon issued mid-turn could silently evaporate and evict an innocent waiter (VM-2078)** —
-  `_grant_wedged`'s staleness check measured wall-clock grant age only, so a
-  grant issued by `conch give` or an operator `summon` *while the holder was
-  still speaking* could be judged "wedged" and evicted before the floor ever
-  freed for the grantee to claim it — costing the target its place in line
-  for a race it had no way to win. The check is now holder-gated (a grant
-  cannot be judged wedged while a live holder still blocks the claim),
-  `granted_at` is re-stamped when a grant is finally honoured so its TTL
-  clock starts when the claim actually becomes possible, and the claim
-  window is scaled to how the grantee can actually claim it (a local poll
-  loop gets a short window; a remote/nudge-only claim gets a longer,
-  heartbeat-scaled one).
+- Cleared 67/67 Dependabot and 17/17 CodeQL alerts. The `uv.lock` refresh pins dev and
+  CI only; a `pip` or `uvx` install resolves its own dependency versions. (VM-2484)
+- Provider URLs are matched by parsed hostname, not substring, and the whisper.cpp
+  temp WAV is created with `mkstemp`. (VM-2484)
+- `scripts/conversation_browser.py` serves `/audio/` only from inside AUDIO_DIR, and
+  Flask debug is off unless `VOICEMODE_BROWSER_DEBUG=1`. (VM-2484)
 
 ### Migration
 
-- **`converse(conch_mode=...)` is removed — background a `wait`-mode call instead.**
-  There is no more `wait`/`callback` choice: every queued `converse` waiter
-  polls and is TTL-covered. If you relied on callback mode to avoid holding a
-  turn open, run a `wait_for_conch=true` `converse()` call in the
-  background — you get the same "don't block my turn" benefit without
-  discarding your message or depending on a fragile tmux pane nudge.
-- **`VOICEMODE_CONCH_MODE` is removed** — it no longer has any effect; delete
-  it from your `~/.voicemode/voicemode.env`.
-- **`conch(action="callback")` is renamed to `action="queue"`.** Same
-  register-and-poll behaviour (nothing changes about how it works), just an
-  honest name — nothing about it was ever a callback in the telephone sense.
-  The literal string `"callback"` still resolves but now returns an error
-  naming `"queue"` as the replacement, so no caller fails silently. Remote
-  agents that need to queue for longer than the 25 s `conch(action="wait")`
-  cap should use `action="queue"` + periodic `action="heartbeat"` instead.
+- Stop passing `conch_mode` to `converse`. To avoid blocking your turn, run a
+  `wait_for_conch=true` `converse` call in the background. (VM-2078)
+- Delete `VOICEMODE_CONCH_MODE` from `~/.voicemode/voicemode.env`; it has no effect.
+  (VM-2078)
+- Replace `conch(action="callback")` with `action="queue"`; `"callback"` now returns
+  an error naming `"queue"`. (VM-2078)
+- To queue past the 25 s `conch(action="wait")` cap, use `action="queue"` plus a
+  periodic `action="heartbeat"`. (VM-2078)
+- MCP callers: stop passing `timeout` to `converse`; it is now a validation error.
+  (VM-2442)
+- If `converse` now fails with a voice-resolution error, fix the name it points at:
+  qualify `group/member`, declare `default:` in the group's `voice.md`, or add
+  `default.wav`. For undeclared groups only, `VOICEMODE_CAST_UNDECLARED_SEVERITY=warn`
+  makes it a warning (the group's first member speaks) for one release. (VM-1901)
 
 - **XSS in OAuth callback page** — `_callback_page()` in `auth.py`
   interpolated the OAuth `error_description` query param into HTML without

@@ -28,8 +28,13 @@ classifiers = [
 ]
 
 dependencies = [
-    "uv>=0.4.0",
-    "fastmcp>=3.2.0,<4",  # Migrated to 3.x in VM-1242. Fixes CVSS 10.0 (GHSA-vv7q-7jx5-f767).
+    "uv>=0.13.4",  # VM-2492: emSign CA fix (was >=0.4.0)
+    # VM-2492: security floors for pip/uvx installs, which ignore uv.lock.
+    "certifi>=2026.10.19",  # critical emSign CA; httpx uses it for every TLS call
+    "pyjwt>=2.15.0",  # transitive via fastmcp; clears every runtime PyJWT advisory
+    "fastmcp>=3.4.10,<4",  # Migrated to 3.x in VM-1242. Fixes CVSS 10.0 (GHSA-vv7q-7jx5-f767);
+                          # 3.4.10 fixes GHSA-7xgj-8392-5q4r (component authorization skipped).
+    "opentelemetry-api>=1.45.1",  # transitive via fastmcp; fixes GHSA-xcq7-p3pf-p88h (tracestate parsing)
     "numpy",
     "sounddevice",
     "scipy",
@@ -63,6 +68,7 @@ test = [
     "pytest-xdist>=3.5.0",  # For parallel testing
     "pytest-timeout>=2.2.0",  # For test timeouts
     "coverage[toml]>=7.4.0",
+    "flask>=3.0.0",  # VM-2484: runs the scripts/conversation_browser containment tests
 ]
 scripts = [
     "flask>=3.0.0",

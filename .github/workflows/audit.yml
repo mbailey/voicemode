@@ -1,0 +1,32 @@
+name: Dependency audit
+
+# pip-audit over every locked dependency (package and installer, all
+# extras). Advisories land any day, so this runs daily, plus whenever a
+# lock changes on master. `make audit` is the same check, and the
+# release targets run it first.
+on:
+  schedule:
+    - cron: "17 20 * * *"  # daily, 07:17 Melbourne summer time
+  push:
+    branches: [ master ]
+    paths:
+      - "uv.lock"
+      - "installer/uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+    - name: Audit locked dependencies
+      run: make audit

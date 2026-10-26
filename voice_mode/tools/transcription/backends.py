@@ -209,14 +209,21 @@ async def transcribe_with_whisper_cpp(
     # Convert audio to WAV if needed
     if audio_path.suffix.lower() != ".wav":
         # Use ffmpeg to convert
-        wav_path = Path(tempfile.mktemp(suffix=".wav"))
+        # mkstemp creates the file atomically (0600, O_EXCL), so no other
+        # process can claim the name between choosing it and writing it, which
+        # tempfile.mktemp allowed (VM-2484, CodeQL py/insecure-temporary-file).
+        # The file now exists before ffmpeg runs, hence "-y" to overwrite it.
+        fd, wav_name = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        wav_path = Path(wav_name)
         try:
             subprocess.run([
-                "ffmpeg", "-i", str(audio_path),
+                "ffmpeg", "-y", "-i", str(audio_path),
                 "-ar", "16000", "-ac", "1", "-f", "wav",
                 str(wav_path)
             ], check=True, capture_output=True)
         except subprocess.CalledProcessError as e:
+            wav_path.unlink(missing_ok=True)
             return TranscriptionResult(
                 text="",
                 language="",
@@ -225,6 +232,11 @@ async def transcribe_with_whisper_cpp(
                 success=False,
                 error=f"Failed to convert audio to WAV: {e.stderr.decode() if e.stderr else str(e)}"
             )
+        except BaseException:
+            # e.g. ffmpeg missing (FileNotFoundError): still raises as
+            # before, but no longer leaves the temp file behind.
+            wav_path.unlink(missing_ok=True)
+            raise
     else:
         wav_path = audio_path
     
