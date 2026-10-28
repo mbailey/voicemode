@@ -37,7 +37,7 @@ dependencies = [
     "opentelemetry-api>=1.45.1",  # transitive via fastmcp; fixes GHSA-xcq7-p3pf-p88h (tracestate parsing)
     "numpy",
     "sounddevice",
-    "scipy",
+    "scipy!=1.15.*",
     "openai>=2",  # was >=1.0.0 (VM-1640 / VM-1240)
     "pydub",
     "audioop-lts; python_version >= '3.13'",

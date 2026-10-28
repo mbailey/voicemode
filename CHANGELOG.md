@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   redirect can't inject script; `voicemode serve` compares Bearer tokens in constant time.
   Thanks @mcteamster (#558).
 
+### Fixed
+
+- VoiceMode loads again on macOS 27: scipy 1.15.x is excluded (`scipy!=1.15.*`), because
+  macOS 27 refuses to load its compiled wheels and the `converse` tool failed to import
+  ("Connection closed" in the plugin). Python 3.10 now gets scipy 1.14.1; 3.11+ keeps 1.16.2.
+  Thanks @jonschull for the report (#577, VM-2246).
+
 ## [9.0.1] - 2026-10-26
 
 ### Security
