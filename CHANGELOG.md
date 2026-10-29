@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The VoiceMode Connect login's callback page escapes the OAuth error text, so a crafted
   redirect can't inject script; `voicemode serve` compares Bearer tokens in constant time.
   Thanks @mcteamster (#558).
+- Dependency floors so `make audit` passes again: `authlib>=1.9.1` fixes seven advisories
+  (CVE-2026-96760, CVE-2026-114614 to CVE-2026-114618, CVE-2026-114620). `dnspython>=2.9.0`
+  fixes CVE-2026-114605 on Python 3.11 and newer. One known issue remains on Python 3.10:
+  dnspython's only fixed release (2.9.0) needs Python 3.11, so 3.10 installs keep dnspython
+  2.8.0. The audit's Python 3.10 pass ignores that one advisory and fails on anything else.
+  VoiceMode's own code never imports dnspython; it comes in through fastmcp's pydantic email
+  validation. (VM-2246)
+
+### Fixed
+
+- VoiceMode loads again on macOS 27: scipy 1.15.x is excluded (`scipy!=1.15.*`), because
+  macOS 27 refuses to load its compiled wheels and the `converse` tool failed to import
+  ("Connection closed" in the plugin). Python 3.10 now gets scipy 1.14.1; 3.11+ keeps 1.16.2.
+  Thanks @jonschull for the report (#577, VM-2246).
 
 ## [9.0.1] - 2026-10-26
 
