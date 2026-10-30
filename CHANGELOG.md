@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- MacBook lid-closed guide: check `disablesleep` with `pmset -g | grep SleepDisabled` (the setting
+  isn't listed by `pmset -g assertions`, and the line is named `SleepDisabled`), note that it stays
+  on after a restart, and add Keep Mac Awake as a second GUI option.
+
 ## [9.0.2] - 2026-10-29
 
 ### Security
