@@ -21,11 +21,13 @@ sudo pmset -a disablesleep 0
 To verify the setting is active:
 
 ```bash
-pmset -g assertions
+pmset -g | grep SleepDisabled
 ```
 
+While it's on, this prints `SleepDisabled 1`; when it's off, it prints nothing. The setting doesn't appear in `pmset -g assertions`.
+
 !!! warning "Remember to Re-enable"
-    Don't forget to run `sudo pmset -a disablesleep 0` when you're done, or your MacBook will never sleep even when you want it to.
+    Don't forget to run `sudo pmset -a disablesleep 0` when you're done, or your MacBook will never sleep even when you want it to. The setting also stays on after a restart.
 
 ## GUI Alternative: Amphetamine
 
@@ -36,6 +38,16 @@ For a more user-friendly approach, [Amphetamine](https://apps.apple.com/app/amph
 3. Go to **Sessions → Non-Trigger Sessions**
 4. Uncheck **"Allow system to sleep when display is closed"**
 5. Start an Amphetamine session before closing your lid
+
+## GUI Alternative: Keep Mac Awake
+
+[Keep Mac Awake](https://keepmacawake.com/?utm_source=voicemode&utm_medium=referral&utm_campaign=partner-docs&utm_content=lid-closed-guide) is a paid menu bar app with a free trial, for Macs with Apple silicon on macOS 26 or later. It turns the same `disablesleep` setting on for a session you start and puts the previous setting back when the session ends:
+
+1. Install it from its website
+2. Start a session from the menu bar icon (1 hour, 8 hours, a custom length or no limit), or run `keepmacawake start --hours 8` in Terminal
+3. Close the lid
+
+Sessions run on AC power by default. To use it on battery, turn on the battery option and pick the battery level at which the session ends.
 
 ## MacBook Air Thermal Considerations
 
@@ -79,7 +91,7 @@ Test your setup before relying on it:
 
 ### Audio Stops When Lid Closes
 
-- Verify `disablesleep` is enabled: `pmset -g | grep disablesleep`
+- Verify `disablesleep` is enabled: `pmset -g | grep SleepDisabled` should print `SleepDisabled 1`
 - Check if another power assertion is overriding: `pmset -g assertions`
 - Try the Amphetamine app as an alternative
 
