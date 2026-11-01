@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Windows: `converse` no longer listens until `listen_duration_max` on every turn when it runs
   as an MCP server. `from scipy import signal` sat inside the recording loop, so its first run
   landed after the input stream opened and stalled the VAD for about 24 s while scipy loaded;
-  it now runs at module load. Thanks @jayjayholic for the report and the stack dump (#545).
+  it now runs once at the top of the recording function, before the stream opens. Thanks
+  @jayjayholic for the report and the stack dump (#545, VM-2254).
 
 ## [9.0.2] - 2026-10-29
 

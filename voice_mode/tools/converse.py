@@ -17,8 +17,6 @@ import numpy as np
 import psutil
 import sounddevice as sd
 from scipy.io.wavfile import write
-# Imported here, not inside the recording loop: a first import mid-stream stalls the VAD on Windows (#545).
-from scipy import signal
 from pydub import AudioSegment
 from openai import AsyncOpenAI
 from pydantic import Field
@@ -1437,7 +1435,9 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
             - audio_data: Numpy array of recorded audio samples
             - speech_detected: Boolean indicating if speech was detected during recording
     """
-    
+    # VM-2254: import before the input stream opens; a first import mid-stream stalls the VAD on Windows.
+    from scipy import signal
+
     logger.info(f"record_audio_with_silence_detection called - VAD_AVAILABLE={VAD_AVAILABLE}, DISABLE_SILENCE_DETECTION={DISABLE_SILENCE_DETECTION}, min_duration={min_duration}")
     
     if not VAD_AVAILABLE:
