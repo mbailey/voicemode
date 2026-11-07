@@ -173,6 +173,11 @@ VOICEMODE_VOICES=af_sky
 # To use OpenAI voices, set OPENAI_API_KEY and add them here:
 # VOICEMODE_VOICES=af_sky,alloy
 
+# When TTS fails over from Kokoro to OpenAI, let OpenAI speak a Kokoro voice
+# as its nearest OpenAI voice (af_sky -> nova). Off by default: the OpenAI
+# endpoint is skipped and the Kokoro outage is reported instead (#533).
+# VOICEMODE_TTS_VOICE_SUBSTITUTION=false
+
 # Comma-separated list of preferred models
 # VOICEMODE_TTS_MODELS=tts-1,tts-1-hd,gpt-4o-mini-tts
 

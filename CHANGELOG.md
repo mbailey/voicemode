@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clear reason, so the error you see is the real one. To keep the old mapping, set
   `VOICEMODE_TTS_VOICE_SUBSTITUTION=true`; it logs a warning each time it maps a voice.
   OpenAI voices you ask for by name (alloy, nova, ...) are unaffected.
+  **If you use OpenAI as a fallback for Kokoro** (the hybrid setup), a Kokoro outage
+  now means no speech and a clear error rather than OpenAI's voice, unless you set the
+  flag above.
   Thanks @rwunsch (#533, #538).
 
 ## [9.0.2] - 2026-10-29
