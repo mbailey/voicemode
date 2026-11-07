@@ -121,13 +121,13 @@ class TestTTSErrorHandling:
             assert config['base_url'] == 'https://api.openai.com/v1'
 
     @pytest.mark.asyncio
-    async def test_voice_is_passed_through_to_openai_by_default(self):
-        """A local voice is NOT silently remapped when falling back to OpenAI.
+    async def test_kokoro_voice_is_not_substituted_on_openai_by_default(self):
+        """A local voice is NOT silently remapped when falling back to OpenAI (#533).
 
         Substituting silently meant a Kokoro/Piper outage surfaced as the
         assistant changing voice mid-conversation, with nothing in the result or
-        the logs to say why. Passing the voice through makes the request fail
-        loudly instead, which surfaces the real fault.
+        the logs to say why. By default the OpenAI endpoint is skipped loudly
+        instead, before any request is made, which surfaces the real fault.
         """
         with patch('voice_mode.simple_failover.TTS_BASE_URLS', ['https://api.openai.com/v1']), \
              patch('voice_mode.simple_failover.OPENAI_API_KEY', 'test-key'), \
@@ -142,8 +142,11 @@ class TestTTSErrorHandling:
                 model="tts-1"
             )
 
-            mock_tts.assert_called_once()
-            assert mock_tts.call_args[1]['tts_voice'] == 'af_sky'
+            assert success is False
+            mock_tts.assert_not_called()
+            [attempt] = config['attempted_endpoints']
+            assert attempt['provider'] == 'openai'
+            assert 'VOICEMODE_TTS_VOICE_SUBSTITUTION' in attempt['error']
 
     @pytest.mark.asyncio
     async def test_voice_mapping_when_substitution_is_enabled(self):

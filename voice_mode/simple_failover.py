@@ -95,7 +95,9 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
 
     Shared by the play and synth-only failover loops. Returns the configured
     ``AsyncOpenAI`` client plus the voice/model actually sent to the provider
-    (clone voices pass through; OpenAI maps Kokoro voice names to equivalents).
+    (clone voices pass through; an OpenAI endpoint speaks only OpenAI voices,
+    and maps Kokoro voice names to equivalents only when
+    ``VOICEMODE_TTS_VOICE_SUBSTITUTION`` is on, #533).
 
     ``voice`` here MUST be ``resolution.resolved`` (the canonical id from
     :func:`voice_profiles.resolve_voice`), never the raw caller expression —
@@ -146,10 +148,12 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
         selected_model = _select_tts_model_for_endpoint(provider_type, model)
         if provider_type == "openai":
             openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
-            if voice in openai_voices or not TTS_VOICE_SUBSTITUTION:
-                # Pass the requested voice through. If OpenAI does not own it the
-                # request fails loudly, which surfaces the local-TTS outage that
-                # caused the fallback instead of masking it as a voice change.
+            if voice in openai_voices:
+                selected_voice = voice
+            elif not TTS_VOICE_SUBSTITUTION:
+                # #533: never substitute a voice by default. Skip this endpoint
+                # loudly instead, so the local-TTS outage that sent us here is
+                # what the user sees, not the assistant changing voice.
                 #
                 # Substituting silently is worse than failing here: nothing in the
                 # return value or the logs told the user their voice changed, the
@@ -158,7 +162,16 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                 # also collapses distinct voices onto one (af_sky and af_sarah both
                 # became nova), which matters when several agents share a channel
                 # and the voice is how you tell them apart.
-                selected_voice = voice
+                #
+                # Raised before any request, as VM-1901 already did for
+                # unmapped voices: no call to OpenAI, and one clear reason in
+                # the failover's attempted_endpoints instead of a 400.
+                raise UnmappedProviderVoiceError(
+                    f"Voice {voice!r} is not an OpenAI voice and voice "
+                    f"substitution is off — this endpoint cannot speak it; "
+                    f"skipping. Set VOICEMODE_TTS_VOICE_SUBSTITUTION=true to "
+                    f"map Kokoro voices to OpenAI equivalents."
+                )
             else:
                 voice_mapping = {
                     "af_sky": "nova",

@@ -82,13 +82,16 @@ def _run_probe(script: str, probe_args: dict, env_extra: dict | None = None,
                timeout: int = 300) -> dict:
     """Run ``script`` in a fresh interpreter with a controlled voicemode config.
 
-    Every ``VOICEMODE_*`` variable is stripped and ``HOME`` points at a scratch
+    Every ``VOICEMODE_*`` variable (and ``OPENAI_API_KEY``, so a probe that
+    misses a mock fails instead of making a billed call) is stripped and
+    ``HOME`` points at a scratch
     directory, so the only configuration in play is what ``env_extra`` says
     (voicemode reads ``~/.voicemode/voicemode.env`` via ``Path.home()``).
     ``PYTHONPATH`` pins the *worktree* source, so the probe can never
     accidentally measure an installed copy.
     """
-    env = {k: v for k, v in os.environ.items() if not k.startswith("VOICEMODE_")}
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("VOICEMODE_") and k != "OPENAI_API_KEY"}
     env["PYTHONPATH"] = str(REPO_ROOT)
     env["VM2099_PROBE_ARGS"] = json.dumps(probe_args)
     env.update(env_extra or {})
@@ -143,12 +146,26 @@ def fake_record(max_duration, disable_silence_detection=False, min_duration=0.0,
     return (np.zeros(config.SAMPLE_RATE, dtype=np.int16), True)
 
 
+async def fake_synth(*, message, voice=None, **_kw):
+    """The turns path synthesises through its own sibling of
+    text_to_speech_with_failover. Unmocked, it reached real endpoints: with
+    Kokoro down this probe passed only because af_sky was silently swapped
+    for OpenAI's nova, a billed call from a test (#533, VM-2536)."""
+    return (True, np.zeros(2400, dtype=np.float32), 24000, {"generation": 0.0}, {})
+
+
+async def fake_play(samples, sample_rate, control_state, **_kw):
+    return "played"
+
+
 async def main():
     fn = getattr(conv.converse, "fn", conv.converse)
     conv.FFMPEG_AVAILABLE = True
     config.FFMPEG_AVAILABLE = True
     with patch.object(conv, "startup_initialization", new_callable=AsyncMock), \
          patch.object(conv, "text_to_speech_with_failover", new_callable=AsyncMock) as tts, \
+         patch.object(conv, "synthesize_turn_with_failover", side_effect=fake_synth), \
+         patch.object(conv, "_play_samples_controllable", side_effect=fake_play), \
          patch.object(conv, "record_audio_with_silence_detection", side_effect=fake_record), \
          patch.object(conv, "speech_to_text", new_callable=AsyncMock) as stt, \
          patch.object(conv, "play_audio_feedback", new_callable=AsyncMock):

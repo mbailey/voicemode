@@ -1,66 +1,85 @@
-"""A local voice must not silently become an OpenAI voice on failover.
+"""A local voice must not silently become an OpenAI voice on failover (#533).
 
-When TTS failover reaches the OpenAI endpoint the requested voice used to be
-remapped (af_sky -> nova, and anything unmapped -> alloy). Nothing in the return
-value or the logs said so, which meant a Kokoro/Piper hiccup surfaced as the
-assistant suddenly speaking in a different — and billed — voice, mid-conversation.
+When TTS failover reached the OpenAI endpoint the requested voice used to be
+remapped (af_sky -> nova). Nothing in the return value or the logs said so,
+which meant a Kokoro/Piper hiccup surfaced as the assistant suddenly speaking
+in a different, and billed, voice, mid-conversation.
 
-The voice is now passed through unchanged, so an endpoint that does not own it
-fails loudly and the underlying outage is what the user sees. The old behaviour
-stays reachable behind VOICEMODE_TTS_VOICE_SUBSTITUTION, and logs a warning when
-it fires.
+By default the OpenAI endpoint now speaks only OpenAI voices: any other voice
+is a loud skip (UnmappedProviderVoiceError, no request made), so the
+underlying outage is what the user sees. The old mapping stays reachable
+behind VOICEMODE_TTS_VOICE_SUBSTITUTION, and warns when it fires.
+
+Originally contributed by Robert Wunsch (#538) as source-inspection tests;
+rewritten to drive _prepare_tts_endpoint itself (VM-2536).
 """
-import inspect
+import logging
+from unittest.mock import patch
 
 import pytest
 
-from voice_mode import config, simple_failover
+from voice_mode import config
+from voice_mode.simple_failover import UnmappedProviderVoiceError, _prepare_tts_endpoint
+
+OPENAI = "https://api.openai.com/v1"
+KOKORO = "http://127.0.0.1:8880/v1"
+OPENAI_VOICES = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
 
 
-def _substitution_branch_source() -> str:
-    """The provider_type == 'openai' voice-selection block."""
-    src = inspect.getsource(simple_failover)
-    start = src.index('if provider_type == "openai":')
-    end = src.index("logger.info(f\"Endpoint {base_url}", start)
-    return src[start:end]
+def _prepare(voice, base_url=OPENAI):
+    _client, selected_voice, _model, provider_type, is_fallback, reason = _prepare_tts_endpoint(
+        base_url=base_url, voice=voice, model="tts-1", clone_profile=None,
+    )
+    return selected_voice, provider_type, is_fallback, reason
 
 
-def test_substitution_is_off_by_default():
+@pytest.fixture
+def substitution(request):
+    with patch("voice_mode.simple_failover.TTS_VOICE_SUBSTITUTION", request.param):
+        yield request.param
+
+
+def test_substitution_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("VOICEMODE_TTS_VOICE_SUBSTITUTION", raising=False)
+    assert config.env_bool("VOICEMODE_TTS_VOICE_SUBSTITUTION", False) is False
     assert config.TTS_VOICE_SUBSTITUTION is False
 
 
-def test_default_path_passes_the_requested_voice_through():
-    """With substitution off, the branch must select the caller's voice verbatim."""
-    branch = _substitution_branch_source()
-    assert "or not TTS_VOICE_SUBSTITUTION" in branch, (
-        "the pass-through condition is missing - a local voice would still be remapped"
-    )
-    assert "selected_voice = voice" in branch
+@pytest.mark.parametrize("substitution", [False], indirect=True)
+@pytest.mark.parametrize("voice", ["af_sky", "af_sarah", "am_adam", "bm_fable"])
+def test_default_kokoro_voice_on_openai_is_a_loud_skip(substitution, voice):
+    """Off: a mapped Kokoro voice is refused, never turned into nova/onyx/..."""
+    with pytest.raises(UnmappedProviderVoiceError) as exc:
+        _prepare(voice)
+    assert voice in str(exc.value)
+    assert "VOICEMODE_TTS_VOICE_SUBSTITUTION" in str(exc.value)
 
 
-def test_mapping_table_is_only_reachable_when_enabled():
-    """The af_sky -> nova table must sit behind the flag, not in front of it."""
-    branch = _substitution_branch_source()
-    guard = branch.index("or not TTS_VOICE_SUBSTITUTION")
-    mapping = branch.index('"af_sky": "nova"')
-    assert guard < mapping, "the mapping table is reachable before the flag is checked"
+@pytest.mark.parametrize("substitution", [True], indirect=True)
+def test_enabled_maps_and_warns(substitution, caplog):
+    """On: the old mapping, recorded as a fallback, and logged at WARNING."""
+    with caplog.at_level(logging.INFO, logger="voicemode"):
+        selected, provider, is_fallback, reason = _prepare("af_sky")
+    assert (selected, provider, is_fallback) == ("nova", "openai", True)
+    assert "af_sky" in reason and "nova" in reason
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("Substituted voice af_sky -> nova" in r.getMessage() for r in warnings)
 
 
-def test_substitution_warns_rather_than_informs():
-    """If it does fire, it must be visible in the logs - the old code used info."""
-    branch = _substitution_branch_source()
-    assert "logger.warning(" in branch, "a silent-by-default substitution must warn"
-    assert "Substituted voice" in branch
+@pytest.mark.parametrize("substitution", [True], indirect=True)
+def test_enabled_never_invents_alloy_for_an_unmapped_voice(substitution):
+    """On or off, a voice with no mapping is never defaulted to alloy (VM-1901)."""
+    with pytest.raises(UnmappedProviderVoiceError):
+        _prepare("af_nicole")
 
 
-@pytest.mark.parametrize("voice", ["alloy", "echo", "fable", "nova", "onyx", "shimmer"])
-def test_native_openai_voices_are_unaffected(voice):
-    """A caller asking for a real OpenAI voice is unchanged either way."""
-    branch = _substitution_branch_source()
-    assert "openai_voices = " in branch
-    assert voice in branch or "openai_voices" in branch
+@pytest.mark.parametrize("substitution", [False, True], indirect=True)
+@pytest.mark.parametrize("voice", OPENAI_VOICES)
+def test_native_openai_voices_are_unaffected(substitution, voice):
+    """A caller asking for a real OpenAI voice gets it, flag on or off."""
+    assert _prepare(voice)[:3] == (voice, "openai", False)
 
 
-def test_config_flag_is_documented_as_an_env_var():
-    src = inspect.getsource(config)
-    assert "VOICEMODE_TTS_VOICE_SUBSTITUTION" in src
+@pytest.mark.parametrize("substitution", [False, True], indirect=True)
+def test_kokoro_endpoint_keeps_the_kokoro_voice(substitution):
+    assert _prepare("af_sky", base_url=KOKORO)[:3] == ("af_sky", "kokoro", False)
