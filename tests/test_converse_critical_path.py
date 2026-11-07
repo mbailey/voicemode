@@ -207,9 +207,16 @@ class TestConverseSTTFailures:
         with patch('voice_mode.simple_failover.simple_tts_failover') as mock_tts:
             mock_tts.return_value = (True, {'duration_ms': 100}, {'provider': 'kokoro'})
 
-            with patch('voice_mode.tools.converse.record_audio') as mock_record:
+            # VM-2072: converse() records through
+            # record_audio_with_silence_detection(), NOT record_audio(), so
+            # mocking only the latter left the real capture path live and these
+            # tests opened the microphone on a ThreadPoolExecutor thread. The
+            # subject here is STT failure reporting; the capture is incidental.
+            with patch('voice_mode.tools.converse.record_audio') as mock_record, \
+                 patch('voice_mode.tools.converse.record_audio_with_silence_detection') as mock_record_vad:
                 # Return a proper numpy array instead of bytes
                 mock_record.return_value = np.array([0, 100, 200, 100, 0], dtype=np.int16)
+                mock_record_vad.return_value = (np.array([0, 100, 200, 100, 0], dtype=np.int16), True)
 
                 with patch('voice_mode.simple_failover.simple_stt_failover') as mock_stt:
                     mock_stt.return_value = {
@@ -242,9 +249,16 @@ class TestConverseSTTFailures:
         with patch('voice_mode.simple_failover.simple_tts_failover') as mock_tts:
             mock_tts.return_value = (True, {'duration_ms': 100}, {'provider': 'kokoro'})
 
-            with patch('voice_mode.tools.converse.record_audio') as mock_record:
+            # VM-2072: converse() records through
+            # record_audio_with_silence_detection(), NOT record_audio(), so
+            # mocking only the latter left the real capture path live and these
+            # tests opened the microphone on a ThreadPoolExecutor thread. The
+            # subject here is STT failure reporting; the capture is incidental.
+            with patch('voice_mode.tools.converse.record_audio') as mock_record, \
+                 patch('voice_mode.tools.converse.record_audio_with_silence_detection') as mock_record_vad:
                 # Return a proper numpy array instead of bytes
                 mock_record.return_value = np.array([0, 0, 0, 0, 0], dtype=np.int16)
+                mock_record_vad.return_value = (np.array([0, 0, 0, 0, 0], dtype=np.int16), True)
 
                 with patch('voice_mode.simple_failover.simple_stt_failover') as mock_stt:
                     mock_stt.return_value = {

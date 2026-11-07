@@ -137,7 +137,9 @@ class TestLocalSTTRetry:
 
                 result = await simple_stt_failover(mock_file)
 
-        assert result["error_type"] == "connection_failed"
+        # VM-2342: a 4xx is the server answering, not a connection failure.
+        assert result["error_type"] == "request_rejected"
+        assert result["status_code"] == 400
         assert mock_client.audio.transcriptions.create.call_count == 1
 
     @pytest.mark.asyncio
@@ -158,7 +160,9 @@ class TestLocalSTTRetry:
 
                 result = await simple_stt_failover(mock_file)
 
-        assert result["error_type"] == "connection_failed"
+        # VM-2342: a 4xx is the server answering, not a connection failure.
+        assert result["error_type"] == "request_rejected"
+        assert result["status_code"] == 429
         assert mock_client.audio.transcriptions.create.call_count == 1
 
     @pytest.mark.asyncio

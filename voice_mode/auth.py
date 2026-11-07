@@ -9,6 +9,7 @@ Storage: OS keychain via keyring (default), or ~/.voicemode/credentials (plainte
 
 import base64
 import hashlib
+import html
 import http.server
 import secrets
 import socket
@@ -136,7 +137,7 @@ def _callback_page(success: bool, error_message: str = "") -> str:
             '" fill="#0d1117"/>'
         )
         heading = "Authentication Failed"
-        message = f"Error: {error_message}" if error_message else "Something went wrong."
+        message = f"Error: {html.escape(error_message)}" if error_message else "Something went wrong."
 
     return f"""\
 <!DOCTYPE html>

@@ -88,13 +88,6 @@ nav:
     - Claude Code Plugin: guides/claude-code-plugin.md
     - Selective Tool Loading: guides/selective-tool-loading.md
     - Remote Access (serve): guides/serve-configuration.md
-  - VoiceMode Connect:
-    - Overview: connect/README.md
-    - Architecture: connect/architecture.md
-    - Setup:
-      - Claude Code: connect/setup/claude-code.md
-    - Reference:
-      - MCP Tools: connect/reference/mcp-tools.md
   - Local Services:
     - Whisper STT: guides/whisper-setup.md
     - Kokoro TTS: guides/kokoro-setup.md
@@ -107,6 +100,7 @@ nav:
     - Voices Resource: reference/voices-resource.md
   - Development:
     - Local Development: tutorials/development-setup.md
+    - Audio Test Isolation: reference/audio-test-isolation.md
     - Tool Loading Architecture: reference/tool-loading-architecture.md
     - PR Review Rubric: maintainers/pr-review-rubric.md
   - Troubleshooting:

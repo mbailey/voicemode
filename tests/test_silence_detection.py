@@ -196,7 +196,14 @@ class TestSilenceDetection:
         """Test that min_duration parameter is respected."""
         with patch('voice_mode.tools.converse.record_audio') as mock_record:
             # When VAD is available but we pass a min_duration
-            with patch('sounddevice.InputStream'):
+            # VM-2072: patch the SEAM the code under test uses. Patching the
+            # module attribute ('sounddevice.InputStream') patches whatever
+            # object currently answers to that name -- which is not the module
+            # converse holds if anything has put a stand-in in sys.modules. In
+            # the first full-suite run, 2026-08-19, this test opened a real
+            # InputStream (blocked by the guard) for exactly that reason, while
+            # passing in isolation. The seam does not depend on run order.
+            with patch('voice_mode.tools.converse.sd.InputStream'):
                 with patch('queue.Queue') as mock_queue:
                     # Simulate immediate silence detection
                     mock_vad.Vad.return_value.is_speech.return_value = False

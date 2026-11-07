@@ -14,6 +14,24 @@ class ExchangeMetadata:
     voice_mode_version: str
     model: Optional[str] = None
     voice: Optional[str] = None
+    # VM-1901 (SCHEMA_VERSION 4): additive requested-vs-resolved provenance.
+    # Absent (None) on any record logged before this slice — a v<=3 record
+    # is result-only, provenance unknown; never backfill a guessed value.
+    voice_requested: Optional[str] = None
+    voice_via: Optional[str] = None
+    # Review fix (VM-1901 observability-001): voice_resolved (the canonical
+    # id straight from the resolver, before any endpoint-level provider
+    # mapping) plus is_fallback/fallback_reason were being written to the
+    # JSONL by ConversationLogger.log_tts (log_utterance writes the raw
+    # dict) but were NOT declared here — ExchangeMetadata.from_dict filters
+    # incoming keys against `cls.__annotations__`, so every reader that goes
+    # through Exchange.from_jsonl (statistics, any exchange-log consumer)
+    # silently dropped them. Bytes on disk were right; the model any code
+    # actually reads through was blind to the very fields this slice exists
+    # to make observable — the "dead hook" pattern recurring one layer up.
+    voice_resolved: Optional[str] = None
+    is_fallback: Optional[bool] = None
+    fallback_reason: Optional[str] = None
     provider: Optional[str] = None
     provider_url: Optional[str] = None  # Full URL of the provider endpoint
     provider_type: Optional[str] = None  # e.g., "openai", "local", "kokoro"
@@ -138,8 +156,45 @@ class Exchange:
             parts.append(self.metadata.model)
         if self.metadata.voice and self.is_tts:
             parts.append(f"voice: {self.metadata.voice}")
-        
+
         return " | ".join(parts) if parts else "unknown"
+
+    @property
+    def voice_provenance(self) -> str:
+        """Render requested-vs-resolved voice identity for a TTS exchange.
+
+        VM-1901 design.md §5.3 reader rule: a record from before
+        SCHEMA_VERSION 4 (``self.version <= 3``) is *result-only, provenance
+        unknown* — it must NEVER be rendered with a guessed/backfilled
+        ``voice_requested``, even though the field is absent (None) the same
+        way an unset v4 field would be. ``version`` is the authoritative
+        signal, not field presence.
+        """
+        if not self.is_tts or not self.metadata:
+            return "unknown"
+        resolved = self.metadata.voice or "unknown"
+        if self.version <= 3:
+            return f"{resolved} (requested voice unknown — pre-v4 record)"
+        requested = self.metadata.voice_requested
+        parts = []
+        if requested and requested != resolved:
+            via = f" via {self.metadata.voice_via}" if self.metadata.voice_via else ""
+            parts.append(f"requested {requested!r}{via}")
+        # Review fix (VM-1901 observability-001): a legitimate endpoint
+        # substitution (voice_resolved != voice, the Kokoro->OpenAI mapping
+        # case) must be visible in the rendered string too -- the acceptance
+        # is that a deliberate fallback is PROVABLY visible, not just that
+        # the substituted voice is shown.
+        if self.metadata.is_fallback:
+            resolved_id = self.metadata.voice_resolved
+            reason = self.metadata.fallback_reason
+            if resolved_id and resolved_id != resolved:
+                parts.append(f"fallback from {resolved_id!r}" + (f" ({reason})" if reason else ""))
+            elif reason:
+                parts.append(f"fallback ({reason})")
+        if parts:
+            return f"{resolved} (" + ", ".join(parts) + ")"
+        return resolved
 
 
 @dataclass

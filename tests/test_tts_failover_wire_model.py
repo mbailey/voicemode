@@ -194,7 +194,7 @@ class TestClonePrepareEndpoint:
         with patch("voice_mode.providers.TTS_MODELS", DEFAULT_TTS_MODELS), patch(
             "voice_mode.providers.TTS_MODELS_BY_PROVIDER", {}
         ):
-            client, voice, model, provider_type = _prepare_tts_endpoint(
+            client, voice, model, provider_type, is_fallback, fallback_reason = _prepare_tts_endpoint(
                 base_url="http://127.0.0.1:8890/v1",
                 voice="my_clone",
                 model="tts-1",  # would resolve to the mlx default if consulted
