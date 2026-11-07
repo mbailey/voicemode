@@ -515,16 +515,25 @@ def _classify_stt_failure(e: Exception) -> Tuple[Optional[int], str]:
 _STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE: set[str] = set()
 
 
-def _auto_language_may_be_rejected(e: Exception, transcription_kwargs: Dict[str, Any]) -> bool:
+def _auto_language_may_be_rejected(
+    e: Exception, transcription_kwargs: Dict[str, Any], provider_type: str
+) -> bool:
     """True when a failed local STT request is worth repeating without language="auto".
 
     Only an implicit "auto" (we added it, the user did not ask for a language)
     and only a 5xx, which is how speaches rejects it. Called after the transient
     retries are exhausted, so a whisper.cpp 500 that clears on retry never
     reaches here and can never cause "auto" to be dropped for whisper.cpp.
+
+    Never for an endpoint detected as whisper.cpp (``provider_type ==
+    "whisper"``, VoiceMode's own service on :2022): there "auto" is known to be
+    right, and a server that kept failing and then recovered on the request
+    without it would otherwise be remembered, leaving that process on
+    whisper.cpp's English default until restart.
     """
     return (
-        transcription_kwargs.get("language") == "auto"
+        provider_type != "whisper"
+        and transcription_kwargs.get("language") == "auto"
         and isinstance(e, APIStatusError)
         and e.status_code >= 500
     )
@@ -685,7 +694,7 @@ async def simple_stt_failover(
                     # The endpoint may be an OpenAI-compatible server that is not
                     # whisper.cpp and rejects language="auto". Try once without it;
                     # if that fails too, the original error stands.
-                    if _auto_language_may_be_rejected(e, transcription_kwargs):
+                    if _auto_language_may_be_rejected(e, transcription_kwargs, provider_type):
                         fallback_kwargs = {k: v for k, v in transcription_kwargs.items() if k != "language"}
                         try:
                             transcription = await client.audio.transcriptions.create(**fallback_kwargs)

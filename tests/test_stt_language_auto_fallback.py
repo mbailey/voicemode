@@ -10,7 +10,9 @@ server failed under default settings.
 The fix keeps sending "auto" first, and only when an implicit "auto" request
 still fails with a 5xx after the transient retries does it try once more
 without ``language``. An endpoint where that works is remembered, so later
-requests omit ``language`` straight away.
+requests omit ``language`` straight away. An endpoint detected as whisper.cpp
+(``:2022``) never gets the language-less retry: "auto" is known to be right
+there (VM-2536).
 
 The server mocks below mirror what speaches did on one machine with one test
 recording: 500 for ``language="auto"``, success without it.
@@ -103,23 +105,27 @@ class TestWhisperCppUnchanged:
         assert _languages_sent(create) == ["auto", "auto", "auto"]
 
     @pytest.mark.asyncio
-    async def test_real_failure_is_reported_and_not_remembered(self):
-        """If the request fails without language too, the error was not about
-        language: the turn fails as before and nothing is remembered."""
+    async def test_whisper_cpp_that_keeps_failing_never_drops_auto(self):
+        """VoiceMode's own whisper.cpp (:2022) is never sent a request without
+        "auto": a run of 500s that outlasts the retries fails the turn as
+        before, nothing is remembered, and the next turn still asks for "auto".
+        Without this, a server that recovered just in time for the language-less
+        request would leave the process on whisper.cpp's English default."""
         mock_file = MagicMock()
 
         with patch("voice_mode.simple_failover.STT_BASE_URLS", WHISPER_CPP):
             with patch("voice_mode.simple_failover.WHISPER_LANGUAGE", "auto"):
-                with patch("voice_mode.simple_failover.STT_RETRY_ATTEMPTS", 0):
+                with patch("voice_mode.simple_failover.STT_RETRY_ATTEMPTS", 2):
                     with patch("voice_mode.simple_failover.AsyncOpenAI") as MockClient:
                         create = MockClient.return_value.audio.transcriptions.create = AsyncMock(
-                            side_effect=_status_error(500, "model crashed")
+                            side_effect=[_status_error(500)] * 3 + ["Hallo.", "Wieder."]
                         )
-                        result = await simple_stt_failover(mock_file)
+                        first = await simple_stt_failover(mock_file)
+                        second = await simple_stt_failover(mock_file)
 
-        assert result["error_type"] == "connection_failed"
-        assert "model crashed" in result["attempted_endpoints"][0]["error"]
-        assert _languages_sent(create) == ["auto", "<omitted>"]
+        assert first["error_type"] == "connection_failed"
+        assert second["text"] == "Hallo."
+        assert _languages_sent(create) == ["auto", "auto", "auto", "auto"]
         assert simple_failover._STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE == set()
 
     @pytest.mark.asyncio
@@ -134,7 +140,8 @@ class TestWhisperCppUnchanged:
                     )
                     result = await simple_stt_failover(mock_file)
 
-        assert result["error_type"] == "connection_failed"
+        # A 4xx is the server answering, classified since VM-2342.
+        assert result["error_type"] == "request_rejected"
         assert _languages_sent(create) == ["auto"]
 
 
@@ -175,6 +182,26 @@ class TestServerRejectingAuto:
 
         assert result["text"] == "Hallo, das ist ein Test."
         assert _languages_sent(create) == ["<omitted>"]
+
+    @pytest.mark.asyncio
+    async def test_real_failure_is_reported_and_not_remembered(self):
+        """If the request fails without language too, the error was not about
+        language: the turn fails as before and nothing is remembered."""
+        mock_file = MagicMock()
+
+        with patch("voice_mode.simple_failover.STT_BASE_URLS", SPEACHES):
+            with patch("voice_mode.simple_failover.WHISPER_LANGUAGE", "auto"):
+                with patch("voice_mode.simple_failover.STT_RETRY_ATTEMPTS", 0):
+                    with patch("voice_mode.simple_failover.AsyncOpenAI") as MockClient:
+                        create = MockClient.return_value.audio.transcriptions.create = AsyncMock(
+                            side_effect=_status_error(500, "model crashed")
+                        )
+                        result = await simple_stt_failover(mock_file)
+
+        assert result["error_type"] == "connection_failed"
+        assert "model crashed" in result["attempted_endpoints"][0]["error"]
+        assert _languages_sent(create) == ["auto", "<omitted>"]
+        assert simple_failover._STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE == set()
 
     @pytest.mark.asyncio
     async def test_memory_is_per_endpoint(self):
