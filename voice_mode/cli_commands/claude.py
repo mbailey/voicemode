@@ -7,6 +7,7 @@ for managing VoiceMode hooks in Claude Code settings.
 import copy
 import json
 import os
+import shlex
 import shutil
 import sys
 from importlib.resources import files
@@ -24,6 +25,14 @@ HOOK_NAME_TO_EVENT = {
     'pre-compact': 'PreCompact',
     'permission-request': 'PermissionRequest',
 }
+
+# The heard ride-along (ambient-listen, VM-2270). Unlike the soundfont hooks it
+# is not the receiver script on one event: it is its own script on two events
+# (PostToolUse, and PostToolBatch where the harness offers it), so it is found
+# by its own marker and is opt-in: a bare `hooks add` leaves it out.
+HEARD_HOOK = 'heard'
+HEARD_MARKER = 'voicemode-heard-hook'
+OPT_IN_HOOKS = {HEARD_HOOK}
 
 # Settings file paths by scope
 SETTINGS_PATHS = {
@@ -66,6 +75,8 @@ def get_installed_hook_names(scope: str) -> set[str]:
         if any(is_voicemode_hook(e) for e in entries):
             if event in event_to_name:
                 installed.add(event_to_name[event])
+        if any(is_heard_hook(e) for e in entries):
+            installed.add(HEARD_HOOK)
     return installed
 
 
@@ -123,12 +134,50 @@ def resolve_hook_command() -> str:
 
 
 def is_voicemode_hook(hook_entry: dict) -> bool:
-    """Check if a hook entry belongs to VoiceMode."""
+    """Check if a hook entry is VoiceMode's receiver (the soundfont hooks).
+
+    The heard ride-along is NOT matched here, on purpose: soundfonts use this
+    to decide whether their hooks are installed. See ``is_heard_hook``.
+    """
     for handler in hook_entry.get('hooks', []):
         cmd = handler.get('command', '')
         if 'voicemode-hook-receiver' in cmd or 'voicemode hook-receiver' in cmd:
             return True
     return False
+
+
+def is_heard_hook(hook_entry: dict) -> bool:
+    """Check if a hook entry is VoiceMode's heard ride-along."""
+    return any(HEARD_MARKER in handler.get('command', '')
+               for handler in hook_entry.get('hooks', []))
+
+
+def is_any_voicemode_hook(hook_entry: dict) -> bool:
+    return is_voicemode_hook(hook_entry) or is_heard_hook(hook_entry)
+
+
+def install_heard_hook() -> Path:
+    """Copy ``voice_mode/heard.py`` to ~/.voicemode/bin/voicemode-heard-hook.
+
+    Always rewritten, so re-running ``hooks add heard`` after an upgrade
+    refreshes it. The file is stdlib-only and runs under ``python3``.
+    """
+    dest = Path.home() / '.voicemode' / 'bin' / HEARD_MARKER
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    source = files('voice_mode').joinpath('heard.py').read_text()
+    tmp = dest.with_name(dest.name + '.tmp')
+    tmp.write_text(source)
+    tmp.chmod(0o755)
+    os.replace(tmp, dest)
+    return dest
+
+
+def heard_hook_command(path: Path) -> str:
+    """``|| exit 1``, not ``|| true``: a broken ride-along must show as a
+    hook error, not pass for a quiet room; and never exit 2, which stops
+    the agent's turn (python itself exits 2 when the script is missing).
+    Measured 04:11 Thu 2026-09-24."""
+    return f'{shlex.quote(str(path))} hook || exit 1'
 
 
 def read_settings(scope: str) -> dict:
@@ -156,13 +205,17 @@ def _resolve_command_in_entries(entries: list, command: str) -> list:
     return resolved
 
 
-def merge_hooks(existing: dict, new_hooks: dict, command: str) -> tuple[dict, list[str]]:
+def merge_hooks(existing: dict, new_hooks: dict, command: str,
+                owned=is_voicemode_hook) -> tuple[dict, list[str]]:
     """Deep merge hooks into existing settings, preserving everything.
 
     Args:
         existing: Current settings dict
         new_hooks: Hook definitions from source JSON (with 'hooks' key)
         command: Resolved command path for hook entries
+        owned: Predicate for "this hook is already there" (the receiver by
+            default; ``is_heard_hook`` for the ride-along, which may sit
+            beside the receiver on the same event)
 
     Returns:
         Tuple of (updated settings, list of added event names)
@@ -182,20 +235,22 @@ def merge_hooks(existing: dict, new_hooks: dict, command: str) -> tuple[dict, li
             result['hooks'][event] = resolved_entries
             added.append(event)
         else:
-            # Check if VoiceMode hook already present
-            if not any(is_voicemode_hook(e) for e in result['hooks'][event]):
+            # Check if this VoiceMode hook is already present
+            if not any(owned(e) for e in result['hooks'][event]):
                 result['hooks'][event].extend(resolved_entries)
                 added.append(event)
 
     return result, added
 
 
-def remove_hooks(existing: dict, event_names: list[str] | None = None) -> tuple[dict, list[str]]:
+def remove_hooks(existing: dict, event_names: list[str] | None = None,
+                 owned=is_voicemode_hook) -> tuple[dict, list[str]]:
     """Remove VoiceMode hooks from settings.
 
     Args:
         existing: Current settings dict
         event_names: Specific events to remove, or None for all
+        owned: Which entries are ours to remove (the receiver by default)
 
     Returns:
         Tuple of (updated settings, list of removed event names)
@@ -213,7 +268,7 @@ def remove_hooks(existing: dict, event_names: list[str] | None = None) -> tuple[
             continue
         original_count = len(result['hooks'][event])
         result['hooks'][event] = [
-            e for e in result['hooks'][event] if not is_voicemode_hook(e)
+            e for e in result['hooks'][event] if not owned(e)
         ]
         if len(result['hooks'][event]) < original_count:
             removed.append(event)
@@ -282,21 +337,33 @@ def hooks_add(hook_name, scope):
             sys.exit(1)
         hooks_to_add = {hook_name: available_hooks[hook_name]}
     else:
-        hooks_to_add = available_hooks
+        # Opt-in hooks (the heard ride-along) are only added by name.
+        hooks_to_add = {k: v for k, v in available_hooks.items() if k not in OPT_IN_HOOKS}
 
-    # Ensure hook receiver is installed, then resolve command path
-    command = resolve_hook_command()
+    # Resolve each hook's command: the receiver for the soundfont hooks,
+    # the installed heard script for the ride-along.
+    command = None
+    heard_command = None
+    if any(name not in OPT_IN_HOOKS for name in hooks_to_add):
+        command = resolve_hook_command()
+    if HEARD_HOOK in hooks_to_add:
+        heard_command = heard_hook_command(install_heard_hook())
 
     # Read existing settings
     settings = read_settings(scope)
 
     # Track what was added
     all_added = []
+    added_by_name = {}
 
     # Add each hook
     for name, hook_def in hooks_to_add.items():
-        settings, added = merge_hooks(settings, hook_def, command)
+        if name == HEARD_HOOK:
+            settings, added = merge_hooks(settings, hook_def, heard_command, owned=is_heard_hook)
+        else:
+            settings, added = merge_hooks(settings, hook_def, command)
         all_added.extend(added)
+        added_by_name[name] = added
 
     # Write updated settings
     write_settings(scope, settings)
@@ -305,7 +372,14 @@ def hooks_add(hook_name, scope):
     settings_path = SETTINGS_PATHS[scope]
     click.echo(f"Added VoiceMode hooks to {scope} settings ({settings_path}):")
 
-    for name in hooks_to_add.keys():
+    for name, hook_def in hooks_to_add.items():
+        if name in OPT_IN_HOOKS:
+            for event in hook_def.get('hooks', {}):
+                if event in added_by_name.get(name, []):
+                    click.echo(f"  + {event} ({name})")
+                else:
+                    click.echo(f"  - {event} ({name}, already present)")
+            continue
         event = HOOK_NAME_TO_EVENT.get(name, name)
         if event in all_added:
             click.echo(f"  + {event}")
@@ -336,14 +410,19 @@ def hooks_remove(hook_name, scope):
     removes only the specified hook event.
     """
     # Validate hook name first (before reading settings)
-    if hook_name:
+    owned = is_voicemode_hook
+    if hook_name == HEARD_HOOK:
+        event_names = list(get_available_hooks()[HEARD_HOOK]['hooks'])
+        owned = is_heard_hook
+    elif hook_name:
         if hook_name not in HOOK_NAME_TO_EVENT:
             click.echo(f"Unknown hook: {hook_name}")
-            click.echo(f"\nAvailable hooks: {', '.join(HOOK_NAME_TO_EVENT.keys())}")
+            click.echo(f"\nAvailable hooks: {', '.join([*HOOK_NAME_TO_EVENT.keys(), HEARD_HOOK])}")
             sys.exit(1)
         event_names = [HOOK_NAME_TO_EVENT[hook_name]]
     else:
         event_names = None
+        owned = is_any_voicemode_hook
 
     # Read existing settings
     settings = read_settings(scope)
@@ -353,7 +432,7 @@ def hooks_remove(hook_name, scope):
         return
 
     # Remove hooks
-    settings, removed = remove_hooks(settings, event_names)
+    settings, removed = remove_hooks(settings, event_names, owned=owned)
 
     # Write updated settings
     write_settings(scope, settings)
@@ -364,6 +443,8 @@ def hooks_remove(hook_name, scope):
 
     # Show all events we checked
     events_to_show = event_names if event_names else list(HOOK_NAME_TO_EVENT.values())
+    if not event_names:
+        events_to_show += [e for e in removed if e not in events_to_show]
     for event in events_to_show:
         if event in removed:
             click.echo(f"  + {event} (removed)")
@@ -398,6 +479,11 @@ def hooks_list(scope):
             else:
                 # Check if VoiceMode hook is present
                 results[event] = any(is_voicemode_hook(e) for e in hooks_dict[event])
+
+        # The heard ride-along, by its own marker, on whichever events it holds
+        heard_events = [ev for ev, entries in hooks_dict.items()
+                        if any(is_heard_hook(e) for e in entries)]
+        results[f"{HEARD_HOOK} ({', '.join(heard_events) or 'opt-in'})"] = bool(heard_events)
 
         return results
 

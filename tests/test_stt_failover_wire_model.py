@@ -8,6 +8,9 @@ resolved model, not a hardcoded literal.
   - OpenAI endpoint -> always 'whisper-1' (provider_type override)
   - whisper.cpp endpoint (2022) -> global STT_MODEL (passed but ignored
     by whisper.cpp at the wire; the value must still appear in kwargs)
+
+VM-2342 adds: the mlx-audio STT default model when VOICEMODE_STT_MODEL is
+unset, and no ``language`` kwarg to mlx-audio on auto.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -22,9 +25,21 @@ def _make_audio_file():
     return MagicMock()
 
 
-async def _capture_kwargs_for_url(base_url: str, stt_model: str, stt_models=None):
+async def _capture_kwargs_for_url(
+    base_url: str,
+    stt_model: str,
+    stt_models=None,
+    *,
+    stt_model_explicit: bool = False,
+    whisper_language: str = "auto",
+    caller_model=None,
+):
     """Run simple_stt_failover with a single STT endpoint and capture the
-    kwargs passed to client.audio.transcriptions.create."""
+    kwargs passed to client.audio.transcriptions.create.
+
+    ``stt_model_explicit`` stands for "the user set VOICEMODE_STT_MODEL"
+    (VM-2342); the stock install leaves it False with STT_MODEL "whisper-1".
+    """
     if stt_models is None:
         stt_models = []
 
@@ -43,11 +58,15 @@ async def _capture_kwargs_for_url(base_url: str, stt_model: str, stt_models=None
     ), patch(
         "voice_mode.providers.STT_MODELS", stt_models
     ), patch(
+        "voice_mode.providers.STT_MODEL_EXPLICIT", stt_model_explicit
+    ), patch(
+        "voice_mode.simple_failover.WHISPER_LANGUAGE", whisper_language
+    ), patch(
         "voice_mode.simple_failover.AsyncOpenAI"
     ) as MockClient:
         mock_client = MockClient.return_value
         mock_client.audio.transcriptions.create = AsyncMock(side_effect=fake_create)
-        await simple_stt_failover(_make_audio_file())
+        await simple_stt_failover(_make_audio_file(), model=caller_model)
 
     return captured
 
@@ -84,3 +103,82 @@ class TestSttFailoverWireModel:
             stt_model="custom-cpp-model",
         )
         assert kwargs["model"] == "custom-cpp-model"
+
+
+MLX_URL = "http://127.0.0.1:8890/v1"
+CPP_URL = "http://127.0.0.1:2022/v1"
+MLX_STT_DEFAULT = "mlx-community/whisper-large-v3-turbo-asr-4bit"
+
+
+class TestMlxAudioSttDefaultModel:
+    """VM-2342: a stock install (VOICEMODE_STT_MODEL unset -> "whisper-1")
+    pointing STT at mlx-audio sends a repo id mlx-audio can load."""
+
+    @pytest.mark.asyncio
+    async def test_stock_install_sends_asr_4bit_to_mlx_audio(self):
+        kwargs = await _capture_kwargs_for_url(MLX_URL, stt_model="whisper-1")
+        assert kwargs["model"] == MLX_STT_DEFAULT
+        # Never the bare turbo id: it 500s "Processor not found" (VM-2334).
+        assert kwargs["model"] != "mlx-community/whisper-large-v3-turbo"
+
+    @pytest.mark.asyncio
+    async def test_explicit_voicemode_stt_model_still_wins(self):
+        kwargs = await _capture_kwargs_for_url(
+            MLX_URL, stt_model="whisper-1", stt_model_explicit=True
+        )
+        assert kwargs["model"] == "whisper-1"
+
+    @pytest.mark.asyncio
+    async def test_positional_stt_models_still_wins(self):
+        kwargs = await _capture_kwargs_for_url(
+            MLX_URL, stt_model="whisper-1", stt_models=["org/positional-asr"]
+        )
+        assert kwargs["model"] == "org/positional-asr"
+
+    @pytest.mark.asyncio
+    async def test_caller_model_still_wins(self):
+        kwargs = await _capture_kwargs_for_url(
+            MLX_URL, stt_model="whisper-1", caller_model="org/caller-asr"
+        )
+        assert kwargs["model"] == "org/caller-asr"
+
+    @pytest.mark.asyncio
+    async def test_whisper_cpp_stock_install_unchanged(self):
+        kwargs = await _capture_kwargs_for_url(CPP_URL, stt_model="whisper-1")
+        assert kwargs["model"] == "whisper-1"
+
+
+class TestSttLanguageByProvider:
+    """VM-2342 (folded VM-2334): mlx-audio turns language="auto" into
+    <|endoftext|> and skips detection, so it gets NO language on auto."""
+
+    @pytest.mark.asyncio
+    async def test_mlx_audio_gets_no_language_on_auto(self):
+        kwargs = await _capture_kwargs_for_url(MLX_URL, stt_model="whisper-1")
+        assert "language" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_mlx_audio_gets_no_language_when_unset(self):
+        kwargs = await _capture_kwargs_for_url(
+            MLX_URL, stt_model="whisper-1", whisper_language=""
+        )
+        assert "language" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_whisper_cpp_still_gets_auto(self):
+        kwargs = await _capture_kwargs_for_url(CPP_URL, stt_model="whisper-1")
+        assert kwargs["language"] == "auto"
+
+    @pytest.mark.asyncio
+    async def test_explicit_language_goes_to_mlx_audio(self):
+        kwargs = await _capture_kwargs_for_url(
+            MLX_URL, stt_model="whisper-1", whisper_language="en"
+        )
+        assert kwargs["language"] == "en"
+
+    @pytest.mark.asyncio
+    async def test_openai_gets_no_language_on_auto(self):
+        kwargs = await _capture_kwargs_for_url(
+            "https://api.openai.com/v1", stt_model="whisper-1"
+        )
+        assert "language" not in kwargs

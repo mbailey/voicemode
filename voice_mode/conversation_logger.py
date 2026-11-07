@@ -18,9 +18,23 @@ from voice_mode.config import BASE_DIR
 
 
 class ConversationLogger:
-    """Handles JSONL-based conversation logging."""
-    
-    SCHEMA_VERSION = 3
+    """Handles JSONL-based conversation logging.
+
+    SCHEMA_VERSION 3 -> 4 (VM-1901 observability-001): ``log_tts`` gained
+    additive ``voice_requested`` / ``voice_resolved`` / ``voice_via`` fields
+    recording the requested-vs-resolved voice identity — see
+    :meth:`log_tts`. The version bump exists precisely so a reader can ask
+    "does this record carry provenance?" without guessing from field
+    presence alone.
+
+    **Reader rule for v<=3 records (design.md §5.3), stated so nobody has
+    to re-derive it:** ``voice`` on a v<=3 record is *result-only,
+    provenance unknown* — render it as such (e.g. "spoke as X, requested
+    voice unknown"). NEVER backfill/guess a ``voice_requested`` for an old
+    record; a fabricated provenance is worse than an absent one.
+    """
+
+    SCHEMA_VERSION = 4
     CONVERSATION_GAP_MINUTES = 5
     
     def __init__(self, base_dir: Optional[Path] = None):
@@ -201,10 +215,32 @@ class ConversationLogger:
     
     def log_tts(self, text: str, audio_file: Optional[str] = None,
                 duration_ms: Optional[int] = None, **kwargs) -> None:
-        """Log a text-to-speech utterance."""
+        """Log a text-to-speech utterance.
+
+        VM-1901: ``voice`` keeps its long-standing meaning — the
+        provider-level voice actually sent (a clone canonical id, an OpenAI
+        voice name, ...). Additive on top of it (SCHEMA_VERSION 4):
+        ``voice_requested`` (the caller's verbatim expression, e.g.
+        ``"blackadder"`` or ``"secretary/lee-holloway"``), ``voice_via``
+        (the resolution route, e.g. ``"cast-default:blackadder"`` or
+        ``"leaf"``, including multi-level cast chains), and
+        ``voice_resolved`` (review fix, design.md §5.3: the canonical id
+        BEFORE any endpoint-level provider mapping — this is additive
+        alongside ``voice`` specifically because the two can legitimately
+        differ, e.g. the one remaining ``is_fallback`` case where a Kokoro
+        alias like ``"af_sky"`` resolves to itself but is then MAPPED to
+        ``"nova"`` for an OpenAI endpoint: ``voice`` records what was
+        actually sent ("nova"), ``voice_resolved`` records what the
+        resolver produced ("af_sky") — losing either half hides the
+        substitution). Never guess any of these for a legacy record — see
+        the class docstring's reader rule.
+        """
         metadata = {
             "model": kwargs.get("model"),
             "voice": kwargs.get("voice"),
+            "voice_requested": kwargs.get("voice_requested"),
+            "voice_resolved": kwargs.get("voice_resolved"),
+            "voice_via": kwargs.get("voice_via"),
             "provider": kwargs.get("provider"),
             "provider_url": kwargs.get("provider_url"),
             "provider_type": kwargs.get("provider_type"),

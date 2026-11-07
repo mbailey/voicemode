@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 
 from .config import (
     TTS_VOICES, TTS_MODELS, TTS_BASE_URLS, STT_BASE_URLS, STT_MODEL, STT_MODELS,
+    STT_MODEL_EXPLICIT, STT_MODEL_PROVIDER_DEFAULTS,
     TTS_MODELS_BY_PROVIDER, TTS_MODEL_PROVIDER_DEFAULTS, TTS_MODEL_DEFAULT,
     OPENAI_API_KEY, get_voice_preferences,
 )
@@ -235,25 +236,40 @@ def _select_voice_for_endpoint(endpoint_info: EndpointInfo) -> str:
 
 
 def _select_model_for_endpoint(endpoint_info: EndpointInfo, requested_model: Optional[str] = None) -> str:
-    """Select the best available model for an endpoint."""
-    # If specific model requested and supported, use it
+    """Select the best available model for an endpoint.
+
+    Advertised/seeded models are filtered through :func:`_model_compatible`
+    first (VM-2156): an endpoint's model list can be stale -- seeded by an older
+    version, or discovered from a server that advertises ids it cannot load --
+    and handing an incompatible id to mlx-audio wedges its router thread. When
+    nothing advertised is usable we fall through to the provider-aware resolver
+    (VM-1390), the same one the live failover path uses.
+    """
+    provider_type = endpoint_info.provider_type or "unknown"
+
+    # If specific model requested and supported, use it (caller trust, step 1
+    # of the VM-1390 resolution order).
     if requested_model and requested_model in endpoint_info.models:
         return requested_model
 
+    # Only consider advertised models this provider can actually load.
+    compatible = [
+        model for model in endpoint_info.models
+        if _model_compatible(provider_type, model)
+    ]
+
     # Try to find a preferred model
     for model in TTS_MODELS:
-        if model in endpoint_info.models:
+        if model in compatible:
             return model
 
-    # Otherwise use first available model
-    if endpoint_info.models:
-        return endpoint_info.models[0]
+    # Otherwise use first available compatible model
+    if compatible:
+        return compatible[0]
 
     # Fallback: provider-aware default (VM-1390) instead of a hardcoded "tts-1",
     # so the registry path converges on the same resolver as the failover path.
-    return _select_tts_model_for_endpoint(
-        endpoint_info.provider_type or "unknown", requested_model
-    )
+    return _select_tts_model_for_endpoint(provider_type, requested_model)
 
 
 def _model_compatible(provider_type: str, model_id: str) -> bool:
@@ -310,7 +326,19 @@ def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model:
       1. provider_type == "openai" -> always "whisper-1" (OpenAI's only STT model id)
       2. caller-passed requested_model wins
       3. positional STT_MODELS entry matching this endpoint's index in STT_BASE_URLS
-      4. global STT_MODEL fallback
+      4. global STT_MODEL, if the user set VOICEMODE_STT_MODEL explicitly, or if
+         it is a plausible id for this provider (see :func:`_model_compatible`)
+      5. built-in per-provider default (``STT_MODEL_PROVIDER_DEFAULTS``:
+         mlx-audio -> ``mlx-community/whisper-large-v3-turbo-asr-4bit``)
+      6. global STT_MODEL fallback (``"whisper-1"`` unless configured)
+
+    Steps 4-5 exist for VM-2342: the stock STT_MODEL default ``"whisper-1"`` is
+    an OpenAI id that mlx-audio does not know (HTTP 404), so a stock install
+    pointing STT at mlx-audio now sends a repo id it can load. An explicit
+    VOICEMODE_STT_MODEL, or an HF repo id in STT_MODEL, still wins. The
+    default is an ``-asr-*`` repo because the bare
+    ``mlx-community/whisper-large-v3-turbo`` 500s ("Processor not found") on a
+    stock HF cache (VM-2334).
 
     Note: the OpenAI override keys off endpoint_info.provider_type. If an
     OpenAI-compatible endpoint ever sets provider_type="openai" this branch
@@ -327,5 +355,9 @@ def _select_stt_model_for_endpoint(endpoint_info: EndpointInfo, requested_model:
         if idx < len(STT_MODELS) and STT_MODELS[idx]:
             return STT_MODELS[idx]
 
-    return STT_MODEL
+    provider_type = endpoint_info.provider_type or "unknown"
+    if STT_MODEL_EXPLICIT or _model_compatible(provider_type, STT_MODEL):
+        return STT_MODEL
+
+    return STT_MODEL_PROVIDER_DEFAULTS.get(provider_type, STT_MODEL)
 

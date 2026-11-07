@@ -13,7 +13,6 @@ import multiprocessing
 import os
 import subprocess
 import sys
-import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -21,7 +20,7 @@ import psutil
 import pytest
 
 from voice_mode.conch import Conch
-from voice_mode.conch_queue import ConchQueue, WaiterEntry
+from voice_mode.conch_queue import ConchQueue
 
 
 # --------------------------------------------------------------------------- #
@@ -29,12 +28,14 @@ from voice_mode.conch_queue import ConchQueue, WaiterEntry
 # --------------------------------------------------------------------------- #
 
 def _write_entry(seq, session_id, *, pid=-1, expires=None, agent="other",
-                 mode="wait"):
+                 extra=None):
     """Write a raw queue entry file directly (simulating another registrant).
 
     ``pid=-1`` means "use the current process" (a live local waiter). Pass
     ``pid=None`` for a remote waiter, or an explicit int (e.g. a reaped, dead
-    PID) to fabricate a stale local entry.
+    PID) to fabricate a stale local entry. ``extra`` merges in additional raw
+    keys -- e.g. a legacy ``"mode": "callback"`` (VM-2078 dropped the field;
+    ``from_dict`` must tolerate and discard an unknown key like this).
     """
     if pid == -1:
         pid = os.getpid()
@@ -43,17 +44,19 @@ def _write_entry(seq, session_id, *, pid=-1, expires=None, agent="other",
     if isinstance(expires, datetime):
         expires = expires.isoformat()
     path = qdir / ConchQueue._filename(seq, session_id)
-    path.write_text(json.dumps({
+    payload = {
         "session_id": session_id,
         "seq": seq,
         "agent": agent,
         "project_path": None,
         "voice": None,
         "pid": pid,
-        "mode": mode,
         "requested_at": datetime.now().isoformat(),
         "expires": expires,
-    }))
+    }
+    if extra:
+        payload.update(extra)
+    path.write_text(json.dumps(payload))
     return path
 
 
@@ -96,15 +99,20 @@ class TestRegisterOrder:
 
     def test_register_persists_all_fields(self):
         ConchQueue.register(
-            "a", agent="cora", project_path="/p", voice="af_sky", mode="callback")
+            "a", agent="cora", project_path="/p", voice="af_sky")
         entry = ConchQueue.head()
         assert entry.session_id == "a"
         assert entry.agent == "cora"
         assert entry.project_path == "/p"
         assert entry.voice == "af_sky"
-        assert entry.mode == "callback"
         assert entry.pid == os.getpid()
         assert entry.requested_at is not None
+
+    def test_register_rejects_mode_kwarg(self):
+        """VM-2078 dropped the mode concept entirely -- register() no longer
+        accepts it (no retain-and-ignore)."""
+        with pytest.raises(TypeError):
+            ConchQueue.register("a", mode="wait")
 
     def test_empty_queue_head_is_none(self):
         assert ConchQueue.head() is None
@@ -227,10 +235,22 @@ class TestCleanup:
                 ).isoformat().replace("+00:00", "Z")
         (qdir / ConchQueue._filename(1, "rz")).write_text(json.dumps({
             "session_id": "rz", "seq": 1, "agent": "remote", "project_path": None,
-            "voice": None, "pid": None, "mode": "wait",
+            "voice": None, "pid": None,
             "requested_at": datetime.now().isoformat(), "expires": zstr,
         }))
         assert [e.session_id for e in ConchQueue.list()] == ["rz"]
+
+    def test_legacy_mode_key_is_tolerated_and_discarded(self):
+        """VM-2078 Q1: a legacy on-disk entry carrying "mode": "callback" (plus
+        any other unknown/future key) must not crash -- from_dict is
+        field-explicit, so it is silently ignored, and the entry is granted
+        like any ordinary waiter."""
+        _write_entry(1, "legacy-cb", extra={"mode": "callback", "future_key": "x"})
+        entries = ConchQueue.list()
+        assert [e.session_id for e in entries] == ["legacy-cb"]
+        assert not hasattr(entries[0], "mode")
+        granted = ConchQueue.grant_next()
+        assert granted.session_id == "legacy-cb"
 
     def test_register_remote_with_tz_aware_expires_persists(self):
         # End-to-end via the public API: registering a remote waiter with a
@@ -346,8 +366,10 @@ class TestGrant:
 
 
 # --------------------------------------------------------------------------- #
-# VM-1967: grant claim TTL safety net -- a WAIT-mode grant nobody ever claims
-# self-heals past CONCH_GRANT_TTL instead of wedging the queue forever.
+# VM-1967: grant claim TTL safety net -- a grant nobody ever claims self-heals
+# past CONCH_GRANT_TTL instead of wedging the queue forever. VM-2078 removed
+# the one exemption this TTL used to carry (callback mode) -- every grant is
+# now covered, with no grant class exempt.
 # --------------------------------------------------------------------------- #
 
 class TestGrantTTLSafetyNet:
@@ -358,16 +380,16 @@ class TestGrantTTLSafetyNet:
         g["granted_at"] = (datetime.now() - timedelta(seconds=seconds)).isoformat()
         ConchQueue._atomic_write_json(gf, g)
 
-    def test_stale_wait_grant_self_heals_and_promotes_next(self, monkeypatch):
-        """The exact VM-1967 deadlock shape: a WAIT-mode grant that is never
-        claimed must NOT wedge the queue forever -- past CONCH_GRANT_TTL it is
+    def test_stale_grant_self_heals_and_promotes_next(self, monkeypatch):
+        """The exact VM-1967 deadlock shape: a grant that is never claimed
+        must NOT wedge the queue forever -- past CONCH_GRANT_TTL it is
         treated as abandoned, the stuck grantee is evicted, and the next live
         waiter is promoted, matching the manual `conch give` recovery an
         operator would otherwise have to perform.
         """
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("stuck-head", mode="wait")
-        ConchQueue.register("next-in-line", mode="wait")
+        ConchQueue.register("stuck-head")
+        ConchQueue.register("next-in-line")
         ConchQueue.grant_next()  # promotes stuck-head, never claimed
         assert ConchQueue.granted_to() == "stuck-head"
 
@@ -379,57 +401,180 @@ class TestGrantTTLSafetyNet:
         assert ConchQueue.granted_to() == "next-in-line"
         assert [e.session_id for e in ConchQueue.list()] == ["next-in-line"]
 
-    def test_stale_wait_grant_with_no_other_waiters_clears_to_free(self, monkeypatch):
+    def test_stale_grant_with_no_other_waiters_clears_to_free(self, monkeypatch):
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("stuck-head", mode="wait")
+        ConchQueue.register("stuck-head")
         ConchQueue.grant_next()
         self._backdate_grant(11)
 
         assert ConchQueue.granted_to() is None
         assert ConchQueue.list() == []
 
-    def test_fresh_wait_grant_within_ttl_is_not_disturbed(self, monkeypatch):
+    def test_fresh_grant_within_ttl_is_not_disturbed(self, monkeypatch):
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("head", mode="wait")
+        ConchQueue.register("head")
         ConchQueue.grant_next()
         self._backdate_grant(5)  # within the 10s TTL
 
         assert ConchQueue.granted_to() == "head"
         assert "head" in [e.session_id for e in ConchQueue.list()]
 
-    def test_callback_grant_is_exempt_from_ttl(self, monkeypatch):
-        """A CALLBACK grantee is claimed out-of-band, at agent/human pace
-        (VM-1625) -- unclaimed for a long time is normal there, not stuck, so
-        it must never be evicted by the TTL safety net."""
+    def test_lone_waiter_grant_is_no_longer_exempt(self, monkeypatch):
+        """VM-2078: the exact wedge this task closes. Previously a lone
+        callback waiter granted the head (nothing to starve) was EXEMPT from
+        the TTL, so it never expired even when never claimed. There is no
+        such exemption any more -- a lone head grant self-heals past TTL
+        exactly like any other."""
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("idle-callback", mode="callback")
-        ConchQueue.grant_next()  # only-callback case -> grants head unchanged
-        assert ConchQueue.granted_to() == "idle-callback"
+        ConchQueue.register("idle-waiter")
+        ConchQueue.grant_next()  # only waiter -> grants head unchanged
+        assert ConchQueue.granted_to() == "idle-waiter"
 
-        self._backdate_grant(9999)  # ancient -- would trip a WAIT-mode TTL
+        self._backdate_grant(9999)  # ancient -- would have been exempt pre-VM-2078
 
-        assert ConchQueue.granted_to() == "idle-callback"
-        assert "idle-callback" in [e.session_id for e in ConchQueue.list()]
+        assert ConchQueue.granted_to() is None
+        assert ConchQueue.list() == []
 
     def test_ttl_disabled_when_zero(self, monkeypatch):
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
-        ConchQueue.register("stuck-head", mode="wait")
+        ConchQueue.register("stuck-head")
         ConchQueue.grant_next()
         self._backdate_grant(9999)
 
         assert ConchQueue.granted_to() == "stuck-head"
 
-    def test_legacy_grant_with_no_granted_at_is_not_treated_as_wedged(self, monkeypatch):
-        """A grant written before VM-1967 (or by any other writer) carries no
-        ``granted_at`` -- can't judge its age, so don't guess it's stuck."""
+    def test_missing_granted_at_is_stamped_on_first_sighting_then_judged_normally(
+        self, monkeypatch
+    ):
+        """VM-2078 fix-002: a grant carrying no ``granted_at`` (predates
+        VM-1967, or was written by something else) must NOT be exempt
+        forever -- that is itself an un-expiring grant, exactly the class
+        this task exists to eliminate. First read stamps it (persisted,
+        atomic) and treats it as fresh-from-now; only once THAT stamp ages
+        past the TTL is it judged wedged, same as any other grant.
+
+        Supersedes the old ``test_legacy_grant_with_no_granted_at_is_not_
+        treated_as_wedged``, which asserted the pre-fix-002 contract
+        (exempt forever) -- that test encoded the bug this one closes, per
+        the fix-002-prescription-corrected decision in progress.json.
+        """
         monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
-        ConchQueue.register("a", mode="wait")
+        ConchQueue.register("a")
         ConchQueue._atomic_write_json(
             ConchQueue._grant_file(), {"session_id": "a", "seq": 1})
+
+        # First sighting: judged fresh (not wedged), AND now stamped on disk
+        # -- the bonus gap this closes: "no timestamp" no longer means
+        # "exempt forever".
         assert ConchQueue.granted_to() == "a"
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("granted_at") is not None
+
+        # Now that it carries a real stamp, ageing it past the TTL judges
+        # and evicts it exactly like any other grant.
+        self._backdate_grant(11)
+        assert ConchQueue.granted_to() is None
+        assert ConchQueue.list() == []
+
+    def test_holder_gate_precedes_missing_granted_at_stamp(self, monkeypatch):
+        """Order matters, not just presence (fix-002 checklist #1). With a
+        missing ``granted_at`` AND a live holder, the holder gate must
+        short-circuit FIRST -- if the granted_at parse ran first, a live
+        holder would be irrelevant to the missing-timestamp branch, but the
+        real risk is the reverse: the gate placed AFTER the parse would
+        never run at all when the timestamp is malformed. Assert the
+        stamp-on-first-sighting write from the missing-timestamp branch does
+        NOT fire while the holder gate is the one short-circuiting."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        try:
+            ConchQueue.register("a")
+            ConchQueue._atomic_write_json(
+                ConchQueue._grant_file(), {"session_id": "a", "seq": 1})  # no granted_at
+
+            assert ConchQueue.granted_to() == "a"  # holder gate -> not wedged
+            grant_payload = json.loads(ConchQueue._grant_file().read_text())
+            assert grant_payload.get("granted_at") is None  # gate ran first; no stamp write
+        finally:
+            holder.release()
+
+    def test_give_during_live_holder_speech_survives_past_ttl(self, monkeypatch):
+        """VM-2078 Q3 repro, inverted into a regression test. Reproduced
+        against unmodified master with mode='wait' throughout (no callback
+        involved): ``conch give`` while the holder is still speaking used to
+        evaporate once the grant aged past ``CONCH_GRANT_TTL``, evicting the
+        innocent, still-polling waiter. A grant cannot be judged wedged while
+        a live holder still blocks the claim -- the grantee cannot claim
+        yet, no matter how long ago the grant was issued."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        try:
+            ConchQueue.register("A")
+            assert ConchQueue.grant("A") is True  # operator: `conch give A`
+            self._backdate_grant(9999)  # ancient, but the holder is still speaking
+
+            # Must NOT evaporate and must NOT evict the waiter -- this is the
+            # exact bug reproduced against unmodified master.
+            assert ConchQueue.granted_to() == "A"
+            assert [e.session_id for e in ConchQueue.list()] == ["A"]
+        finally:
+            holder.release()
+
+    def test_give_re_stamped_on_release_then_claims_normally(self, monkeypatch):
+        """The companion half of the give-during-hold fix: when the holder
+        finally releases, ``grant_next``'s honour-an-existing-give early
+        return must re-stamp ``granted_at`` -- the claim window begins when
+        the floor actually frees, not whenever the operator originally ran
+        `conch give`. Without the re-stamp the grant is already ancient at
+        the exact moment it becomes claimable and would be judged wedged on
+        the very next read."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        holder = Conch(agent_name="holder", session_id="holder")
+        assert holder.try_acquire() is True
+        ConchQueue.register("A")
+        assert ConchQueue.grant("A") is True
+        self._backdate_grant(9999)  # already "ancient" while the holder still speaks
+
+        holder.release()  # full release -> grant_next() honours the existing give
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        granted_at = datetime.fromisoformat(grant_payload["granted_at"])
+        assert (datetime.now() - granted_at).total_seconds() < 2  # freshly re-stamped
+
+        # And the grantee can now claim normally -- the re-stamp did not
+        # merely avoid eviction, it produced a genuinely fresh claim window.
+        a = Conch(agent_name="a", session_id="A")
+        assert a.try_acquire() is True
+        a.release()
+
+    def test_stacked_wedged_grants_recursion_bound(self, monkeypatch):
+        """``_current_grant``'s self-heal recursion (deregister -> grant_next
+        -> recursive ``_current_grant``) goes from a rare path to a routine
+        one once every grant is TTL-covered (no more callback exemption) --
+        exercise it two deep: each self-heal promotes a freshly-stamped
+        grant, so a single stale read never cascades past the next live
+        waiter."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("first")
+        ConchQueue.register("second")
+        ConchQueue.register("third")
+        ConchQueue.grant_next()  # grants "first"
+        self._backdate_grant(11)  # wedge #1
+
+        # One read self-heals through the first wedge and lands on a fresh
+        # grant for "second" -- not a second wedge, no stack blow-up.
+        assert ConchQueue.granted_to() == "second"
+        assert [e.session_id for e in ConchQueue.list()] == ["second", "third"]
+
+        # Wedge the newly-promoted grant too -> self-heals again, to "third".
+        self._backdate_grant(11)
+        assert ConchQueue.granted_to() == "third"
+        assert [e.session_id for e in ConchQueue.list()] == ["third"]
 
     def test_grant_age_seconds(self, monkeypatch):
-        ConchQueue.register("a", mode="wait")
+        ConchQueue.register("a")
         assert ConchQueue.grant_age_seconds() is None  # no grant yet
         ConchQueue.grant_next()
         self._backdate_grant(5)
@@ -438,150 +583,301 @@ class TestGrantTTLSafetyNet:
 
 
 # --------------------------------------------------------------------------- #
-# grant_next skips leading callback waiters (VM-1625, F1)
+# VM-2078 fix-002: claim_ttl -- a bounded override on a SINGLE grant record,
+# widening (never disabling, never a category on the waiter) the claim window
+# from evidence the GRANTER directly observed -- e.g. a summon_and_grant nudge
+# (D2) confirmed delivered. do-003 is the intended caller; this is the
+# queue-side primitive it will drive once its checked-and-surfaced delivery
+# result exists (see the "SHAPE SETTLED" note in fix-002's slice notes).
 # --------------------------------------------------------------------------- #
 
-def _mock_session_send(monkeypatch):
-    """Capture the local notify push (``session send``) instead of spawning it.
+class TestGrantClaimTTLOverride:
+    def _backdate_grant(self, seconds):
+        """Rewrite the on-disk grant with ``granted_at`` ``seconds`` in the past."""
+        gf = ConchQueue._grant_file()
+        g = json.loads(gf.read_text())
+        g["granted_at"] = (datetime.now() - timedelta(seconds=seconds)).isoformat()
+        ConchQueue._atomic_write_json(gf, g)
 
-    Returns the list of recorded argv lists. A callback waiter skipped by
-    grant_next is a *local* waiter here (current PID), so it would otherwise
-    shell out to the real ``session send`` and type into a live tmux pane.
-    """
-    calls = []
+    def test_grant_without_claim_ttl_uses_base_ttl(self, monkeypatch):
+        """Regression: an ordinary `grant()` call (no observed-delivery
+        evidence passed) must be unaffected -- same base-TTL behaviour as
+        before ``claim_ttl`` existed, and no stray key on the grant record."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a") is True
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert "claim_ttl" not in grant_payload
 
-    def fake_run(*args, **kwargs):
-        calls.append(args[0] if args else kwargs.get("args"))
+        self._backdate_grant(11)  # past the 10s base TTL
+        assert ConchQueue.granted_to() is None  # evicted, same as always
 
-        class _Result:
-            returncode = 0
+    def test_claim_ttl_is_persisted_on_the_grant_record(self):
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a", claim_ttl=90.0) is True
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 90.0
 
-        return _Result()
+    def test_claim_ttl_widens_the_window_past_the_base_ttl(self, monkeypatch):
+        """The whole point of the override: a summoned session (D2) with a
+        CONFIRMED-delivered nudge must survive well past the ordinary
+        poll-loop TTL, since it has no poll loop -- but the window stays
+        FINITE, not exempt."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("summoned")
+        assert ConchQueue.grant("summoned", claim_ttl=90.0) is True
 
-    monkeypatch.setattr("subprocess.run", fake_run)
-    return calls
+        self._backdate_grant(30)  # past the 10s base TTL, well within 90s
+        assert ConchQueue.granted_to() == "summoned"  # survives -- override applies
 
+        self._backdate_grant(91)  # past the claim_ttl override too
+        assert ConchQueue.granted_to() is None  # still finite -- eventually evicted
+        assert ConchQueue.list() == []
 
-def _join_notify_threads(timeout=5.0):
-    """Join the fire-and-forget notify threads grant_next spawns on the release
-    hot path (``notify_block=False``), so a test can assert their side effect
-    deterministically instead of racing them. Named ``conch-notify`` by
-    ``conch_notify._dispatch_async``.
-    """
-    for t in list(threading.enumerate()):
-        if t.name == "conch-notify":
-            t.join(timeout)
-
-
-class TestGrantNextCallbackSkip:
-    def test_skips_leading_callback_to_grant_wait_waiter(self, monkeypatch):
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-head", mode="callback")     # idle callback at head
-        _write_entry(2, "wait-behind", mode="wait")     # blocking waiter behind it
-
-        granted = ConchQueue.grant_next()
-        assert granted.session_id == "wait-behind"       # wait waiter wins, not cb-head
-        assert ConchQueue.granted_to() == "wait-behind"
-        # The skipped callback head was pinged to return.
-        assert any("cb-head" in argv for argv in calls)
-
-    def test_callback_head_no_longer_starves_wait_waiter(self, monkeypatch):
-        """F1 closing the loop: the wait waiter actually acquires now.
-
-        Pre-fix grant_next promoted the head regardless of mode, so the granted
-        callback head (which never self-acquires) gated the wait waiter behind
-        it until it timed out. Now the wait waiter is the grantee and acquires.
-        """
-        _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-head", mode="callback")
-        _write_entry(2, "wait-behind", mode="wait")
-        ConchQueue.grant_next()  # holder releases -> promote next
-
-        # cb-head is not the grantee, so it can't (and never would) take the floor;
-        # wait-behind is the grantee and acquires cleanly.
-        assert Conch(agent_name="cb", session_id="cb-head").try_acquire() is False
-        assert Conch(agent_name="w", session_id="wait-behind").try_acquire() is True
-
-    def test_only_callback_waiters_grant_head_unchanged(self, monkeypatch):
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-1", mode="callback")
-        _write_entry(2, "cb-2", mode="callback")
-
-        granted = ConchQueue.grant_next()
-        assert granted.session_id == "cb-1"              # head granted, unchanged
-        assert ConchQueue.granted_to() == "cb-1"
-        # Only-callback path is unchanged: grant_next pings no one (the lone
-        # callback case VM-1619's converse delivery owns; bump notifies it).
-        assert calls == []
-
-    def test_multiple_leading_callbacks_all_pinged(self, monkeypatch):
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-a", mode="callback")
-        _write_entry(2, "cb-b", mode="callback")
-        _write_entry(3, "wait-c", mode="wait")
-
-        granted = ConchQueue.grant_next()
-        assert granted.session_id == "wait-c"
-        pinged = {argv[2] for argv in calls}  # ["session", "send", <target>, text]
-        assert pinged == {"cb-a", "cb-b"}
-
-    def test_callbacks_after_wait_head_are_untouched(self, monkeypatch):
-        """A wait waiter at the head grants normally; trailing callbacks aren't pinged."""
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "wait-head", mode="wait")
-        _write_entry(2, "cb-trailing", mode="callback")
-
-        granted = ConchQueue.grant_next()
-        assert granted.session_id == "wait-head"
-        assert calls == []  # nothing skipped, nothing pinged
-
-    def test_skip_ping_fires_via_real_release(self, monkeypatch):
-        """The skip-and-ping is reachable through a real holder release, not only
-        a direct ``grant_next`` call (impl-002 review coverage gap).
-
-        ``Conch.release`` -> ``_queue_promote_next`` -> ``grant_next`` still
-        promotes the wait waiter (F1) and pings the skipped callback head -- but
-        on this hot path the ping is fire-and-forget (``notify_block=False``), so
-        we join the named notify thread before asserting its side effect.
-        """
-        calls = _mock_session_send(monkeypatch)
-        _write_entry(1, "cb-head", mode="callback")
-        _write_entry(2, "wait-behind", mode="wait")
-
+    def test_claim_ttl_survives_the_re_stamp_on_release(self, monkeypatch):
+        """``grant_next()``'s honour-an-existing-give re-stamp (VM-2078 Q3)
+        must PRESERVE a ``claim_ttl`` override, not silently drop it back to
+        the base TTL -- the moment the floor frees is exactly when a
+        summoned session most needs its widened window."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
         holder = Conch(agent_name="holder", session_id="holder")
         assert holder.try_acquire() is True
-        holder.release()  # full release -> promote next on the converse hot path
+        ConchQueue.register("summoned")
+        assert ConchQueue.grant("summoned", claim_ttl=90.0) is True
 
-        # F1 still holds via the real release: the wait waiter is the grantee...
-        assert ConchQueue.granted_to() == "wait-behind"
-        # ...and the skipped callback head was pinged -- off-thread, so join first.
-        _join_notify_threads()
-        assert any("cb-head" in argv for argv in calls)
+        holder.release()  # -> grant_next() honours the existing give, re-stamps
 
-    def test_release_skip_ping_is_off_the_release_thread(self, monkeypatch):
-        """The release-path ping is dispatched, not run inline, so a wedged
-        ``session send`` can't add latency to the holder's release (impl-002)."""
-        captured = []
-        # Intercept the dispatcher so we can prove the ping was handed off rather
-        # than executed on the release thread.
-        import voice_mode.conch_notify as conch_notify
-        monkeypatch.setattr(
-            conch_notify, "_dispatch_async",
-            lambda fn, *a: captured.append((fn, a)),
-        )
-        _write_entry(1, "cb-head", mode="callback")
-        _write_entry(2, "wait-behind", mode="wait")
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 90.0
+        granted_at = datetime.fromisoformat(grant_payload["granted_at"])
+        assert (datetime.now() - granted_at).total_seconds() < 2  # freshly re-stamped
 
-        holder = Conch(agent_name="holder", session_id="holder")
-        assert holder.try_acquire() is True
-        holder.release()
+        self._backdate_grant(30)  # past the base 10s, within the preserved 90s
+        assert ConchQueue.granted_to() == "summoned"
 
-        assert ConchQueue.granted_to() == "wait-behind"
-        # Exactly one ping, handed to the async dispatcher for the skipped head.
-        assert len(captured) == 1
-        fn, fn_args = captured[0]
-        assert fn is conch_notify._local_nudge
-        assert fn_args[0].session_id == "cb-head"
+    def test_disabled_base_ttl_ignores_claim_ttl_too(self, monkeypatch):
+        """``CONCH_GRANT_TTL=0`` is the administrative "disable the safety
+        net entirely" switch -- a per-grant ``claim_ttl`` override must not
+        partially re-enable judgement while the base is off."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a", claim_ttl=5.0) is True
+        self._backdate_grant(9999)
+        assert ConchQueue.granted_to() == "a"
+
+    def test_remote_head_promotion_gets_the_remote_claim_window(self, monkeypatch):
+        """REFINE #1 (fix-002, retry 1/3): ``claim_ttl`` is only ever written
+        by ``grant()`` -- the SUMMON path. ``grant_next()``'s ordinary
+        HEAD-PROMOTION never wrote it, so a REMOTE waiter (``pid=None``,
+        whose claim is a heartbeat/status round trip) promoted on release
+        was judged against the local poll-cycle window and evicted before
+        it could structurally ever claim in time -- a regression this
+        branch introduced by removing callback mode's TTL exemption without
+        giving ordinary-promoted remote waiters a correct window.
+
+        Restored in the shape the reviewer asked for: monkeypatch BOTH
+        getters so it reads like its neighbours, promote a ``pid=None``
+        waiter via ``grant_next()`` (the ordinary promotion path -- the
+        uncovered one, not ``grant()``'s summon path), then assert the
+        window is bounded, not exempt: survives the local TTL, still
+        eventually evicted past the remote one.
+        """
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("remote-waiter", pid=None)
+        assert ConchQueue.grant_next() is not None  # ordinary head-promotion
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 60.0  # max(10, 60)
+
+        self._backdate_grant(30)  # past the 10s local TTL, within the 60s remote one
+        assert ConchQueue.granted_to() == "remote-waiter"  # survives -- can still claim
+
+        self._backdate_grant(9999)  # past the remote TTL too
+        assert ConchQueue.granted_to() is None  # still finite -- eventually evicted
+        assert ConchQueue.list() == []
+
+    def test_local_head_promotion_is_unaffected_by_the_remote_window(self, monkeypatch):
+        """Companion to the remote case: an ordinary LOCAL promotion (a real
+        ``pid``) must carry no ``claim_ttl`` at all and keep using the base
+        TTL exactly as before -- the remote window is scoped to ``pid is
+        None``, not a blanket widening of every head-promotion."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("local-waiter")  # defaults pid to this process
+        assert ConchQueue.grant_next() is not None
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert "claim_ttl" not in grant_payload
+
+        self._backdate_grant(11)  # past the 10s base TTL
+        assert ConchQueue.granted_to() is None  # evicted, same as always
+
+    def test_give_to_a_remote_waiter_with_no_explicit_claim_ttl_gets_the_remote_window(
+        self, monkeypatch
+    ):
+        """REFINE #2 (fix-002, retry 2/3): ``claim_ttl`` was previously only
+        ever defaulted by ``grant_next()``'s ordinary head-promotion
+        (REFINE #1). ``grant()`` -- the ``conch give`` / summon path -- still
+        wrote a BASE-TTL grant whenever its caller passed no ``claim_ttl``,
+        even when the target waiter has no local ``pid``: ``tools/conch.py``
+        ``_do_give`` and the CLI ``give`` both call ``grant()`` with no
+        ``claim_ttl``, so 'conch give' to a remote waiter was the same
+        unwinnable heartbeat-round-trip arithmetic as REFINE #1's bug,
+        through a different door.
+
+        The fix lives in ``grant()`` (via the shared ``_write_grant_decision``
+        writer), not in its call sites, so no caller has to remember it.
+        Asserts both halves of the bounded window: survives past the base
+        TTL, still eventually evicted past the remote one -- not a new
+        exemption."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("remote-waiter", pid=None)
+        assert ConchQueue.grant("remote-waiter") is True  # no explicit claim_ttl
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 60.0  # max(10, 60)
+
+        self._backdate_grant(30)  # past the 10s local TTL, within the 60s remote one
+        assert ConchQueue.granted_to() == "remote-waiter"  # survives -- can still claim
+
+        self._backdate_grant(9999)  # past the remote TTL too
+        assert ConchQueue.granted_to() is None  # still finite -- eventually evicted
+        assert ConchQueue.list() == []
+
+    def test_give_to_a_remote_waiter_with_an_explicit_claim_ttl_still_wins(
+        self, monkeypatch
+    ):
+        """The caller-supplied override must still win over the pid-based
+        fallback -- a summon carve-out that has real delivery evidence
+        should not be silently overridden by the structural pid-is-None
+        default."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("remote-waiter", pid=None)
+        assert ConchQueue.grant("remote-waiter", claim_ttl=5.0) is True
+
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 5.0  # explicit value, not max(10, 60)
+
+        self._backdate_grant(6)  # past the explicit 5s override
+        assert ConchQueue.granted_to() is None  # evicted per the explicit override
+
+
+# --------------------------------------------------------------------------- #
+# VM-2078 do-003: remote_claim_window / claim_window_remaining
+#
+# remote_claim_window() is the single source of truth _write_grant_decision's
+# pid-based fallback (tested above via TestGrantClaimTTLOverride) already
+# exercises indirectly; these tests cover it -- and the heartbeat-facing
+# claim_window_remaining() -- directly.
+# --------------------------------------------------------------------------- #
+
+class TestRemoteClaimWindow:
+    def test_is_max_of_base_and_remote_ttl(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        assert ConchQueue.remote_claim_window() == 60.0
+
+    def test_never_narrows_an_administratively_widened_base_ttl(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 300.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 90.0)
+        assert ConchQueue.remote_claim_window() == 300.0
+
+    def test_summon_confirmed_delivered_uses_it_as_the_explicit_claim_ttl(
+        self, monkeypatch
+    ):
+        """The exact do-003/fix-002 interlock: a LOCAL-pid summon target
+        (nudged, not polling) still needs the bounded window, via an
+        explicit ``claim_ttl`` -- ``grant()``'s own pid-based fallback would
+        NOT fire for it (it has a pid), so the caller must pass it."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        monkeypatch.setattr("voice_mode.conch_queue._get_remote_ttl", lambda: 60.0)
+        ConchQueue.register("summoned-local")  # local pid -- nudged, not polling
+        assert ConchQueue.grant(
+            "summoned-local", claim_ttl=ConchQueue.remote_claim_window()
+        ) is True
+        grant_payload = json.loads(ConchQueue._grant_file().read_text())
+        assert grant_payload.get("claim_ttl") == 60.0
+
+
+class TestClaimWindowRemaining:
+    def _backdate_grant(self, seconds):
+        gf = ConchQueue._grant_file()
+        payload = json.loads(gf.read_text())
+        past = datetime.now() - timedelta(seconds=seconds)
+        payload["granted_at"] = past.isoformat()
+        gf.write_text(json.dumps(payload))
+
+    def test_none_when_not_the_current_grantee(self):
+        ConchQueue.register("a")
+        ConchQueue.register("b")
+        ConchQueue.grant_next()  # grants "a"
+        assert ConchQueue.claim_window_remaining("b") is None
+
+    def test_none_when_no_grant_at_all(self):
+        ConchQueue.register("a")
+        assert ConchQueue.claim_window_remaining("a") is None
+
+    def test_full_window_right_after_grant(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 30.0)
+        ConchQueue.register("a")
+        ConchQueue.grant_next()
+        remaining = ConchQueue.claim_window_remaining("a")
+        assert remaining is not None
+        assert remaining == pytest.approx(30.0, abs=1.0)
+
+    def test_counts_down_and_reflects_a_claim_ttl_override(self, monkeypatch):
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        ConchQueue.register("summoned")
+        assert ConchQueue.grant("summoned", claim_ttl=90.0) is True
+        self._backdate_grant(30)
+        remaining = ConchQueue.claim_window_remaining("summoned")
+        assert remaining == pytest.approx(60.0, abs=1.0)  # 90 - 30
+
+    def test_never_negative_once_past_the_window(self, monkeypatch):
+        """Past the window the grant is ordinarily self-healed away (evicted)
+        on the very next judged read, so there is no "stale but still
+        present" case to clamp -- UNLESS a live holder still gates the
+        judgement (fix-002's holder gate: a grant cannot be wedged while the
+        floor is still occupied). That is the one real case where
+        ``claim_window_remaining`` sees a grant whose TTL has already run out
+        and must clamp rather than go negative."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 10.0)
+        Conch(session_id="holder-sess").acquire(agent_name="holder")
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a") is True
+        self._backdate_grant(9999)
+        assert ConchQueue.claim_window_remaining("a") == 0.0
+
+    def test_none_not_zero_when_administratively_disabled(self, monkeypatch):
+        """REFINE #1 (do-003, retry 1/3): with ``CONCH_GRANT_TTL=0`` the
+        ENFORCER (``_grant_wedged``) never expires the grant -- but this
+        reporter used to derive its own TTL independently and say "0.0
+        seconds remaining", which reads as *already expired*. A remote
+        agent obediently heartbeating on this exact call would be told it
+        was out of time while it in fact held the floor indefinitely.
+        ``None`` ("no deadline exists") is the only answer that agrees with
+        the enforcer -- both must now go through the same
+        ``_effective_claim_ttl`` helper."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
+        ConchQueue.register("a")
+        assert ConchQueue.grant("a") is True
+        self._backdate_grant(9999)
+        assert ConchQueue.granted_to() == "a"  # enforcer: never wedged
+        assert ConchQueue.claim_window_remaining("a") is None  # reporter agrees
+
+    def test_none_not_zero_when_disabled_even_with_a_claim_ttl_override(self, monkeypatch):
+        """Mirrors ``test_disabled_base_ttl_ignores_claim_ttl_too`` on the
+        enforcer side: a disabled base TTL turns judgement off project-wide,
+        including a per-grant ``claim_ttl`` override -- the reporter must
+        not partially re-enable it either."""
+        monkeypatch.setattr("voice_mode.conch_queue._get_grant_ttl", lambda: 0)
+        ConchQueue.register("summoned")
+        assert ConchQueue.grant("summoned", claim_ttl=5.0) is True
+        self._backdate_grant(9999)
+        assert ConchQueue.claim_window_remaining("summoned") is None
 
 
 # --------------------------------------------------------------------------- #

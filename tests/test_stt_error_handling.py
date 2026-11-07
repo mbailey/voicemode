@@ -102,8 +102,13 @@ class TestSTTErrorHandling:
 
                     result = await simple_stt_failover(mock_file)
 
-                assert result["error_type"] == "connection_failed"
+                # VM-2342: OpenAI ANSWERED with 401, which outranks the local
+                # connection error; it is not a connection failure.
+                assert result["error_type"] == "request_rejected"
+                assert result["status_code"] == 401
                 assert len(result["attempted_endpoints"]) == 2
+                assert result["attempted_endpoints"][0]["error_type"] == "connection_failed"
+                assert result["attempted_endpoints"][1]["error_type"] == "request_rejected"
 
                 # Check OpenAI error
                 openai_attempt = result["attempted_endpoints"][1]
@@ -160,7 +165,10 @@ class TestSTTErrorHandling:
 
             result = await simple_stt_failover(mock_file)
 
-            assert result["error_type"] == "connection_failed"
+            # VM-2342: a 404 is the server answering, reported as
+            # model_not_found (the converse message also names a wrong path).
+            assert result["error_type"] == "model_not_found"
+            assert result["status_code"] == 404
             whisper_attempt = result["attempted_endpoints"][0]
             assert "404" in whisper_attempt["error"] or "Not Found" in whisper_attempt["error"]
 
@@ -297,3 +305,162 @@ class TestSTTErrorHandling:
             # Should report no_speech, not connection_failed
             assert result["error_type"] == "no_speech"
             assert result["provider"] == "openai"
+
+# ---------------------------------------------------------------------------
+# VM-2342: an HTTP 4xx is the server ANSWERING. It must be reported as what it
+# is (model_not_found for 404), never as connection_failed.
+# ---------------------------------------------------------------------------
+
+from openai import APIStatusError, BadRequestError, InternalServerError  # noqa: E402
+import httpx  # noqa: E402
+
+from voice_mode.simple_failover import _classify_stt_failure  # noqa: E402
+
+MLX_URL = "http://127.0.0.1:8890/v1"
+CPP_URL = "http://127.0.0.1:2022/v1"
+
+
+def _http_error(cls, status, url=MLX_URL, body="Not Found"):
+    """A real openai status error carrying a real httpx response."""
+    request = httpx.Request("POST", f"{url}/audio/transcriptions")
+    response = httpx.Response(status, request=request)
+    return cls(message=f"Error code: {status} - {body}", response=response, body=body)
+
+
+def _conn_error():
+    return APIConnectionError(message="Connection error.", request=MagicMock())
+
+
+async def _run_chain(urls, per_endpoint_effects, stt_models=None):
+    """Run simple_stt_failover over ``urls``; endpoint i raises/returns
+    ``per_endpoint_effects[i]``. Retries are off so each endpoint is tried once."""
+    clients = []
+    for effect in per_endpoint_effects:
+        client = MagicMock()
+        if isinstance(effect, Exception):
+            client.audio.transcriptions.create = AsyncMock(side_effect=effect)
+        else:
+            client.audio.transcriptions.create = AsyncMock(return_value=effect)
+        clients.append(client)
+    clients_iter = iter(clients)
+
+    with patch("voice_mode.simple_failover.STT_BASE_URLS", list(urls)), \
+         patch("voice_mode.providers.STT_BASE_URLS", list(urls)), \
+         patch("voice_mode.providers.STT_MODELS", list(stt_models or [])), \
+         patch("voice_mode.providers.STT_MODEL", "whisper-1"), \
+         patch("voice_mode.providers.STT_MODEL_EXPLICIT", True), \
+         patch("voice_mode.simple_failover.STT_RETRY_ATTEMPTS", 0), \
+         patch("voice_mode.simple_failover.AsyncOpenAI", side_effect=lambda **_k: next(clients_iter)):
+        return await simple_stt_failover(MagicMock())
+
+
+class TestSTTHttpAnswerClassification:
+    """VM-2342 regression tests: the bug was a 404 surfacing as connection_failed."""
+
+    @pytest.mark.asyncio
+    async def test_mlx_audio_404_is_model_not_found_naming_model_and_endpoint(self):
+        """The measured bug: mlx-audio 0.5.7 404s on model 'whisper-1'."""
+        result = await _run_chain([MLX_URL], [_http_error(NotFoundError, 404)])
+
+        assert result["error_type"] == "model_not_found"
+        assert result["error_type"] != "connection_failed"
+        assert result["model"] == "whisper-1"
+        assert result["endpoint"] == f"{MLX_URL}/audio/transcriptions"
+        assert result["status_code"] == 404
+        attempt = result["attempted_endpoints"][0]
+        assert attempt["error_type"] == "model_not_found"
+        assert attempt["model"] == "whisper-1"
+        assert attempt["status_code"] == 404
+        assert attempt["provider"] == "mlx-audio"
+
+    @pytest.mark.asyncio
+    async def test_404_names_the_model_actually_sent_per_endpoint(self):
+        """A positional VOICEMODE_STT_MODELS entry is what was sent, so it is
+        what the report names."""
+        result = await _run_chain(
+            [MLX_URL], [_http_error(NotFoundError, 404)], stt_models=["org/not-loaded"]
+        )
+        assert result["error_type"] == "model_not_found"
+        assert result["model"] == "org/not-loaded"
+
+    @pytest.mark.asyncio
+    async def test_mixed_chain_refused_then_404_reports_model_not_found(self):
+        """Mixed-chain rule: a server's 4xx answer outranks a connection error."""
+        result = await _run_chain(
+            [CPP_URL, MLX_URL], [_conn_error(), _http_error(NotFoundError, 404)]
+        )
+        assert result["error_type"] == "model_not_found"
+        assert result["endpoint"] == f"{MLX_URL}/audio/transcriptions"
+        kinds = [a["error_type"] for a in result["attempted_endpoints"]]
+        assert kinds == ["connection_failed", "model_not_found"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_chain_404_then_refused_reports_model_not_found(self):
+        result = await _run_chain(
+            [MLX_URL, CPP_URL], [_http_error(NotFoundError, 404), _conn_error()]
+        )
+        assert result["error_type"] == "model_not_found"
+        assert result["endpoint"] == f"{MLX_URL}/audio/transcriptions"
+
+    @pytest.mark.asyncio
+    async def test_404_outranks_other_4xx(self):
+        result = await _run_chain(
+            [CPP_URL, MLX_URL],
+            [_http_error(BadRequestError, 400, url=CPP_URL, body="bad audio"),
+             _http_error(NotFoundError, 404)],
+        )
+        assert result["error_type"] == "model_not_found"
+        assert result["endpoint"] == f"{MLX_URL}/audio/transcriptions"
+
+    @pytest.mark.asyncio
+    async def test_other_4xx_is_request_rejected(self):
+        result = await _run_chain(
+            [CPP_URL], [_http_error(BadRequestError, 400, url=CPP_URL, body="bad audio")]
+        )
+        assert result["error_type"] == "request_rejected"
+        assert result["status_code"] == 400
+        assert result["endpoint"] == f"{CPP_URL}/audio/transcriptions"
+
+    @pytest.mark.asyncio
+    async def test_5xx_stays_connection_failed(self):
+        """Boundary: only 4xx is reclassified; a 5xx keeps today's behaviour."""
+        result = await _run_chain(
+            [MLX_URL], [_http_error(InternalServerError, 500, body="Processor not found")]
+        )
+        assert result["error_type"] == "connection_failed"
+        assert result["attempted_endpoints"][0]["status_code"] == 500
+        assert "model" not in result
+
+    @pytest.mark.asyncio
+    async def test_pure_connection_errors_unchanged(self):
+        result = await _run_chain([CPP_URL, MLX_URL], [_conn_error(), _conn_error()])
+        assert result["error_type"] == "connection_failed"
+        assert set(result) == {"error_type", "attempted_endpoints"}
+        for attempt in result["attempted_endpoints"]:
+            assert attempt["error_type"] == "connection_failed"
+            assert attempt["status_code"] is None
+
+    @pytest.mark.asyncio
+    async def test_success_after_404_still_wins(self):
+        result = await _run_chain(
+            [MLX_URL, CPP_URL], [_http_error(NotFoundError, 404), "hello"]
+        )
+        assert result["text"] == "hello"
+        assert "error_type" not in result
+
+
+class TestClassifySttFailure:
+    def test_404(self):
+        assert _classify_stt_failure(_http_error(NotFoundError, 404)) == (404, "model_not_found")
+
+    def test_other_4xx(self):
+        for status in (400, 401, 403, 422, 429):
+            err = _http_error(APIStatusError, status)
+            assert _classify_stt_failure(err) == (status, "request_rejected")
+
+    def test_5xx(self):
+        assert _classify_stt_failure(_http_error(InternalServerError, 503)) == (503, "connection_failed")
+
+    def test_connection_and_unknown_errors(self):
+        assert _classify_stt_failure(_conn_error()) == (None, "connection_failed")
+        assert _classify_stt_failure(RuntimeError("boom")) == (None, "connection_failed")

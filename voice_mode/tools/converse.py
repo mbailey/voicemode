@@ -34,6 +34,16 @@ from voice_mode.server import mcp
 from voice_mode.conch import Conch, _get_hold_expiry
 from voice_mode.conch_queue import ConchQueue
 from voice_mode.conversation_logger import get_conversation_logger
+# resolve_voice/VoiceResolutionError are imported lazily where used (see the
+# early-resolution block in _converse_core), NOT bound at module import time
+# -- mirrors simple_failover.py's identical lazy-import pattern. A top-level
+# `from voice_mode.voice_profiles import VoiceResolutionError` would bind to
+# whichever class object existed at converse.py's own import time; any later
+# `importlib.reload(voice_profiles)` (tests do this to point the resolver at
+# a temp voices tree) creates a NEW VoiceResolutionError class, and an
+# instance of the new class fails `isinstance` against the old one -- the
+# `except VoiceResolutionError` below would silently stop catching anything.
+# The lazy, per-call import always resolves the CURRENT class.
 from voice_mode.config import (
     audio_operation_lock,
     BASE_DIR,
@@ -73,11 +83,11 @@ from voice_mode.config import (
     CONCH_ENABLED,
     CONCH_TIMEOUT,
     CONCH_CHECK_INTERVAL,
-    CONCH_MODE,
     AUTO_FOCUS_PANE
 )
 import voice_mode.config
 from voice_mode.provider_discovery import provider_registry
+from voice_mode.url_match import is_openai_url
 from voice_mode.core import (
     get_openai_clients,
     save_debug_file,
@@ -862,7 +872,7 @@ async def _speak_turns_pipeline(
                 })
                 continue
             try:
-                success, samples, sample_rate, metrics, _config = await synthesize_turn_with_failover(
+                success, samples, sample_rate, metrics, config = await synthesize_turn_with_failover(
                     message=turn["say"],
                     voice=turn["voice"],
                     model=tts_model,
@@ -874,7 +884,33 @@ async def _speak_turns_pipeline(
                 )
             except Exception as e:
                 logger.error(f"Turn {idx} synthesis raised: {e}")
-                success, samples, sample_rate, metrics = False, None, None, {}
+                success, samples, sample_rate, metrics, config = False, None, None, {}, None
+
+            # VM-1901 §5.4: this call used to discard `config` (the
+            # underscore WAS the hole) — turns[] speech never appeared in
+            # the exchange log at all. Log immediately on success, per turn,
+            # with its own resolution (turns carry per-turn voice); mirrors
+            # the single-message path's log-on-success pattern.
+            if success:
+                try:
+                    get_conversation_logger().log_tts(
+                        text=turn["say"],
+                        model=config.get('model') if config else tts_model,
+                        voice=config.get('voice') if config else turn["voice"],
+                        voice_requested=config.get('voice_requested') if config else turn["voice"],
+                        voice_resolved=config.get('voice_resolved') if config else None,
+                        voice_via=config.get('voice_via') if config else None,
+                        provider=config.get('provider') if config else tts_provider,
+                        provider_url=config.get('base_url') if config else None,
+                        provider_type=config.get('provider_type') if config else None,
+                        is_fallback=config.get('is_fallback', False) if config else False,
+                        fallback_reason=config.get('fallback_reason') if config else None,
+                        audio_format=audio_format,
+                        generation_time=(metrics or {}).get('generation'),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to log turn {idx} TTS to JSONL: {e}")
+
             await audio_queue.put({
                 "index": idx, "turn": turn, "samples": samples, "sample_rate": sample_rate,
                 "success": bool(success), "metrics": metrics or {},
@@ -1020,6 +1056,40 @@ def prepare_audio_for_stt(audio_data: np.ndarray, output_format: str = "mp3") ->
     return compressed_data
 
 
+def _heard_turn(text: Optional[str], *, session: Optional[str] = None,
+                detector: Optional[str] = None, transport: Optional[str] = None) -> None:
+    """Write converse's listen window into the heard log (ambient-listen 1.2).
+
+    One ``turn`` line with ``via: "converse"``, beside the exchange log's
+    ``log_stt`` entry: converse transcribes a whole utterance once, so it
+    has no chunks and writes no ``partial`` lines. The reading session's
+    own hook skips these (it has the text as converse's result); other
+    sessions see them. No speech, no line. Never raises and never changes
+    converse's return.
+    """
+    if not text or not text.strip() or text.strip() == "[no speech detected]":
+        return
+    try:
+        from voice_mode import heard
+        local = transport in (None, "local", "survey")
+        heard.turn(
+            text,
+            via="converse",
+            source="mic" if local else str(transport),
+            # No `device` yet: naming it here means a PortAudio query in
+            # converse's path, which the test audio guard rightly flags
+            # (46 blocked calls, measured 04:06 Thu 2026-09-24). Task 4
+            # (VM-1010) names the device once, where the stream opens, and
+            # hands it to both this line and converse's result.
+            session=session or heard.caller_session(),
+            agent=heard.caller_agent(),
+            detector=detector,
+            directory=Path(BASE_DIR) / "logs" / "conversations",
+        )
+    except Exception as heard_err:
+        logger.warning(f"heard: converse's turn was not written: {heard_err}")
+
+
 async def speech_to_text(
     audio_data: np.ndarray,
     save_audio: bool = False,
@@ -1050,7 +1120,9 @@ async def speech_to_text(
         Dict with transcription result or error information:
         - Success: {"text": "...", "provider": "...", "endpoint": "..."}
         - No speech: {"error_type": "no_speech", "provider": "..."}
-        - All failed: {"error_type": "connection_failed", "attempted_endpoints": [...]}
+        - All failed: {"error_type": "connection_failed" | "model_not_found" |
+          "request_rejected", "attempted_endpoints": [...], ...} (see
+          simple_failover.simple_stt_failover, VM-2342)
     """
     import tempfile
     import io
@@ -1846,6 +1918,65 @@ async def _drain_skip_back(control_state, replay_cursor: int) -> int:
 # ask-turn survey loop (impl-002) will also call this once per ask turn.
 # ---------------------------------------------------------------------------
 
+# STT failure kinds returned by simple_stt_failover (error_type) mapped to the
+# stable ListenResult.error_kind each one surfaces as (VM-2342).
+_STT_FAILURE_KINDS = {
+    "connection_failed": "stt_connection_failed",
+    "model_not_found": "stt_model_not_found",
+    "request_rejected": "stt_request_rejected",
+}
+
+
+def _format_stt_failure(stt_result: Dict[str, Any]) -> Tuple[str, str]:
+    """Build the user-facing message and ``error_kind`` for a failed STT pass.
+
+    ``connection_failed`` keeps its historical wording. ``model_not_found``
+    and ``request_rejected`` (VM-2342) mean a server ANSWERED with an HTTP 4xx,
+    so the headline names the model, the endpoint and the status instead of
+    sending the user hunting a network fault that does not exist.
+    """
+    error_type = stt_result["error_type"]
+    error_kind = _STT_FAILURE_KINDS[error_type]
+    model = stt_result.get("model")
+    endpoint = stt_result.get("endpoint")
+    status = stt_result.get("status_code")
+
+    if error_type == "model_not_found":
+        error_lines = [
+            f"STT model {model!r} not found at {endpoint} (HTTP {status}).",
+            "The server answered: it does not serve this model (or the endpoint path is wrong).",
+            "Set VOICEMODE_STT_MODELS (one model per VOICEMODE_STT_BASE_URLS entry) "
+            "or VOICEMODE_STT_MODEL to a model that server serves.",
+        ]
+    elif error_type == "request_rejected":
+        error_lines = [
+            f"STT request rejected by {endpoint} (HTTP {status}, model {model!r}).",
+            "The server answered and refused the request; this is not a connection failure.",
+        ]
+    else:
+        error_lines = ["STT service connection failed:"]
+
+    if error_type != "connection_failed":
+        error_lines.append("Endpoints tried:")
+
+    openai_error_shown = False
+    for attempt in stt_result.get("attempted_endpoints", []):
+        if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
+            error_details = attempt['error_details']
+            error_lines.append("")
+            error_lines.append(error_details.get('title', 'OpenAI Error'))
+            error_lines.append(error_details.get('message', ''))
+            if error_details.get('suggestion'):
+                error_lines.append(f"💡 {error_details['suggestion']}")
+            if error_details.get('fallback'):
+                error_lines.append(f"ℹ️ {error_details['fallback']}")
+            openai_error_shown = True
+        else:
+            error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
+
+    return "\n".join(error_lines), error_kind
+
+
 @dataclass
 class ListenResult:
     """Classified result of one listen exchange.
@@ -1862,7 +1993,7 @@ class ListenResult:
             control-channel stop ended the exchange -- see ``control``),
             "skip_back" (a pending skip_back was detected post-recording --
             the caller should replay then call again), or "stt_error" (empty
-            recording buffer or an STT connection failure -- see
+            recording buffer or an STT service failure -- see
             ``error_message`` / ``error_kind``).
         text: transcribed reply text (set only when outcome == "answered").
         stt_provider: the STT provider name, else "unknown".
@@ -1877,8 +2008,10 @@ class ListenResult:
             progress review S2); use ``error_kind`` instead.
         error_kind: set when outcome == "stt_error" -- a stable machine
             classification: "record_failed" (empty recording buffer, not a
-            skip_forward "go now") or "stt_connection_failed" (STT service
-            unreachable). ``None`` for every other outcome.
+            skip_forward "go now"), "stt_connection_failed" (STT service
+            unreachable), "stt_model_not_found" (an STT server answered HTTP
+            404: unknown model, VM-2342) or "stt_request_rejected" (an STT
+            server answered another HTTP 4xx). ``None`` for every other outcome.
         stt_classified: True iff STT actually ran AND returned a definitive
             classification of the capture -- i.e. outcome is "answered", or
             outcome is "no_speech" *because STT itself* reported no speech
@@ -2083,29 +2216,12 @@ async def listen_and_transcribe(
 
             if "error_type" in stt_result:
                 # Handle connection failures vs no speech
-                if stt_result["error_type"] == "connection_failed":
-                    error_lines = ["STT service connection failed:"]
-                    openai_error_shown = False
-
-                    for attempt in stt_result.get("attempted_endpoints", []):
-                        if attempt.get('error_details') and not openai_error_shown and attempt.get('provider') == 'openai':
-                            error_details = attempt['error_details']
-                            error_lines.append("")
-                            error_lines.append(error_details.get('title', 'OpenAI Error'))
-                            error_lines.append(error_details.get('message', ''))
-                            if error_details.get('suggestion'):
-                                error_lines.append(f"💡 {error_details['suggestion']}")
-                            if error_details.get('fallback'):
-                                error_lines.append(f"ℹ️ {error_details['fallback']}")
-                            openai_error_shown = True
-                        else:
-                            error_lines.append(f"  - {attempt['endpoint']}: {attempt['error']}")
-
-                    error_msg = "\n".join(error_lines)
+                if stt_result["error_type"] in _STT_FAILURE_KINDS:
+                    error_msg, error_kind = _format_stt_failure(stt_result)
                     logger.error(error_msg)
                     return ListenResult(
                         outcome="stt_error", timings=timings, error_message=error_msg,
-                        error_kind="stt_connection_failed",
+                        error_kind=error_kind,
                     )
 
                 elif stt_result["error_type"] == "no_speech":
@@ -2466,7 +2582,7 @@ async def _ask_turns_pipeline(
                 })
                 continue
             try:
-                success, samples, sample_rate, metrics, _config = await synthesize_turn_with_failover(
+                success, samples, sample_rate, metrics, config = await synthesize_turn_with_failover(
                     message=turn["say"],
                     voice=turn["voice"],
                     model=tts_model,
@@ -2478,7 +2594,31 @@ async def _ask_turns_pipeline(
                 )
             except Exception as e:
                 logger.error(f"Survey turn {idx} synthesis raised: {e}")
-                success, samples, sample_rate, metrics = False, None, None, {}
+                success, samples, sample_rate, metrics, config = False, None, None, {}, None
+
+            # VM-1901 §5.4: same blindness fix as the speak-only pipeline —
+            # `_config` was discarded here too, so an ask-survey's turns never
+            # reached the exchange log either. Log immediately on success.
+            if success:
+                try:
+                    get_conversation_logger().log_tts(
+                        text=turn["say"],
+                        model=config.get('model') if config else tts_model,
+                        voice=config.get('voice') if config else turn["voice"],
+                        voice_requested=config.get('voice_requested') if config else turn["voice"],
+                        voice_resolved=config.get('voice_resolved') if config else None,
+                        voice_via=config.get('voice_via') if config else None,
+                        provider=config.get('provider') if config else tts_provider,
+                        provider_url=config.get('base_url') if config else None,
+                        provider_type=config.get('provider_type') if config else None,
+                        is_fallback=config.get('is_fallback', False) if config else False,
+                        fallback_reason=config.get('fallback_reason') if config else None,
+                        audio_format=audio_format,
+                        generation_time=(metrics or {}).get('generation'),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to log survey turn {idx} TTS to JSONL: {e}")
+
             await audio_queue.put({
                 "index": idx, "samples": samples, "sample_rate": sample_rate,
                 "success": bool(success), "metrics": metrics or {},
@@ -2657,9 +2797,12 @@ async def _ask_turns_pipeline(
                     # stable ``error_kind`` field, not a substring match on the
                     # human-readable ``error_message`` (a rewording there used
                     # to be able to silently misclassify survey aborts).
+                    # VM-2342: every STT-service kind passes through as its own
+                    # reason (stt_connection_failed / stt_model_not_found /
+                    # stt_request_rejected); only record_failed is a device error.
                     reason = (
-                        "stt_connection_failed"
-                        if listen_result.error_kind == "stt_connection_failed"
+                        listen_result.error_kind
+                        if listen_result.error_kind in _STT_FAILURE_KINDS.values()
                         else "audio_device_error"
                     )
                     stopped_at = {"turn": idx, "phase": "listening", "reason": reason}
@@ -2749,6 +2892,11 @@ async def _ask_turns_pipeline(
                     )
                 except Exception as log_err:
                     logger.error(f"Survey turn {idx}: failed to log conversation STT: {log_err}")
+                _heard_turn(
+                    text,
+                    detector="max-duration" if disable_silence_detection else "converse-silence",
+                    transport="survey",
+                )
                 break
 
             results[idx] = entry
@@ -2875,232 +3023,138 @@ def _format_survey_result(
     return json.dumps({"survey": survey}, ensure_ascii=False, indent=2), success
 
 
-# Literal schema-description text for the `turns` parameter (README ## Design,
-# VM-1775 slice 6). Applied here via Annotated/Field so it lands in the tool's
-# JSON schema (not just prose in the docstring); every other converse() param
-# still gets its description from the KEY PARAMETERS prose below pending the
-# broader per-arg Annotated/Field migration (VM-1451).
+# Schema-description text for the `turns` parameter (introduced VM-1775 slice 6
+# from that task's README ## Design; the cap advice it originally carried was
+# removed by VM-2099 — see _LISTEN_DURATION_MAX_PARAM_DESCRIPTION below).
+# Applied here via Annotated/Field so it lands in the tool's JSON schema (not
+# just prose in the docstring); most other converse() params still get their
+# description from the KEY PARAMETERS prose below pending the broader per-arg
+# Annotated/Field migration (VM-1451).
+# Schema descriptions for the parameters that need more than a clause. They land
+# in the MCP inputSchema via Annotated[..., Field(description=...)], next to the
+# parameter's type and default, which is where a client puts them in front of the
+# model. The tool docstring does not restate them (VM-2442: one description per
+# parameter, in the schema). The two listening-window descriptions name the
+# CONFIG KEY and never a number (VM-2099; tests/test_no_cap_teaching.py).
 _TURNS_PARAM_DESCRIPTION = (
-    "Ordered list of utterances to deliver in ONE call, pipelined (turn N+1 is "
-    "synthesized while turn N plays — no synth dead-air). Each turn is an "
-    "object with EXACTLY ONE of: \"say\": str — speak this text and advance "
-    "(no listening), or \"ask\": str — speak this text, then LISTEN and "
-    "record the user's spoken reply. Optional per-turn overrides (each "
-    "defaults to the call-level argument of the same name): \"voice\", "
-    "\"speed\", \"tts_instructions\", \"pause_after_ms\"; and, meaningful on "
-    "ask turns: \"listen_duration_max\", \"listen_duration_min\", "
-    "\"vad_aggressiveness\", \"ack\". \"ack\" (bool, default false, or set the "
-    "call-level \"ack\" to switch every ask turn on) plays a short content-free "
-    "confirmation cue when — and only when — a reply is captured, so the user "
-    "can tell \"heard you → advancing\" from \"didn't hear → advancing\"; it "
-    "stays silent on a timeout/no-speech and keeps the survey pipelined (no "
-    "synth). (\"wait_for_response\": true on a say turn is an "
-    "accepted alias for \"ask\".) The call-level wait_for_response is IGNORED "
-    "when turns is present — listening happens only for ask turns. If NO turn "
-    "asks, the call speaks the sequence and returns a text summary. If ANY "
-    "turn asks, the call returns a JSON object (as a string) with replies "
-    "aligned to turns by index: {\"survey\": {\"completed\": bool, \"asked\": "
-    "n, \"answered\": n, \"stopped_at\": null|{turn, phase, reason}, "
-    "\"turns\": [{\"turn\": i, \"verb\": \"say\"|\"ask\", \"status\": "
-    "\"spoken\"|\"answered\"|\"no_speech\"|\"tts_failed\"|\"stt_failed\"|"
-    "\"not_reached\", \"reply\": str|null}, ...]}} — entries for no_speech / "
-    "tts_failed / not_reached can simply be re-asked in a follow-up call. "
-    "Keep surveys short (≤ ~7 ask turns) and give each ask turn a sensible "
-    "\"listen_duration_max\" (30–45s for normal questions). Because turns "
-    "advance automatically without reacting to each answer, make the survey "
-    "legible to the user: OPEN with a leading say turn announcing how many "
-    "questions there are (e.g. \"I've got 3 quick questions\") so they know a "
-    "multi-turn survey is running, and at the TOP of your NEXT converse call "
-    "acknowledge the answers you just collected — content-aware acknowledgment "
-    "can't be pipelined mid-survey, so it belongs at the next call. During a "
-    "survey "
-    "the user can: answer early or finish answering with skip-forward, hear "
-    "the question again with skip-back or by saying \"repeat\", pause with "
-    "\"wait\", and abandon the survey with the stop control or by saying only "
-    "\"break\" / \"stop the survey\" (returns the replies collected so far "
-    "plus where it stopped). Unknown keys in a turn are rejected. \"play\" is "
-    "reserved for a future phase. If both message and turns are given, turns "
-    "wins."
+    "Several utterances in ONE call, pipelined (the next turn is synthesised "
+    "while this one plays). Each turn has exactly one of \"say\": str (speak, "
+    "no listening) or \"ask\": str (speak, then listen and record the reply); "
+    "\"wait_for_response\": true on a say turn is an alias for \"ask\". "
+    "Per-turn overrides, each defaulting to the call-level value: \"voice\", "
+    "\"speed\", \"tts_instructions\", \"pause_after_ms\"; on ask turns also "
+    "\"listen_duration_max\", \"listen_duration_min\", \"vad_aggressiveness\" "
+    "and \"ack\" (a short cue when a reply is captured). The call-level "
+    "wait_for_response is ignored; only ask turns listen. Open with a say turn "
+    "that announces how many questions are coming. If no turn asks, the "
+    "call returns a text summary; if any does, a JSON string: {\"survey\": "
+    "{\"completed\": bool, \"asked\": n, \"answered\": n, \"stopped_at\": "
+    "null|{turn, phase, reason}, \"turns\": [{\"turn\": i, \"verb\": "
+    "\"say\"|\"ask\", \"status\": \"spoken\"|\"answered\"|\"no_speech\"|"
+    "\"tts_failed\"|\"stt_failed\"|\"not_reached\", \"reply\": str|null}, "
+    "...]}}; re-ask the no_speech and not_reached turns in a later call. Each "
+    "reply is written to the conversation log the moment it arrives, so a "
+    "killed or crashed call keeps every answer already given. While it runs "
+    "the user can skip-forward (done answering), skip-back or say \"repeat\" "
+    "(hear the question again), say \"wait\" (pause), or say only \"break\" / "
+    "\"stop the survey\" (returns the replies so far). Unknown keys are "
+    "rejected. If both message and turns are given, turns wins."
+)
+
+_LISTEN_DURATION_MAX_PARAM_DESCRIPTION = (
+    "Ceiling on one listening turn, in seconds. Leave it unset: the user's "
+    "VOICEMODE_DEFAULT_LISTEN_DURATION applies, and silence detection ends the "
+    "turn when they stop speaking. A value you pass replaces theirs without "
+    "notice. Set it only for a need you can state, e.g. silence detection is "
+    "disabled for a diagnostic."
+)
+
+_LISTEN_DURATION_MIN_PARAM_DESCRIPTION = (
+    "Floor before silence detection may end the turn, in seconds. Raise it "
+    "when the user needs thinking time, e.g. after hearing a long list; it "
+    "cannot cut an answer short."
 )
 
 
+# One description per parameter, written once and referenced from BOTH the MCP
+# wrapper `converse` and `_converse_core`, so the two signatures stay identical
+# (tests/test_converse_wrapper_signature_parity.py) and the text has one home.
+# Parameters without an entry are config-backed and self-naming; they carry no
+# description on purpose (VM-2442 findings.md has the keep/cut/quieten table).
+_PARAM_DESCRIPTIONS = {
+    "message": "Text to speak. Required unless `turns` is given.",
+    "turns": _TURNS_PARAM_DESCRIPTION,
+    "pause_after_ms": "Silence after each turn of a `turns` sequence, in ms; 0 = none.",
+    "wait_for_response": "Listen for the user's reply after speaking. false = speak only.",
+    "listen_duration_max": _LISTEN_DURATION_MAX_PARAM_DESCRIPTION,
+    "listen_duration_min": _LISTEN_DURATION_MIN_PARAM_DESCRIPTION,
+    "voice": ("TTS voice (lowercase, with its prefix: bm_daniel, af_sky) or an absolute "
+              ".wav path to clone. Omit for the default; voice://voices lists them."),
+    "tts_instructions": "Tone or style; OpenAI gpt-4o-mini-tts only.",
+    "disable_silence_detection": "Record until listen_duration_max instead of stopping on silence.",
+    "speed": "Speech rate 0.25-4.0; 1.0 is normal.",
+    "vad_aggressiveness": "Voice detection strictness 0-3; 3 is strictest.",
+    "skip_tts": "true: return the text without speaking it.",
+    "metrics_level": ("minimal: reply text only (fewest tokens); summary: plus compact "
+                      "timing; verbose: full metrics."),
+    "wait_for_conch": ("Several agents on one channel: if another holds the floor, true "
+                       "queues until it is yours (a number: at most that many seconds); "
+                       "false returns a status at once instead of speaking."),
+    "hold_conch": ("Keep the floor for your next converse call: you are asking something "
+                   "you will follow up, or speaking over several turns. Released by a "
+                   "call with hold_conch=false, or when it idles out."),
+    "conch_hold_timeout": "Idle expiry for this hold, in seconds; needs hold_conch=true.",
+    "skip_conch": "Speak at once even if another agent holds the floor. An escape hatch, not a default.",
+    "session_id": ("Your harness session id, recorded in the floor lock. Defaults to "
+                   "CLAUDE_CODE_SESSION_ID or VOICEMODE_SESSION_ID from the environment."),
+    "ref_text": "Transcript of a clone clip, as text or a file path; only with a cloned voice.",
+    "ack": "Play a short cue whenever a reply is captured (ask turns).",
+    "time_in_response": "Append the local wall-clock time to the result (text only, never spoken).",
+}
+
+
+def _param(name: str):
+    """The schema Field for a described parameter (see _PARAM_DESCRIPTIONS)."""
+    return Field(description=_PARAM_DESCRIPTIONS[name])
+
+
 async def _converse_core(
-    message: Optional[str] = None,
-    turns: Annotated[Optional[list], Field(description=_TURNS_PARAM_DESCRIPTION)] = None,
-    pause_after_ms: int = 150,
-    wait_for_response: Union[bool, str] = True,
-    listen_duration_max: float = DEFAULT_LISTEN_DURATION,
-    listen_duration_min: float = 2.0,
-    timeout: float = 60.0,
-    voice: Optional[str] = None,
+    message: Annotated[Optional[str], _param("message")] = None,
+    turns: Annotated[Optional[list], _param("turns")] = None,
+    pause_after_ms: Annotated[int, _param("pause_after_ms")] = 150,
+    wait_for_response: Annotated[Union[bool, str], _param("wait_for_response")] = True,
+    listen_duration_max: Annotated[Optional[float], _param("listen_duration_max")] = None,
+    listen_duration_min: Annotated[float, _param("listen_duration_min")] = 2.0,
+    voice: Annotated[Optional[str], _param("voice")] = None,
     tts_provider: Optional[Literal["openai", "kokoro"]] = None,
     tts_model: Optional[str] = None,
-    tts_instructions: Optional[str] = None,
+    tts_instructions: Annotated[Optional[str], _param("tts_instructions")] = None,
     chime_enabled: Optional[Union[bool, str]] = None,
     audio_format: Optional[str] = None,
-    disable_silence_detection: Union[bool, str] = False,
-    speed: Optional[float] = None,
-    vad_aggressiveness: Optional[Union[int, str]] = None,
-    skip_tts: Optional[Union[bool, str]] = None,
+    disable_silence_detection: Annotated[Union[bool, str], _param("disable_silence_detection")] = False,
+    speed: Annotated[Optional[float], _param("speed")] = None,
+    vad_aggressiveness: Annotated[Optional[Union[int, str]], _param("vad_aggressiveness")] = None,
+    skip_tts: Annotated[Optional[Union[bool, str]], _param("skip_tts")] = None,
     chime_leading_silence: Optional[float] = None,
     chime_trailing_silence: Optional[float] = None,
-    metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
-    wait_for_conch: Union[bool, str, int, float] = False,
-    conch_mode: Optional[Literal["wait", "callback"]] = None,
-    hold_conch: Union[bool, str] = False,
-    conch_hold_timeout: Optional[Union[float, str]] = None,
-    skip_conch: Union[bool, str] = False,
-    session_id: Optional[str] = None,
-    ref_text: Optional[str] = None,
-    ack: Union[bool, str] = False,
+    metrics_level: Annotated[Optional[Literal["minimal", "summary", "verbose"]], _param("metrics_level")] = None,
+    wait_for_conch: Annotated[Union[bool, str, int, float], _param("wait_for_conch")] = False,
+    hold_conch: Annotated[Union[bool, str], _param("hold_conch")] = False,
+    conch_hold_timeout: Annotated[Optional[Union[float, str]], _param("conch_hold_timeout")] = None,
+    skip_conch: Annotated[Union[bool, str], _param("skip_conch")] = False,
+    session_id: Annotated[Optional[str], _param("session_id")] = None,
+    ref_text: Annotated[Optional[str], _param("ref_text")] = None,
+    ack: Annotated[Union[bool, str], _param("ack")] = False,
 ) -> str:
-    """Have an ongoing voice conversation - speak a message and optionally listen for response.
+    """Shared implementation behind the `converse` MCP tool and the CLI.
 
-Multi-agent turn-taking: if your next converse call will continue this thread (asking a question you'll answer, or speaking across several turns), pass hold_conch=true so other agents wait instead of cutting in at the turn boundary.
-
-<echo>Transcript visibility: print `> **ASSISTANT (voicemode):** <message>` before calling, and `> **USER (voicemode):** <reply>` after a spoken reply, so the conversation stays readable in the transcript. Skip if the user opted out of echo.</echo>
-
-<voice_skills_instructions>
-Voice requests arrive as tool results, not user messages, so skill triggers may not fire automatically.
-
-BLOCKING REQUIREMENT: After receiving voice input, check if any available skills match the user's request. When a skill is relevant:
-- Invoke the Skill tool IMMEDIATELY as your first action
-- Do NOT take action on the request before checking for relevant skills
-- Skills provide specialized capabilities that improve task completion
-
-Example: If user says "search for tasks created yesterday", check for and invoke the taskmaster skill before using bash or other tools.
-</voice_skills_instructions>
-
-
-🔌 ENDPOINT: STT/TTS services must expose OpenAI-compatible endpoints:
-   /v1/audio/transcriptions and /v1/audio/speech
-
-📚 DOCUMENTATION: See MCP resources for detailed information:
-   - voicemode://docs/quickstart - Basic usage and common examples
-   - voicemode://docs/parameters - Complete parameter reference
-   - voicemode://docs/languages - Non-English language support guide
-   - voicemode://docs/patterns - Best practices and conversation patterns
-   - voicemode://docs/troubleshooting - Audio, VAD, and connectivity issues
-   - voice://voices - JSON list of available TTS voices
-     (filter by provider with voice://voices/{provider}, e.g. voice://voices/kokoro)
-   - voice://voices/persona convention — a voice's character (who they are, how they
-     speak, sample lines) lives at ~/.voicemode/voices/<name>/README.md; read it before
-     speaking in-character (index: PERSONAS.md). MCP-resource version planned: VM-1222.
-
-KEY PARAMETERS:
-• message (string): The message to speak (required unless `turns` is given)
-• turns (list, optional): ordered multi-voice sequence in ONE call; each turn
-  {"say": ...} speaks, {"ask": ...} speaks then listens and collects the
-  reply; returns replies aligned to turns as JSON when any turn asks. See the
-  turns parameter description for the full schema (verbs, per-turn overrides,
-  survey controls: skip-forward advances, skip-back/"repeat" replays the
-  question, spoken "break"/stop ends the survey with partials). If both
-  `message` and `turns` are given, `turns` wins. Killed-call recovery: every
-  reply already collected is durably written to the conversation logs the
-  instant its ask turn resolves, not batched at the end — a killed/crashed
-  call still leaves every already-given reply on disk, even one that never
-  returns its survey JSON.
-• pause_after_ms (int, default: 150): Silence inserted after each turn in a
-  `turns` sequence; a turn's own `pause_after_ms` overrides this. 0 = gap-free.
-• wait_for_response (bool, default: true): Listen for response after speaking
-• voice (string): TTS voice name (auto-selected unless specified)
-  - To list available voices, read MCP resource voice://voices
-  - An absolute path to a .wav clones from that clip directly (no profile needed)
-  - The chosen voice is recorded in the conch, so in a multi-agent session you
-    can read another agent's voice (Conch.get_holder) and pick a different one
-    to avoid a voice clash.
-• ref_text (string): Reference transcript for clip-based cloning. A file path
-  is read; anything else is the literal transcript. Overrides any sidecar.
-  Only used with a clone voice (abs-path clip or registered profile).
-• tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)
-• disable_silence_detection (bool, default: false): Disable auto-stop on silence
-• vad_aggressiveness (0-3, default: 3): Voice detection strictness (0=permissive, 3=strict)
-• speed (0.25-4.0): Speech rate (1.0=normal, 2.0=double speed)
-• chime_enabled (bool): Enable/disable audio feedback chimes
-• chime_leading_silence (float): Silence before chime in seconds
-• chime_trailing_silence (float): Silence after chime in seconds
-• metrics_level ("minimal"|"summary"|"verbose"): Output detail level
-  - minimal: Just response text (saves tokens)
-  - summary: Response + compact timing (default)
-  - verbose: Response + detailed metrics breakdown
-• wait_for_conch (bool|number, default: false): Multi-agent coordination — the
-  GATE for whether a busy conch puts you in the waiter queue at all.
-  - false: If another agent is speaking, return a status immediately WITHOUT
-    queuing (back-compat; you are never silently blocked). The status names the
-    holder and tells you how to queue.
-  - true: Join the FIFO waiter queue (you show up in `voicemode conch status`),
-    then behave per conch_mode (below). Fast-fails the moment the holder dies.
-  - a number: As true, but wait at most that many seconds, overriding the
-    configured default timeout for this call.
-• conch_mode ("wait"|"callback", default: VOICEMODE_CONCH_MODE, itself "wait"):
-  How a queued caller is served once wait_for_conch has engaged the queue. Has
-  NO effect unless wait_for_conch is truthy.
-  - wait: Block until the conch is granted to you (FIFO; the queue's grant hint
-    ensures only the next-in-line acquires — no thundering-herd steal), bounded
-    by the timeout. On timeout you are cleanly deregistered.
-  - callback: Register and return IMMEDIATELY with your queue position; your
-    message is NOT spoken now. When the conch is granted to you, your turn is
-    actively delivered out-of-band: a session nudge prompts you to call
-    converse() and take the floor (requires a session id; `voicemode conch
-    status` is always available as a supplementary view of your place in line).
-    You stay registered — that's the point.
-• hold_conch (bool, default: false): Keep the floor across turns (opt-in)
-  - WHEN: set true if your NEXT converse call will continue this thread —
-    you're asking a question you'll answer, or speaking over several turns —
-    so other agents queue instead of cutting in at the turn boundary. Leave
-    false (the default) for a one-off reply that ends the exchange.
-  - The hold is a SHORT, refreshed TTL: each converse(hold_conch=true)
-    re-stamps it to now + the hold timeout (default ~10s). Keep conversing
-    inside the window and the floor stays yours; stop and within the window
-    the hold lapses and the next queued agent is promoted — no stale wedge.
-    Released immediately by your next converse(hold_conch=false), your process
-    exiting, or idle-expiry. For a deliberate pause, use pause_conversation.
-• conch_hold_timeout (number, optional): Override the hold idle-expiry TTL for
-  THIS hold, in seconds (default: VOICEMODE_CONCH_HOLD_EXPIRY, ~10s). Only has
-  effect alongside hold_conch=true. The value is stamped into the conch lock so
-  OTHER agents honour your chosen window — raise it when you know the next turn
-  needs longer (heavy tool use between turns), lower it to release faster.
-• skip_conch (bool, default: false): Bypass conch entirely
-  - false: Honour the conch lock (default multi-agent coordination)
-  - true: Don't try to acquire or release the conch -- speak immediately
-    regardless of whether another agent holds it (including a hold). Deliberate
-    escape hatch for overriding a stuck holder; not a fallback for a timeout.
-• session_id (string, optional): Caller-provided harness session ID, stored
-  verbatim in the conch lock so tooling can see which *session* holds the
-  floor. Falls back to VOICEMODE_SESSION_ID / CLAUDE_CODE_SESSION_ID from the
-  environment (stdio transport only) when not passed.
-
-TIMING PARAMETERS (usually leave at defaults):
-  Silence detection handles most cases automatically. Only override these if
-  silence detection is disabled or the user reports being cut off.
-  Defaults are configurable by the user via ~/.voicemode/voicemode.env.
-• listen_duration_max (number, default: 120): Max listen time in seconds
-• listen_duration_min (number, default: 2.0): Min recording time before silence detection
-
-PRIVACY: Microphone access required when wait_for_response=true.
-         Audio processed via STT service, not stored.
-
-RECOGNITION TIP: If specific words are consistently misrecognized, configure
-   VOICEMODE_STT_PROMPT for vocabulary biasing - see voicemode://docs/parameters
-
-VOICEMODE ECHO (default ON): Some hosts (e.g. newer Claude Code) collapse MCP
-   tool calls, hiding voice turns from the visible transcript. To keep voice
-   exchanges readable on screen, echo each converse turn as Markdown blockquotes:
-       > **ASSISTANT (voicemode):** <message arg, verbatim>
-       [voicemode:converse tool call]
-       > **USER (voicemode):** <captured user message, verbatim>
-   - ASSISTANT echo: always (incl. wait_for_response=false). Verbatim — the
-     exact string passed to `message`, not a paraphrase or reformat.
-   - USER echo: only when a user message was captured (skip on empty result
-     or transcription failure). Verbatim, no truncation.
-   - Visual aids (lists, tables, code) may follow AFTER the blockquote, not
-     inside it — the blockquote stays a clean verbatim copy of what was spoken.
-   - Don't double-echo content already visible as prose.
-   - Disable on request — canonical phrase: "disable voicemode echo".
-
-For complete parameter list, advanced options, and detailed examples,
-consult the MCP resources listed above.
+    The agent-facing text lives on `converse` (the MCP wrapper): its docstring
+    and the parameters' Field descriptions. This docstring is for maintainers.
     """
+    if listen_duration_max is None:
+        # Unset on the wire (the schema shows null, not a number): the user's
+        # VOICEMODE_DEFAULT_LISTEN_DURATION owns the ceiling (VM-2099, VM-2442).
+        listen_duration_max = DEFAULT_LISTEN_DURATION
     # Convert string booleans to actual booleans
     if isinstance(wait_for_response, str):
         wait_for_response = wait_for_response.lower() in ('true', '1', 'yes', 'on')
@@ -3153,17 +3207,6 @@ consult the MCP resources listed above.
             )
     if isinstance(skip_conch, str):
         skip_conch = skip_conch.lower() in ('true', '1', 'yes', 'on')
-    # conch_mode (VM-1619) selects how a *queued* caller is served once
-    # wait_for_conch has engaged the queue. The arg overrides the
-    # VOICEMODE_CONCH_MODE config default (VM-1415); an unknown/empty value
-    # falls back to "wait" so a typo never silently downgrades a wait into a
-    # silent callback.
-    if conch_mode is None:
-        resolved_conch_mode = CONCH_MODE
-    else:
-        resolved_conch_mode = str(conch_mode).strip().lower()
-    if resolved_conch_mode not in ("wait", "callback"):
-        resolved_conch_mode = "wait"
 
     # Resolve the session ID and project path once, for the conch payload.
     # Precedence: explicit param > VOICEMODE_SESSION_ID > Claude Code's stdio
@@ -3181,10 +3224,31 @@ consult the MCP resources listed above.
     except OSError:
         resolved_project_path = None
     # The nominal voice this call will use (param, else the first configured
-    # default). Resolved cheaply here (no provider/network) so it can go in the
-    # conch for voice-clash avoidance (VM-914) — another agent can read the
-    # holder's voice and choose a different one.
-    resolved_voice = voice or (TTS_VOICES[0] if TTS_VOICES else None)
+    # default). VM-1901 observability-001: this now runs the REAL, TOTAL
+    # resolver (filesystem-only, no network — the cheapness this comment
+    # always promised) instead of the old `voice or TTS_VOICES[0]` fake
+    # "resolved_voice" that never passed through the resolver. An
+    # unresolvable/ambiguous/undeclared-cast expression raises HERE — before
+    # the conch is constructed, let alone acquired or queued — so a caller
+    # never takes the floor, or a queue position, merely to say nothing
+    # (design.md §5.1). The resolution also feeds the conch payload below
+    # (voice=resolved, voice_requested, voice_via) so conch-watch's roster
+    # and the voice-clash detector finally see truth, not the request.
+    from voice_mode.voice_profiles import resolve_voice, VoiceResolutionError
+    _nominal_voice_expr = voice or (TTS_VOICES[0] if TTS_VOICES else None)
+    voice_requested = None
+    voice_via = None
+    if _nominal_voice_expr:
+        try:
+            _voice_resolution = resolve_voice(_nominal_voice_expr)
+        except VoiceResolutionError as e:
+            logger.error(f"Voice resolution failed for {_nominal_voice_expr!r}: {e}")
+            return f"❌ Error: {e}"
+        resolved_voice = _voice_resolution.resolved
+        voice_requested = _voice_resolution.requested
+        voice_via = _voice_resolution.via
+    else:
+        resolved_voice = None
 
     # Resolve ref_text override once (path-vs-inline auto-detect). None means
     # "no override" — fall back to the resolved profile/sidecar transcript.
@@ -3356,20 +3420,28 @@ consult the MCP resources listed above.
     
     result = None
     success = False
+    # VM-2045: did THIS call actually produce speech (or otherwise
+    # legitimately use the floor)? Threaded into conch.release(spoke=...) in
+    # the `finally` block below so a hold_conch=true call that spoke nothing
+    # (TTS failed, or simply never reached a speaking branch) does not
+    # re-stamp/extend the hold's idle-expiry TTL. Deliberately independent of
+    # the pre-existing `success` var above, which is not set on every
+    # actually-spoke path (e.g. speak-only single-message success) and would
+    # be the wrong signal here.
+    spoke_this_turn = False
     conch = Conch(  # Named for event logging
         agent_name="converse",
         session_id=resolved_session_id,
         project_path=resolved_project_path,
         voice=resolved_voice,
         hold_timeout=resolved_hold_timeout,  # VM-1649 per-call hold TTL override
+        voice_requested=voice_requested,  # VM-1901: additive requested-vs-resolved
+        voice_via=voice_via,
     )
-    # VM-1967: set when this call commits to the blocking WAIT-mode poll loop
-    # (below), so the outer `finally` can deregister the ConchQueue entry on
-    # EVERY exit path from that loop -- including cancellation, which
-    # previously skipped cleanup entirely (see the `finally` block for the
-    # full explanation). Deliberately NOT set for a CALLBACK-mode
-    # registration, which must stay registered after this call returns (its
-    # whole point is out-of-band delivery later, VM-1625).
+    # VM-1967: set when this call commits to the blocking poll loop (below),
+    # so the outer `finally` can deregister the ConchQueue entry on EVERY exit
+    # path from that loop -- including cancellation, which previously skipped
+    # cleanup entirely (see the `finally` block for the full explanation).
     queue_session_id = None
     wait_mode_registered = False
 
@@ -3391,21 +3463,18 @@ consult the MCP resources listed above.
                         "holder_pid": holder.get('pid') if holder else None,
                         "holder_agent": holder_agent,
                         "wait_for_conch": wait_for_conch,
-                        "conch_mode": resolved_conch_mode,
                     })
 
                 if not wait_for_conch:
                     # Gate closed (default): return IMMEDIATELY without queuing.
                     # Mike's hard constraint — never silently block a caller who
-                    # did not opt in. Leave no registration behind. Tell them how
-                    # to engage the queue (and that a callback is an option).
+                    # did not opt in. Leave no registration behind.
                     return (
                         f"{holder_agent} currently holds the voice channel — your "
                         f"message was NOT spoken, and you are NOT queued. Pass "
-                        f"wait_for_conch=true to join the queue: conch_mode=wait "
-                        f"blocks until your turn, conch_mode=callback returns "
-                        f"immediately with your position and delivers your turn "
-                        f"when granted. Or just try again later."
+                        f"wait_for_conch=true to join the queue and block until "
+                        f"your turn (run it in the background to avoid holding "
+                        f"this call open while queued). Or just try again later."
                     )
 
                 # Gate open: become a first-class queue participant (visible in
@@ -3424,7 +3493,8 @@ consult the MCP resources listed above.
                         agent="converse",
                         project_path=resolved_project_path,
                         voice=resolved_voice,
-                        mode=resolved_conch_mode,
+                        voice_requested=voice_requested,  # VM-1901
+                        voice_via=voice_via,
                         pid=os.getpid(),
                     )
                 except Exception as e:
@@ -3433,32 +3503,7 @@ consult the MCP resources listed above.
                     logger.warning(f"Conch queue register failed ({e}); polling without a queue entry")
                     position = None
 
-                if resolved_conch_mode == "callback":
-                    # Do NOT block. Return immediately with the position and stay
-                    # registered, so the turn can be delivered out-of-band when
-                    # granted: on a holder's release, grant_next pings a skipped
-                    # callback waiter via conch_notify.notify_granted (a session
-                    # nudge). Make crystal clear the message was not spoken and
-                    # how the turn resumes.
-                    if event_logger:
-                        event_logger.log_event("CONCH_CALLBACK_REGISTERED", {
-                            "pid": os.getpid(),
-                            "session_id": queue_session_id,
-                            "position": position,
-                            "holder_agent": holder_agent,
-                        })
-                    where = f"position #{position}" if position else "the queue"
-                    return (
-                        f"Queued for a callback at {where} — your message was NOT "
-                        f"spoken ({holder_agent} holds the voice channel). Your turn "
-                        f"will be actively delivered when the conch is granted to "
-                        f"you: a session nudge prompts you to call converse() and "
-                        f"take the floor (requires a session id). `voicemode conch "
-                        f"status` shows your place in line any time as a "
-                        f"supplementary view."
-                    )
-
-                # WAIT mode — block until granted, bounded by the timeout. Now
+                # Block until granted, bounded by the timeout. Now
                 # that we are registered, try_acquire() is grant-aware: only the
                 # granted head acquires when the floor frees (FIFO; no steal),
                 # and it consumes the grant + deregisters us on success. It also
@@ -3497,8 +3542,8 @@ consult the MCP resources listed above.
                         pass
                     return (
                         f"Timed out waiting for conch ({conch_wait_timeout:.0f}s). "
-                        f"{holder_agent} is still speaking. You can request a "
-                        f"callback instead with conch_mode=callback."
+                        f"{holder_agent} is still speaking. Try again, or run this "
+                        f"call in the background instead of blocking on it."
                     )
 
             # Successfully acquired
@@ -3561,6 +3606,15 @@ consult the MCP resources listed above.
                     result, success = _format_survey_result(
                         survey_results, stopped_at, n_ask, effective_metrics_level,
                     )
+                    # VM-2045: every survey status except "not_reached" (never
+                    # started) and "tts_failed" (synthesis failed before any
+                    # audio played, `_ask_turns_pipeline`) is only reachable
+                    # AFTER that turn's prompt/statement actually played —
+                    # so this is exactly "spoke at least once this call".
+                    spoke_this_turn = any(
+                        r["status"] not in ("not_reached", "tts_failed")
+                        for r in survey_results
+                    )
 
                     n_answered = sum(1 for r in survey_results if r["status"] == "answered")
                     timing_str = ", ".join(
@@ -3607,6 +3661,11 @@ consult the MCP resources listed above.
                             should_skip_tts=should_skip_tts,
                         )
                     result, success = _format_turns_result(turn_results, effective_metrics_level)
+                    # VM-2045: r["success"] is True exactly when that turn's
+                    # audio actually played (or was an explicit skip_tts
+                    # no-op) — the same "did this call use the floor" signal
+                    # tts_success carries in the single-message path below.
+                    spoke_this_turn = any(r["success"] for r in turn_results)
 
                     n_ok = sum(1 for r in turn_results if r["success"])
                     timing_str = ", ".join(
@@ -3654,6 +3713,13 @@ consult the MCP resources listed above.
                             ref_text=resolved_ref_text
                         )
                 
+                # VM-2045: this is the actual "did this call use the floor"
+                # signal, threaded into conch.release(spoke=...) in the
+                # `finally` block below (root cause: it previously wasn't
+                # threaded anywhere, so a hold_conch=true call re-stamped the
+                # hold's idle-expiry TTL even when TTS produced nothing).
+                spoke_this_turn = tts_success
+
                 # Add TTS sub-metrics
                 if tts_metrics:
                     timings['ttfa'] = tts_metrics.get('ttfa', 0)
@@ -3680,6 +3746,10 @@ consult the MCP resources listed above.
                             audio_file=os.path.basename(tts_metrics.get('audio_path')) if tts_metrics and tts_metrics.get('audio_path') else None,
                             model=tts_config.get('model') if tts_config else tts_model,
                             voice=tts_config.get('voice') if tts_config else voice,
+                            # VM-1901: requested-vs-resolved provenance (design.md §5.3).
+                            voice_requested=tts_config.get('voice_requested') if tts_config else voice,
+                            voice_resolved=tts_config.get('voice_resolved') if tts_config else None,
+                            voice_via=tts_config.get('voice_via') if tts_config else None,
                             provider=tts_config.get('provider') if tts_config else (tts_provider if tts_provider else 'openai'),
                             provider_url=tts_config.get('base_url') if tts_config else None,
                             provider_type=tts_config.get('provider_type') if tts_config else None,
@@ -3722,7 +3792,7 @@ consult the MCP resources listed above.
 
                         result = "\n".join(error_lines)
                     # Check if we have config info that might indicate why it failed
-                    elif tts_config and 'openai.com' in tts_config.get('base_url', ''):
+                    elif tts_config and is_openai_url(tts_config.get('base_url')):
                         # Check if API key is missing for OpenAI
                         from voice_mode.config import OPENAI_API_KEY
                         if not OPENAI_API_KEY:
@@ -4080,6 +4150,14 @@ consult the MCP resources listed above.
                     )
                 except Exception as e:
                     logger.error(f"Failed to log STT to JSONL: {e}")
+                _heard_turn(
+                    response_text,
+                    session=resolved_session_id,
+                    detector=("max-duration"
+                              if (DISABLE_SILENCE_DETECTION or disable_silence_detection)
+                              else "converse-silence"),
+                    transport=transport,
+                )
             
             # Calculate total time (use tts_total instead of sub-metrics)
             main_timings = {k: v for k, v in timings.items() if k in ['tts_total', 'record', 'stt']}
@@ -4253,10 +4331,9 @@ consult the MCP resources listed above.
         # acquire already deregisters via `_queue_on_acquired()` inside
         # `try_acquire()`, so this only ever fires for a call that
         # registered but never actually took the floor. Also guarded on
-        # `wait_mode_registered`: a CALLBACK-mode registration must NOT be
-        # touched here -- it is deliberately left registered for
-        # out-of-band delivery (VM-1625), so this only applies once we
-        # actually committed to the blocking WAIT poll.
+        # `wait_mode_registered`, set once we actually commit to the
+        # blocking poll (VM-2078 removed the only other registration path,
+        # callback mode, whose whole point was to stay registered).
         if queue_session_id is not None and wait_mode_registered and not conch._acquired:
             try:
                 ConchQueue.deregister(queue_session_id)
@@ -4265,14 +4342,21 @@ consult the MCP resources listed above.
 
         # Release the conch to signal voice conversation has ended. With
         # hold_conch=true, keep the floor between turns (re-stamped hold,
-        # flock dropped, file left) instead of a full release.
+        # flock dropped, file left) instead of a full release -- but ONLY
+        # when this turn actually spoke (VM-2045 fix-001): a hold_conch=true
+        # call that produced no speech (TTS failed, or no speaking branch was
+        # ever reached) falls through to a full release instead, so a caller
+        # cannot keep the floor indefinitely by calling converse(hold_conch=
+        # true) without ever saying anything -- closing rca-001's gap between
+        # "held the floor" and "used the floor".
         if CONCH_ENABLED and conch._acquired:
-            held_seconds = conch.release(hold=hold_conch)
+            held_seconds = conch.release(hold=hold_conch, spoke=spoke_this_turn)
             if event_logger:
                 event_logger.log_event("CONCH_RELEASE", {
                     "pid": os.getpid(),
                     "held_seconds": held_seconds,
-                    "hold_active": bool(hold_conch)
+                    "hold_active": bool(hold_conch and spoke_this_turn),
+                    "spoke": spoke_this_turn,
                 })
         else:
             # Don't call release() when not acquired — it would delete the lock
@@ -4306,187 +4390,49 @@ consult the MCP resources listed above.
 
 @mcp.tool()
 async def converse(
-    message: Optional[str] = None,
-    turns: Annotated[Optional[list], Field(description=_TURNS_PARAM_DESCRIPTION)] = None,
-    pause_after_ms: int = 150,
-    wait_for_response: Union[bool, str] = True,
-    listen_duration_max: float = DEFAULT_LISTEN_DURATION,
-    listen_duration_min: float = 2.0,
-    timeout: float = 60.0,
-    voice: Optional[str] = None,
+    message: Annotated[Optional[str], _param("message")] = None,
+    turns: Annotated[Optional[list], _param("turns")] = None,
+    pause_after_ms: Annotated[int, _param("pause_after_ms")] = 150,
+    wait_for_response: Annotated[Union[bool, str], _param("wait_for_response")] = True,
+    listen_duration_max: Annotated[Optional[float], _param("listen_duration_max")] = None,
+    listen_duration_min: Annotated[float, _param("listen_duration_min")] = 2.0,
+    voice: Annotated[Optional[str], _param("voice")] = None,
     tts_provider: Optional[Literal["openai", "kokoro"]] = None,
     tts_model: Optional[str] = None,
-    tts_instructions: Optional[str] = None,
+    tts_instructions: Annotated[Optional[str], _param("tts_instructions")] = None,
     chime_enabled: Optional[Union[bool, str]] = None,
     audio_format: Optional[str] = None,
-    disable_silence_detection: Union[bool, str] = False,
-    speed: Optional[float] = None,
-    vad_aggressiveness: Optional[Union[int, str]] = None,
-    skip_tts: Optional[Union[bool, str]] = None,
+    disable_silence_detection: Annotated[Union[bool, str], _param("disable_silence_detection")] = False,
+    speed: Annotated[Optional[float], _param("speed")] = None,
+    vad_aggressiveness: Annotated[Optional[Union[int, str]], _param("vad_aggressiveness")] = None,
+    skip_tts: Annotated[Optional[Union[bool, str]], _param("skip_tts")] = None,
     chime_leading_silence: Optional[float] = None,
     chime_trailing_silence: Optional[float] = None,
-    metrics_level: Optional[Literal["minimal", "summary", "verbose"]] = None,
-    wait_for_conch: Union[bool, str, int, float] = False,
-    conch_mode: Optional[Literal["wait", "callback"]] = None,
-    hold_conch: Union[bool, str] = False,
-    conch_hold_timeout: Optional[Union[float, str]] = None,
-    skip_conch: Union[bool, str] = False,
-    session_id: Optional[str] = None,
-    ref_text: Optional[str] = None,
-    ack: Union[bool, str] = False,
-    time_in_response: Optional[Union[bool, str]] = None,
+    metrics_level: Annotated[Optional[Literal["minimal", "summary", "verbose"]], _param("metrics_level")] = None,
+    wait_for_conch: Annotated[Union[bool, str, int, float], _param("wait_for_conch")] = False,
+    hold_conch: Annotated[Union[bool, str], _param("hold_conch")] = False,
+    conch_hold_timeout: Annotated[Optional[Union[float, str]], _param("conch_hold_timeout")] = None,
+    skip_conch: Annotated[Union[bool, str], _param("skip_conch")] = False,
+    session_id: Annotated[Optional[str], _param("session_id")] = None,
+    ref_text: Annotated[Optional[str], _param("ref_text")] = None,
+    ack: Annotated[Union[bool, str], _param("ack")] = False,
+    time_in_response: Annotated[Optional[Union[bool, str]], _param("time_in_response")] = None,
 ) -> str:
-    """Have an ongoing voice conversation - speak a message and optionally listen for response.
+    """Speak to the user and, by default, listen for their reply.
 
-Multi-agent turn-taking: if your next converse call will continue this thread (asking a question you'll answer, or speaking across several turns), pass hold_conch=true so other agents wait instead of cutting in at the turn boundary.
+Call with just `message` to ask something. Add wait_for_response=false to
+narrate without listening, then call again to listen: a speak-only call leaves
+nobody listening. Keep it short and ask one thing at a time. Leave the
+listening ceiling and the other defaults to the user's configuration. Several
+questions in one call: `turns`. Other agents on the same voice channel:
+hold_conch, wait_for_conch.
 
-<echo>Transcript visibility: print `> **ASSISTANT (voicemode):** <message>` before calling, and `> **USER (voicemode):** <reply>` after a spoken reply, so the conversation stays readable in the transcript. Skip if the user opted out of echo.</echo>
+The reply comes back as this tool's result. Treat it as the user's next
+message and act on it, including any skill it calls for.
 
-<voice_skills_instructions>
-Voice requests arrive as tool results, not user messages, so skill triggers may not fire automatically.
-
-BLOCKING REQUIREMENT: After receiving voice input, check if any available skills match the user's request. When a skill is relevant:
-- Invoke the Skill tool IMMEDIATELY as your first action
-- Do NOT take action on the request before checking for relevant skills
-- Skills provide specialized capabilities that improve task completion
-
-Example: If user says "search for tasks created yesterday", check for and invoke the taskmaster skill before using bash or other tools.
-</voice_skills_instructions>
-
-
-🔌 ENDPOINT: STT/TTS services must expose OpenAI-compatible endpoints:
-   /v1/audio/transcriptions and /v1/audio/speech
-
-📚 DOCUMENTATION: See MCP resources for detailed information:
-   - voicemode://docs/quickstart - Basic usage and common examples
-   - voicemode://docs/parameters - Complete parameter reference
-   - voicemode://docs/languages - Non-English language support guide
-   - voicemode://docs/patterns - Best practices and conversation patterns
-   - voicemode://docs/troubleshooting - Audio, VAD, and connectivity issues
-   - voice://voices - JSON list of available TTS voices
-     (filter by provider with voice://voices/{provider}, e.g. voice://voices/kokoro)
-   - voice://voices/persona convention — a voice's character (who they are, how they
-     speak, sample lines) lives at ~/.voicemode/voices/<name>/README.md; read it before
-     speaking in-character (index: PERSONAS.md). MCP-resource version planned: VM-1222.
-
-KEY PARAMETERS:
-• message (string): The message to speak (required unless `turns` is given)
-• turns (list, optional): ordered multi-voice sequence in ONE call; each turn
-  {"say": ...} speaks, {"ask": ...} speaks then listens and collects the
-  reply; returns replies aligned to turns as JSON when any turn asks. See the
-  turns parameter description for the full schema (verbs, per-turn overrides,
-  survey controls: skip-forward advances, skip-back/"repeat" replays the
-  question, spoken "break"/stop ends the survey with partials). If both
-  `message` and `turns` are given, `turns` wins. Killed-call recovery: every
-  reply already collected is durably written to the conversation logs the
-  instant its ask turn resolves, not batched at the end — a killed/crashed
-  call still leaves every already-given reply on disk, even one that never
-  returns its survey JSON.
-• pause_after_ms (int, default: 150): Silence inserted after each turn in a
-  `turns` sequence; a turn's own `pause_after_ms` overrides this. 0 = gap-free.
-• wait_for_response (bool, default: true): Listen for response after speaking
-• voice (string): TTS voice name (auto-selected unless specified)
-  - To list available voices, read MCP resource voice://voices
-  - An absolute path to a .wav clones from that clip directly (no profile needed)
-  - The chosen voice is recorded in the conch, so in a multi-agent session you
-    can read another agent's voice (Conch.get_holder) and pick a different one
-    to avoid a voice clash.
-• ref_text (string): Reference transcript for clip-based cloning. A file path
-  is read; anything else is the literal transcript. Overrides any sidecar.
-  Only used with a clone voice (abs-path clip or registered profile).
-• tts_provider ("openai"|"kokoro"): Provider selection (auto-selected unless specified)
-• disable_silence_detection (bool, default: false): Disable auto-stop on silence
-• vad_aggressiveness (0-3, default: 3): Voice detection strictness (0=permissive, 3=strict)
-• speed (0.25-4.0): Speech rate (1.0=normal, 2.0=double speed)
-• chime_enabled (bool): Enable/disable audio feedback chimes
-• chime_leading_silence (float): Silence before chime in seconds
-• chime_trailing_silence (float): Silence after chime in seconds
-• metrics_level ("minimal"|"summary"|"verbose"): Output detail level
-  - minimal: Just response text (saves tokens)
-  - summary: Response + compact timing (default)
-  - verbose: Response + detailed metrics breakdown
-• time_in_response (bool, default: VOICEMODE_TIME_IN_RESPONSE, itself false):
-  Append the current local wall-clock time to the result as a trailing
-  ` | Widgets: time HH:MM:SS` segment. Text-only — never spoken by TTS.
-  Off by default; set true (per-call or via the env var) so you have an
-  accurate in-band answer if asked what time it is, instead of guessing.
-• wait_for_conch (bool|number, default: false): Multi-agent coordination — the
-  GATE for whether a busy conch puts you in the waiter queue at all.
-  - false: If another agent is speaking, return a status immediately WITHOUT
-    queuing (back-compat; you are never silently blocked). The status names the
-    holder and tells you how to queue.
-  - true: Join the FIFO waiter queue (you show up in `voicemode conch status`),
-    then behave per conch_mode (below). Fast-fails the moment the holder dies.
-  - a number: As true, but wait at most that many seconds, overriding the
-    configured default timeout for this call.
-• conch_mode ("wait"|"callback", default: VOICEMODE_CONCH_MODE, itself "wait"):
-  How a queued caller is served once wait_for_conch has engaged the queue. Has
-  NO effect unless wait_for_conch is truthy.
-  - wait: Block until the conch is granted to you (FIFO; the queue's grant hint
-    ensures only the next-in-line acquires — no thundering-herd steal), bounded
-    by the timeout. On timeout you are cleanly deregistered.
-  - callback: Register and return IMMEDIATELY with your queue position; your
-    message is NOT spoken now. When the conch is granted to you, your turn is
-    actively delivered out-of-band: a session nudge prompts you to call
-    converse() and take the floor (requires a session id; `voicemode conch
-    status` is always available as a supplementary view of your place in line).
-    You stay registered — that's the point.
-• hold_conch (bool, default: false): Keep the floor across turns (opt-in)
-  - WHEN: set true if your NEXT converse call will continue this thread —
-    you're asking a question you'll answer, or speaking over several turns —
-    so other agents queue instead of cutting in at the turn boundary. Leave
-    false (the default) for a one-off reply that ends the exchange.
-  - The hold is a SHORT, refreshed TTL: each converse(hold_conch=true)
-    re-stamps it to now + the hold timeout (default ~10s). Keep conversing
-    inside the window and the floor stays yours; stop and within the window
-    the hold lapses and the next queued agent is promoted — no stale wedge.
-    Released immediately by your next converse(hold_conch=false), your process
-    exiting, or idle-expiry. For a deliberate pause, use pause_conversation.
-• conch_hold_timeout (number, optional): Override the hold idle-expiry TTL for
-  THIS hold, in seconds (default: VOICEMODE_CONCH_HOLD_EXPIRY, ~10s). Only has
-  effect alongside hold_conch=true. The value is stamped into the conch lock so
-  OTHER agents honour your chosen window — raise it when you know the next turn
-  needs longer (heavy tool use between turns), lower it to release faster.
-• skip_conch (bool, default: false): Bypass conch entirely
-  - false: Honour the conch lock (default multi-agent coordination)
-  - true: Don't try to acquire or release the conch -- speak immediately
-    regardless of whether another agent holds it (including a hold). Deliberate
-    escape hatch for overriding a stuck holder; not a fallback for a timeout.
-• session_id (string, optional): Caller-provided harness session ID, stored
-  verbatim in the conch lock so tooling can see which *session* holds the
-  floor. Falls back to VOICEMODE_SESSION_ID / CLAUDE_CODE_SESSION_ID from the
-  environment (stdio transport only) when not passed.
-
-TIMING PARAMETERS (usually leave at defaults):
-  Silence detection handles most cases automatically. Only override these if
-  silence detection is disabled or the user reports being cut off.
-  Defaults are configurable by the user via ~/.voicemode/voicemode.env.
-• listen_duration_max (number, default: 120): Max listen time in seconds
-• listen_duration_min (number, default: 2.0): Min recording time before silence detection
-
-PRIVACY: Microphone access required when wait_for_response=true.
-         Audio processed via STT service, not stored.
-
-RECOGNITION TIP: If specific words are consistently misrecognized, configure
-   VOICEMODE_STT_PROMPT for vocabulary biasing - see voicemode://docs/parameters
-
-VOICEMODE ECHO (default ON): Some hosts (e.g. newer Claude Code) collapse MCP
-   tool calls, hiding voice turns from the visible transcript. To keep voice
-   exchanges readable on screen, echo each converse turn as Markdown blockquotes:
-       > **ASSISTANT (voicemode):** <message arg, verbatim>
-       [voicemode:converse tool call]
-       > **USER (voicemode):** <captured user message, verbatim>
-   - ASSISTANT echo: always (incl. wait_for_response=false). Verbatim — the
-     exact string passed to `message`, not a paraphrase or reformat.
-   - USER echo: only when a user message was captured (skip on empty result
-     or transcription failure). Verbatim, no truncation.
-   - Visual aids (lists, tables, code) may follow AFTER the blockquote, not
-     inside it — the blockquote stays a clean verbatim copy of what was spoken.
-   - Don't double-echo content already visible as prose.
-   - Disable on request — canonical phrase: "disable voicemode echo".
-
-For complete parameter list, advanced options, and detailed examples,
-consult the MCP resources listed above.
+Resources: voicemode://docs/parameters (every parameter), voicemode://docs/patterns,
+voicemode://docs/quickstart, voicemode://docs/troubleshooting,
+voicemode://docs/languages; voice://voices lists the voices.
     """
     if isinstance(time_in_response, str):
         time_in_response = time_in_response.lower() in ("true", "1", "yes", "on")
@@ -4499,7 +4445,6 @@ consult the MCP resources listed above.
         wait_for_response=wait_for_response,
         listen_duration_max=listen_duration_max,
         listen_duration_min=listen_duration_min,
-        timeout=timeout,
         voice=voice,
         tts_provider=tts_provider,
         tts_model=tts_model,
@@ -4514,7 +4459,6 @@ consult the MCP resources listed above.
         chime_trailing_silence=chime_trailing_silence,
         metrics_level=metrics_level,
         wait_for_conch=wait_for_conch,
-        conch_mode=conch_mode,
         hold_conch=hold_conch,
         conch_hold_timeout=conch_hold_timeout,
         skip_conch=skip_conch,
@@ -4581,8 +4525,12 @@ async def pause_conversation(
     except OSError:
         project_path = None
     # Preserve the voice already recorded by our own prior converse hold (if
-    # any) so a pause doesn't blank it out.
+    # any) so a pause doesn't blank it out. Includes the VM-1901 additive
+    # provenance fields — a pause must not downgrade a resolved hold back to
+    # request-only.
     holder_voice = holder.get("voice") if holder else None
+    holder_voice_requested = holder.get("voice_requested") if holder else None
+    holder_voice_via = holder.get("voice_via") if holder else None
 
     logger.info(
         f"pause_conversation: holding for {seconds:.0f}s, resuming at {end_str}"
@@ -4605,6 +4553,8 @@ async def pause_conversation(
             project_path=project_path,
             voice=holder_voice,
             hold_timeout=hold_ttl if hold_ttl > 0 else None,
+            voice_requested=holder_voice_requested,
+            voice_via=holder_voice_via,
         )
         chunk = min(interval, seconds - elapsed)
         await asyncio.sleep(chunk)

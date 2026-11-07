@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 
 from voice_mode.dj.mfp import (
     HttpFetcher,
@@ -667,7 +668,7 @@ class TestGitHubChapterFetching:
 
         def mock_urlopen(url, timeout=None):
             nonlocal github_was_called
-            if "github" in url.lower() or "raw.githubusercontent.com" in url:
+            if urlparse(url).hostname == "raw.githubusercontent.com":
                 github_was_called = True
                 if url.endswith(".ffmeta"):
                     response = MagicMock()

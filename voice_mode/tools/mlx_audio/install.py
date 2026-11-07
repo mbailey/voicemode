@@ -12,20 +12,17 @@ Install layout::
 The install pipeline is:
 
 1. Apple Silicon gate -- mlx-audio is MLX-native, no Intel/Linux fallback.
-2. ``uv tool install mlx-audio>=0.4.3 --with <extras>`` -- the extras list
-   is hardcoded in :data:`MLX_AUDIO_EXTRAS` and is the minimum surface
+2. ``uv tool install mlx-audio>=0.5.7,<0.6 --with <extras>`` -- the extras
+   list is hardcoded in :data:`MLX_AUDIO_EXTRAS` and is the minimum surface
    needed to make the upstream server.py serve Kokoro TTS, Qwen3-TTS
-   clone-voice, and Whisper STT under the OpenAI-compatible API. The
-   ``>=0.4.3`` floor exists because that's the first release that absorbed
-   the MLX Metal thread-safety serialisation lock. (See VM-1108.)
-3. Apply the bundled ``mlx_audio_server.patch`` to add OpenAI-style STT
-   ``response_format`` (``text`` / ``json`` / ``verbose_json``) handling.
-   Upstream mlx-audio 0.4.3 returns whisper's full ndjson stream regardless
-   of what the client requests; the patch reshapes ``text`` / ``json`` /
-   ``verbose_json`` into the OpenAI Audio API shape and strips whisper's
-   trailing silence-hallucination segments. (See VM-1128 -- this fix used
-   to be intertwined with the inference-lock patch and was incorrectly
-   removed alongside it in VM-1126.)
+   clone-voice, and Whisper STT under the OpenAI-compatible API. The pin is
+   explained at :data:`MLX_AUDIO_PIP_PACKAGE`. The upstream server.py is used
+   as shipped: voicemode no longer patches it (VM-2338 -- the OpenAI-style
+   STT ``response_format`` the old bundled patch added is native upstream
+   since 0.4.4, PR #704).
+3. Check the installed espeak-ng data path length and warn (never fail) if
+   it is long enough to crash the server on the first Kokoro render. See
+   :func:`espeak_data_path_warning`.
 4. Render the launchd plist calling ``~/.local/bin/mlx_audio.server``
    directly. (Apple-Silicon-only -- no systemd unit ships.)
 """
@@ -47,37 +44,35 @@ logger = logging.getLogger("voicemode")
 
 
 MLX_AUDIO_DEFAULT_PORT = 8890
-# Pinned ``>=0.4.3`` because that's the first upstream release that absorbed
-# the MLX Metal serialisation lock fix voicemode previously shipped as part
-# of a bundled patch. See VM-1126. The OpenAI-style STT ``response_format``
-# half of the original patch was NOT upstreamed -- voicemode still bundles
-# a minimal patch to add it. See VM-1128.
+# Floor ``>=0.5.7``: the release VM-2330 MEASURED. It carries every fix that
+# voicemode used to work around:
+#   - the MLX Metal serialisation lock (upstream since 0.4.3; VM-1108/VM-1126);
+#   - OpenAI-style STT ``response_format`` on /v1/audio/transcriptions (native
+#     since 0.4.4, PR #704), so voicemode's bundled server.py patch (VM-1128)
+#     is gone -- its hunks no longer apply to >=0.4.4 anyway (VM-2338);
+#   - the Kokoro ``istftnet.py`` SineGen ``[broadcast_shapes]`` crash that 0.4.4
+#     introduced (VM-1547, which is why VM-1550 capped us at ``<0.4.4``); fixed
+#     upstream in 0.4.5 (PR #785) and measured fixed on 0.5.7 (VM-2330: Kokoro
+#     20/20 non-empty renders).
 #
-# Capped ``<0.4.4`` because mlx-audio 0.4.4 regressed the Kokoro TTS decoder:
-# ``istftnet.py`` SineGen crashes with a ``[broadcast_shapes]`` ValueError on
-# longer utterances, returning HTTP 500 (which voicemode then masks as a
-# spurious "OPENAI_API_KEY not set" failover error). 0.4.3 is crash-free. Lift
-# the ceiling once a fixed upstream release ships. See VM-1547 / VM-1550.
-MLX_AUDIO_PIP_PACKAGE = "mlx-audio>=0.4.3,<0.4.4"
+# Capped ``<0.6``: the 0.4.4 lesson. An untested minor release shipped a TTS
+# crash to every fresh install. Raise the cap only after measuring the next
+# minor (see VM-2330 for how).
+MLX_AUDIO_PIP_PACKAGE = "mlx-audio>=0.5.7,<0.6"
 MLX_AUDIO_ENTRY_POINT = "mlx_audio.server"
 
-# Sentinel string that proves the bundled patch has already been applied
-# to the installed server.py. Picked because the comment line is unique to
-# the patch and unlikely to appear in any unpatched mlx-audio release.
-PATCH_SENTINEL = "voicemode-patch: honor OpenAI-style response_format"
+# espeak-ng keeps its data directory in a fixed ``path_home[N_PATH_HOME]``
+# buffer (160 on non-Windows). A longer path is truncated, espeak-ng falls back
+# to its compiled-in path, fails to open ``phontab`` and calls C ``exit()`` --
+# taking the whole mlx-audio server down on the first Kokoro render. VM-2330
+# bisected it: 151 chars OK, 161 chars FAIL. See :func:`espeak_data_path_warning`.
+ESPEAK_DATA_PATH_MAX = 160
 
-# Path of the bundled patch relative to the installed package root.
-_PATCH_RESOURCE = (
-    Path(__file__).resolve().parent.parent.parent
-    / "data"
-    / "patches"
-    / "mlx_audio_server.patch"
-)
+# Where espeakng-loader (pulled in by misaki[en]) ships espeak-ng's data,
+# relative to the tool env's site-packages.
+_ESPEAK_DATA_RELPATH = Path("espeakng_loader") / "espeak-ng-data"
 
-# Backup filename written next to the patched server.py.
-_BACKUP_NAME = "server.py.pre-voicemode.bak"
-
-# Extras the bundled server.py + voicemode client need at runtime. These were
+# Extras the upstream server.py + voicemode client need at runtime. These were
 # captured from Mike's working install on 2026-04-27. Order matters only for
 # reviewability -- ``uv tool install`` resolves them as a single set.
 MLX_AUDIO_EXTRAS: List[str] = [
@@ -190,143 +185,51 @@ def _find_installed_server_py() -> Optional[Path]:
     return candidates[0] if candidates else None
 
 
-def _query_installed_version() -> Optional[str]:
-    """Best-effort: read mlx-audio's installed version from inside its venv.
+def espeak_data_path_warning(data_path: Union[str, Path]) -> Optional[str]:
+    """Return a warning if ``data_path`` is too long for espeak-ng, else ``None``.
 
-    Uses ``importlib.metadata`` via ``uv tool run`` rather than parsing
-    ``uv tool list`` stdout (which is fragile across uv releases). Returns
-    ``None`` on any failure -- callers should treat it as "unknown version"
-    rather than aborting the install/patch flow.
+    Pure: looks only at the string length, never at the filesystem, so it
+    unit-tests without an install. A path of :data:`ESPEAK_DATA_PATH_MAX`
+    characters or more is flagged (VM-2330 investigate-002 section 0).
     """
-    try:
-        completed = subprocess.run(
-            [
-                "uv",
-                "tool",
-                "run",
-                "--from",
-                MLX_AUDIO_PIP_PACKAGE,
-                "python",
-                "-c",
-                "import importlib.metadata as m; "
-                f"print(m.version('{MLX_AUDIO_PIP_PACKAGE}'))",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+    path_str = str(data_path)
+    length = len(path_str)
+    if length < ESPEAK_DATA_PATH_MAX:
         return None
-    if completed.returncode != 0:
-        return None
-    version = (
-        completed.stdout.strip().splitlines()[-1] if completed.stdout.strip() else ""
+    return (
+        f"espeak-ng data path is {length} characters (limit: under "
+        f"{ESPEAK_DATA_PATH_MAX}): {path_str}. espeak-ng truncates longer paths "
+        "and then exits, which kills the mlx-audio server on the first Kokoro "
+        "TTS request. Shorten the path by using a shorter HOME, UV_TOOL_DIR or "
+        "XDG_DATA_HOME, then reinstall: voicemode service install mlx-audio --force"
     )
-    if not version or not version[0].isdigit():
-        return None
-    return version
 
 
-def _apply_server_patch(server_py: Path) -> Dict[str, Any]:
-    """Apply the bundled patch to ``server.py``, idempotently.
+def _find_espeak_data_dir(site_packages: Path) -> Optional[Path]:
+    """Return ``<site_packages>/espeakng_loader/espeak-ng-data`` if it exists."""
+    candidate = site_packages / _ESPEAK_DATA_RELPATH
+    return candidate if candidate.is_dir() else None
 
-    1. If ``server.py`` already contains :data:`PATCH_SENTINEL`, treat it as
-       already-patched and return success without touching anything.
-    2. Else, save a one-shot backup as ``server.py.pre-voicemode.bak`` (only
-       if no backup exists yet) and run ``patch -p1`` from the package root.
-    3. On failure, surface a clear error pointing at both the bundled patch
-       and the installed mlx-audio version (best-effort) so the operator can
-       refresh the patch against upstream.
-    """
-    result: Dict[str, Any] = {
-        "patch_path": str(_PATCH_RESOURCE),
-        "server_py": str(server_py),
-    }
 
-    if not _PATCH_RESOURCE.exists():
-        result["success"] = False
-        result["error"] = (
-            f"Bundled patch is missing at {_PATCH_RESOURCE}. "
-            "This is a packaging bug -- reinstall voicemode."
+def _post_install_warnings(server_py: Optional[Path]) -> List[str]:
+    """Non-fatal checks on the installed tool env. Never raises."""
+    warnings: List[str] = []
+    if server_py is None:
+        warnings.append(
+            "Could not locate the installed mlx_audio/server.py under "
+            "~/.local/share/uv/tools/mlx-audio/, so the espeak-ng data path "
+            "length check was skipped."
         )
-        return result
-
-    try:
-        current = server_py.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        result["success"] = False
-        result["error"] = f"Could not read {server_py}: {exc}"
-        return result
-
-    if PATCH_SENTINEL in current:
-        result["success"] = True
-        result["already_patched"] = True
-        result["message"] = "mlx-audio server.py already patched (sentinel present)"
-        logger.info(result["message"])
-        return result
-
-    package_root = server_py.parent  # .../site-packages/mlx_audio/
-    backup_path = package_root / _BACKUP_NAME
-
-    if not backup_path.exists():
-        try:
-            shutil.copy2(server_py, backup_path)
-            logger.info("Saved backup: %s", backup_path)
-        except OSError as exc:
-            result["success"] = False
-            result["error"] = f"Could not write backup {backup_path}: {exc}"
-            return result
-    result["backup_path"] = str(backup_path)
-
-    # Apply with ``patch -p1`` from the package root. ``-p1`` strips the
-    # leading "a/" / "b/" path prefix from the diff so it matches the
-    # installed file regardless of its absolute location.
-    try:
-        completed = subprocess.run(
-            ["patch", "-p1", "--forward", "-i", str(_PATCH_RESOURCE)],
-            cwd=str(package_root),
-            capture_output=True,
-            text=True,
-        )
-    except FileNotFoundError as exc:
-        result["success"] = False
-        result["error"] = (
-            f"`patch` binary not found ({exc}). On macOS install Xcode "
-            "command-line tools: xcode-select --install"
-        )
-        return result
-
-    if completed.returncode != 0:
-        version = _query_installed_version()
-        result["success"] = False
-        result["error"] = (
-            f"Failed to apply {_PATCH_RESOURCE} to {server_py} "
-            f"(mlx-audio version: {version or 'unknown'}). "
-            "The upstream server.py may have drifted. Refresh the patch "
-            "against the installed file and retry. "
-            f"patch stdout: {completed.stdout.strip()!r} "
-            f"patch stderr: {completed.stderr.strip()!r}"
-        )
-        return result
-
-    # Sanity check: the sentinel should now be present.
-    try:
-        post = server_py.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        post = ""
-    if PATCH_SENTINEL not in post:
-        result["success"] = False
-        result["error"] = (
-            f"`patch` reported success but {PATCH_SENTINEL!r} is not in "
-            f"{server_py}. Refusing to silently ship a half-applied patch."
-        )
-        return result
-
-    result["success"] = True
-    result["already_patched"] = False
-    result["message"] = "mlx-audio server.py patched successfully"
-    logger.info(result["message"])
-    return result
+        return warnings
+    # server.py lives in .../site-packages/mlx_audio/
+    data_dir = _find_espeak_data_dir(server_py.parent.parent)
+    if data_dir is None:
+        return warnings
+    warning = espeak_data_path_warning(data_dir)
+    if warning:
+        logger.warning(warning)
+        warnings.append(warning)
+    return warnings
 
 
 async def _update_mlx_audio_service_files(
@@ -397,8 +300,9 @@ async def mlx_audio_install(
             falls back to ``VOICEMODE_SERVICE_AUTO_ENABLE``.
 
     Returns:
-        Dict with ``success``, ``install_path``, ``service_url``, and
-        ``service_path``.
+        Dict with ``success``, ``install_path``, ``service_url``,
+        ``service_path`` and ``warnings`` (a list of non-fatal problems
+        found after install, e.g. an over-long espeak-ng data path).
     """
     if not _is_apple_silicon():
         return {
@@ -459,25 +363,7 @@ async def mlx_audio_install(
             ),
         }
 
-    server_py = _find_installed_server_py()
-    if server_py is None:
-        return {
-            "success": False,
-            "error": (
-                "Could not locate installed mlx_audio/server.py under "
-                "~/.local/share/uv/tools/mlx-audio/. uv tool layout may have "
-                "changed -- inspect `uv tool list` and refresh the locator."
-            ),
-        }
-
-    patch_result = _apply_server_patch(server_py)
-    if not patch_result.get("success"):
-        return {
-            "success": False,
-            "error": f"Patch step failed: {patch_result.get('error')}",
-            "install_path": str(install_path),
-            "patch": patch_result,
-        }
+    warnings = _post_install_warnings(_find_installed_server_py())
 
     service_result = await _update_mlx_audio_service_files(auto_enable_bool)
     if not service_result.get("success"):
@@ -485,7 +371,7 @@ async def mlx_audio_install(
             "success": False,
             "error": f"service file update failed: {service_result.get('error')}",
             "install_path": str(install_path),
-            "patch": patch_result,
+            "warnings": warnings,
         }
 
     bind_host = "0.0.0.0" if bind_lan_bool else "127.0.0.1"
@@ -498,7 +384,7 @@ async def mlx_audio_install(
         "host": bind_host,
         "port": port_int,
         "auto_enabled": service_result.get("enabled", False),
-        "patch": patch_result,
+        "warnings": warnings,
         "extras": list(MLX_AUDIO_EXTRAS),
         "message": (
             f"mlx-audio installed via uv tool install. "

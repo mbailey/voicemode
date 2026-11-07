@@ -44,9 +44,10 @@ editing (`voicemode reconnect`, or `/mcp` in Claude Code). See
 These operational notes are independent of VM-1390 and still apply.
 
 1. **Install/upgrade only via the voicemode installer.** voice-mode pins mlx-audio
-   and patches `mlx_audio/server.py` (sentinel:
-   `voicemode-patch: honor OpenAI-style response_format`). A bare
-   `uv tool install mlx-audio` loses the patch. Use:
+   to a tested range (`>=0.5.7,<0.6`) and installs the runtime extras the server
+   needs; a bare `uv tool install mlx-audio` gets neither. (It no longer patches
+   `mlx_audio/server.py`: upstream has served OpenAI-style `response_format`
+   natively since 0.4.4.) Use:
 
     ```bash
     voicemode service install mlx-audio --force
@@ -59,7 +60,14 @@ These operational notes are independent of VM-1390 and still apply.
     launchctl kickstart -k gui/$(id -u)/com.voicemode.mlx-audio
     ```
 
-3. **Cold start is slow and normal.** After a (re)start, poll `GET /v1/models`
+3. **The server dies on the first Kokoro request if its espeak-ng data path is
+   160+ characters.** espeak-ng truncates the path, cannot find `phontab`
+   (`Error processing file '.../espeak-ng-data/phontab'` in the error log) and
+   exits the whole process. The installer warns when
+   `<site-packages>/espeakng_loader/espeak-ng-data` is that long; fix it with a
+   shorter `HOME`, `UV_TOOL_DIR` or `XDG_DATA_HOME` and reinstall.
+
+4. **Cold start is slow and normal.** After a (re)start, poll `GET /v1/models`
    until it answers before concluding the service is broken.
 
 A known-good launchd plist for running `mlx_audio.server` as a user service is

@@ -346,6 +346,37 @@ class TestPipelineFailurePolicy:
         assert results[1]["status"] == "not_reached"
         assert results[2]["status"] == "not_reached"
 
+    async def test_stt_model_not_found_aborts_with_its_own_reason(self):
+        """VM-2342: a 404 from STT surfaces as stt_model_not_found in the
+        survey's stopped_at, not as audio_device_error or connection failure."""
+        turns = _norm([{"ask": "q1"}, {"ask": "q2"}])
+
+        def fake_record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def fake_stt(*_a, **_k):
+            return {
+                "error_type": "model_not_found",
+                "model": "whisper-1",
+                "endpoint": "http://127.0.0.1:8890/v1/audio/transcriptions",
+                "status_code": 404,
+                "attempted_endpoints": [{
+                    "endpoint": "http://127.0.0.1:8890/v1/audio/transcriptions",
+                    "error": "Error code: 404",
+                }],
+            }
+
+        with patch("voice_mode.tools.converse.synthesize_turn_with_failover", side_effect=_ok_synth), \
+             patch("voice_mode.tools.converse._play_samples_controllable", new=_make_play_fn()), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=fake_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=fake_stt):
+            results, stopped_at = await _ask_turns_pipeline(turns, **_pipeline_kwargs())
+
+        assert stopped_at == {"turn": 0, "phase": "listening", "reason": "stt_model_not_found"}
+        assert results[0]["status"] == "stt_failed"
+        assert results[1]["status"] == "not_reached"
+
     async def test_audio_device_exception_mid_record_aborts_with_partials(self):
         turns = _norm([{"ask": "q1"}, {"ask": "q2"}])
 
