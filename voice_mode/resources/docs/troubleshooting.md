@@ -130,10 +130,12 @@
 **Problem:** Operations timing out.
 
 **Solutions:**
-1. Increase listen duration:
-   ```python
-   converse("Please elaborate", listen_duration_max=300)
-   ```
+1. Raise the user's own listening ceiling — this is a config change, not a
+   call-site change. Set `VOICEMODE_DEFAULT_LISTEN_DURATION` in
+   `~/.voicemode/voicemode.env` (see `voice://config/env-template`) so every
+   call gets the longer window. Do **not** pass `listen_duration_max` on the
+   call: that silently replaces whatever the user configured, and an assistant
+   choosing the number is how users get cut off mid-answer.
 
 2. Check network latency to services
 3. Verify services are responding
@@ -203,9 +205,14 @@ converse("Quick update", speed=1.5)
    ```python
    converse("What do you think?", listen_duration_min=5.0)
    ```
-4. Disable silence detection to see if it's a VAD issue:
+4. Disable silence detection to see if it's a VAD issue. This is the one case
+   with a genuine, present need for an explicit ceiling: with silence detection
+   off, nothing else ends the recording, so the diagnostic would otherwise run
+   for the user's whole configured window. Keep `SECONDS` small (a handful) —
+   and note this is a one-off diagnostic, not a shape to copy into real calls,
+   where the user's config owns the ceiling:
    ```python
-   converse("Testing", disable_silence_detection=True, listen_duration_max=10)
+   converse("Testing", disable_silence_detection=True, listen_duration_max=SECONDS)
    ```
 
 ### Incorrect transcriptions
@@ -270,9 +277,13 @@ This "primes" Whisper to recognize these specific terms correctly.
 ❌ **Don't:** `converse("Bonjour")`
 ✅ **Do:** `converse("Bonjour", voice="ff_siwis", tts_provider="kokoro")`
 
-### Setting listen_duration_max too low
-❌ **Don't:** `listen_duration_max=5` for complex questions
-✅ **Do:** Use default (120) or higher for long responses
+### Choosing a listen_duration_max at all
+❌ **Don't:** pass `listen_duration_max` because you expect a long or a short
+answer — the ceiling you pick silently replaces the user's configured one, and
+they get cut off mid-answer with no way to predict it
+✅ **Do:** pass nothing. `VOICEMODE_DEFAULT_LISTEN_DURATION` (the user's own
+config) owns the ceiling; if it is genuinely too short, change the config, not
+the call
 
 ### Overriding defaults unnecessarily
 ❌ **Don't:** Specify `voice`, `tts_provider`, `tts_model` without reason

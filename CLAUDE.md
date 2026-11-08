@@ -168,6 +168,32 @@ Services can be installed and managed through MCP tools, with automatic service 
 - Unit tests: `tests/` - run with `make test`
 - Manual tests: `tests/manual/` - require user interaction
 
+### ⛔ The suite must never open the real audio device
+
+There may be a **live human on voice at this machine**, and this suite used to
+run through their speakers and microphone. It presented as unexplained flakiness
+somewhere else, not as an audio bug, which is why it survived for a day.
+
+`tests/audio_guard/` now makes the device unreachable from a test run: it arms
+at `pytest_configure` (before any test module is imported), blocks both the
+`sounddevice`/PortAudio path and audio subprocess spawns (`paplay`, `mpv`,
+`afplay`, ...), and **fails the run from its own hit record** — a blocked call
+that the code under test swallowed still fails, because that exact case reported
+"10 passed" here.
+
+- `pytest` — default; audio-marked tests excluded, device unreachable.
+- `pytest -m audio` — the opt-in path; runs **muted**, never on a real device.
+- `VOICEMODE_TEST_AUDIO_GUARD=off` — the escape hatch, which announces itself.
+  **Ask first if anyone might be on voice.**
+
+If a test fails on the guard it is almost certainly missing a mock rather than
+needing a marker — and **patch the seam the code under test holds**
+(`patch('voice_mode.tools.converse.sd.rec')`), never the whole module. Never do
+`sys.modules['sounddevice'] = MagicMock()`: a module body runs at collection, so
+its blast radius is the entire session, and it takes the guard's sounddevice
+coverage down with it (reported, once, naming your file). Full reference:
+[docs/reference/audio-test-isolation.md](docs/reference/audio-test-isolation.md).
+
 ## Logging
 
 Logs are stored in `~/.voicemode/`:
@@ -185,15 +211,13 @@ This is the core Python package. VoiceMode is a suite of related projects:
 
 Quick reference:
 - **voicemode** (this repo) - Python MCP server for local voice mode
-- **voicemode-dev** - Cloudflare Workers backend for voicemode.dev
 - **voicemode-ios** - Native iOS app
 - **voicemode-macos** - Native macOS app
 - **voicemode-meta** - Project coordination and operations
 
 ## See Also
 
-- **[skills/voicemode/SKILL.md](skills/voicemode/SKILL.md)** - Voice interaction usage and MCP tools
-- **[skills/voicemode-connect/SKILL.md](skills/voicemode-connect/SKILL.md)** - Remote voice via mobile/web clients
+- **[.claude/skills/voicemode/SKILL.md](.claude/skills/voicemode/SKILL.md)** - Voice interaction usage and MCP tools
 - **[docs/tutorials/getting-started.md](docs/tutorials/getting-started.md)** - Installation guide
 - **[docs/guides/configuration.md](docs/guides/configuration.md)** - Configuration reference
 - **[docs/concepts/architecture.md](docs/concepts/architecture.md)** - Detailed architecture

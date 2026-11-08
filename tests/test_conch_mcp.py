@@ -7,7 +7,7 @@ into a per-test fake home; ``ConchQueue`` derives its paths from there), so the
 whole conch state is isolated automatically.
 
 Coverage mirrors the task's Testing Strategy:
-- per-action unit tests (status / callback / wait / heartbeat / leave / give /
+- per-action unit tests (status / queue / wait / heartbeat / leave / give /
   bump / release),
 - remote-waiter liveness via the ``expires`` TTL (pruned when past, kept when
   future),
@@ -48,6 +48,22 @@ def _running(sid, *, agent=None, name=None, pid=None, cwd=None):
     )
 
 
+def _nudge_delivered(*a, **k):
+    """``subprocess.run`` stand-in simulating a CONFIRMED-delivered nudge
+    (VM-2078 D2): the summon path only grants when it can check this."""
+    class _Result:
+        returncode = 0
+    return _Result()
+
+
+def _nudge_failed(*a, **k):
+    """``subprocess.run`` stand-in simulating an ATTEMPTED-but-failed nudge
+    (no session match / tmux miss) — a non-zero exit, still no exception."""
+    class _Result:
+        returncode = 1
+    return _Result()
+
+
 def _tool():
     """The undecorated tool coroutine (FastMCP may wrap it as ``.fn``)."""
     return getattr(_conch_tool, "fn", _conch_tool)
@@ -61,9 +77,9 @@ async def call(**kwargs):
 # Helpers
 # --------------------------------------------------------------------------- #
 
-def _register_local(sid, *, agent=None, mode="wait"):
+def _register_local(sid, *, agent=None):
     """Register a live LOCAL waiter (pid = current process)."""
-    return ConchQueue.register(sid, agent=agent, mode=mode)
+    return ConchQueue.register(sid, agent=agent)
 
 
 def _make_holder(agent="holder", sid="holder-sess"):
@@ -94,13 +110,13 @@ def _norm_state():
     """Normalised, seq-independent snapshot of the shared conch state.
 
     The grant ``seq`` is a monotonic internal hint that drifts between two runs;
-    the *meaningful* state (who holds, who is granted, who is queued in what
-    mode) is what the two front ends must agree on.
+    the *meaningful* state (who holds, who is granted, who is queued) is what
+    the two front ends must agree on.
     """
     return {
         "granted": ConchQueue.granted_to(),
         "holder": (Conch.get_holder() or {}).get("session_id"),
-        "queue": [(e.session_id, e.mode) for e in ConchQueue.list()],
+        "queue": [e.session_id for e in ConchQueue.list()],
     }
 
 
@@ -147,42 +163,68 @@ class TestStatus:
     @pytest.mark.asyncio
     async def test_status_shows_holder_and_queue(self, clean_conch):
         _make_holder(agent="alpha", sid="alpha-sess")
-        _register_local("beta-222", agent="beta", mode="wait")
+        _register_local("beta-222", agent="beta")
         res = await call(action="status")
         assert res["holder"]["agent"] == "alpha"
         assert res["holder"]["session_id"] == "alpha-sess"
         assert [q["session_id"] for q in res["queue"]] == ["beta-222"]
-        assert res["queue"][0]["mode"] == "wait"
+        assert "mode" not in res["queue"][0]  # VM-2078: mode column removed
 
 
 # --------------------------------------------------------------------------- #
-# callback (the timeout-safe default for joining)
+# queue (the timeout-safe default for joining; VM-2078 D1 renamed from
+# "callback" -- register-and-poll, never delivered a callback in the
+# telephone sense)
 # --------------------------------------------------------------------------- #
 
-class TestCallback:
+class TestQueue:
     @pytest.mark.asyncio
-    async def test_callback_registers_remote_and_returns_position(self, clean_conch):
-        res = await call(action="callback", session_id="remote-1", agent="r1")
+    async def test_queue_registers_remote_and_returns_position(self, clean_conch):
+        res = await call(action="queue", session_id="remote-1", agent="r1")
         assert res["ok"] is True
         assert res["registered"] is True
         assert res["granted"] is False
-        assert res["mode"] == "callback"
+        assert "mode" not in res  # VM-2078: no self-declared category field
         assert res["position"] == 1
         # Stays registered as a REMOTE waiter (pid is None) with a future TTL.
         entry = _entry("remote-1")
         assert entry is not None
         assert entry.pid is None
-        assert entry.mode == "callback"
         assert entry.expires is not None
         assert res["expires"] == entry.expires
 
     @pytest.mark.asyncio
-    async def test_callback_expires_is_in_the_future(self, clean_conch):
+    async def test_queue_expires_is_in_the_future(self, clean_conch):
         from datetime import datetime
-        res = await call(action="callback", session_id="remote-1")
+        res = await call(action="queue", session_id="remote-1")
         exp = parse_ts(res["expires"])
         assert exp is not None
         assert exp > datetime.now()
+
+
+class TestCallbackRenamed:
+    """D1: the literal string 'callback' is not a valid action any more --
+    it returns a clear error naming the replacement, never a traceback and
+    never the generic 'unknown action' message (so a caller upgrading from
+    the old name gets pointed at exactly what changed)."""
+
+    @pytest.mark.asyncio
+    async def test_callback_is_a_named_error_not_a_generic_unknown_action(
+        self, clean_conch
+    ):
+        res = await call(action="callback", session_id="remote-1")
+        assert res["ok"] is False
+        assert res["action"] == "callback"
+        assert "queue" in res["message"].lower()
+        assert "renamed" in res["message"].lower()
+        # Never silently registers under the old name.
+        assert _entry("remote-1") is None
+
+    @pytest.mark.asyncio
+    async def test_callback_is_case_insensitively_caught(self, clean_conch):
+        res = await call(action="CallBack", session_id="remote-1")
+        assert res["ok"] is False
+        assert "queue" in res["message"].lower()
 
 
 # --------------------------------------------------------------------------- #
@@ -202,7 +244,7 @@ class TestWait:
     @pytest.mark.asyncio
     async def test_wait_granted_via_explicit_grant(self, clean_conch):
         _make_holder()  # busy: not the free-head path
-        _register_local("w1", agent="w1", mode="callback")
+        _register_local("w1", agent="w1")
         assert ConchQueue.grant("w1") is True
         res = await call(action="wait", session_id="w1", timeout=5)
         assert res["granted"] is True
@@ -213,7 +255,7 @@ class TestWait:
         monkeypatch.setattr("voice_mode.tools.conch.CONCH_CHECK_INTERVAL", 0.02)
         _make_holder()  # live holder => never free for us
         # A separate granted waiter means our head-of-free path never fires.
-        _register_local("other", agent="other", mode="wait")
+        _register_local("other", agent="other")
         assert ConchQueue.grant("other") is True
         res = await call(action="wait", session_id="w1", timeout=0.2)
         assert res["ok"] is True
@@ -227,7 +269,7 @@ class TestWait:
         monkeypatch.setattr("voice_mode.tools.conch.CONCH_CHECK_INTERVAL", 0.02)
         monkeypatch.setattr("voice_mode.tools.conch.CONCH_MCP_WAIT_CAP", 0.1)
         _make_holder()
-        _register_local("other", mode="wait")
+        _register_local("other")
         ConchQueue.grant("other")
         res = await call(action="wait", session_id="w1", timeout=999)
         # min(timeout, cap) => the cap wins.
@@ -236,22 +278,22 @@ class TestWait:
 
 
 # --------------------------------------------------------------------------- #
-# heartbeat (refresh TTL, keep place + mode)
+# heartbeat (refresh TTL, keep place; VM-2078 do-003 also surfaces `granted`)
 # --------------------------------------------------------------------------- #
 
 class TestHeartbeat:
     @pytest.mark.asyncio
-    async def test_heartbeat_refreshes_expires_and_preserves_seq_and_mode(self, clean_conch):
-        first = await call(action="callback", session_id="r1")
+    async def test_heartbeat_refreshes_expires_and_preserves_seq(self, clean_conch):
+        first = await call(action="queue", session_id="r1")
         seq_before = _entry("r1").seq
         exp_before = first["expires"]
 
         res = await call(action="heartbeat", session_id="r1")
         assert res["ok"] is True
-        assert res["mode"] == "callback"  # mode preserved (not flipped to wait)
+        assert "mode" not in res  # VM-2078: no self-declared category field
+        assert res["granted"] is False
         entry = _entry("r1")
         assert entry.seq == seq_before  # place preserved
-        assert entry.mode == "callback"
         # TTL moved forward (or stayed equal at worst — never earlier).
         assert parse_ts(res["expires"]) >= parse_ts(exp_before)
 
@@ -261,6 +303,31 @@ class TestHeartbeat:
         assert res["ok"] is False
         assert "not in the queue" in res["message"].lower()
 
+    @pytest.mark.asyncio
+    async def test_heartbeat_surfaces_granted_true_on_the_one_call_told_to_make(
+        self, clean_conch
+    ):
+        """VM-2078 do-003: before this, a remote waiter's heartbeat could not
+        tell it had been granted the floor — it needed a second,
+        un-instructed status() call to find out. Now the one call the tool
+        instructs it to make regularly IS the discovery channel."""
+        await call(action="queue", session_id="r1")
+        assert ConchQueue.grant("r1") is True
+
+        res = await call(action="heartbeat", session_id="r1")
+        assert res["ok"] is True
+        assert res["granted"] is True
+        assert "granted" in res["message"].lower()
+        assert "claim_window_remaining" in res
+        assert res["claim_window_remaining"] > 0
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_not_granted_has_no_claim_window_key(self, clean_conch):
+        await call(action="queue", session_id="r1")
+        res = await call(action="heartbeat", session_id="r1")
+        assert res["granted"] is False
+        assert "claim_window_remaining" not in res
+
 
 # --------------------------------------------------------------------------- #
 # leave
@@ -269,7 +336,7 @@ class TestHeartbeat:
 class TestLeave:
     @pytest.mark.asyncio
     async def test_leave_deregisters(self, clean_conch):
-        await call(action="callback", session_id="r1")
+        await call(action="queue", session_id="r1")
         assert "r1" in _sessions()
         res = await call(action="leave", session_id="r1")
         assert res["ok"] is True
@@ -318,20 +385,76 @@ class TestGive:
 
 
 class TestSummon:
-    """give over MCP to a running non-waiter ⇒ summon (VM-1637)."""
+    """give over MCP to a running non-waiter ⇒ summon (VM-1637), gated on the
+    CHECKED, SURFACED nudge outcome (VM-2078 D2 amendment)."""
 
     @pytest.mark.asyncio
-    async def test_summon_non_waiter_enqueues_and_grants(self, clean_conch, monkeypatch):
+    async def test_summon_non_waiter_enqueues_and_grants_on_confirmed_delivery(
+        self, clean_conch, monkeypatch
+    ):
         monkeypatch.setattr(conch_ops, "_list_running_sessions",
                             lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
-        monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+        monkeypatch.setattr("subprocess.run", _nudge_delivered)
         res = await call(action="give", target="dora")
         assert res["ok"] is True
         assert res["summoned"] is True
         assert res["target"] == "run-1"
+        assert res["granted"] is True
+        assert res["nudge"] == "delivered"
         entry = _entry("run-1")
-        assert entry is not None and entry.mode == "callback" and entry.pid == os.getpid()
+        assert entry is not None and entry.pid == os.getpid()
         assert ConchQueue.granted_to() == "run-1"
+        # D2: a confirmed-delivered summon nudge writes a BOUNDED, LONGER
+        # claim window onto the grant record -- not the ordinary base TTL,
+        # since the summoned target has no poll loop of its own.
+        grant_payload = _grant_file_dict()
+        assert grant_payload.get("claim_ttl") is not None
+
+    @pytest.mark.asyncio
+    async def test_summon_withholds_grant_when_nudge_fails(self, clean_conch, monkeypatch):
+        """D2 amendment: an ATTEMPTED-but-failed nudge must NOT grant --
+        handing the floor to a target just confirmed not to have been told
+        is the original bug wearing a different hat. REFINE #1: the target
+        must also be DEREGISTERED rather than left queued -- a queued entry
+        nobody polls for would block every other waiter for a full claim
+        window and then be evicted anyway, so leaving it behind would strand
+        it (and everyone behind it), not protect it."""
+        monkeypatch.setattr(conch_ops, "_list_running_sessions",
+                            lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
+        monkeypatch.setattr("subprocess.run", _nudge_failed)
+        res = await call(action="give", target="dora")
+        assert res["ok"] is True
+        assert res["summoned"] is True
+        assert res["granted"] is False
+        assert res["nudge"] == "failed"
+        assert "tell them yourself" in res["message"].lower()
+        assert "not queu" in res["message"].lower()
+        assert "wait_for_conch" in res["message"]
+        assert ConchQueue.granted_to() is None
+        entry = _entry("run-1")
+        assert entry is None  # deregistered, not left stranded in the queue
+
+    @pytest.mark.asyncio
+    async def test_summon_withholds_grant_when_target_is_remote(self, clean_conch, monkeypatch):
+        """D2 amendment: a remote target (no local pid) has NO nudge path at
+        all -- must not be silently upgraded to 'delivered'. REFINE #1: also
+        deregistered, same as the failed-nudge case."""
+        # NOTE: _running()'s `pid=None` default means "use this live process"
+        # (so the summoned waiter survives dead-PID cleanup) — construct the
+        # RunningSession directly to get a genuinely pid-less (remote) target.
+        remote = conch_ops.RunningSession(
+            session_id="remote-run", pid=None, agent="dora", project_path=None,
+        )
+        monkeypatch.setattr(conch_ops, "_list_running_sessions", lambda: [remote])
+        monkeypatch.setattr("subprocess.run", _nudge_delivered)  # must not even be reached
+        res = await call(action="give", target="dora")
+        assert res["ok"] is True
+        assert res["granted"] is False
+        assert res["nudge"] == "remote"
+        assert "wait_for_conch" in res["message"]
+        assert ConchQueue.granted_to() is None
+        entry = _entry("remote-run")
+        assert entry is None  # deregistered, not left stranded in the queue
 
     @pytest.mark.asyncio
     async def test_summon_target_is_holder_is_noop(self, clean_conch, monkeypatch):
@@ -418,7 +541,7 @@ class TestRemoteLiveness:
 
     @pytest.mark.asyncio
     async def test_future_remote_waiter_survives(self, clean_conch):
-        await call(action="callback", session_id="live-remote")
+        await call(action="queue", session_id="live-remote")
         assert "live-remote" in _sessions()  # future TTL => kept
 
     @pytest.mark.asyncio
@@ -459,7 +582,7 @@ class TestParityWithCLI:
         """MCP and CLI summon land the identical queue + grant state (SC5)."""
         monkeypatch.setattr(conch_ops, "_list_running_sessions",
                             lambda: [_running("run-1", agent="dora", cwd="/tmp/p")])
-        monkeypatch.setattr("subprocess.run", lambda *a, **k: None)
+        monkeypatch.setattr("subprocess.run", _nudge_delivered)
 
         await call(action="give", target="dora")
         mcp_state = _norm_state()
@@ -473,7 +596,7 @@ class TestParityWithCLI:
 
         assert mcp_state == cli_state
         assert mcp_state["granted"] == "run-1"
-        assert mcp_state["queue"] == [("run-1", "callback")]
+        assert mcp_state["queue"] == ["run-1"]
         assert mcp_grant_sid == cli_grant_sid == "run-1"
 
     @pytest.mark.asyncio
@@ -521,7 +644,7 @@ class TestParityWithCLI:
 
 class TestValidation:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("action", ["wait", "callback", "heartbeat", "leave"])
+    @pytest.mark.parametrize("action", ["wait", "queue", "heartbeat", "leave"])
     async def test_session_required_actions_error_without_session(self, clean_conch, action):
         res = await call(action=action)
         assert res["ok"] is False

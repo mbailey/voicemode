@@ -7,6 +7,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [9.0.2] - 2026-10-29
+
+### Security
+
+- The VoiceMode Connect login's callback page escapes the OAuth error text, so a crafted
+  redirect can't inject script; `voicemode serve` compares Bearer tokens in constant time.
+  Thanks @mcteamster (#558).
+- Dependency floors so `make audit` passes again: `authlib>=1.9.1` fixes seven advisories
+  (CVE-2026-96760, CVE-2026-114614 to CVE-2026-114618, CVE-2026-114620). `dnspython>=2.9.0`
+  fixes CVE-2026-114605 on Python 3.11 and newer. One known issue remains on Python 3.10:
+  dnspython's only fixed release (2.9.0) needs Python 3.11, so 3.10 installs keep dnspython
+  2.8.0. The audit's Python 3.10 pass ignores that one advisory and fails on anything else.
+  VoiceMode's own code never imports dnspython; it comes in through fastmcp's pydantic email
+  validation. (VM-2246)
+
+### Fixed
+
+- VoiceMode loads again on macOS 27: scipy 1.15.x is excluded (`scipy!=1.15.*`), because
+  macOS 27 refuses to load its compiled wheels and the `converse` tool failed to import
+  ("Connection closed" in the plugin). Python 3.10 now gets scipy 1.14.1; 3.11+ keeps 1.16.2.
+  Thanks @jonschull for the report (#577, VM-2246).
+
+## [9.0.1] - 2026-10-26
+
+### Security
+
+- New runtime floors so `pip` and `uvx` installs get the 9.0.0 security fixes too:
+  `certifi>=2026.10.19` (critical CA fix), `uv>=0.13.4` and `pyjwt>=2.15.0`. (VM-2492)
+- `fastmcp>=3.4.10` fixes GHSA-7xgj-8392-5q4r (component authorization skipped on direct calls),
+  and `opentelemetry-api>=1.45.1` fixes GHSA-xcq7-p3pf-p88h (unbounded tracestate parsing).
+
+## [9.0.0] - 2026-10-25
+
+### Added
+
+- `conch(action="heartbeat")` now reports `granted` and `claim_window_remaining`, so a
+  queued remote agent sees its grant without an extra `status` call. (VM-2078)
+- `voicemode service install mlx-audio` warns when the espeak-ng data path is 160+
+  characters, which crashes the server on the first Kokoro request. (VM-2338)
+
+### Changed
+
+- Voice names resolve completely or fail: a `voice=` (or a `VOICEMODE_VOICES` default)
+  the resolver cannot place is now an error naming the cause, not silent Alloy. See
+  Migration. (VM-1901)
+- The `converse` tool description is cut from ~2,400 to ~190 tokens; the MCP connect
+  cost of the default tool set falls from ~4,400 to ~2,170 tokens. (VM-2442)
+- `listen_duration_max` is unset in the `converse` schema by default, so your
+  `VOICEMODE_DEFAULT_LISTEN_DURATION` sets the listening ceiling. (VM-2442)
+- The transcript echo (`ASSISTANT/USER (voicemode)` blockquotes) is gone from the tool
+  description and the skill; the Talk app already shows the conversation. (VM-2442)
+- One VoiceMode skill: `converse`, `impressions` and `voicemode-dj` are folded into
+  `voicemode`, with the detail in its references. (VM-2442)
+- STT on mlx-audio needs no model setting: with `VOICEMODE_STT_MODEL` unset it is sent
+  `mlx-community/whisper-large-v3-turbo-asr-4bit` instead of `whisper-1`. (VM-2342)
+- With `VOICEMODE_WHISPER_LANGUAGE=auto`, mlx-audio is sent no `language` and detects
+  it; whisper.cpp still gets `auto`. (VM-2342)
+- STT 4xx get their own `listen_and_transcribe` `error_kind` and `ask_turns` stop reason:
+  `stt_model_not_found` (HTTP 404) and `stt_request_rejected` (other 4xx). (VM-2342)
+- mlx-audio STT no longer drops whisper's `""` / `"."` / `"..."` silence segments (the
+  old patch did); default whisper.cpp installs are unaffected. (VM-2338)
+- mlx-audio answers clients that omit `response_format` with ndjson, not json;
+  `converse` and `impressions` always send it. (VM-2338, VM-2346)
+- The mlx-audio install result has a `warnings` list in place of its `patch` key.
+  (VM-2338)
+
+### Removed
+
+- `converse(conch_mode=...)` and `VOICEMODE_CONCH_MODE`: callback mode never delivered
+  its turn and could wedge the conch queue. See Migration. (VM-2078)
+- `timeout` from the `converse` MCP schema (no effect since LiveKit left); passing it
+  is now a validation error. The CLI keeps it. See Migration. (VM-2442)
+- VoiceMode Connect docs and the `voicemode-connect` skill: the product was abandoned.
+  `voicemode connect auth` stays for now; its removal is VM-2314. (VM-2290)
+- The bundled mlx-audio `server.py` patch: upstream serves `response_format` natively
+  since 0.4.4. (VM-2338)
+
+### Fixed
+
+- All 67 Kokoro voices work in `converse` again, not just a 7-name whitelist; a voice
+  no configured endpoint serves still fails loudly. (VM-2190)
+- `voicemode service install mlx-audio` installs current mlx-audio again: the pin is
+  now `mlx-audio>=0.5.7,<0.6` (was `>=0.4.3,<0.4.4`). (VM-2338)
+- STT: an HTTP 4xx is no longer reported as "STT service connection failed"; a 404
+  names the model and endpoint and points at `VOICEMODE_STT_MODELS`. (VM-2342)
+- Impressions voice-profile transcription asks the STT server for JSON, so it works on
+  mlx-audio 0.4.4 and later. (VM-2346)
+- The docs no longer tell assistants to pass their own listening limit, which silently
+  overrode your `VOICEMODE_DEFAULT_LISTEN_DURATION` and cut you off. (VM-2099)
+- The parameter reference is one document for assistants and the docs site, and
+  `listen_duration_max` / `listen_duration_min` have real descriptions. (VM-2099)
+- A silent `converse(hold_conch=true)` no longer holds the channel indefinitely: the
+  hold is kept only when the turn spoke. (VM-2045)
+- Every conch grant is covered by the `VOICEMODE_CONCH_GRANT_TTL` self-heal, so an
+  unclaimed grant can no longer wedge the queue. (VM-2078)
+- `conch give` / `summon` to a session not in the queue grants only on a confirmed
+  nudge; otherwise it returns `granted: false` and the operator relays. (VM-2078)
+- A grant issued mid-turn is no longer evicted as wedged before the floor frees;
+  remote grantees get a heartbeat-scaled claim window. (VM-2078)
+- The provider registry no longer advertises `tts-1` for mlx-audio, and selection
+  never sends a model id the provider cannot load. (VM-2156)
+- Three dead voicemode.dev links in the `voicemode://docs/parameters` resource now
+  point at the docs on GitHub. (VM-2290)
+- Contributors: `pytest` can no longer reach the real microphone or speakers;
+  `pytest -m audio` runs muted. See `docs/reference/audio-test-isolation.md`. (VM-2072)
+- `VOICEMODE_TEST_AUDIO_GUARD=off` lifts the test audio guard. Tool-call soundfonts
+  (`VOICEMODE_SOUNDFONTS_ENABLED`, on by default) are separate and unchanged. (VM-2072)
+
+### Security
+
+- Cleared 67/67 Dependabot and 17/17 CodeQL alerts. The `uv.lock` refresh pins dev and
+  CI only; a `pip` or `uvx` install resolves its own dependency versions. (VM-2484)
+- Provider URLs are matched by parsed hostname, not substring, and the whisper.cpp
+  temp WAV is created with `mkstemp`. (VM-2484)
+- `scripts/conversation_browser.py` serves `/audio/` only from inside AUDIO_DIR, and
+  Flask debug is off unless `VOICEMODE_BROWSER_DEBUG=1`. (VM-2484)
+
+### Migration
+
+- Stop passing `conch_mode` to `converse`. To avoid blocking your turn, run a
+  `wait_for_conch=true` `converse` call in the background. (VM-2078)
+- Delete `VOICEMODE_CONCH_MODE` from `~/.voicemode/voicemode.env`; it has no effect.
+  (VM-2078)
+- Replace `conch(action="callback")` with `action="queue"`; `"callback"` now returns
+  an error naming `"queue"`. (VM-2078)
+- To queue past the 25 s `conch(action="wait")` cap, use `action="queue"` plus a
+  periodic `action="heartbeat"`. (VM-2078)
+- MCP callers: stop passing `timeout` to `converse`; it is now a validation error.
+  (VM-2442)
+- If `converse` now fails with a voice-resolution error, fix the name it points at:
+  qualify `group/member`, declare `default:` in the group's `voice.md`, or add
+  `default.wav`. For undeclared groups only, `VOICEMODE_CAST_UNDECLARED_SEVERITY=warn`
+  makes it a warning (the group's first member speaks) for one release. (VM-1901)
+
 ## [8.12.0] - 2026-07-21
 
 ### Fixed

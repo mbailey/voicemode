@@ -21,15 +21,41 @@ from openai import AsyncOpenAI
 
 from . import config
 from .config import TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY
+from .url_match import is_openai_url
 
 logger = logging.getLogger("voicemode")
+
+# The standard Kokoro-82M voice set. Single source of truth (VM-2190) for the
+# list that used to be pasted inline in three places: the registry seed below,
+# the optimistic re-seed in tools/providers.py, and (implicitly) the resolver's
+# idea of what a kokoro-family endpoint can say. kokoro-fastapi reports exactly
+# this set from /v1/audio/voices; mlx-audio has no listing endpoint but fetches
+# any of these voices on demand from the Kokoro HF repo, so the static set IS
+# our knowledge of it.
+KNOWN_KOKORO_VOICES = (
+    "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jadzia", "af_jessica",
+    "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky",
+    "af_v0", "af_v0bella", "af_v0irulan", "af_v0nicole", "af_v0sarah",
+    "af_v0sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam",
+    "am_michael", "am_onyx", "am_puck", "am_santa", "am_v0adam", "am_v0gurney",
+    "am_v0michael", "bf_alice", "bf_emma", "bf_lily", "bf_v0emma",
+    "bf_v0isabella", "bm_daniel", "bm_fable", "bm_george", "bm_lewis",
+    "bm_v0george", "bm_v0lewis", "ef_dora", "em_alex", "em_santa", "ff_siwis",
+    "hf_alpha", "hf_beta", "hm_omega", "hm_psi", "if_sara", "im_nicola",
+    "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo",
+    "pf_dora", "pm_alex", "pm_santa", "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao",
+    "zf_xiaoyi", "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
+)
+
+# OpenAI's TTS voice seed used when registering an api.openai.com endpoint.
+OPENAI_SEED_VOICES = ("alloy", "echo", "fable", "nova", "onyx", "shimmer")
 
 
 def detect_provider_type(base_url: str) -> str:
     """Detect provider type from base URL."""
     if not base_url:
         return "unknown"
-    if "openai.com" in base_url:
+    if is_openai_url(base_url):
         return "openai"
     elif "api.cartesia.ai" in base_url:
         return "cartesia"
@@ -60,6 +86,27 @@ def is_local_provider(base_url: str) -> bool:
     return provider_type in ["kokoro", "whisper", "mlx-audio", "local"] or \
            "127.0.0.1" in base_url or \
            "localhost" in base_url
+
+
+def _default_tts_models(base_url: str) -> List[str]:
+    """Display-only TTS seed for an endpoint we have not probed yet (VM-2156).
+
+    mlx-audio loads Hugging Face repos on demand, so an OpenAI-style id like
+    "tts-1" is not just rejected -- it makes the server fetch
+    ``huggingface.co/api/models/tts-1``, 404, and (upstream bug) kill its
+    router thread. Seed each provider with the same built-in default the
+    per-endpoint resolver would pick (VM-1390's
+    ``config.TTS_MODEL_PROVIDER_DEFAULTS``) so there is one source of truth,
+    mirroring what ``_default_stt_models`` already does on the STT side
+    (VM-1106 impl-003). Wire payloads on the live speech path are unaffected --
+    ``providers._select_tts_model_for_endpoint`` owns those.
+    """
+    provider_type = detect_provider_type(base_url)
+    return [
+        config.TTS_MODEL_PROVIDER_DEFAULTS.get(
+            provider_type, config.TTS_MODEL_DEFAULT
+        )
+    ]
 
 
 def _default_stt_models(base_url: str) -> List[str]:
@@ -109,7 +156,7 @@ class ProviderRegistry:
                 provider_type = detect_provider_type(url)
                 if provider_type == "openai":
                     models = ["gpt4o-mini-tts", "tts-1", "tts-1-hd"]
-                    voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
+                    voices = list(OPENAI_SEED_VOICES)
                 elif provider_type == "cartesia":
                     import re
                     uuid_re = re.compile(
@@ -121,8 +168,8 @@ class ProviderRegistry:
                     if config.CARTESIA_VOICE_ID and config.CARTESIA_VOICE_ID not in voices:
                         voices.insert(0, config.CARTESIA_VOICE_ID)
                 else:
-                    models = ["tts-1"]
-                    voices = ["af_alloy", "af_aoede", "af_bella", "af_heart", "af_jadzia", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "af_v0", "af_v0bella", "af_v0irulan", "af_v0nicole", "af_v0sarah", "af_v0sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa", "am_v0adam", "am_v0gurney", "am_v0michael", "bf_alice", "bf_emma", "bf_lily", "bf_v0emma", "bf_v0isabella", "bm_daniel", "bm_fable", "bm_george", "bm_lewis", "bm_v0george", "bm_v0lewis", "ef_dora", "em_alex", "em_santa", "ff_siwis", "hf_alpha", "hf_beta", "hm_omega", "hm_psi", "if_sara", "im_nicola", "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo", "pf_dora", "pm_alex", "pm_santa", "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang"]
+                    models = _default_tts_models(url)
+                    voices = list(KNOWN_KOKORO_VOICES)
                 self.registry["tts"][url] = EndpointInfo(
                     base_url=url,
                     models=models,
@@ -272,7 +319,7 @@ class ProviderRegistry:
     async def _discover_voices(self, base_url: str, client: AsyncOpenAI) -> List[str]:
         """Discover available voices for a TTS endpoint."""
         # If it's OpenAI, use known voices (they don't expose a voices endpoint)
-        if "openai.com" in base_url:
+        if is_openai_url(base_url):
             return ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
         
         # Try standard OpenAI-compatible voices endpoint
@@ -365,3 +412,40 @@ class ProviderRegistry:
 
 # Global registry instance
 provider_registry = ProviderRegistry()
+
+
+def known_provider_voices() -> frozenset:
+    """Every provider-native voice name a configured TTS endpoint can say.
+
+    The synchronous, always-available answer to "is this a real provider
+    voice?" (VM-2190) — used by ``voice_profiles._is_provider_native`` so the
+    resolver accepts exactly the voices some configured endpoint claims,
+    instead of a hand-maintained whitelist that silently drifted to 7 of the
+    67 kokoro voices.
+
+    Per configured URL, prefer the live registry entry's voice list (real
+    discovery data when a refresh has run); fall back to the same seed
+    ``initialize()`` would use when the registry hasn't populated that URL yet
+    (or discovery came back empty — mlx-audio has no voices endpoint, so a
+    refresh legitimately returns ``[]`` for it). Cartesia is skipped: its
+    UUID voices are config-declared and already covered by the resolver's
+    ``TTS_VOICES`` check.
+
+    Reads ``config.TTS_BASE_URLS`` dynamically so a config reload is
+    respected, and never touches the network — safe to call before (or
+    without) ``provider_registry.initialize()``.
+    """
+    names = set()
+    for url in config.TTS_BASE_URLS:
+        info = provider_registry.registry["tts"].get(url)
+        if info is not None and info.voices:
+            names.update(info.voices)
+            continue
+        provider_type = detect_provider_type(url)
+        if provider_type == "openai":
+            names.update(OPENAI_SEED_VOICES)
+        elif provider_type == "cartesia":
+            continue
+        else:
+            names.update(KNOWN_KOKORO_VOICES)
+    return frozenset(names)

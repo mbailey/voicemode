@@ -7,6 +7,12 @@ on:
     branches: [ master, main ]
   workflow_dispatch:
 
+# Least privilege (VM-2484, CodeQL actions/missing-workflow-permissions):
+# every step only reads the repo. The codecov upload is tokenless (no
+# use_oidc), so it needs no id-token: write either.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}

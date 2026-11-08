@@ -709,6 +709,58 @@ class TestConchHold:
         conch.release()  # hold defaults to False
         assert not Conch.LOCK_FILE.exists()
 
+    def test_hold_with_spoke_default_true_is_unchanged(self, clean_conch):
+        """release(hold=True) with no ``spoke`` arg behaves exactly as
+        before (default True) — every existing caller that never passes it
+        keeps today's re-stamping behaviour."""
+        conch = Conch(agent_name="cora")
+        assert conch.try_acquire() is True
+        conch.release(hold=True)
+
+        assert Conch.LOCK_FILE.exists()
+        data = json.loads(Conch.LOCK_FILE.read_text())
+        assert data["held"] is True
+
+    def test_hold_with_spoke_false_falls_through_to_full_release(self, clean_conch):
+        """VM-2045 fix-001: release(hold=True, spoke=False) — a turn that
+        said nothing — must NOT re-stamp/extend the hold. It falls through
+        to a full release (unlink + drop flock), exactly like hold=False,
+        instead of reserving a floor nothing was ever said to reserve."""
+        conch = Conch(agent_name="cora")
+        assert conch.try_acquire() is True
+        conch.release(hold=True, spoke=False)
+
+        assert not Conch.LOCK_FILE.exists(), (
+            "a silent turn (spoke=False) must fully release, not hold"
+        )
+        assert conch._acquired is False
+
+    def test_repeated_silent_hold_never_accumulates(self, clean_conch):
+        """The unbounded-lock scenario at the Conch level: many consecutive
+        acquire + release(hold=True, spoke=False) cycles never leave a held
+        marker behind, no matter how many times it's repeated."""
+        conch = Conch(agent_name="cora", session_id="gc-adcb")
+        for _ in range(10):
+            assert conch.try_acquire() is True
+            conch.release(hold=True, spoke=False)
+            assert not Conch.LOCK_FILE.exists()
+        assert Conch.get_holder() is None
+
+    def test_hold_then_silent_turn_drops_the_floor(self, clean_conch):
+        """A hold legitimately established by a spoken turn is dropped the
+        moment a later turn on the same floor speaks nothing — the fix
+        applies per-turn, not just to the very first call."""
+        conch = Conch(agent_name="cora")
+        assert conch.try_acquire() is True
+        conch.release(hold=True)  # turn 1: spoke (default) -> hold established
+        assert Conch.LOCK_FILE.exists()
+
+        assert conch.try_acquire() is True  # turn 2: same process reclaims it
+        conch.release(hold=True, spoke=False)  # turn 2 said nothing
+        assert not Conch.LOCK_FILE.exists(), (
+            "a silent turn must drop even a previously-legitimate hold"
+        )
+
     def test_holder_reclaims_its_own_hold(self, clean_conch):
         """The same process re-acquires across a hold (its pid isn't 'other')."""
         conch = Conch(agent_name="cora")

@@ -17,13 +17,14 @@ updates:
       prefix: "deps"
       include: "scope"
     groups:
-      # Group every bump (major/minor/patch) into a single weekly PR.
-      # Trades fine-grained review for a clean inbox; CI is the gate.
+      # Group minor and patch bumps into a single weekly PR; each major
+      # bump comes as its own PR, so a breaking jump never holds up the
+      # routine ones. These groups apply to version updates only (no
+      # applies-to); security updates are not grouped by them.
       python-all:
         patterns:
           - "*"
         update-types:
-          - "major"
           - "minor"
           - "patch"
 
@@ -46,7 +47,6 @@ updates:
         patterns:
           - "*"
         update-types:
-          - "major"
           - "minor"
           - "patch"
 
@@ -68,6 +68,5 @@ updates:
         patterns:
           - "*"
         update-types:
-          - "major"
           - "minor"
           - "patch"

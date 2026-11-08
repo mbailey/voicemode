@@ -22,35 +22,71 @@ from .providers import _select_stt_model_for_endpoint, _select_tts_model_for_end
 logger = logging.getLogger("voicemode")
 
 
+class UnmappedProviderVoiceError(RuntimeError):
+    """Loud per-endpoint refusal (VM-1901 design.md §3.2.7, scope per VM-2190).
+
+    Raised when a provider-native voice reaches an OpenAI endpoint that has
+    no mapping for it. Since VM-2190 widened ``resolve_voice()``'s gate to
+    every voice a configured endpoint claims (the full kokoro set, not just
+    the 7 mapped names), this is an EXPECTED failover case, not only upstream
+    drift: ``voice="af_nicole"`` with kokoro/mlx-audio down legitimately lands
+    here. Raising skips THIS endpoint (failover continues to the next one)
+    instead of silently substituting "alloy" — the identity break VM-1901
+    exists to prevent.
+    """
+
+
 def _resolve_tts_endpoints(voice, ref_text_override):
     """Resolve which TTS endpoints to try and the clone profile (if any).
 
-    Clone voices route directly to their own endpoint; an explicit ``ref_text``
-    override wins over the profile/sidecar transcript (VM-1278). For non-clone
-    voices a stray ref_text override is ignored with a warning. Shared by the
-    play (``simple_tts_failover``) and synth-only (``simple_tts_synthesize``)
+    VM-1901: this is where every "unresolvable voice silently becomes Alloy"
+    mouth used to live — ``is_clone_voice()``/``get_profile()`` returning
+    False/None for anything they didn't recognise, falling straight through
+    to the generic ``TTS_BASE_URLS`` chain. This now calls the TOTAL
+    resolver (:func:`voice_profiles.resolve_voice`) directly: an
+    unresolvable/ambiguous/undeclared-cast expression raises a
+    ``VoiceResolutionError`` here, before any endpoint is tried, instead of
+    reaching a provider at all.
+
+    Clone/clip voices route directly to their own endpoint; an explicit
+    ``ref_text`` override wins over the profile/sidecar transcript (VM-1278).
+    A provider-native resolution (``kind="provider"``, e.g. an OpenAI/Kokoro
+    voice name) falls through to the generic chain exactly as before — that
+    is legitimate usage, not a fallback. Shared by the play
+    (``simple_tts_failover``) and synth-only (``simple_tts_synthesize``)
     paths so endpoint selection stays identical between them.
 
     Returns:
-        tuple: (endpoints_to_try, clone_profile)
+        tuple: (endpoints_to_try, clone_profile, resolution)
+
+    Raises:
+        voice_profiles.VoiceResolutionError: the voice expression could not
+            be resolved. Callers must catch this — see
+            :func:`simple_tts_failover` / :func:`simple_tts_synthesize`.
     """
     from dataclasses import replace as _dc_replace
-    from .voice_profiles import get_profile, is_clone_voice
+    from .voice_profiles import resolve_voice
 
-    clone_profile = get_profile(voice) if is_clone_voice(voice) else None
-    if clone_profile:
+    resolution = resolve_voice(voice)
+
+    if resolution.kind in ("clone", "clip"):
+        clone_profile = resolution.profile
         if ref_text_override is not None:
             clone_profile = _dc_replace(clone_profile, ref_text=ref_text_override)
             logger.info(f"Voice '{voice}': applying ref_text override ({len(ref_text_override)} chars)")
-        logger.info(f"Voice '{voice}' is a clone profile, routing to {clone_profile.base_url}")
-        return [clone_profile.base_url], clone_profile
+        logger.info(
+            f"Voice '{voice}' resolved to {resolution.resolved!r} "
+            f"(via={resolution.via}), routing to {clone_profile.base_url}"
+        )
+        return [clone_profile.base_url], clone_profile, resolution
 
     if ref_text_override is not None:
         logger.warning(
-            f"ref_text override supplied but voice '{voice}' is not a clone "
-            f"voice (no abs-path clip or registered profile) — override ignored"
+            f"ref_text override supplied but voice '{voice}' resolved to a "
+            f"provider-native voice ({resolution.resolved!r}), not a clone — "
+            f"override ignored"
         )
-    return TTS_BASE_URLS, None
+    return TTS_BASE_URLS, None, resolution
 
 
 def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
@@ -60,11 +96,39 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
     ``AsyncOpenAI`` client plus the voice/model actually sent to the provider
     (clone voices pass through; OpenAI maps Kokoro voice names to equivalents).
 
+    ``voice`` here MUST be ``resolution.resolved`` (the canonical id from
+    :func:`voice_profiles.resolve_voice`), never the raw caller expression —
+    review fix, VM-1901 observability-001. Passing the raw expression through
+    reintroduced this slice's own headline bug one call deeper: for a cast
+    (``"peep-show"`` resolving to member ``"peep-show/mark"``) or any other
+    request-vs-resolved qualified/index/ambiguous-leaf path, the clone branch
+    below did ``selected_voice = voice`` — the unresolved cast/leaf name,
+    not the member that will actually sound — and that string is exactly
+    what ends up in the exchange log's ``voice`` field (config['voice'] below)
+    and, via ``resolution.resolved`` no longer matching what's shown, silently
+    defeats the clash detector's "compare resolved ids" contract for the very
+    cases (casts, qualified paths) this design exists to make correct.
+    Provider-native resolutions are unaffected either way (``resolved ==
+    requested`` for those by construction), so this only changes behavior for
+    the cases that were wrong.
+
     Returns:
-        tuple: (client, selected_voice, selected_model, provider_type)
+        tuple: (client, selected_voice, selected_model, provider_type,
+        is_fallback, fallback_reason)
+
+        ``is_fallback``/``fallback_reason`` (VM-1901 design.md §5.3) are set
+        ONLY for the one legitimate substitution left in this function: a
+        known Kokoro voice name mapped to its OpenAI equivalent because the
+        endpoint chain failed over to OpenAI. Every other path (clone
+        passthrough, an OpenAI-native name used on purpose, Kokoro itself)
+        is ``is_fallback=False`` — under P1 the unresolvable-to-alloy
+        population that made this hook meaningless is now structurally
+        impossible, so ``is_fallback`` finally means one thing.
     """
     provider_type = detect_provider_type(base_url)
     api_key = OPENAI_API_KEY if provider_type == "openai" else (OPENAI_API_KEY or "dummy-key-for-local")
+    is_fallback = False
+    fallback_reason = None
 
     if clone_profile:
         # Clone voice: use profile's model and pass voice name through
@@ -94,7 +158,28 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                     "am_onyx": "onyx",
                     "bm_fable": "fable"
                 }
-                selected_voice = voice_mapping.get(voice, "alloy")  # Default to alloy
+                # VM-1901: this used to default unrecognised names to
+                # "alloy" — the mechanism the alloy-fallback bug actually
+                # rode in on. Raise instead of substituting; failover skips
+                # this endpoint and moves on. VM-2190: with the resolver now
+                # accepting every voice a configured endpoint claims, an
+                # unmapped kokoro voice landing here (kokoro/mlx unreachable,
+                # chain reached OpenAI) is an expected, loud skip — not
+                # necessarily upstream drift.
+                if voice not in voice_mapping:
+                    raise UnmappedProviderVoiceError(
+                        f"Voice {voice!r} has no OpenAI mapping and isn't an "
+                        f"OpenAI-native name — this endpoint cannot speak it; "
+                        f"skipping (no silent substitution)."
+                    )
+                selected_voice = voice_mapping[voice]
+                # VM-1901: this IS the one legitimate fallback left in the
+                # system (design.md §5.3) — a known Kokoro alias mapped to
+                # its OpenAI equivalent because this endpoint is OpenAI, not
+                # Kokoro. Record it as such, structurally distinct from the
+                # bug case (which can no longer reach this line at all).
+                is_fallback = True
+                fallback_reason = f"endpoint-failover: {voice}→{selected_voice} (kokoro unreachable)"
                 logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
         else:
             selected_voice = voice  # Use original voice for Kokoro
@@ -108,7 +193,7 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
         timeout=30.0,  # Reasonable timeout
         max_retries=max_retries
     )
-    return client, selected_voice, selected_model, provider_type
+    return client, selected_voice, selected_model, provider_type, is_fallback, fallback_reason
 
 
 async def simple_tts_failover(
@@ -128,6 +213,7 @@ async def simple_tts_failover(
 
     from .core import text_to_speech
     from .conversation_logger import get_conversation_logger
+    from .voice_profiles import VoiceResolutionError
 
     # Pull the optional ref_text override out of kwargs before it gets
     # forwarded to text_to_speech (which has no ref_text param). None means
@@ -141,25 +227,45 @@ async def simple_tts_failover(
     conversation_logger = get_conversation_logger()
     conversation_id = conversation_logger.conversation_id
 
-    # Check if this is a clone voice — if so, route directly to its endpoint
-    endpoints_to_try, clone_profile = _resolve_tts_endpoints(voice, ref_text_override)
+    # Check if this is a clone voice — if so, route directly to its endpoint.
+    # VM-1901: an unresolvable voice raises HERE, before any endpoint is
+    # tried — no TTS request issued, no cross-provider substitution possible.
+    try:
+        endpoints_to_try, clone_profile, resolution = _resolve_tts_endpoints(voice, ref_text_override)
+    except VoiceResolutionError as e:
+        logger.error(f"Voice resolution failed for {voice!r}: {e}")
+        return False, None, {
+            'error_type': 'voice_resolution_failed',
+            'error': str(e),
+            'attempted_endpoints': [],
+        }
 
     # Try each TTS endpoint in order
     logger.info(f"simple_tts_failover: Starting with endpoints = {endpoints_to_try}")
     for base_url in endpoints_to_try:
         logger.info(f"Trying TTS endpoint: {base_url}")
 
-        client, selected_voice, selected_model, provider_type = _prepare_tts_endpoint(
-            base_url, voice, model, clone_profile
-        )
-
-        # Create clients dict for text_to_speech
-        openai_clients = {'tts': client}
-
-        # Try TTS with this endpoint
-        # Wrap in try/catch to get actual exception details
+        # Wrap in try/catch to get actual exception details. _prepare_tts_endpoint
+        # can itself raise (VM-1901's defensive UnmappedProviderVoiceError) —
+        # treated the same as any other per-endpoint failure so failover
+        # continues to the next endpoint.
         last_exception = None
+        provider_type = detect_provider_type(base_url)
+        selected_voice = voice
+        selected_model = model
         try:
+            # Review fix (VM-1901 observability-001): pass resolution.resolved,
+            # not the raw `voice` expression -- see _prepare_tts_endpoint's
+            # docstring. For a cast/qualified request this is the difference
+            # between "peep-show" (unresolved) and "peep-show/mark" (what
+            # will actually sound) ending up in the exchange log.
+            client, selected_voice, selected_model, provider_type, is_fallback, fallback_reason = _prepare_tts_endpoint(
+                base_url, resolution.resolved, model, clone_profile
+            )
+
+            # Create clients dict for text_to_speech
+            openai_clients = {'tts': client}
+
             # Pass clone profile through kwargs if present
             tts_kwargs = dict(kwargs)
             if clone_profile:
@@ -181,7 +287,14 @@ async def simple_tts_failover(
                     'provider': provider_type,
                     'voice': selected_voice,  # Return the voice actually used
                     'model': selected_model,
-                    'endpoint': f"{base_url}/audio/speech"
+                    'endpoint': f"{base_url}/audio/speech",
+                    # VM-1901: requested-vs-resolved provenance (design.md §5.3),
+                    # additive alongside the provider-level 'voice' above.
+                    'voice_requested': resolution.requested,
+                    'voice_resolved': resolution.resolved,
+                    'voice_via': resolution.via,
+                    'is_fallback': is_fallback,
+                    'fallback_reason': fallback_reason,
                 }
                 logger.info(f"TTS succeeded with {base_url} using voice {selected_voice}")
                 return True, metrics, config
@@ -252,6 +365,7 @@ async def simple_tts_synthesize(
 
     from .core import synthesize_tts_audio
     from .conversation_logger import get_conversation_logger
+    from .voice_profiles import VoiceResolutionError
 
     ref_text_override = kwargs.pop("ref_text", None)
     attempted_endpoints = []
@@ -259,19 +373,35 @@ async def simple_tts_synthesize(
     conversation_logger = get_conversation_logger()
     conversation_id = conversation_logger.conversation_id
 
-    endpoints_to_try, clone_profile = _resolve_tts_endpoints(voice, ref_text_override)
+    # VM-1901: an unresolvable voice raises HERE, before any endpoint is
+    # tried — see simple_tts_failover's identical guard for the rationale.
+    try:
+        endpoints_to_try, clone_profile, resolution = _resolve_tts_endpoints(voice, ref_text_override)
+    except VoiceResolutionError as e:
+        logger.error(f"Voice resolution failed for {voice!r}: {e}")
+        return False, None, None, None, {
+            'error_type': 'voice_resolution_failed',
+            'error': str(e),
+            'attempted_endpoints': [],
+        }
 
     logger.info(f"simple_tts_synthesize: Starting with endpoints = {endpoints_to_try}")
     for base_url in endpoints_to_try:
         logger.info(f"Trying TTS endpoint (synth): {base_url}")
 
-        client, selected_voice, selected_model, provider_type = _prepare_tts_endpoint(
-            base_url, voice, model, clone_profile
-        )
-        openai_clients = {'tts': client}
-
         last_exception = None
+        provider_type = detect_provider_type(base_url)
+        selected_voice = voice
+        selected_model = model
         try:
+            # Review fix (VM-1901 observability-001): resolution.resolved, not
+            # the raw `voice` -- see _prepare_tts_endpoint's docstring and the
+            # identical fix in simple_tts_failover above.
+            client, selected_voice, selected_model, provider_type, is_fallback, fallback_reason = _prepare_tts_endpoint(
+                base_url, resolution.resolved, model, clone_profile
+            )
+            openai_clients = {'tts': client}
+
             tts_kwargs = dict(kwargs)
             if clone_profile:
                 tts_kwargs['clone_profile'] = clone_profile
@@ -292,7 +422,13 @@ async def simple_tts_synthesize(
                     'provider': provider_type,
                     'voice': selected_voice,
                     'model': selected_model,
-                    'endpoint': f"{base_url}/audio/speech"
+                    'endpoint': f"{base_url}/audio/speech",
+                    # VM-1901: requested-vs-resolved provenance (design.md §5.3).
+                    'voice_requested': resolution.requested,
+                    'voice_resolved': resolution.resolved,
+                    'voice_via': resolution.via,
+                    'is_fallback': is_fallback,
+                    'fallback_reason': fallback_reason,
                 }
                 logger.info(f"TTS(synth) succeeded with {base_url} using voice {selected_voice}")
                 return True, samples, sample_rate, metrics, config
@@ -351,6 +487,25 @@ def _is_transient_stt_error(e: Exception) -> bool:
     return False
 
 
+def _classify_stt_failure(e: Exception) -> Tuple[Optional[int], str]:
+    """Classify one STT endpoint's failure as ``(status_code, error_type)`` (VM-2342).
+
+    - HTTP 404 -> ``(404, "model_not_found")``: the server answered and does
+      not know the model (mlx-audio's reply to an unknown model id; a wrong
+      endpoint path also 404s, and the user-facing message says so).
+    - Any other HTTP 4xx -> ``(status, "request_rejected")``: the server
+      answered and refused the request (bad audio, auth, rate limit...).
+    - Everything else -> ``(status or None, "connection_failed")``: refused,
+      timed out, 5xx, or an unrecognised exception, as before VM-2342.
+    """
+    if isinstance(e, APIStatusError):
+        status = getattr(e, "status_code", None)
+        if isinstance(status, int) and 400 <= status < 500:
+            return status, ("model_not_found" if status == 404 else "request_rejected")
+        return (status if isinstance(status, int) else None), "connection_failed"
+    return None, "connection_failed"
+
+
 async def simple_stt_failover(
     audio_file,
     model: Optional[str] = None,
@@ -363,7 +518,22 @@ async def simple_stt_failover(
         Dict with transcription result or error information:
         - Success: {"text": "...", "provider": "...", "endpoint": "...", "metrics": {...}}
         - No speech: {"error_type": "no_speech", "provider": "...", "metrics": {...}}
-        - All failed: {"error_type": "connection_failed", "attempted_endpoints": [...]}
+        - All failed: {"error_type": <kind>, "attempted_endpoints": [...]}
+          where <kind> classifies the failures (VM-2342):
+            * "model_not_found" -- at least one endpoint ANSWERED with HTTP 404
+              (mlx-audio does this for a model it does not know, e.g. the
+              stock "whisper-1"). Adds top-level "model", "endpoint" and
+              "status_code" from the first 404.
+            * "request_rejected" -- no 404, but at least one endpoint answered
+              with another HTTP 4xx (400/401/403/422/429...). Adds the same
+              top-level fields from the first such answer.
+            * "connection_failed" -- no endpoint answered with a 4xx: refused,
+              timed out, 5xx, or an unrecognised error (unchanged behaviour).
+          Rule for a mixed chain: a server's 4xx answer outranks a connection
+          error, because it is the actionable fault (the server is up and
+          told us why). 404 outranks other 4xx. Every endpoint's own failure
+          stays in "attempted_endpoints", each entry carrying "error_type",
+          "model" (the id sent, or None) and "status_code" (or None).
 
         The metrics dict (when present) contains:
         - file_size_bytes: Size of audio file sent
@@ -399,6 +569,7 @@ async def simple_stt_failover(
 
     # Try each STT endpoint in order
     for i, base_url in enumerate(STT_BASE_URLS):
+        resolved_model = None  # recorded in the failure entry if we fail early
         try:
             # Detect provider type for logging
             provider_type = detect_provider_type(base_url)
@@ -448,13 +619,16 @@ async def simple_stt_failover(
             # Handle language parameter based on provider
             # - whisper.cpp: needs "auto" explicitly (default is "en")
             # - OpenAI API: omit for auto-detect (doesn't accept "auto")
+            # - mlx-audio: omit for auto-detect (VM-2342). It does not treat
+            #   "auto" as a language: 0.5.7 maps it to <|endoftext|> and skips
+            #   detection; only an unset language detects (VM-2334).
             if WHISPER_LANGUAGE and WHISPER_LANGUAGE != "auto":
                 # Explicit language set - pass to all providers
                 transcription_kwargs["language"] = WHISPER_LANGUAGE
-            elif is_local_provider(base_url):
+            elif is_local_provider(base_url) and provider_type != "mlx-audio":
                 # Local whisper.cpp with auto mode - must pass "auto" explicitly
                 transcription_kwargs["language"] = "auto"
-            # For OpenAI with "auto" - don't pass parameter (auto-detect by default)
+            # For OpenAI / mlx-audio with "auto" - don't pass the parameter
 
             # Bounded, transient-only retry with backoff for LOCAL STT (VM-926).
             # Local whisper.cpp does time out transiently and usually recovers on
@@ -482,7 +656,7 @@ async def simple_stt_failover(
                         continue
                     # Permanent error or retries exhausted: re-raise to the outer
                     # except, which records the failure and advances to the next
-                    # endpoint (or returns connection_failed).
+                    # endpoint (or returns the classified failure).
                     raise
             request_time_ms = (time.perf_counter() - request_start) * 1000
 
@@ -525,13 +699,18 @@ async def simple_stt_failover(
                     if error_details.get('suggestion'):
                         logger.info(f"  💡 {error_details['suggestion']}")
 
-            # Track connection/auth errors
+            # Track the failure, classified (VM-2342): an HTTP 4xx means the
+            # server ANSWERED, which is not a connection failure.
             full_endpoint = f"{base_url}/audio/transcriptions" if not base_url.endswith("/v1") else f"{base_url}/audio/transcriptions"
+            status_code, endpoint_error_type = _classify_stt_failure(e)
             connection_errors.append({
                 "endpoint": full_endpoint,
                 "provider": provider_type,
                 "error": error_str,
-                "error_details": error_details  # Include parsed error details
+                "error_details": error_details,  # Include parsed error details
+                "error_type": endpoint_error_type,
+                "model": resolved_model,
+                "status_code": status_code,
             })
 
             # Log failure with appropriate level based on whether we have fallbacks
@@ -554,8 +733,23 @@ async def simple_stt_failover(
             result["metrics"] = successful_metrics
         return result
     elif connection_errors:
-        # All endpoints failed with connection/auth errors
+        # All endpoints failed. Report a server's 4xx answer as what it is
+        # (VM-2342); see the docstring for the mixed-chain rule.
         logger.error(f"✗ All STT endpoints failed after {len(STT_BASE_URLS)} attempts")
+        for kind in ("model_not_found", "request_rejected"):
+            answered = next((a for a in connection_errors if a["error_type"] == kind), None)
+            if answered is not None:
+                logger.error(
+                    f"  {kind}: model {answered['model']!r} at {answered['endpoint']} "
+                    f"(HTTP {answered['status_code']})"
+                )
+                return {
+                    "error_type": kind,
+                    "model": answered["model"],
+                    "endpoint": answered["endpoint"],
+                    "status_code": answered["status_code"],
+                    "attempted_endpoints": connection_errors,
+                }
         return {"error_type": "connection_failed", "attempted_endpoints": connection_errors}
     else:
         # Should not reach here, but handle it gracefully
