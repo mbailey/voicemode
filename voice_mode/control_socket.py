@@ -80,6 +80,37 @@ _MAX_RESPONSE_BYTES = 65536
 _MAX_HANDLERS = 8
 _CONN_MAX_LIFETIME = 10.0
 
+# Platform limit (VM-2544, #588): the transport is a Unix domain socket, and
+# native-Windows CPython has no ``socket.AF_UNIX``. The channel is a convenience,
+# so a missing AF_UNIX must never break speech -- the listener says so once and
+# steps aside, and the client verbs raise :class:`ControlChannelUnavailable`.
+UNIX_SOCKETS_UNAVAILABLE_MESSAGE = (
+    "control channel needs Unix domain sockets, not available on this platform"
+)
+_unix_unavailable_logged = False
+
+
+class ControlChannelUnavailable(OSError):
+    """This platform has no Unix domain sockets (no ``socket.AF_UNIX``).
+
+    An :class:`OSError` so callers that already treat socket failures as
+    non-fatal keep doing so; the message is :data:`UNIX_SOCKETS_UNAVAILABLE_MESSAGE`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(UNIX_SOCKETS_UNAVAILABLE_MESSAGE)
+
+
+def unix_sockets_available() -> bool:
+    """True when this platform's ``socket`` module offers ``AF_UNIX``."""
+    return hasattr(socket, "AF_UNIX")
+
+
+def _require_unix_sockets() -> None:
+    """Raise :class:`ControlChannelUnavailable` when there is no ``AF_UNIX``."""
+    if not unix_sockets_available():
+        raise ControlChannelUnavailable()
+
 
 def _peer_uid(conn: socket.socket) -> Optional[int]:
     """Best-effort UID of the connected peer, or ``None`` if it can't be read.
@@ -303,7 +334,11 @@ class ControlSocketListener:
         lock the parent dir to ``0700`` and ``umask(0o077)`` across the bind to
         close the chmod-after-bind TOCTOU window. The real, portable enforcement
         is the F3 peer-credential check on accept; these are defence in depth.
+
+        Raises :class:`ControlChannelUnavailable` (an ``OSError``) before touching
+        the filesystem when the platform has no ``AF_UNIX`` (VM-2544).
         """
+        _require_unix_sockets()
         path = self._socket_path
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -564,8 +599,18 @@ def start_control_listener() -> Optional[ControlSocketListener]:
     channel is disabled. A bind failure is treated as **non-fatal** -- the
     control channel is a convenience, so it's logged and swallowed rather than
     breaking voice playback.
+
+    A platform with no Unix domain sockets (no ``socket.AF_UNIX``: native
+    Windows) is treated the same way (VM-2544, #588): it is logged ONCE per
+    process and ``None`` is returned, so converse speaks normally with the flag on.
     """
+    global _unix_unavailable_logged
     if not config.CONTROL_CHANNEL_ENABLED:
+        return None
+    if not unix_sockets_available():
+        if not _unix_unavailable_logged:
+            _unix_unavailable_logged = True
+            logger.warning("%s; continuing without it", UNIX_SOCKETS_UNAVAILABLE_MESSAGE)
         return None
     listener = get_control_listener()
     try:
@@ -622,6 +667,7 @@ def send_control_command(
             (the server isn't speaking, or the control channel is disabled).
         ConnectionRefusedError: a (stale) socket file exists but no server is
             accepting on it.
+        ControlChannelUnavailable: this platform has no ``AF_UNIX`` (VM-2544).
         OSError: any other socket failure (e.g. the connection/send times out).
     """
     payload = {"command": command}
@@ -640,6 +686,7 @@ def send_control_command(
         if socket_path is not None
         else Path(config.CONTROL_SOCKET_PATH)
     )
+    _require_unix_sockets()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
         client.connect(str(path))
@@ -669,6 +716,7 @@ def query_status(
             (the server isn't speaking, or the control channel is disabled).
         ConnectionRefusedError: a (stale) socket file exists but no server is
             accepting on it.
+        ControlChannelUnavailable: this platform has no ``AF_UNIX`` (VM-2544).
         OSError: any other socket failure (e.g. the connect/recv times out, or
             the response exceeds the read ceiling without a newline).
         ValueError: the server's response was not valid JSON.
@@ -680,6 +728,7 @@ def query_status(
         if socket_path is not None
         else Path(config.CONTROL_SOCKET_PATH)
     )
+    _require_unix_sockets()
     buf = b""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
