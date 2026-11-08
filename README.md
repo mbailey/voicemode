@@ -2,6 +2,10 @@
 
 > Natural voice conversations with Claude Code (and other MCP capable agents)
 
+**New, 9 Nov 2026: [Session Kit](https://github.com/sessionkit/sessionkit)**,
+from the people who brought you VoiceMode. A voice, a phone line and mail for
+your Claude Code sessions. Works on macOS; preliminary testing on Linux.
+
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode)](https://pepy.tech/project/voice-mode)
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode/month)](https://pepy.tech/project/voice-mode)
 [![PyPI Downloads](https://static.pepy.tech/badge/voice-mode/week)](https://pepy.tech/project/voice-mode)
