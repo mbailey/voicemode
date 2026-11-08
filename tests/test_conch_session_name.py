@@ -11,6 +11,7 @@ The name now resolves VOICEMODE_SESSION_NAME > the project directory's
 basename > "converse", so the old value is still what you get when nothing
 better is known.
 """
+import asyncio
 import os
 from unittest.mock import patch
 
@@ -103,25 +104,53 @@ async def test_holder_payload_carries_the_session_name(clean_conch, monkeypatch)
     assert seen["holder"]["session_id"] == "sess-a"
 
 
+async def _queue_behind_a_real_holder(session_id):
+    """Start a converse() that queues behind the floor and return its task once
+    it is registered as a waiter.
+
+    VM-2078 removed callback mode, so every waiter now blocks and polls: the
+    call is started as a task, and the test cancels it when done. A real
+    in-process holder keeps the floor busy (an fcntl flock conflicts even
+    between two fds in one process), as in test_converse_conch_queue.py.
+    """
+    task = asyncio.create_task(_converse()(
+        message="Hello",
+        wait_for_response=False,
+        wait_for_conch=5,
+        session_id=session_id,
+    ))
+    for _ in range(200):
+        if any(e.session_id == session_id for e in ConchQueue.list()):
+            return task
+        await asyncio.sleep(0.01)
+    task.cancel()
+    raise AssertionError(f"{session_id} never joined the conch queue")
+
+
+async def _cancel(*tasks):
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_queued_waiter_shows_its_name_in_conch_status(clean_conch, monkeypatch):
     """A queued converse appears in `conch status` under its own name."""
     from voice_mode.cli_commands.conch import _status_payload
 
+    monkeypatch.setattr("voice_mode.tools.converse.CONCH_CHECK_INTERVAL", 0.01)
     monkeypatch.setenv("VOICEMODE_SESSION_NAME", "reviewer")
-    holder = {"pid": 999999, "agent": "other_agent", "session_id": "holder-x"}
-    with patch.object(Conch, "try_acquire", return_value=False), \
-         patch.object(Conch, "get_holder", return_value=holder):
-        await _converse()(
-            message="Hello",
-            wait_for_response=False,
-            wait_for_conch=True,
-            conch_mode="callback",
-            session_id="sess-a",
-        )
-
-    queued = {q["session_id"]: q for q in _status_payload()["queue"]}
-    assert queued["sess-a"]["agent"] == "reviewer"
+    holder = Conch(agent_name="holder")
+    assert holder.try_acquire()
+    try:
+        task = await _queue_behind_a_real_holder("sess-a")
+        try:
+            queued = {q["session_id"]: q for q in _status_payload()["queue"]}
+            assert queued["sess-a"]["agent"] == "reviewer"
+        finally:
+            await _cancel(task)
+    finally:
+        holder.release()
 
 
 @pytest.mark.asyncio
@@ -129,17 +158,17 @@ async def test_conch_give_can_target_the_session_by_name(clean_conch, monkeypatc
     """`conch give <name>` matches on the agent field, so the name is usable there."""
     from voice_mode.conch_ops import resolve_session
 
-    holder = {"pid": 999999, "agent": "other_agent", "session_id": "holder-x"}
-    with patch.object(Conch, "try_acquire", return_value=False), \
-         patch.object(Conch, "get_holder", return_value=holder):
+    monkeypatch.setattr("voice_mode.tools.converse.CONCH_CHECK_INTERVAL", 0.01)
+    holder = Conch(agent_name="holder")
+    assert holder.try_acquire()
+    tasks = []
+    try:
         for name, sid in (("reviewer", "sess-a"), ("writer", "sess-b")):
             monkeypatch.setenv("VOICEMODE_SESSION_NAME", name)
-            await _converse()(
-                message="Hello",
-                wait_for_response=False,
-                wait_for_conch=True,
-                conch_mode="callback",
-                session_id=sid,
-            )
+            tasks.append(await _queue_behind_a_real_holder(sid))
 
-    assert resolve_session("writer", ConchQueue.list()).session_id == "sess-b"
+        assert resolve_session("writer", ConchQueue.list()).session_id == "sess-b"
+        assert resolve_session("reviewer", ConchQueue.list()).session_id == "sess-a"
+    finally:
+        await _cancel(*tasks)
+        holder.release()
