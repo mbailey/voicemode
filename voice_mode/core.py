@@ -33,6 +33,20 @@ from .audio_player import NonBlockingAudioPlayer
 
 logger = logging.getLogger("voicemode")
 
+
+def _close_and_unlink(handle) -> None:
+    """Close a temp file, then delete it.
+
+    Windows cannot delete a file that is still open (WinError 32), and these files are
+    deleted inside the ``with`` that opened them. A file that cannot be deleted must not
+    turn a reply that already played into a failed turn, so errors are ignored.
+    """
+    try:
+        handle.close()
+        os.unlink(handle.name)
+    except OSError:
+        pass
+
 # VM-1676 control channel: poll cadence while waiting on the buffered (non-
 # streaming) player. ~50ms keeps the stop reaction well under the 200ms target
 # without busy-spinning.
@@ -555,7 +569,7 @@ async def text_to_speech(
                             event_logger.log_event(event_logger.TTS_PLAYBACK_END, tts_event_data)
 
                         logger.info("✓ TTS played successfully")
-                        os.unlink(tmp_file.name)
+                        _close_and_unlink(tmp_file)
                         return True, metrics
                     finally:
                         # Restore stdio if it was changed
@@ -577,7 +591,7 @@ async def text_to_speech(
                         logger.debug("Using PyDub playback...")
                         pydub_play(audio)
                         logger.info("✓ TTS played successfully with PyDub")
-                        os.unlink(tmp_file.name)
+                        _close_and_unlink(tmp_file)
                         metrics['playback'] = time.perf_counter() - playback_start
                         return True, metrics
                     except Exception as pydub_error:
@@ -589,12 +603,12 @@ async def text_to_speech(
                         import shutil
                         shutil.copy(tmp_file.name, fallback_path)
                         logger.warning(f"Audio saved to {fallback_path} for manual playback")
-                        os.unlink(tmp_file.name)
+                        _close_and_unlink(tmp_file)
                         metrics['playback'] = time.perf_counter() - playback_start
                         return False, metrics
                     except Exception as save_error:
                         logger.error(f"Failed to save audio file: {save_error}")
-                        os.unlink(tmp_file.name)
+                        _close_and_unlink(tmp_file)
                         metrics['playback'] = time.perf_counter() - playback_start
                         return False, metrics
                 
@@ -611,7 +625,7 @@ async def text_to_speech(
                         result = subprocess.run(['paplay', tmp_file.name], capture_output=True, timeout=10)
                         if result.returncode == 0:
                             logger.info("✓ Alternative playback successful")
-                            os.unlink(tmp_file.name)
+                            _close_and_unlink(tmp_file)
                             metrics['playback'] = time.perf_counter() - playback_start
                             return True, metrics
                         else:
@@ -619,7 +633,7 @@ async def text_to_speech(
                     except Exception as alt_e:
                         logger.error(f"Alternative playback error: {alt_e}")
                 
-                os.unlink(tmp_file.name)
+                _close_and_unlink(tmp_file)
                 metrics['playback'] = time.perf_counter() - playback_start
                 return False, metrics
                         
