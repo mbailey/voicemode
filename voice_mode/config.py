@@ -737,7 +737,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CARTESIA_API_KEY = os.getenv("CARTESIA_API_KEY")
 CARTESIA_VOICE_ID = os.getenv("VOICEMODE_CARTESIA_VOICE_ID", "")
 CARTESIA_MODEL = os.getenv("VOICEMODE_CARTESIA_MODEL", "sonic-3")
-CARTESIA_FALLBACK_MODEL = os.getenv("VOICEMODE_CARTESIA_FALLBACK_MODEL", "sonic-2")
+CARTESIA_FALLBACK_MODEL = os.getenv("VOICEMODE_CARTESIA_FALLBACK_MODEL", "sonic-3.6")
 
 # Helper function to parse comma-separated lists
 def parse_comma_list(env_var: str, fallback: str) -> list:
