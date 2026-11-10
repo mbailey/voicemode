@@ -454,9 +454,11 @@ def _do_bump() -> dict:
 
     bumped_agent = holder.get("agent") or "unknown"
     bumped_sid = holder.get("session_id")
-    conch_ops.force_clear_lock()
     ConchQueue.clear_grant()
+    # Record the next acquirer while the current holder still blocks the floor.
+    # Otherwise a polling waiter can slip in after unlink and before the grant.
     head = ConchQueue.grant_next()
+    conch_ops.force_clear_lock()
     if head is None:
         return {
             "ok": True, "action": "bump", "bumped": bumped_sid, "next": None,
