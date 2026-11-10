@@ -17,6 +17,7 @@ Coverage:
 """
 
 import asyncio
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -83,6 +84,24 @@ class TestListenAndTranscribe:
         assert result.stt_provider == "whisper-local"
         assert result.stt_classified is True
         assert "record" in result.timings and "stt" in result.timings
+
+    async def test_answered_applies_stt_pronounce_rules(self):
+        """STT-direction VOICEMODE_PRONOUNCE rules run on the transcript (#539)."""
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            return {"text": "where is my bag", "provider": "whisper-local"}
+
+        with patch.dict(os.environ, {"VOICEMODE_PRONOUNCE": "STT bag carrier"}), \
+             patch("voice_mode.pronounce._manager", None), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt):
+            result = await listen_and_transcribe(**_listen_kwargs())
+
+        assert result.outcome == "answered"
+        assert result.text == "where is my carrier"
 
     async def test_no_speech_vad_level_skips_stt(self):
         """VAD never detected speech -- STT must not even be called."""
