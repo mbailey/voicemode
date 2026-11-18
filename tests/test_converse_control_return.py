@@ -15,6 +15,7 @@ exactly what the socket-listener thread does at runtime.
 """
 
 import asyncio
+import os
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -178,7 +179,7 @@ class TestConverseControlReturn:
                     )
 
         holder = Conch.get_holder()
-        assert holder is None or holder.get("agent") != "converse", (
+        assert holder is None or holder.get("pid") != os.getpid(), (
             f"Conch still held by converse after control stop: {holder}"
         )
 
