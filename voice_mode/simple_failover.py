@@ -543,6 +543,39 @@ def _classify_stt_failure(e: Exception) -> Tuple[Optional[int], str]:
     return None, "connection_failed"
 
 
+# Local STT endpoints that answered language="auto" with a server error and then
+# transcribed fine once the parameter was omitted. whisper.cpp needs "auto"
+# spelled out (it defaults to "en"), but other OpenAI-compatible servers reject
+# it -- speaches (faster-whisper) returns HTTP 500 -- and auto-detect when the
+# parameter is absent. Remembered for the life of the process so the failing
+# request is only paid once per endpoint.
+_STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE: set[str] = set()
+
+
+def _auto_language_may_be_rejected(
+    e: Exception, transcription_kwargs: Dict[str, Any], provider_type: str
+) -> bool:
+    """True when a failed local STT request is worth repeating without language="auto".
+
+    Only an implicit "auto" (we added it, the user did not ask for a language)
+    and only a 5xx, which is how speaches rejects it. Called after the transient
+    retries are exhausted, so a whisper.cpp 500 that clears on retry never
+    reaches here and can never cause "auto" to be dropped for whisper.cpp.
+
+    Never for an endpoint detected as whisper.cpp (``provider_type ==
+    "whisper"``, VoiceMode's own service on :2022): there "auto" is known to be
+    right, and a server that kept failing and then recovered on the request
+    without it would otherwise be remembered, leaving that process on
+    whisper.cpp's English default until restart.
+    """
+    return (
+        provider_type != "whisper"
+        and transcription_kwargs.get("language") == "auto"
+        and isinstance(e, APIStatusError)
+        and e.status_code >= 500
+    )
+
+
 async def simple_stt_failover(
     audio_file,
     model: Optional[str] = None,
@@ -662,7 +695,11 @@ async def simple_stt_failover(
             if WHISPER_LANGUAGE and WHISPER_LANGUAGE != "auto":
                 # Explicit language set - pass to all providers
                 transcription_kwargs["language"] = WHISPER_LANGUAGE
-            elif is_local_provider(base_url) and provider_type != "mlx-audio":
+            elif (
+                is_local_provider(base_url)
+                and provider_type != "mlx-audio"
+                and base_url not in _STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE
+            ):
                 # Local whisper.cpp with auto mode - must pass "auto" explicitly
                 transcription_kwargs["language"] = "auto"
             # For OpenAI / mlx-audio with "auto" - don't pass the parameter
@@ -691,6 +728,22 @@ async def simple_stt_failover(
                         await asyncio.sleep(delay)
                         attempt += 1
                         continue
+                    # The endpoint may be an OpenAI-compatible server that is not
+                    # whisper.cpp and rejects language="auto". Try once without it;
+                    # if that fails too, the original error stands.
+                    if _auto_language_may_be_rejected(e, transcription_kwargs, provider_type):
+                        fallback_kwargs = {k: v for k, v in transcription_kwargs.items() if k != "language"}
+                        try:
+                            transcription = await client.audio.transcriptions.create(**fallback_kwargs)
+                        except Exception as fallback_error:
+                            logger.debug(f"STT retry without language failed on {base_url}: {fallback_error}")
+                            raise e
+                        _STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE.add(base_url)
+                        logger.warning(
+                            f"STT endpoint {base_url} rejected language=auto but transcribed "
+                            f"without it; omitting language for this endpoint from now on"
+                        )
+                        break
                     # Permanent error or retries exhausted: re-raise to the outer
                     # except, which records the failure and advances to the next
                     # endpoint (or returns the classified failure).
