@@ -334,8 +334,13 @@ class TestUndeclaredGroupSeverity:
 # (design.md §3.2.7 "belt to P1's braces")
 # ---------------------------------------------------------------------------
 
-def test_unmapped_provider_voice_raises_instead_of_defaulting_to_alloy():
+@pytest.mark.parametrize("substitution", [False, True])
+def test_unmapped_provider_voice_raises_instead_of_defaulting_to_alloy(substitution, monkeypatch):
     from voice_mode.simple_failover import _prepare_tts_endpoint, UnmappedProviderVoiceError
+
+    # #533 (VM-2536): raises with substitution off (no voice is substituted)
+    # and on (an unmapped name is never defaulted to alloy).
+    monkeypatch.setattr("voice_mode.simple_failover.TTS_VOICE_SUBSTITUTION", substitution)
 
     # A name that reaches the OpenAI endpoint's mapping table unrecognised —
     # simulates upstream drift (resolver whitelist grew, this table didn't).
@@ -348,8 +353,12 @@ def test_unmapped_provider_voice_raises_instead_of_defaulting_to_alloy():
         )
 
 
-def test_known_kokoro_voice_still_maps_cleanly_on_openai_endpoint():
+def test_known_kokoro_voice_still_maps_cleanly_on_openai_endpoint(monkeypatch):
     from voice_mode.simple_failover import _prepare_tts_endpoint
+
+    # #533 (VM-2536): the mapping is opt-in now; off is covered in
+    # tests/test_tts_voice_substitution.py.
+    monkeypatch.setattr("voice_mode.simple_failover.TTS_VOICE_SUBSTITUTION", True)
 
     _client, selected_voice, _model, provider_type, is_fallback, fallback_reason = _prepare_tts_endpoint(
         base_url="https://api.openai.com/v1",

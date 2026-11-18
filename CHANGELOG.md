@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- STT request timeout is configurable: VOICEMODE_STT_TIMEOUT, and
+  VOICEMODE_STT_TIMEOUT_LOCAL for local endpoints only (default 60s, unchanged). Thanks
+  @rwunsch (#552).
+
+### Changed
+
+- A Kokoro voice is no longer swapped for an OpenAI one when TTS fails over to OpenAI.
+  Before, `af_sky` quietly became `nova` (a different voice, and a billed call), and the
+  Kokoro outage that caused it went unreported. Now the OpenAI endpoint is skipped with a
+  clear reason, so the error you see is the real one. To keep the old mapping, set
+  `VOICEMODE_TTS_VOICE_SUBSTITUTION=true`; it logs a warning each time it maps a voice.
+  OpenAI voices you ask for by name (alloy, nova, ...) are unaffected.
+  **If you use OpenAI as a fallback for Kokoro** (the hybrid setup), a Kokoro outage
+  now means no speech and a clear error rather than OpenAI's voice, unless you set the
+  flag above.
+  Thanks @rwunsch (#533, #538).
+- `voicemode conch status` names each session (VOICEMODE_SESSION_NAME, else the project
+  directory) instead of listing every one as "converse", and `voicemode conch give <name>`
+  can target it. Thanks @rwunsch (#536, #556).
+
+### Removed
+
+- The `simpleaudio` dependency is gone, so installing VoiceMode on a Mac or on native Windows
+  no longer compiles it. Nothing imported it, and 1.0.4 has no wheel for Apple Silicon or for
+  any Python VoiceMode supports on Windows, so those installs needed a C compiler (on Windows,
+  Visual Studio Build Tools) just to build it. pydub's last-resort playback now uses `ffplay` from
+  FFmpeg. ALSA development headers (`libasound2-dev`, `alsa-lib-devel`) are now optional on
+  Linux. Thanks @rwunsch (#541, VM-2438).
+
+### Fixed
+
+- With the control channel enabled on native Windows (no Unix domain sockets), `converse`
+  speaks again instead of failing every call. The server logs once that the control channel
+  is not available on this platform and carries on without it; `voicemode control` says the
+  same and exits non-zero, no traceback. Thanks @rwunsch for the report (#588, VM-2544).
+- Local STT servers that reject language=auto (speaches, faster-whisper based) now work with
+  default settings: VoiceMode retries once without it and remembers the endpoint;
+  whisper.cpp is unchanged. Thanks @rwunsch (#553).
+- Cancelling a multi-turn (turns[]) converse now stops playback at once, and a restarting
+  MCP server no longer waits for the current turn to finish before it can exit. Thanks
+  @rwunsch (#554, #555).
+- Native Windows: buffered TTS no longer fails every turn with WinError 32 (the temp file is
+  closed before it is deleted). Thanks @rwunsch (#586, #587).
+
 ## [9.0.2] - 2026-10-29
 
 ### Security

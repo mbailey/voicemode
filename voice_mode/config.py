@@ -168,10 +168,21 @@ def load_voicemode_env():
 # VOICEMODE_STT_RETRY_BACKOFF=0.5      # base backoff seconds (sleep = base * 2**attempt)
 # VOICEMODE_STT_RETRY_BACKOFF_MAX=4.0  # per-sleep cap in seconds
 
+# STT request timeout in seconds. A transcription that hangs costs this long
+# before the retry above kicks in. Local STT time scales with audio length and
+# with CPU vs GPU, so measure your own worst case before lowering it.
+# VOICEMODE_STT_TIMEOUT=60             # all STT endpoints
+# VOICEMODE_STT_TIMEOUT_LOCAL=60       # local endpoints only (default: VOICEMODE_STT_TIMEOUT)
+
 # Comma-separated list of preferred voices (local-only by default)
 VOICEMODE_VOICES=af_sky
 # To use OpenAI voices, set OPENAI_API_KEY and add them here:
 # VOICEMODE_VOICES=af_sky,alloy
+
+# When TTS fails over from Kokoro to OpenAI, let OpenAI speak a Kokoro voice
+# as its nearest OpenAI voice (af_sky -> nova). Off by default: the OpenAI
+# endpoint is skipped and the Kokoro outage is reported instead (#533).
+# VOICEMODE_TTS_VOICE_SUBSTITUTION=false
 
 # Comma-separated list of preferred models
 # VOICEMODE_TTS_MODELS=tts-1,tts-1-hd,gpt-4o-mini-tts
@@ -776,6 +787,12 @@ def parse_provider_models(prefix: str) -> dict:
 TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
 STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
 TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
+
+# Silently remap a local voice to an OpenAI voice when TTS falls back to OpenAI
+# (af_sky -> nova, and so on). Off by default: a silent identity change costs
+# more to diagnose than the outage it hides, turns a free local failure into a
+# billed cloud call, and collapses distinct voices onto one.
+TTS_VOICE_SUBSTITUTION = env_bool("VOICEMODE_TTS_VOICE_SUBSTITUTION", False)
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
 STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
 # Whether the user set VOICEMODE_STT_MODEL themselves (env or voicemode.env).
@@ -819,6 +836,17 @@ STT_PROMPT = os.getenv("VOICEMODE_STT_PROMPT", "")
 STT_RETRY_ATTEMPTS = int(os.getenv("VOICEMODE_STT_RETRY_ATTEMPTS", "2"))
 STT_RETRY_BACKOFF = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF", "0.5"))
 STT_RETRY_BACKOFF_MAX = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF_MAX", "4.0"))
+
+# STT request timeout. When a transcription hangs, this timeout is the whole
+# cost of the stall: the transient retry above then usually succeeds at once,
+# so the turn just goes silent for the full timeout with no error shown.
+# Local STT time scales with audio length and with CPU vs GPU, so size these by
+# measuring your own worst-case transcription. Defaults are the former
+# hardcoded 60s.
+#   VOICEMODE_STT_TIMEOUT        seconds, all STT endpoints
+#   VOICEMODE_STT_TIMEOUT_LOCAL  seconds, local endpoints only (default: as above)
+STT_TIMEOUT = float(os.getenv("VOICEMODE_STT_TIMEOUT", "60.0"))
+STT_TIMEOUT_LOCAL = float(os.getenv("VOICEMODE_STT_TIMEOUT_LOCAL", str(STT_TIMEOUT)))
 
 # Voice preferences cache
 _cached_voice_preferences: Optional[list] = None
@@ -871,6 +899,7 @@ def reload_configuration():
     global STT_MODEL_EXPLICIT
     global TTS_MODELS_BY_PROVIDER
     global STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX
+    global STT_TIMEOUT, STT_TIMEOUT_LOCAL
     TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
     STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
     TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
@@ -882,6 +911,8 @@ def reload_configuration():
     STT_RETRY_ATTEMPTS = int(os.getenv("VOICEMODE_STT_RETRY_ATTEMPTS", "2"))
     STT_RETRY_BACKOFF = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF", "0.5"))
     STT_RETRY_BACKOFF_MAX = float(os.getenv("VOICEMODE_STT_RETRY_BACKOFF_MAX", "4.0"))
+    STT_TIMEOUT = float(os.getenv("VOICEMODE_STT_TIMEOUT", "60.0"))
+    STT_TIMEOUT_LOCAL = float(os.getenv("VOICEMODE_STT_TIMEOUT_LOCAL", str(STT_TIMEOUT)))
 
     logger.info("Configuration reloaded successfully")
 

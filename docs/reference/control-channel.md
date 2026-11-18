@@ -97,6 +97,10 @@ nothing to talk to. See [Security](#security) for the full model.
 
 - **Type:** `AF_UNIX` / `SOCK_STREAM` (no TCP port — every trigger runs on the
   same machine as the server).
+- **Platform limit:** needs Unix domain sockets, so it is unavailable on native
+  Windows (no `socket.AF_UNIX`); with the flag on there, the server logs that once
+  and speaks normally without the channel, and `voicemode control` says so and
+  exits non-zero.
 - **Path:** `~/.voicemode/control.sock` by default (override with
   `VOICEMODE_CONTROL_SOCKET`), beside the conch under `~/.voicemode/`.
 - **Permissions:** parent dir `0700` and socket bound under `umask(0o077)`; the

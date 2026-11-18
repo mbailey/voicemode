@@ -15,6 +15,8 @@ from .provider_discovery import is_local_provider
 from .config import (
     TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE,
     STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX,
+    TTS_VOICE_SUBSTITUTION,
+    STT_TIMEOUT, STT_TIMEOUT_LOCAL,
 )
 from .provider_discovery import detect_provider_type, EndpointInfo
 from .providers import _select_stt_model_for_endpoint, _select_tts_model_for_endpoint
@@ -94,7 +96,9 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
 
     Shared by the play and synth-only failover loops. Returns the configured
     ``AsyncOpenAI`` client plus the voice/model actually sent to the provider
-    (clone voices pass through; OpenAI maps Kokoro voice names to equivalents).
+    (clone voices pass through; an OpenAI endpoint speaks only OpenAI voices,
+    and maps Kokoro voice names to equivalents only when
+    ``VOICEMODE_TTS_VOICE_SUBSTITUTION`` is on, #533).
 
     ``voice`` here MUST be ``resolution.resolved`` (the canonical id from
     :func:`voice_profiles.resolve_voice`), never the raw caller expression —
@@ -144,10 +148,31 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
         # explicit caller model still wins inside the resolver.
         selected_model = _select_tts_model_for_endpoint(provider_type, model)
         if provider_type == "openai":
-            # Map Kokoro voices to OpenAI equivalents, or use OpenAI default
             openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
             if voice in openai_voices:
                 selected_voice = voice
+            elif not TTS_VOICE_SUBSTITUTION:
+                # #533: never substitute a voice by default. Skip this endpoint
+                # loudly instead, so the local-TTS outage that sent us here is
+                # what the user sees, not the assistant changing voice.
+                #
+                # Substituting silently is worse than failing here: nothing in the
+                # return value or the logs told the user their voice changed, the
+                # first signal was auditory and mid-conversation, and it converts a
+                # free local failure into a billed cloud call nobody asked for. It
+                # also collapses distinct voices onto one (af_sky and af_sarah both
+                # became nova), which matters when several agents share a channel
+                # and the voice is how you tell them apart.
+                #
+                # Raised before any request, as VM-1901 already did for
+                # unmapped voices: no call to OpenAI, and one clear reason in
+                # the failover's attempted_endpoints instead of a 400.
+                raise UnmappedProviderVoiceError(
+                    f"Voice {voice!r} is not an OpenAI voice and voice "
+                    f"substitution is off — this endpoint cannot speak it; "
+                    f"skipping. Set VOICEMODE_TTS_VOICE_SUBSTITUTION=true to "
+                    f"map Kokoro voices to OpenAI equivalents."
+                )
             else:
                 voice_mapping = {
                     "af_sky": "nova",
@@ -173,14 +198,16 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                         f"skipping (no silent substitution)."
                     )
                 selected_voice = voice_mapping[voice]
-                # VM-1901: this IS the one legitimate fallback left in the
-                # system (design.md §5.3) — a known Kokoro alias mapped to
-                # its OpenAI equivalent because this endpoint is OpenAI, not
-                # Kokoro. Record it as such, structurally distinct from the
-                # bug case (which can no longer reach this line at all).
+                # VM-1901: a known Kokoro alias mapped to its OpenAI
+                # equivalent because this endpoint is OpenAI, not Kokoro.
+                # Only reachable with VOICEMODE_TTS_VOICE_SUBSTITUTION on
+                # (#533). Record it as a fallback, and warn.
                 is_fallback = True
                 fallback_reason = f"endpoint-failover: {voice}→{selected_voice} (kokoro unreachable)"
-                logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
+                logger.warning(
+                    f"Substituted voice {voice} -> {selected_voice} for OpenAI "
+                    f"(VOICEMODE_TTS_VOICE_SUBSTITUTION is enabled)"
+                )
         else:
             selected_voice = voice  # Use original voice for Kokoro
     logger.info(f"Endpoint {base_url} ({provider_type}): model={selected_model}")
@@ -464,6 +491,16 @@ async def simple_tts_synthesize(
     return False, None, None, None, error_config
 
 
+def _stt_timeout(base_url: str) -> float:
+    """Request timeout for an STT endpoint (VOICEMODE_STT_TIMEOUT[_LOCAL]).
+
+    A hung transcription costs exactly this long before the transient retry
+    below takes over, so it is worth sizing to the endpoint: local STT can be
+    bounded by its own measured worst case, remote keeps its own setting.
+    """
+    return STT_TIMEOUT_LOCAL if is_local_provider(base_url) else STT_TIMEOUT
+
+
 def _is_transient_stt_error(e: Exception) -> bool:
     """Classify an STT transcription exception as transient (retry) or permanent.
 
@@ -504,6 +541,39 @@ def _classify_stt_failure(e: Exception) -> Tuple[Optional[int], str]:
             return status, ("model_not_found" if status == 404 else "request_rejected")
         return (status if isinstance(status, int) else None), "connection_failed"
     return None, "connection_failed"
+
+
+# Local STT endpoints that answered language="auto" with a server error and then
+# transcribed fine once the parameter was omitted. whisper.cpp needs "auto"
+# spelled out (it defaults to "en"), but other OpenAI-compatible servers reject
+# it -- speaches (faster-whisper) returns HTTP 500 -- and auto-detect when the
+# parameter is absent. Remembered for the life of the process so the failing
+# request is only paid once per endpoint.
+_STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE: set[str] = set()
+
+
+def _auto_language_may_be_rejected(
+    e: Exception, transcription_kwargs: Dict[str, Any], provider_type: str
+) -> bool:
+    """True when a failed local STT request is worth repeating without language="auto".
+
+    Only an implicit "auto" (we added it, the user did not ask for a language)
+    and only a 5xx, which is how speaches rejects it. Called after the transient
+    retries are exhausted, so a whisper.cpp 500 that clears on retry never
+    reaches here and can never cause "auto" to be dropped for whisper.cpp.
+
+    Never for an endpoint detected as whisper.cpp (``provider_type ==
+    "whisper"``, VoiceMode's own service on :2022): there "auto" is known to be
+    right, and a server that kept failing and then recovered on the request
+    without it would otherwise be remembered, leaving that process on
+    whisper.cpp's English default until restart.
+    """
+    return (
+        provider_type != "whisper"
+        and transcription_kwargs.get("language") == "auto"
+        and isinstance(e, APIStatusError)
+        and e.status_code >= 500
+    )
 
 
 async def simple_stt_failover(
@@ -591,7 +661,7 @@ async def simple_stt_failover(
             client = AsyncOpenAI(
                 api_key=api_key,
                 base_url=base_url,
-                timeout=60.0,  # Allow time for slower transcriptions
+                timeout=_stt_timeout(base_url),  # VOICEMODE_STT_TIMEOUT[_LOCAL], default 60s
                 max_retries=max_retries
             )
 
@@ -625,7 +695,11 @@ async def simple_stt_failover(
             if WHISPER_LANGUAGE and WHISPER_LANGUAGE != "auto":
                 # Explicit language set - pass to all providers
                 transcription_kwargs["language"] = WHISPER_LANGUAGE
-            elif is_local_provider(base_url) and provider_type != "mlx-audio":
+            elif (
+                is_local_provider(base_url)
+                and provider_type != "mlx-audio"
+                and base_url not in _STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE
+            ):
                 # Local whisper.cpp with auto mode - must pass "auto" explicitly
                 transcription_kwargs["language"] = "auto"
             # For OpenAI / mlx-audio with "auto" - don't pass the parameter
@@ -654,6 +728,22 @@ async def simple_stt_failover(
                         await asyncio.sleep(delay)
                         attempt += 1
                         continue
+                    # The endpoint may be an OpenAI-compatible server that is not
+                    # whisper.cpp and rejects language="auto". Try once without it;
+                    # if that fails too, the original error stands.
+                    if _auto_language_may_be_rejected(e, transcription_kwargs, provider_type):
+                        fallback_kwargs = {k: v for k, v in transcription_kwargs.items() if k != "language"}
+                        try:
+                            transcription = await client.audio.transcriptions.create(**fallback_kwargs)
+                        except Exception as fallback_error:
+                            logger.debug(f"STT retry without language failed on {base_url}: {fallback_error}")
+                            raise e
+                        _STT_ENDPOINTS_REJECTING_AUTO_LANGUAGE.add(base_url)
+                        logger.warning(
+                            f"STT endpoint {base_url} rejected language=auto but transcribed "
+                            f"without it; omitting language for this endpoint from now on"
+                        )
+                        break
                     # Permanent error or retries exhausted: re-raise to the outer
                     # except, which records the failure and advances to the next
                     # endpoint (or returns the classified failure).

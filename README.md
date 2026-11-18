@@ -61,7 +61,9 @@ uvx voice-mode-install
 # Add to Claude Code
 claude mcp add --scope user voicemode -- uvx --refresh --from voice-mode voicemode-mcp-launcher
 
-# Optional: Add OpenAI API key as fallback for local services
+# Optional: Add an OpenAI API key as a fallback for local services.
+# A Kokoro voice (af_sky, ...) is not swapped for an OpenAI one by default;
+# set VOICEMODE_TTS_VOICE_SUBSTITUTION=true if you want that.
 export OPENAI_API_KEY=your-openai-key
 
 # Start a conversation

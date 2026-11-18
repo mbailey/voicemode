@@ -37,6 +37,16 @@ EXPECTED_PER_ENDPOINT = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _kokoro_voice_may_reach_openai():
+    """These tests send af_sky down the whole chain to check the MODEL each
+    endpoint gets, OpenAI included. Since #533 (VM-2536) a Kokoro voice is
+    refused at the OpenAI endpoint unless substitution is on, so turn it on
+    here; the voice rule itself is tested in test_tts_voice_substitution.py."""
+    with patch("voice_mode.simple_failover.TTS_VOICE_SUBSTITUTION", True):
+        yield
+
+
 def _resolver_patches():
     """Patch the resolver's config inputs to the default-config scenario."""
     return (

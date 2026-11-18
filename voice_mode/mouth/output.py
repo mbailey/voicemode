@@ -245,6 +245,10 @@ def call_socks() -> list[str]:
 
 
 def _ask(sock_path: str, header: dict) -> tuple[socket.socket, dict]:
+    if not hasattr(socket, "AF_UNIX"):
+        # Native Windows (VM-2544): an OSError, which both callers already
+        # read as "that bot is not answering", never an AttributeError.
+        raise OSError("call mouth-leg needs Unix domain sockets, not available on this platform")
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(CALL_LOOK_S)
     try:

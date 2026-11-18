@@ -827,11 +827,24 @@ def _normalize_turns(
     return normalized
 
 
-def _play_samples_blocking(samples, sample_rate):
+def _play_samples_blocking(samples, sample_rate, stop_event: Optional[threading.Event] = None):
     """Play decoded samples to completion (blocking). Runs in a worker thread
-    via ``asyncio.to_thread`` so the producer keeps synthesizing during playback."""
+    via ``asyncio.to_thread`` so the producer keeps synthesizing during playback.
+
+    ``stop_event`` is the caller's side channel into this thread, as with the
+    recording stop flag (VM-2015): cancelling the awaiting coroutine abandons
+    the future but not the thread, so the caller sets the event and we stop the
+    player at the next poll instead of playing out the rest of the turn.
+    """
+    if stop_event is not None and stop_event.is_set():
+        return
     player = NonBlockingAudioPlayer()
-    player.play(samples, sample_rate, blocking=True)
+    player.play(samples, sample_rate, blocking=False)
+    while not player.playback_complete.wait(timeout=0.05):
+        if stop_event is not None and stop_event.is_set():
+            player.stop()
+            return
+    player.wait()
 
 
 async def _speak_turns_pipeline(
@@ -936,8 +949,19 @@ async def _speak_turns_pipeline(
                 rec["skipped"] = True
             elif item["success"] and item.get("samples") is not None:
                 play_start = time.perf_counter()
+                # Cancelling this await abandons the future, not the thread.
+                # Left running, the turn plays to the end after ESC, and on
+                # shutdown asyncio.Runner.close() joins the default executor,
+                # so mcp.run() cannot return and the process cannot exit.
+                stop_playback = threading.Event()
                 try:
-                    await asyncio.to_thread(_play_samples_blocking, item["samples"], item["sample_rate"])
+                    await asyncio.to_thread(
+                        _play_samples_blocking, item["samples"], item["sample_rate"],
+                        stop_event=stop_playback,
+                    )
+                except asyncio.CancelledError:
+                    stop_playback.set()
+                    raise
                 except Exception as e:
                     logger.error(f"Turn {idx} playback failed: {e}")
                     rec["success"] = False
@@ -3076,6 +3100,25 @@ _LISTEN_DURATION_MIN_PARAM_DESCRIPTION = (
 )
 
 
+def _conch_agent_name(project_path: Optional[str]) -> str:
+    """The name this session shows as in `voicemode conch status`.
+
+    With several agents taking turns on the conch, this is what tells them
+    apart -- and what `voicemode conch give <name>` matches on. Precedence:
+    VOICEMODE_SESSION_NAME > the project directory's basename (usually the
+    repo) > "converse". Like the session id, the env var is only meaningful
+    for stdio transport, where each session has its own server process.
+    """
+    name = os.environ.get("VOICEMODE_SESSION_NAME", "").strip()
+    if name:
+        return name
+    if project_path:
+        base = os.path.basename(os.path.normpath(project_path))
+        if base:  # empty for a filesystem root
+            return base
+    return "converse"
+
+
 # One description per parameter, written once and referenced from BOTH the MCP
 # wrapper `converse` and `_converse_core`, so the two signatures stay identical
 # (tests/test_converse_wrapper_signature_parity.py) and the text has one home.
@@ -3223,6 +3266,7 @@ async def _converse_core(
         resolved_project_path = os.getcwd()
     except OSError:
         resolved_project_path = None
+    resolved_agent_name = _conch_agent_name(resolved_project_path)
     # The nominal voice this call will use (param, else the first configured
     # default). VM-1901 observability-001: this now runs the REAL, TOTAL
     # resolver (filesystem-only, no network — the cheapness this comment
@@ -3429,8 +3473,8 @@ async def _converse_core(
     # actually-spoke path (e.g. speak-only single-message success) and would
     # be the wrong signal here.
     spoke_this_turn = False
-    conch = Conch(  # Named for event logging
-        agent_name="converse",
+    conch = Conch(
+        agent_name=resolved_agent_name,
         session_id=resolved_session_id,
         project_path=resolved_project_path,
         voice=resolved_voice,
@@ -3490,7 +3534,7 @@ async def _converse_core(
                 try:
                     position = ConchQueue.register(
                         queue_session_id,
-                        agent="converse",
+                        agent=resolved_agent_name,
                         project_path=resolved_project_path,
                         voice=resolved_voice,
                         voice_requested=voice_requested,  # VM-1901

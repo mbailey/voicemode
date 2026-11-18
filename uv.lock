@@ -3077,12 +3077,6 @@ wheels = [
 ]
 
 [[package]]
-name = "simpleaudio"
-version = "1.0.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/94/1b/4dc29653733202b68c09d9c6ca085cf67ac54859ee860647ef21ac1ff3dc/simpleaudio-1.0.4.tar.gz", hash = "sha256:691c88649243544db717e7edf6a9831df112104e1aefb5f6038a5d071e8cf41d", size = 2042564, upload-time = "2019-11-29T03:56:28.965Z" }
-
-[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3330,7 +3324,6 @@ dependencies = [
     { name = "pyyaml" },
     { name = "scipy", version = "1.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.16.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "simpleaudio" },
     { name = "sounddevice" },
     { name = "uv" },
     { name = "webrtcvad-wheels" },
@@ -3404,7 +3397,6 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3.5.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "scipy", specifier = "!=1.15.*" },
-    { name = "simpleaudio" },
     { name = "sounddevice" },
     { name = "twine", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "uv", specifier = ">=0.13.4" },

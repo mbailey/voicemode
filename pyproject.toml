@@ -41,7 +41,6 @@ dependencies = [
     "openai>=2",  # was >=1.0.0 (VM-1640 / VM-1240)
     "pydub",
     "audioop-lts; python_version >= '3.13'",
-    "simpleaudio",
     "httpx",
     "aiohttp",  # Required for Whisper and Kokoro service installers
     "psutil>=5.9.0",
