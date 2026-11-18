@@ -173,6 +173,11 @@ VOICEMODE_VOICES=af_sky
 # To use OpenAI voices, set OPENAI_API_KEY and add them here:
 # VOICEMODE_VOICES=af_sky,alloy
 
+# When TTS fails over from Kokoro to OpenAI, let OpenAI speak a Kokoro voice
+# as its nearest OpenAI voice (af_sky -> nova). Off by default: the OpenAI
+# endpoint is skipped and the Kokoro outage is reported instead (#533).
+# VOICEMODE_TTS_VOICE_SUBSTITUTION=false
+
 # Comma-separated list of preferred models
 # VOICEMODE_TTS_MODELS=tts-1,tts-1-hd,gpt-4o-mini-tts
 
@@ -776,6 +781,12 @@ def parse_provider_models(prefix: str) -> dict:
 TTS_BASE_URLS = parse_comma_list("VOICEMODE_TTS_BASE_URLS", "http://127.0.0.1:8880/v1,https://api.openai.com/v1")
 STT_BASE_URLS = parse_comma_list("VOICEMODE_STT_BASE_URLS", "http://127.0.0.1:2022/v1,https://api.openai.com/v1")
 TTS_VOICES = parse_comma_list("VOICEMODE_VOICES", "af_sky,alloy")
+
+# Silently remap a local voice to an OpenAI voice when TTS falls back to OpenAI
+# (af_sky -> nova, and so on). Off by default: a silent identity change costs
+# more to diagnose than the outage it hides, turns a free local failure into a
+# billed cloud call, and collapses distinct voices onto one.
+TTS_VOICE_SUBSTITUTION = env_bool("VOICEMODE_TTS_VOICE_SUBSTITUTION", False)
 TTS_MODELS = parse_comma_list("VOICEMODE_TTS_MODELS", "tts-1,tts-1-hd,gpt-4o-mini-tts")
 STT_MODEL = os.getenv("VOICEMODE_STT_MODEL", "whisper-1")
 # Whether the user set VOICEMODE_STT_MODEL themselves (env or voicemode.env).

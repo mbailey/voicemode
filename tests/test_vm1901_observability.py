@@ -325,7 +325,9 @@ class TestIsFallbackOnlyForLegitimateSubstitution:
         async def fake_tts(**kwargs):
             return True, {"generation": 0.1}
 
+        # #533 (VM-2536): the Kokoro->OpenAI mapping is opt-in now.
         with patch.object(sf, "TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch.object(sf, "TTS_VOICE_SUBSTITUTION", True), \
              patch("voice_mode.core.text_to_speech", side_effect=fake_tts):
             success, metrics, config = await simple_tts_failover(text="hi", voice="af_sky")
 

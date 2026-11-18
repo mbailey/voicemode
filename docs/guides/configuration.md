@@ -34,6 +34,11 @@ export OPENAI_API_KEY="your-api-key"  # Fallback
 # Local services auto-detected when running
 ```
 
+If Kokoro is down, a Kokoro voice such as `af_sky` is **not** spoken by OpenAI
+in a different voice: the OpenAI endpoint is skipped and you see the real error.
+To have OpenAI stand in with its nearest voice (`af_sky` becomes `nova`), set
+`VOICEMODE_TTS_VOICE_SUBSTITUTION=true`; each swap is logged as a warning.
+
 ## Configuration System
 
 ### Configuration Precedence
@@ -112,6 +117,11 @@ VOICEMODE_TTS_MODEL=tts-1-hd
 
 # Speech speed (0.25 to 4.0)
 VOICEMODE_TTS_SPEED=1.0
+
+# Let the OpenAI endpoint stand in for a Kokoro voice with its nearest
+# OpenAI voice (af_sky -> nova). Off by default: the endpoint is skipped
+# and the local outage is reported instead. Logs a warning when it fires.
+VOICEMODE_TTS_VOICE_SUBSTITUTION=false
 ```
 
 #### Speech-to-Text (STT)

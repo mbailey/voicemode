@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A Kokoro voice is no longer swapped for an OpenAI one when TTS fails over to OpenAI.
+  Before, `af_sky` quietly became `nova` (a different voice, and a billed call), and the
+  Kokoro outage that caused it went unreported. Now the OpenAI endpoint is skipped with a
+  clear reason, so the error you see is the real one. To keep the old mapping, set
+  `VOICEMODE_TTS_VOICE_SUBSTITUTION=true`; it logs a warning each time it maps a voice.
+  OpenAI voices you ask for by name (alloy, nova, ...) are unaffected.
+  **If you use OpenAI as a fallback for Kokoro** (the hybrid setup), a Kokoro outage
+  now means no speech and a clear error rather than OpenAI's voice, unless you set the
+  flag above.
+  Thanks @rwunsch (#533, #538).
+
 ### Removed
 
 - The `simpleaudio` dependency is gone, so installing VoiceMode on a Mac or on native Windows

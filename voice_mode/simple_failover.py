@@ -15,6 +15,7 @@ from .provider_discovery import is_local_provider
 from .config import (
     TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE,
     STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX,
+    TTS_VOICE_SUBSTITUTION,
 )
 from .provider_discovery import detect_provider_type, EndpointInfo
 from .providers import _select_stt_model_for_endpoint, _select_tts_model_for_endpoint
@@ -94,7 +95,9 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
 
     Shared by the play and synth-only failover loops. Returns the configured
     ``AsyncOpenAI`` client plus the voice/model actually sent to the provider
-    (clone voices pass through; OpenAI maps Kokoro voice names to equivalents).
+    (clone voices pass through; an OpenAI endpoint speaks only OpenAI voices,
+    and maps Kokoro voice names to equivalents only when
+    ``VOICEMODE_TTS_VOICE_SUBSTITUTION`` is on, #533).
 
     ``voice`` here MUST be ``resolution.resolved`` (the canonical id from
     :func:`voice_profiles.resolve_voice`), never the raw caller expression —
@@ -144,10 +147,31 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
         # explicit caller model still wins inside the resolver.
         selected_model = _select_tts_model_for_endpoint(provider_type, model)
         if provider_type == "openai":
-            # Map Kokoro voices to OpenAI equivalents, or use OpenAI default
             openai_voices = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"]
             if voice in openai_voices:
                 selected_voice = voice
+            elif not TTS_VOICE_SUBSTITUTION:
+                # #533: never substitute a voice by default. Skip this endpoint
+                # loudly instead, so the local-TTS outage that sent us here is
+                # what the user sees, not the assistant changing voice.
+                #
+                # Substituting silently is worse than failing here: nothing in the
+                # return value or the logs told the user their voice changed, the
+                # first signal was auditory and mid-conversation, and it converts a
+                # free local failure into a billed cloud call nobody asked for. It
+                # also collapses distinct voices onto one (af_sky and af_sarah both
+                # became nova), which matters when several agents share a channel
+                # and the voice is how you tell them apart.
+                #
+                # Raised before any request, as VM-1901 already did for
+                # unmapped voices: no call to OpenAI, and one clear reason in
+                # the failover's attempted_endpoints instead of a 400.
+                raise UnmappedProviderVoiceError(
+                    f"Voice {voice!r} is not an OpenAI voice and voice "
+                    f"substitution is off — this endpoint cannot speak it; "
+                    f"skipping. Set VOICEMODE_TTS_VOICE_SUBSTITUTION=true to "
+                    f"map Kokoro voices to OpenAI equivalents."
+                )
             else:
                 voice_mapping = {
                     "af_sky": "nova",
@@ -173,14 +197,16 @@ def _prepare_tts_endpoint(base_url, voice, model, clone_profile):
                         f"skipping (no silent substitution)."
                     )
                 selected_voice = voice_mapping[voice]
-                # VM-1901: this IS the one legitimate fallback left in the
-                # system (design.md §5.3) — a known Kokoro alias mapped to
-                # its OpenAI equivalent because this endpoint is OpenAI, not
-                # Kokoro. Record it as such, structurally distinct from the
-                # bug case (which can no longer reach this line at all).
+                # VM-1901: a known Kokoro alias mapped to its OpenAI
+                # equivalent because this endpoint is OpenAI, not Kokoro.
+                # Only reachable with VOICEMODE_TTS_VOICE_SUBSTITUTION on
+                # (#533). Record it as a fallback, and warn.
                 is_fallback = True
                 fallback_reason = f"endpoint-failover: {voice}→{selected_voice} (kokoro unreachable)"
-                logger.info(f"Mapped voice {voice} to {selected_voice} for OpenAI")
+                logger.warning(
+                    f"Substituted voice {voice} -> {selected_voice} for OpenAI "
+                    f"(VOICEMODE_TTS_VOICE_SUBSTITUTION is enabled)"
+                )
         else:
             selected_voice = voice  # Use original voice for Kokoro
     logger.info(f"Endpoint {base_url} ({provider_type}): model={selected_model}")
