@@ -1403,7 +1403,7 @@ def _send_control_command(command, message, hint, socket_path):
     friendly message when nothing is listening (the channel is only live while the
     server is speaking, and only when enabled) or on any other socket error.
     """
-    from voice_mode.control_socket import send_control_command
+    from voice_mode.control_socket import ControlChannelUnavailable, send_control_command
     from voice_mode.control_channel import ControlCommandError
     from voice_mode import config
 
@@ -1413,6 +1413,10 @@ def _send_control_command(command, message, hint, socket_path):
     except ControlCommandError as exc:
         click.echo(f"Invalid control command: {exc}", err=True)
         raise SystemExit(2)
+    except ControlChannelUnavailable as exc:
+        # No AF_UNIX (native Windows, VM-2544): say so plainly, no traceback.
+        click.echo(str(exc), err=True)
+        raise SystemExit(1)
     except FileNotFoundError:
         click.echo(
             f"No control socket at {path}.\n"

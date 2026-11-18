@@ -68,6 +68,13 @@ class SocketBackend:
         Returns:
             CommandResult with the response from mpv.
         """
+        if not hasattr(socket, "AF_UNIX"):
+            # Native Windows has no Unix domain sockets (VM-2544): a failed
+            # command, never an AttributeError out of the player.
+            return CommandResult(
+                success=False,
+                error="mpv IPC needs Unix domain sockets, not available on this platform",
+            )
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(5.0)

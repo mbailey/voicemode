@@ -29,6 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   FFmpeg. ALSA development headers (`libasound2-dev`, `alsa-lib-devel`) are now optional on
   Linux. Thanks @rwunsch (#541, VM-2438).
 
+### Fixed
+
+- With the control channel enabled on native Windows (no Unix domain sockets), `converse`
+  speaks again instead of failing every call. The server logs once that the control channel
+  is not available on this platform and carries on without it; `voicemode control` says the
+  same and exits non-zero, no traceback. Thanks @rwunsch for the report (#588, VM-2544).
+
 ## [9.0.2] - 2026-10-29
 
 ### Security
