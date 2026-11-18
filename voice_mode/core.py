@@ -571,7 +571,8 @@ async def text_to_speech(
                     # Fallback to file-based playback methods
                     logger.info("Attempting alternative playback methods...")
                     
-                    # Try using PyDub's playback (requires simpleaudio or pyaudio)
+                    # Try PyDub's playback: simpleaudio, then pyaudio, then ffplay (from
+                    # FFmpeg). VoiceMode ships neither of the first two, so this is ffplay.
                     try:
                         from pydub.playback import play as pydub_play
                         logger.debug("Using PyDub playback...")

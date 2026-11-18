@@ -15,11 +15,13 @@
 # - Ubuntu/Debian: libportaudio2, ffmpeg
 # - Fedora: portaudio, ffmpeg
 #
-# **Required (build tools - for webrtcvad and simpleaudio):**
-# - Ubuntu/Debian: python3-dev, gcc, libasound2-dev
-# - Fedora: python3-devel, gcc, alsa-lib-devel
-# - Note: webrtcvad is a Python C extension used for silence detection. It must be compiled during installation.
-#   simpleaudio is a Python C extension used for audio playback. It requires ALSA headers to compile.
+# **Required (build tools - for webrtcvad):**
+# - Ubuntu/Debian: python3-dev, gcc
+# - Fedora: python3-devel, gcc
+# - Note: webrtcvad is a Python C extension used for silence detection. It must be compiled during installation
+#   where no prebuilt webrtcvad-wheels wheel fits.
+#   simpleaudio was dropped (VM-2438): nothing imported it, and on Apple Silicon it had no wheel, so it
+#   forced a compiler onto every Mac. ALSA headers (libasound2-dev, alsa-lib-devel) are now optional.
 #   Testing confirmed: Only gcc is required for core, g++/gcc-c++ not needed.
 #
 # **Optional (build from source):**
@@ -101,9 +103,9 @@ voicemode:
 
         - name: libasound2-dev
           description: ALSA development files (audio support)
-          required: true
+          required: false
           # Don't use check_command - let it use _check_apt_package which properly checks dpkg output
-          note: Required for compiling simpleaudio (C extension used for audio playback)
+          note: Was needed only to compile simpleaudio, which VoiceMode no longer uses (VM-2438)
 
         - name: libasound2-plugins
           description: ALSA plugins for PulseAudio
@@ -160,9 +162,9 @@ voicemode:
 
         - name: alsa-lib-devel
           description: ALSA development files (audio support)
-          required: true
+          required: false
           check_command: rpm -q alsa-lib-devel
-          note: Required for compiling simpleaudio (C extension used for audio playback)
+          note: Was needed only to compile simpleaudio, which VoiceMode no longer uses (VM-2438)
 
         - name: portaudio
           description: PortAudio library (for sounddevice runtime)
