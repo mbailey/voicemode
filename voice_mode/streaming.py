@@ -647,6 +647,7 @@ async def stream_pcm_audio(
                         with open(tmp_wav.name, 'rb') as f:
                             wav_data = f.read()
                         import os
+                        tmp_wav.close()  # Windows cannot delete an open file
                         os.unlink(tmp_wav.name)
                         audio_path = save_debug_file(wav_data, "tts", "wav", audio_dir, True, conversation_id)
                         if audio_path:
@@ -917,6 +918,7 @@ async def stream_cartesia_pcm(
                         wav_file.writeframes(pcm_data)
                     with open(tmp_wav.name, "rb") as f:
                         wav_data = f.read()
+                    tmp_wav.close()  # Windows cannot delete an open file
                     os.unlink(tmp_wav.name)
                 audio_path = save_debug_file(
                     wav_data, "tts", "wav", audio_dir, True, conversation_id
