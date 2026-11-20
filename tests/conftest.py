@@ -299,3 +299,43 @@ def mock_subprocess(monkeypatch):
     monkeypatch.setattr("subprocess.Popen", mock.Popen)
     monkeypatch.setattr("subprocess.run", mock.run)
     return mock
+
+
+class VirtualClock:
+    """A stand-in for the ``time`` module inside ``voice_mode.mouth.output``.
+
+    ``sleep`` advances ``now`` and returns at once, so NullOut's pacing costs
+    no wall time and a runner's timer slack cannot move what it measures
+    (VM-2605: the macOS runners overshoot a sleep by 60-80 ms). Only the
+    output module sees it; the player's own polling stays on the real clock.
+    """
+
+    def __init__(self, start: float = 1000.0):
+        import threading
+
+        self.now = start
+        self._lock = threading.Lock()
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, s: float) -> None:
+        with self._lock:
+            self.now += max(0.0, s)
+
+
+@pytest.fixture
+def vclock(monkeypatch):
+    """Virtual time for the mouth's NULL device (``output.time``).
+
+    NULL-device tests only: ``DeviceOut.drain`` polls a real device thread
+    against a ``monotonic()`` deadline, which passes at once in virtual time.
+    """
+    from voice_mode.mouth import output
+
+    clock = VirtualClock()
+    monkeypatch.setattr(output, "time", clock)
+    return clock

@@ -18,9 +18,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from voice_mode.mouth import inbox, player
+from voice_mode.mouth import inbox, output, player
 
 HOST = socket.gethostname().split(".")[0].lower()
+
+# A hang guard, not a pacing budget: a healthy player exits within its idle.
+PLAYER_GONE_S = 30
+_players: list = []  # threads run_player started in the current test
 
 
 @pytest.fixture
@@ -37,7 +41,18 @@ def box(tmp_path, monkeypatch):
     # (two were left running at 01:51 Sat).
     monkeypatch.setenv("VOICEMODE_MOUTH_IDLE_S", "1")
     monkeypatch.delenv("VOICEMODE_MOUTH_MAIL_ALLOW", raising=False)
-    return SimpleNamespace(d=d, logs=logs, mail=mail, n=[0])
+    _players.clear()
+    yield SimpleNamespace(d=d, logs=logs, mail=mail, n=[0])
+    # Every player this test started must be gone before the next test: one
+    # that outlives its test reads the env AFTER monkeypatch repoints it, and
+    # speaks into the next test's log (VM-2605). Fail here, in its own test.
+    alive = []
+    for t in _players:
+        t.join(PLAYER_GONE_S)
+        if t.is_alive():
+            alive.append(t.name)
+    _players.clear()
+    assert not alive, f"player(s) still running {PLAYER_GONE_S:g}s after the test: {alive}"
 
 
 def deliver(box, body="", subject="hi", sender=f"cora@{HOST}.example-tailnet.ts.net", **headers) -> str:
@@ -50,7 +65,11 @@ def deliver(box, body="", subject="hi", sender=f"cora@{HOST}.example-tailnet.ts.
     for k, v in headers.items():
         m[k.replace("_", "-")] = v
     m.set_content(body)
-    (box.mail / "new" / f"{time.time_ns()}.{box.n[0]}.{HOST}").write_bytes(bytes(m))
+    # As a real MDA does (and box.drop): write in tmp/, then rename into new/,
+    # so the player can never read, and cache, a half-written mail.
+    name = f"{time.time_ns()}.{box.n[0]}.{HOST}"
+    (box.mail / "tmp" / name).write_bytes(bytes(m))
+    (box.mail / "tmp" / name).rename(box.mail / "new" / name)
     return mid
 
 
@@ -70,7 +89,29 @@ def lines(logs):
 def run_player(d, idle=0.3):
     t = threading.Thread(target=player.serve, kwargs={"d": d, "idle_exit_s": idle}, daemon=True)
     t.start()
+    _players.append(t)  # the box fixture joins it at teardown
     return t
+
+
+@pytest.fixture
+def gate(monkeypatch, vclock):
+    """Hold the first line on its first block until the test says go.
+
+    Returns (playing, release). Once ``playing`` is set the player is inside
+    the first line, so everything queued behind it is "not yet spoken" by
+    construction, however slow the runner. On virtual time the rest of the
+    playback then costs no wall time.
+    """
+    playing, release = threading.Event(), threading.Event()
+    real_write = output.NullOut.write
+
+    def write(self, block):
+        if not playing.is_set():
+            playing.set()
+            assert release.wait(10), "the test never released the first line"
+        real_write(self, block)
+    monkeypatch.setattr(output.NullOut, "write", write)
+    return playing, release
 
 
 def test_a_mail_becomes_a_line_spoken_as_its_sender(box):
@@ -88,35 +129,44 @@ def test_an_empty_body_speaks_the_subject(box):
     assert spoken(box) == ["Parking runs out in forty seconds"]
 
 
-def test_supersedes_amends_a_line_not_yet_spoken(box):
+def test_supersedes_amends_a_line_not_yet_spoken(box, gate):
+    playing, release = gate
     deliver(box, "word " * 20)                      # keeps the player busy
     old = deliver(box, "the old words")
     th = run_player(box.d)
-    time.sleep(0.3)
+    assert playing.wait(10)                         # the busy line is playing: old is queued
     deliver(box, "the new words", Supersedes=old)
-    th.join(8)
+    release.set()
+    th.join(PLAYER_GONE_S)
+    assert not th.is_alive()
     assert "the new words" in spoken(box) and "the old words" not in spoken(box)
     assert sorted(flags(box)) == ["S", "S", "T"]    # the old one: replaced, never spoken
 
 
-def test_the_newer_takes_the_older_ones_place(box):
+def test_the_newer_takes_the_older_ones_place(box, gate):
+    playing, release = gate
     deliver(box, "word " * 20)
     old = deliver(box, "second, amended later")
     deliver(box, "third")
     th = run_player(box.d)
-    time.sleep(0.3)
+    assert playing.wait(10)
     deliver(box, "second, as amended", Supersedes=old)
-    th.join(8)
+    release.set()
+    th.join(PLAYER_GONE_S)
+    assert not th.is_alive()
     assert spoken(box)[1:] == ["second, as amended", "third"]
 
 
-def test_supersedes_with_an_empty_body_retracts(box):
+def test_supersedes_with_an_empty_body_retracts(box, gate):
+    playing, release = gate
     deliver(box, "word " * 20)
     old = deliver(box, "never mind this")
     th = run_player(box.d)
-    time.sleep(0.3)
+    assert playing.wait(10)
     deliver(box, "", subject="retract", Supersedes=old)
-    th.join(8)
+    release.set()
+    th.join(PLAYER_GONE_S)
+    assert not th.is_alive()
     said = [x for x in lines(box.logs) if x["kind"] == "said"]
     assert any(x["reason"] == "retracted" for x in said)
     assert "never mind this" not in spoken(box)

@@ -136,6 +136,32 @@ def test_a_better_opener_supersedes_the_held_one(box, ears):
     assert spoken == ["Yes: the app reads the real store"]
 
 
+def test_a_supersede_and_his_turn_end_between_list_and_floor_read(box, ears, monkeypatch):
+    """The race behind the test above (VM-2605, macOS CI 3.12), forced with no
+    sleep: the player lists the queue, then the better opener and the end of
+    his turn both land, then it reads the floor. The floor says free, but the
+    list it took is stale; the old opener must not play."""
+    from voice_mode.mouth import box as mouth_box
+    ears("partial")
+    first = deliver(box, "Hmm, let me think", X_Mouth_When="turn-end")
+    real_lines, fired = mouth_box.Queue.lines, []
+
+    def lines_then_race(self, act=False, playing=None):
+        snapshot = real_lines(self, act=act, playing=playing)
+        if act and not fired:                          # the player's first look at the queue
+            fired.append(True)
+            deliver(box, "Yes: the app reads the real store", Supersedes=first)
+            ears("turn")
+        return snapshot                                # still holds the old opener
+    monkeypatch.setattr(mouth_box.Queue, "lines", lines_then_race)
+    th = run_player(box.d, idle=0.3)
+    th.join(10)
+    assert not th.is_alive()
+    assert fired, "the player never listed the queue"
+    spoken = [x["text"] for x in lines(box.logs) if x["kind"] == "saying"]
+    assert spoken == ["Yes: the app reads the real store"]
+
+
 def test_an_opener_that_arrives_after_his_turn_plays_at_once(box, ears):
     ears("turn")
     mouth.say("Here", hold="turn-end", d=box.d, spawn=False)
