@@ -19,24 +19,25 @@ logger = logging.getLogger("voicemode")
 def find_whisper_server() -> Optional[str]:
     """Find the whisper-server binary."""
     # Check common installation paths
+    binary_name = "whisper-server.exe" if platform.system() == "Windows" else "whisper-server"
     paths_to_check = [
-        Path.home() / ".voicemode" / "services" / "whisper" / "build" / "bin" / "whisper-server",  # New location
-        Path.home() / ".voicemode" / "whisper.cpp" / "build" / "bin" / "whisper-server",  # Legacy location
-        Path.home() / ".voicemode" / "whisper.cpp" / "whisper-server",
-        Path.home() / ".voicemode" / "whisper.cpp" / "server",
+        Path.home() / ".voicemode" / "services" / "whisper" / "build" / "bin" / binary_name,  # New location
+        Path.home() / ".voicemode" / "whisper.cpp" / "build" / "bin" / binary_name,  # Legacy location
+        Path.home() / ".voicemode" / "whisper.cpp" / binary_name,
+        Path.home() / ".voicemode" / "whisper.cpp" / ("server.exe" if platform.system() == "Windows" else "server"),
         Path("/usr/local/bin/whisper-server"),
         Path("/opt/homebrew/bin/whisper-server"),
     ]
-    
+
     for path in paths_to_check:
         if path.exists() and path.is_file():
             return str(path)
-    
-    # Try to find in PATH
-    result = subprocess.run(["which", "whisper-server"], capture_output=True, text=True)
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip()
-    
+
+    # Try to find in PATH (cross-platform, respects PATHEXT on Windows)
+    found = shutil.which("whisper-server")
+    if found:
+        return found
+
     return None
 
 
