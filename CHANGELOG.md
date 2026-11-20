@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   @rwunsch (#554, #555).
 - Native Windows: buffered TTS no longer fails every turn with WinError 32 (the temp file is
   closed before it is deleted). Thanks @rwunsch (#586, #587).
+- Dependency bumps from Dependabot #583 (python-all group), #595 (joserfc 1.7.6), #574/#575 (setup-go/setup-python v7) and #527 (installer click 8.5.1); dnspython floor raised to 2.9.2 on Python 3.11+ for CVE-2026-128089
 
 ## [9.0.2] - 2026-10-29
 
