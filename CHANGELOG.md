@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `voicemode conch status` names each session (VOICEMODE_SESSION_NAME, else the project
   directory) instead of listing every one as "converse", and `voicemode conch give <name>`
   can target it. Thanks @rwunsch (#536, #556).
+- Dependency updates from Dependabot, in the lock files and CI only (a `pip` or `uvx`
+  install resolves its own versions): the python-all group (#583: uv 0.13.8, certifi
+  2026.10.23, opentelemetry-api 1.45.2, sounddevice 0.5.6, click 8.5.1, and dev and docs
+  tools), joserfc 1.7.6 (#595), the installer's click 8.5.1 (#527), and
+  `actions/setup-go` and `actions/setup-python` v7 in CI (#574, #575). (VM-2596)
 
 ### Removed
 
@@ -52,13 +57,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   @rwunsch (#554, #555).
 - Native Windows: buffered TTS no longer fails every turn with WinError 32 (the temp file is
   closed before it is deleted). Thanks @rwunsch (#586, #587).
-- Dependency bumps from Dependabot #583 (python-all group), #595 (joserfc 1.7.6), #574/#575 (setup-go/setup-python v7) and #527 (installer click 8.5.1); dnspython floor raised to 2.9.2 on Python 3.11+ for CVE-2026-128089
 - make audit ignores CVE-2026-128089 on the Python 3.10 pass only (dnspython 2.9.2 needs 3.11+; voicemode never loads dnspython)
 - VoiceMode now starts on a host with no working audio (a headless server, a container, a CI
   runner with no sound server). Before, it crashed at import time because PortAudio could not
   be reached; now the error comes only when audio is actually used, and names the cause. On
   a machine with working audio nothing changes. This also turns the GitHub test matrix green
   again (VM-2597).
+
+### Security
+
+- Dependency floor so `make audit` passes again: `dnspython>=2.9.2` on Python 3.11 and
+  newer fixes CVE-2026-128089 (GHSA-vvf4-9x63-8xvv, a denial of service). Like VM-2246's
+  floors it is a uv constraint, so it sets the lock, not a `pip` or `uvx` install. Python
+  3.10 cannot take the fix (2.9.2 needs 3.11) and keeps dnspython 2.8.0. VoiceMode's own
+  code never imports dnspython. (VM-2596)
 
 ## [9.0.2] - 2026-10-29
 
