@@ -123,9 +123,10 @@ constraint-dependencies = [
     # client/server extras want authlib>=1.6.11, and email-validator (via
     # pydantic[email]) wants dnspython>=2.0.0, so uv kept the vulnerable versions.
     "authlib>=1.9.1",         # VM-2246: CVE-2026-96760, CVE-2026-114614..114618, CVE-2026-114620
-    # dnspython 2.9.0 is the only fix and needs Python>=3.11, so py3.10 stays on 2.8.0.
-    # The Makefile audit target's py3.10 pass ignores this one CVE (VM-2246).
-    "dnspython>=2.9.0; python_version >= '3.11'",  # VM-2246: CVE-2026-114605
+    # dnspython's fixes (2.9.0, 2.9.2) need Python>=3.11, so py3.10 stays on 2.8.0.
+    # The Makefile audit target's py3.10 pass ignores CVE-2026-114605 (VM-2246);
+    # CVE-2026-128089 on py3.10 is open, put to the super (VM-2596).
+    "dnspython>=2.9.2; python_version >= '3.11'",  # VM-2246: CVE-2026-114605; VM-2596: CVE-2026-128089
 ]
 
 [tool.hatch.build.targets.wheel]
