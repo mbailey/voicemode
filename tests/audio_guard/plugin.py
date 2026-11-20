@@ -69,6 +69,15 @@ _MITIGATION_ENV = {
 
 _BANNER = "=" * 72
 
+#: VM-2605: GitHub Actions sets this to "true" on every runner.  Under it, the
+#: guard's RED verdict is ALSO printed as ``::error`` workflow commands, so the
+#: offending program and test show in the PUBLIC check-run annotations; the job
+#: log itself needs auth, and before this a guard-only RED showed nothing there
+#: but "Process completed with exit code 1".  Anywhere else: unchanged.
+GITHUB_ACTIONS_ENV = "GITHUB_ACTIONS"
+_GITHUB_TITLE = "audio guard RED"
+_GITHUB_LATE_TITLE = "audio guard RED (after session)"
+
 
 def _resolve_mode(config) -> tuple:
     """Pick the mode, and say why — the reason is printed in the summary."""
@@ -120,6 +129,9 @@ def install(config) -> None:
     # evidence simply did not exist.  An instrument's own receipt must not
     # depend on what the things it is measuring do to the environment.
     STATE["report_path"] = os.environ.get(REPORT_ENV)
+    # Read once, for the same reason: a test that scrubs the environment must
+    # not switch the guard's CI annotations off for the rest of the run.
+    STATE["github_annotations"] = os.environ.get(GITHUB_ACTIONS_ENV) == "true"
 
     if mode == MODE_OFF:
         # The escape hatch announces itself.  A guard that can be absent
@@ -535,6 +547,8 @@ class _Reporter:
             write(f"    {key[1]}  ×{count}  <- {key[0]}")
         write("  The device was NOT opened. This run fails on the guard's own "
               "hit record, whatever the tests reported.")
+        for line in _github_error_lines(failing, _GITHUB_TITLE):
+            write(line)
 
     def _maybe_write_report(self, write) -> None:
         path = STATE.get("report_path") or os.environ.get(REPORT_ENV)
@@ -565,6 +579,41 @@ class _Reporter:
             session.exitstatus = 1
 
 
+def _github_escape(text: str, *, prop: bool = False) -> str:
+    """Escape a workflow-command value as the Actions runner expects.
+
+    ``%``, CR and LF in the message; a property value (``title=``) also needs
+    ``:`` and ``,`` escaped, or the runner splits it.
+    """
+    text = str(text).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    if prop:
+        text = text.replace(":", "%3A").replace(",", "%2C")
+    return text
+
+
+def _github_error_lines(hits, title: str) -> list:
+    """One ``::error`` line per (test, program/entry point) group of ``hits``.
+
+    Empty unless the guard armed under ``GITHUB_ACTIONS=true``, so a local run
+    prints exactly what it printed before.  Visibility only: the exit status is
+    still decided by ``pytest_sessionfinish``, untouched.
+    """
+    if not STATE.get("github_annotations") or not hits:
+        return []
+    grouped: dict = {}
+    for hit in hits:
+        program = hit.get("program")
+        entry = (f"{program}/{hit['entry_point']}" if program
+                 else hit["entry_point"])
+        key = (hit["nodeid"], entry)
+        grouped[key] = grouped.get(key, 0) + 1
+    return [
+        f"::error title={_github_escape(title, prop=True)}::"
+        f"{_github_escape(f'{entry} x{count} <- {nodeid}')}"
+        for (nodeid, entry), count in sorted(grouped.items())
+    ]
+
+
 def _group(hits) -> dict:
     grouped: dict = {}
     for hit in hits:
@@ -593,3 +642,9 @@ def _report_late_hits() -> None:
         print(f"    {hit['entry_point']} on thread {hit['thread']} "
               f"<- {hit['nodeid']}", file=sys.stderr)
     print(_BANNER, file=sys.stderr, flush=True)
+    # Workflow commands are read from stdout. Only unsanctioned blocks: the
+    # guard's own drills are excused here exactly as they are in the verdict.
+    late_failing = [hit for hit in late
+                    if hit["disposition"] == "blocked" and not hit["sanctioned"]]
+    for line in _github_error_lines(late_failing, _GITHUB_LATE_TITLE):
+        print(line, flush=True)
