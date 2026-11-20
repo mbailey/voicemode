@@ -261,9 +261,12 @@ clean-dist:
 # Daily in CI too: .github/workflows/audit.yml.
 # pip-audit evaluates the export's markers against the Python it runs on, so the
 # first pass sees only uvx's default interpreter. The second pass audits the
-# py3.10 resolution. It ignores exactly ONE advisory: CVE-2026-114605 in
-# dnspython 2.8.0. dnspython's only patch (2.9.0) needs py3.11+, so py3.10 cannot
-# take it; tracking VM-2246. Anything else on py3.10 still fails the audit.
+# py3.10 resolution. It ignores exactly TWO advisories, both in dnspython 2.8.0:
+# CVE-2026-114605 (patched in 2.9.0, VM-2246) and CVE-2026-128089 (patched in
+# 2.9.2, VM-2596). Both patches need py3.11+, so py3.10 cannot take them, and
+# voicemode never loads dnspython at runtime (pydantic's email check runs with
+# check_deliverability=False). Python 3.10 reached end of life in Oct 2026;
+# dropping it removes both ignores. Anything else on py3.10 still fails.
 audit:
 	@for dir in . installer; do \
 		echo "Auditing $$dir/uv.lock..."; \
@@ -272,7 +275,7 @@ audit:
 		printf '%s\n' "$$reqs" | uvx pip-audit --disable-pip --no-deps --progress-spinner off -r /dev/stdin || exit 1; \
 		echo "Auditing $$dir/uv.lock (py3.10 resolution)..."; \
 		printf '%s\n' "$$reqs" | uvx --python 3.10 pip-audit --disable-pip --no-deps --progress-spinner off \
-			--ignore-vuln CVE-2026-114605 -r /dev/stdin || exit 1; \
+			--ignore-vuln CVE-2026-114605 --ignore-vuln CVE-2026-128089 -r /dev/stdin || exit 1; \
 	done
 
 # Release targets - Create a new release and tag
