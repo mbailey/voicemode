@@ -33,7 +33,11 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except Exception as _sd_exc:  # OSError or PortAudioError: no PortAudio (VM-2597)
+    # pytest.importorskip catches ImportError only, so skip explicitly.
+    pytest.skip(f"sounddevice unimportable: {_sd_exc!r}", allow_module_level=True)
 
 from tests import audio_guard
 

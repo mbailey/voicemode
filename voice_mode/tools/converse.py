@@ -15,7 +15,8 @@ from datetime import datetime
 
 import numpy as np
 import psutil
-import sounddevice as sd
+from .._sounddevice import load as _load_sounddevice
+sd = _load_sounddevice()  # the module, or a stand-in without PortAudio (VM-2597)
 from scipy.io.wavfile import write
 from pydub import AudioSegment
 from openai import AsyncOpenAI
@@ -3421,10 +3422,15 @@ async def _converse_core(
     await startup_initialization()
     
     # Refresh audio device cache to pick up any device changes (AirPods, etc.)
-    # This takes ~1ms and ensures we use the current default device
-    import sounddevice as sd
-    sd._terminate()
-    sd._initialize()
+    # This takes ~1ms and ensures we use the current default device.
+    # Uses the module-level ``sd`` (a local re-import shadowed the patchable
+    # seam). With no PortAudio there is nothing to refresh, and recording /
+    # playback report the real failure where it happens (VM-2597).
+    try:
+        sd._terminate()
+        sd._initialize()
+    except Exception as exc:
+        logger.debug(f"Audio device refresh skipped: {exc}")
     
     # Get event logger and start session
     event_logger = get_event_logger()

@@ -514,7 +514,11 @@ async def text_to_speech(
                 
                 # Try to ensure sounddevice doesn't interfere with stdout/stderr
                 try:
-                    import sounddevice as sd
+                    # The module, or the stand-in that raises at first use when
+                    # PortAudio is unreachable; the except below then falls back
+                    # to file-based playback (VM-2597).
+                    from ._sounddevice import load as _load_sounddevice
+                    sd = _load_sounddevice()
                     import sys
                     
                     # Save current stdio state

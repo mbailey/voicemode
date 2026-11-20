@@ -413,7 +413,19 @@ def arm(mode: str = MODE_BLOCK) -> dict:
     """Install every layer.  Returns the coverage description for the report."""
     sd = sys.modules.get("sounddevice")
     if sd is None:
-        import sounddevice as sd  # noqa: F811 - first import, normal path
+        try:
+            import sounddevice as sd  # noqa: F811 - first import, normal path
+        except Exception as exc:
+            # No PortAudio on this host (VM-2597): the library is missing
+            # (OSError) or Pa_Initialize failed (sounddevice.PortAudioError,
+            # which is not an OSError).  Nothing can open a device that cannot
+            # be imported, so this layer is honestly unarmed, and reported as
+            # such, rather than an INTERNALERROR in pytest_configure.
+            return _unarmed_state(
+                mode,
+                f"sounddevice could not be imported ({type(exc).__name__}: {exc}): "
+                "no PortAudio is reachable, so there is no device to guard",
+            )
     if not _is_sounddevice_module(sd):
         # Never derive against a stand-in.  This is the arm-time half of
         # module_replaced(): if something already occupies sounddevice's name

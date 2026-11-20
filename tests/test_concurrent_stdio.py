@@ -26,10 +26,18 @@ from voice_mode.shared import (
     disable_sounddevice_stderr_redirect,
 )
 
+# VM-2597: these tests exercise the real sounddevice module, so they cannot
+# run on a host where it does not import (no PortAudio, e.g. headless CI).
+from voice_mode._sounddevice import is_available as _sounddevice_available
+requires_sounddevice = pytest.mark.skipif(
+    not _sounddevice_available(), reason="sounddevice unimportable (no PortAudio)"
+)
+
 
 class TestStdioProtection:
     """Test stdio protection mechanisms"""
     
+    @requires_sounddevice
     def test_sounddevice_stderr_redirect_disabled(self):
         """Test that sounddevice stderr redirection is disabled"""
         import sounddevice as sd

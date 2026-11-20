@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed before it is deleted). Thanks @rwunsch (#586, #587).
 - Dependency bumps from Dependabot #583 (python-all group), #595 (joserfc 1.7.6), #574/#575 (setup-go/setup-python v7) and #527 (installer click 8.5.1); dnspython floor raised to 2.9.2 on Python 3.11+ for CVE-2026-128089
 - make audit ignores CVE-2026-128089 on the Python 3.10 pass only (dnspython 2.9.2 needs 3.11+; voicemode never loads dnspython)
+- VoiceMode now starts on a host with no working audio (a headless server, a container, a CI
+  runner with no sound server). Before, it crashed at import time because PortAudio could not
+  be reached; now the error comes only when audio is actually used, and names the cause. On
+  a machine with working audio nothing changes. This also turns the GitHub test matrix green
+  again (VM-2597).
 
 ## [9.0.2] - 2026-10-29
 

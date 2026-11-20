@@ -10,7 +10,8 @@ import threading
 from typing import Optional
 
 import numpy as np
-import sounddevice as sd
+from ._sounddevice import load as _load_sounddevice
+sd = _load_sounddevice()  # the module, or a stand-in without PortAudio (VM-2597)
 
 logger = logging.getLogger("voicemode.audio_player")
 

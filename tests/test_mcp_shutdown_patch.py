@@ -11,9 +11,16 @@ handler (e.g. VM-2015's orphaned recording thread).
 """
 
 import asyncio
+import sys
 
 import anyio
 import pytest
+
+if sys.version_info < (3, 11):
+    # ExceptionGroup is a builtin from 3.11. On 3.10 anyio raises the
+    # `exceptiongroup` backport's class instead (already installed: anyio,
+    # pytest and fastmcp-slim all depend on it), so the test names that one.
+    from exceptiongroup import ExceptionGroup
 
 from voice_mode.mcp_shutdown_patch import (
     TESTED_FASTMCP_VERSION,

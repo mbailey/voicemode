@@ -56,6 +56,7 @@ the checks below read `_TURNS_PARAM_DESCRIPTION`, which IS the schema text
 """
 
 import re
+import sys
 
 import pytest
 
@@ -67,6 +68,23 @@ def _collapse_whitespace(text: str) -> str:
     """Normalize the docstring's hand-wrapped lines to single spaces so
     substring checks aren't brittle against re-wrapping."""
     return re.sub(r"\s+", " ", text)
+
+
+def _turns_schema_description(turns_schema: dict) -> str:
+    """The `description` pydantic generated for `turns` from its Annotated Field.
+
+    On Python 3.10, `typing.get_type_hints` turns a parameter declared
+    `Annotated[Optional[list], Field(...)] = None` into
+    `Optional[Annotated[Optional[list], Field(...)]]` (the implicit Optional for
+    a None default, dropped in 3.11). So pydantic puts the Field's description
+    one level down, on the `anyOf` branch that holds the Annotated type, not at
+    the top of the property. The text still reaches the schema the client gets.
+    3.11+ must still carry it at the top level.
+    """
+    if "description" in turns_schema or sys.version_info >= (3, 11):
+        return turns_schema["description"]
+    (branch,) = [b for b in turns_schema.get("anyOf", []) if "description" in b]
+    return branch["description"]
 
 
 # The per-turn override keys and survey vocabulary the description must keep
@@ -111,7 +129,7 @@ async def test_turns_schema_property_carries_the_description():
     i.e. it's reachable via Annotated/Field, not just docstring prose."""
     tool = await mcp.get_tool("converse")
     turns_schema = tool.parameters["properties"]["turns"]
-    assert turns_schema["description"] == _TURNS_PARAM_DESCRIPTION
+    assert _turns_schema_description(turns_schema) == _TURNS_PARAM_DESCRIPTION
 
 
 @pytest.mark.asyncio
@@ -119,7 +137,7 @@ async def test_turns_schema_description_covers_key_contract_points():
     """Spot-check the substance survives (verbs, controls, return shape) --
     guards against a future edit accidentally truncating the text."""
     tool = await mcp.get_tool("converse")
-    desc = tool.parameters["properties"]["turns"]["description"]
+    desc = _turns_schema_description(tool.parameters["properties"]["turns"])
     for expected in _REQUIRED_VOCABULARY:
         assert expected in desc, f"missing {expected!r} from turns schema description"
 
