@@ -17,6 +17,9 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
+      # VM-2605: let every leg finish. With fail-fast on, the first red leg
+      # cancelled the rest, which hid the macOS failures for months.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]

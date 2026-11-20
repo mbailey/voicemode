@@ -1044,3 +1044,136 @@ class TestTheGuardsOwnReceiptSurvivesTheTestsItMeasures:
         after = len([e for e in audio_guard.EVENTS
                      if e["event"] == "mitigation-env-restored"])
         assert after == before
+
+
+class TestARedVerdictIsVisibleInPublicCIAnnotations:
+    """VM-2605: a guard-only RED must NAME itself on GitHub, not just exit 1.
+
+    The guard fails the run from its own hit record even when every test
+    passed.  On the macOS runner that showed publicly as nothing but "Process
+    completed with exit code 1": the job log needs auth, and no test failed, so
+    no test-failure annotation could carry the cause.  Under
+    ``GITHUB_ACTIONS=true`` the verdict is therefore ALSO printed as one
+    ``::error`` workflow command per (test, program/entry point) group, and the
+    same for stragglers after the session.
+
+    Both directions: the lines appear on Actions, and a local run is unchanged
+    (no ``::error`` anywhere).  The exit status is the guard's either way.
+    """
+
+    CHILD_TEST = textwrap.dedent("""
+        import subprocess
+        import threading
+        import time
+
+        import sounddevice as sd
+
+
+        def test_swallows_an_afplay_spawn():
+            # Swallows the guard's exception, like the repo's own code: PASSES.
+            try:
+                subprocess.run(["afplay", "/System/Library/Sounds/Ping.aiff"])
+            except Exception:
+                pass
+
+
+        def test_swallows_a_device_query():
+            try:
+                sd.query_devices()
+            except Exception:
+                pass
+
+
+        def test_spawns_after_the_whole_session():
+            def very_late():
+                time.sleep(1.5)
+                try:
+                    subprocess.run(["afplay", "/System/Library/Sounds/Ping.aiff"])
+                except Exception:
+                    pass
+            threading.Thread(target=very_late, name="after-session").start()
+    """)
+
+    @pytest.fixture(scope="class")
+    def child_runs(self, tmp_path_factory):
+        workdir = tmp_path_factory.mktemp("audio_guard_ci_annotations")
+        (workdir / "conftest.py").write_text(textwrap.dedent(f"""
+            import sys
+            sys.path.insert(0, {str(REPO_ROOT)!r})
+            from tests.audio_guard import plugin as _guard
+
+            def pytest_configure(config):
+                _guard.install(config)
+        """))
+        (workdir / "test_ci_annotations.py").write_text(self.CHILD_TEST)
+        runs = {}
+        for name, actions in (("actions", "true"), ("local", None)):
+            env = dict(os.environ)
+            env["VOICEMODE_AUDIO_FEEDBACK"] = "false"
+            env["VOICEMODE_SOUNDFONTS_ENABLED"] = "false"
+            env.pop("VOICEMODE_TEST_AUDIO_GUARD", None)
+            env.pop("VOICEMODE_AUDIO_GUARD_REPORT", None)
+            env.pop("GITHUB_ACTIONS", None)
+            if actions:
+                env["GITHUB_ACTIONS"] = actions
+            runs[name] = subprocess.run(
+                [sys.executable, "-m", "pytest", str(workdir),
+                 "-p", "no:cacheprovider", "-q", "--no-header"],
+                cwd=str(workdir), env=env, capture_output=True, text=True,
+                timeout=300,
+            )
+        return runs
+
+    def test_each_failing_group_is_one_error_line_on_actions(self, child_runs):
+        proc = child_runs["actions"]
+        errors = [l for l in proc.stdout.splitlines()
+                  if l.startswith("::error title=audio guard RED::")]
+        assert any(re.fullmatch(
+            r"::error title=audio guard RED::afplay/\S+ x1 <- "
+            r"test_ci_annotations\.py::test_swallows_an_afplay_spawn", l)
+            for l in errors), proc.stdout
+        # An in-process sounddevice block has no program: the entry alone.
+        assert any(re.fullmatch(
+            r"::error title=audio guard RED::query_devices x\d+ <- "
+            r"test_ci_annotations\.py::test_swallows_a_device_query", l)
+            for l in errors), proc.stdout
+
+    def test_a_straggler_after_the_session_gets_its_own_error_line(self, child_runs):
+        proc = child_runs["actions"]
+        late = [l for l in proc.stdout.splitlines()
+                if l.startswith("::error title=audio guard RED (after session)::")]
+        assert late and all("afplay/" in l for l in late), (
+            proc.stdout, proc.stderr)
+
+    def test_the_exit_status_is_still_the_guards_own(self, child_runs):
+        for name, proc in child_runs.items():
+            counts = [line for line in proc.stdout.splitlines()
+                      if re.search(r"\d+ (passed|failed|error)", line)][-1]
+            assert "failed" not in counts, (name, proc.stdout)
+            assert proc.returncode == 1, (name, proc.stdout)
+
+    def test_a_local_run_prints_no_workflow_commands(self, child_runs):
+        proc = child_runs["local"]
+        assert "::error" not in proc.stdout, proc.stdout
+        assert "::error" not in proc.stderr, proc.stderr
+        assert "RESULT: RED" in proc.stdout, proc.stdout
+
+    def test_workflow_command_values_are_escaped(self):
+        from tests.audio_guard import plugin
+
+        assert plugin._github_escape("50%\r\nnext") == "50%25%0D%0Anext"
+        # A property value would be split by a bare ':' or ','.
+        assert plugin._github_escape("a:b,c", prop=True) == "a%3Ab%2Cc"
+        assert plugin._github_escape("a:b,c") == "a:b,c"
+
+    def test_no_lines_unless_armed_under_actions(self, monkeypatch):
+        from tests.audio_guard import STATE, plugin
+
+        hits = [{"nodeid": "t.py::x", "entry_point": "subprocess.run",
+                 "program": "afplay"}] * 2
+        monkeypatch.setitem(STATE, "github_annotations", False)
+        assert plugin._github_error_lines(hits, "T") == []
+        monkeypatch.setitem(STATE, "github_annotations", True)
+        assert plugin._github_error_lines(hits, "T") == [
+            "::error title=T::afplay/subprocess.run x2 <- t.py::x"]
+        assert plugin._github_error_lines([], "T") == []
