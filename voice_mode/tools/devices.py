@@ -2,7 +2,8 @@
 
 import logging
 from typing import Optional
-import sounddevice as sd
+from .._sounddevice import load as _load_sounddevice
+sd = _load_sounddevice()  # the module, or a stand-in without PortAudio (VM-2597)
 
 from voice_mode.server import mcp
 from voice_mode.shared import startup_initialization

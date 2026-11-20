@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import httpx
-import sounddevice as sd
+from ._sounddevice import load as _load_sounddevice
+sd = _load_sounddevice()  # the module, or a stand-in without PortAudio (VM-2597)
 
 # Import all configuration from config.py
 from .config import (

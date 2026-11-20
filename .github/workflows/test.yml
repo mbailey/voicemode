@@ -52,8 +52,11 @@ jobs:
     - name: Run tests
       env:
         OPENAI_API_KEY: test-key
+      # A command-line -m REPLACES pyproject's addopts -m "not audio", so the
+      # audio exclusion must be restated here, or audio-marked tests run in CI
+      # and the opt-in canary fails (VM-2597).
       run: |
-        pytest -v -m "not slow" --cov=voice_mode --cov-report=xml
+        pytest -v -m "not slow and not audio" --cov=voice_mode --cov-report=xml
     
     - name: Upload coverage reports
       uses: codecov/codecov-action@v7

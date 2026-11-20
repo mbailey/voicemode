@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 
-import sounddevice as sd
+from ._sounddevice import load as _load_sounddevice
+sd = _load_sounddevice()  # the module, or a stand-in without PortAudio (VM-2597)
 from pydub import AudioSegment
 
 from .config import (

@@ -8,6 +8,13 @@ from voice_mode.tools.devices import check_audio_devices
 from voice_mode.tools.voice_registry import voice_registry
 from voice_mode.tools.dependencies import check_audio_dependencies
 
+# VM-2597: these tests exercise the real sounddevice module, so they cannot
+# run on a host where it does not import (no PortAudio, e.g. headless CI).
+from voice_mode._sounddevice import is_available as _sounddevice_available
+requires_sounddevice = pytest.mark.skipif(
+    not _sounddevice_available(), reason="sounddevice unimportable (no PortAudio)"
+)
+
 
 # VM-2072: check_audio_dependencies() enumerates the host's real audio devices
 # through the lazy `import sounddevice` at voice_mode/tools/dependencies.py:78.
@@ -151,6 +158,7 @@ class TestDiagnosticTools:
             assert "am_adam" in result
 
     @pytest.mark.asyncio
+    @requires_sounddevice
     async def test_check_audio_dependencies_linux(self):
         """Test check_audio_dependencies on Linux."""
         # Since platform is imported inside the function, we need to ensure
@@ -211,6 +219,7 @@ class TestDiagnosticTools:
                     sys.modules.pop('platform', None)
 
     @pytest.mark.asyncio
+    @requires_sounddevice
     async def test_check_audio_dependencies_macos(self):
         """Test check_audio_dependencies on macOS."""
         with patch("voice_mode.tools.dependencies.diagnose_audio_setup", return_value=[]), \
@@ -257,6 +266,7 @@ class TestDiagnosticTools:
                     sys.modules.pop('platform', None)
 
     @pytest.mark.asyncio
+    @requires_sounddevice
     async def test_check_audio_dependencies_windows(self):
         """Test check_audio_dependencies on Windows/WSL."""
         with patch("platform.system", return_value="Linux"), \
