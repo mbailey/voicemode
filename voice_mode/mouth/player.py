@@ -388,6 +388,14 @@ def _next(d: Path, q: "_box.Queue") -> tuple[Optional[dict], bool]:
             return x, held
         verdict = _hold.check(x)
         if verdict == "play":
+            # The race (VM-2605): the queue was listed BEFORE check() read the
+            # floor. A supersede and his turn's end that both land between the
+            # two reads leave a stale snapshot with a free floor, and the old
+            # held line would play. Any supersede written before the turn ended
+            # is visible to a list taken after that floor read, so look again
+            # and play the line only if it is still the effective one.
+            if x.get("hold") and not _still_effective(q, x):
+                return None, True  # replaced under us: the serve loop polls again
             return x, held
         if verdict in ("expire", "stale"):
             if q.drop_line(x, "P"):
@@ -396,6 +404,11 @@ def _next(d: Path, q: "_box.Queue") -> tuple[Optional[dict], bool]:
             continue
         held = True
     return None, held
+
+
+def _still_effective(q: "_box.Queue", x: dict) -> bool:
+    """X's own mail is still a line in the queue (not replaced, retracted or taken)."""
+    return any(y["_name"] == x["_name"] for y in q.lines())
 
 
 def _read_playing(d: Path) -> Optional[dict]:
