@@ -255,17 +255,29 @@ def test_a_healthy_device_counts_what_it_pulled(box, fake_device):
     assert said["played_s"] == pytest.approx(said["dur_s"], abs=0.06)
 
 
-def test_a_device_that_stops_pulling_is_lost_not_a_hang(box, fake_device):
+def test_a_device_that_stops_pulling_is_lost_not_a_hang(box, fake_device, monkeypatch):
+    # The AirPods go into the case once the device has PULLED 8 blocks of audio
+    # (VM-2605). Not after a sleep: the pulls are sleep-paced, so timer slack
+    # changes how much a sleep's worth is. Not after N callbacks either: the
+    # stream pulls before the first write, and how many of those come back
+    # empty is timing.
+    real_cb = output.DeviceOut._callback
+
+    def callback(self, outdata, frames, t, status):
+        real_cb(self, outdata, frames, t, status)
+        if self.frames_played >= 8 * 1200:
+            fake_device.stall.set()
+    monkeypatch.setattr(output.DeviceOut, "_callback", callback)
     lost = say("word " * 20, device="MacBook Pro Speakers")
     after = say("next one", device="null")
     th = run_player(box.d)
-    time.sleep(0.4)
-    fake_device.stall.set()          # the AirPods go into the case
-    th.join(5)
+    th.join(10)
     assert not th.is_alive()
     said = {r["utt"]: r for r in lines(box.logs) if r["kind"] == "said"}
     assert said[lost["utt"]]["reason"] == "device-lost" and said[lost["utt"]]["cut"] is True
-    assert 0.2 < said[lost["utt"]]["played_s"] < 0.7
+    # It stalls on the first pull that reaches 8 blocks, and a pull is at most
+    # one block: 8 to 9 blocks pulled, less the stream's 10 ms latency.
+    assert 8 * 0.05 - 0.01 <= said[lost["utt"]]["played_s"] < 9 * 0.05 - 0.01
     assert said[after["utt"]]["reason"] == "done"  # the queue did not stall
 
 
@@ -301,9 +313,15 @@ def test_the_next_line_is_ready_when_this_one_ends(box, monkeypatch):
     saying_a = next(r for r in got if r["kind"] == "saying" and r["utt"] == a["utt"])
     from datetime import datetime
     gap = (datetime.fromisoformat(saying_b["ts"]) - datetime.fromisoformat(said_a["ts"])).total_seconds()
+    # No dead air: a latency property with no sleep on its path (file I/O only).
     assert gap < 0.1, gap                      # was gen_s (0.3 s) of dead air
     assert saying_b.get("prefetched") is True and "prefetched" not in saying_a
-    assert saying_b["gen_s"] == pytest.approx(0.3, abs=0.05)
+    # gen_s is a REAL elapsed time around Silence's time.sleep(0.3), stamped on
+    # two threads, so it cannot go on a fake clock. Assert what holds by
+    # construction instead of a window around 0.3 (VM-2605: a macOS runner
+    # read 0.36-0.38): a sleep never returns early, so gen_s >= 0.3; and B was
+    # ready before A finished, which is the point of prefetch.
+    assert 0.3 <= saying_b["gen_s"] < said_a["played_s"], (saying_b["gen_s"], said_a["played_s"])
 
 
 def test_a_stop_cancels_the_prefetched_line_too(box):
@@ -393,21 +411,51 @@ class Slow:
             yield np.full(1200, 0.5, dtype=np.float32)
 
 
-def test_a_fast_line_has_no_underrun(box):
+def test_a_fast_line_has_no_underrun(box, vclock):
+    # On virtual time NullOut's clock moves only by its own sleeps, so a line
+    # synthesised faster than real time never runs dry, by construction. On a
+    # real clock a sleep that overshoots by more than 55 ms counted as an
+    # underrun, and the macOS runners overshoot by 60-80 ms (VM-2605).
     say("Hello Mike.")
-    run_player(box.d).join(5)
+    th = run_player(box.d)
+    th.join(10)
+    assert not th.is_alive()
     said = next(r for r in lines(box.logs) if r["kind"] == "said")
     assert said["underrun_s"] == 0 and said["underruns"] == 0
+    assert said["played_s"] == pytest.approx(11 / 15, abs=0.06)
 
 
-def test_a_slow_synthesis_is_logged_as_underrun_on_null(box, monkeypatch):
+def test_a_slow_synthesis_is_logged_as_underrun_on_null(box, vclock, monkeypatch):
+    """Lock-step: the backend makes block k only once the player wrote block k-1,
+    then spends 0.1 s of virtual time on it. Each 50 ms block therefore arrives
+    50 ms after the last one ran out: 9 dry spells of exactly 0.05 s."""
+    import numpy as np
     from voice_mode.mouth import backends
-    monkeypatch.setattr(backends, "resolve", lambda b, v: (Slow(), v))
+    written = threading.Semaphore(0)
+    real_write = output.NullOut.write
+
+    def write(self, block):
+        real_write(self, block)
+        written.release()
+    monkeypatch.setattr(output.NullOut, "write", write)
+
+    class LockStep:
+        name, sample_rate = "slow", 24000
+
+        def stream(self, text, voice, speed):
+            for k in range(10):
+                if k:
+                    assert written.acquire(timeout=10), "the player never wrote the last block"
+                vclock.sleep(0.1)                 # half real time: 0.1 s per 50 ms block
+                yield np.full(1200, 0.5, dtype=np.float32)
+    monkeypatch.setattr(backends, "resolve", lambda b, v: (LockStep(), v))
     say("slow")
-    run_player(box.d).join(5)
+    th = run_player(box.d)
+    th.join(10)
+    assert not th.is_alive()
     said = next(r for r in lines(box.logs) if r["kind"] == "said")
-    assert said["played_s"] == pytest.approx(0.5, abs=0.01)
-    assert 0.3 < said["underrun_s"] < 0.7 and said["underruns"] >= 5
+    assert said["played_s"] == pytest.approx(0.5, abs=0.001)
+    assert said["underruns"] == 9 and said["underrun_s"] == pytest.approx(0.45, abs=0.001)
 
 
 def _slow_on_device(box, monkeypatch, blocks=20):
@@ -418,9 +466,40 @@ def _slow_on_device(box, monkeypatch, blocks=20):
     return next(r for r in lines(box.logs) if r["kind"] == "said")
 
 
-def test_a_slow_synthesis_is_logged_as_underrun_on_a_device(box, fake_device, monkeypatch):
-    said = _slow_on_device(box, monkeypatch)
-    assert said["reason"] == "done" and said["underrun_s"] > 0.5 and said["underruns"] >= 5
+def test_a_slow_synthesis_is_logged_as_underrun_on_a_device(monkeypatch):
+    """DeviceOut's underrun accounting reads no clock, so drive its callback by
+    hand: synthesis at half real time is one block written per two pulls, and
+    every second pull finds the queue dry. (The player passes these counters to
+    ``said`` whatever the output: the null-device test covers that path.) A
+    real-time fake device paced its pulls with time.sleep, so timer slack slowed
+    the consumer too and the dry fraction fell below the bound (VM-2605)."""
+    import numpy as np
+    monkeypatch.delenv("VOICEMODE_MOUTH_REBUFFER_S", raising=False)
+
+    class Stream:
+        latency = 0.0
+
+        def __init__(self, **kw):
+            pass
+
+        def start(self):
+            pass
+
+        def abort(self):
+            pass
+
+        def close(self):
+            pass
+    monkeypatch.setattr(output, "_sd", lambda: SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setattr(output, "resolve", lambda name: (0, name))
+    out = output.DeviceOut("MacBook Pro Speakers", 24000)
+    buf = np.zeros((1200, 1), dtype="float32")
+    for _ in range(20):
+        out.write(np.full(1200, 0.5, dtype=np.float32))
+        out._callback(buf, 1200, None, None)      # the block just written
+        out._callback(buf, 1200, None, None)      # nothing yet: a dry pull
+    assert out.underruns == 20 and out.underrun_frames == 20 * 1200
+    assert out.frames_played == 20 * 1200
 
 
 def test_rebuffer_turns_many_stutters_into_few_pauses(box, fake_device, monkeypatch, tmp_path):

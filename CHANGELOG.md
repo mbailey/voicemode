@@ -45,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The mouth no longer speaks a held opener that a better one replaced in the same moment his
+  turn ended: it looks at the queue again before releasing a held line (VM-2605).
 - With the control channel enabled on native Windows (no Unix domain sockets), `converse`
   speaks again instead of failing every call. The server logs once that the control channel
   is not available on this platform and carries on without it; `voicemode control` says the
