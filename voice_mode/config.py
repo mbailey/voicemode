@@ -155,6 +155,15 @@ def load_voicemode_env():
 # VOICEMODE_STT_MODEL=whisper-1
 # VOICEMODE_STT_MODELS=
 
+# Parakeet STT via mlx-audio (Apple Silicon): faster than whisper, and covers
+# 25 European languages including English. Whisper stays as the fallback, but
+# VoiceMode fails over when an endpoint errors or is down, not by language:
+# for a language Parakeet lacks, put whisper first. whisper.cpp ignores the
+# model id; OpenAI always gets whisper-1. Serve it on :8890 with
+# voicemode service install mlx-audio && voicemode service start mlx-audio
+# VOICEMODE_STT_BASE_URLS=http://127.0.0.1:8890/v1,http://127.0.0.1:2022/v1,https://api.openai.com/v1
+# VOICEMODE_STT_MODEL=mlx-community/parakeet-tdt-0.6b-v3
+
 # STT prompt for vocabulary biasing - helps Whisper recognize names and technical terms
 # Use when specific words are consistently misrecognized
 # Example: VOICEMODE_STT_PROMPT=tmux, Tali, kubectl, VoiceMode

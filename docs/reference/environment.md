@@ -90,6 +90,11 @@ endpoint gets `whisper-1`. With `VOICEMODE_WHISPER_LANGUAGE=auto`, mlx-audio is
 sent no `language` at all, so it detects the language; whisper.cpp still gets
 `auto`.
 
+For a worked example that puts Parakeet on mlx-audio first, with whisper.cpp
+and OpenAI as fallbacks, see
+[Parakeet via mlx-audio](../guides/configuration.md#example-parakeet-via-mlx-audio-apple-silicon)
+in the configuration guide.
+
 ### Whisper Configuration
 
 | Variable | Description | Default | Example |
