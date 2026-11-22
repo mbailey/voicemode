@@ -632,15 +632,40 @@ def test_now_interrupts_only_the_line_playing(box):
     assert order == [a["utt"], c["utt"], b["utt"]]
 
 
-def test_amend_rewrites_a_queued_line_even_if_prefetched(box):
-    a, b = say("word " * 10), say("the old words")
+def test_amend_rewrites_a_queued_line_even_if_prefetched(box, monkeypatch):
+    # Amend once b's prefetch has FINISHED, not after a sleep: under timer
+    # coalescing (macOS CI, `taskpolicy -c background`) a sleep says nothing
+    # about what the player has done. And keep the audio short: the null
+    # device is paced by sleeps too, so there the player took 8.1-10.7 s of
+    # wall time for the old 4.2 s of audio and join(8) returned before b's
+    # said (VM-2617 fix-002). ``a`` only has to outlast the amend, which now
+    # follows the prefetch by milliseconds.
+    b_prefetched = threading.Event()
+    real_run = player.Synth._run
+
+    def run(self):
+        real_run(self)
+        if self.finished and self.item["text"] == "the old words":
+            b_prefetched.set()
+    monkeypatch.setattr(player.Synth, "_run", run)
+    synthesised = {}                     # utt -> the text of the synthesis that played
+    real_play_one = player.play_one
+
+    def play_one(item, d, synth=None, prefetched=False):
+        synthesised[item["utt"]] = synth.item["text"] if synth else None
+        return real_play_one(item, d, synth, prefetched)
+    monkeypatch.setattr(player, "play_one", play_one)
+
+    a, b = say("word " * 4), say("the old words")
     th = run_player(box.d)
-    time.sleep(0.3)                       # b is prefetched by now (silence synthesises at once)
-    mouth.amend(b["utt"], "the new words")
+    assert b_prefetched.wait(5), "b was never prefetched"
+    mouth.amend(b["utt"], "the new words")   # raises if b were already playing
     th.join(8)
+    assert not th.is_alive(), "the player was still playing after 8 s"
     saying_b = next(r for r in lines(box.logs) if r["kind"] == "saying" and r["utt"] == b["utt"])
     assert saying_b["text"] == "the new words"
     assert _said(box.logs)[b["utt"]]["text_played_est"] == "the new words"
+    assert synthesised[b["utt"]] == "the new words"   # the stale prefetch was dropped
 
 
 def test_amend_refuses_a_line_already_playing(box):
