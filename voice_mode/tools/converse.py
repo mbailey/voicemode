@@ -1460,6 +1460,15 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
             - audio_data: Numpy array of recorded audio samples
             - speech_detected: Boolean indicating if speech was detected during recording
     """
+    # VM-2633: honour a caller that was cancelled before we started, ahead of
+    # any recording work. The scipy.signal import below can take seconds the
+    # first time in a process, so checking only inside the chunk loop made a
+    # pre-cancelled call pay for it. Same result as the in-loop break with no
+    # chunks recorded.
+    if stop_event is not None and stop_event.is_set():
+        logger.info("🛑 Recording skipped: caller was cancelled before it started")
+        return (np.array([]), False)
+
     # VM-2254: import before the input stream opens; a first import mid-stream stalls the VAD on Windows.
     from scipy import signal
 
