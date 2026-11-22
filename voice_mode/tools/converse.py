@@ -1451,9 +1451,12 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
             already chunked on ``audio_queue.get(timeout=0.1)``, so checking
             this flag each chunk lets the caller's ``except CancelledError``
             set it and get a thread that returns in ~100ms instead of
-            ~max_duration seconds. Has no effect on the non-VAD
-            ``record_audio`` fallback (a single blocking ``sd.rec``/``sd.wait``
-            call with no chunk boundary to poll from) -- out of scope here.
+            ~max_duration seconds. A flag that is already set when this
+            function is called returns at once on every path, before any
+            recording work (VM-2633). A flag set *during* the call has no
+            effect on the non-VAD ``record_audio`` fallback (a single blocking
+            ``sd.rec``/``sd.wait`` call with no chunk boundary to poll from)
+            -- out of scope here.
 
     Returns:
         Tuple of (audio_data, speech_detected):
