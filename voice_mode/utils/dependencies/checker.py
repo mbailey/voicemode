@@ -11,7 +11,7 @@ import time
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
-from .package_managers import get_package_manager
+from .package_managers import get_package_manager, get_homebrew_prefix, is_ostree_system
 from .cache import get_cache
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,36 @@ def load_dependencies() -> dict:
                 with yaml_file.open() as f:
                     return yaml.safe_load(f)
             raise FileNotFoundError("Could not find dependencies.yaml")
+
+
+def _check_env() -> dict:
+    """Environment for check commands, with Homebrew's pkgconfig dirs added.
+
+    Homebrew is not on pkg-config's default search path on Linux, so headers
+    installed with ``brew install alsa-lib`` are invisible to a bare
+    ``pkg-config --exists alsa`` even though the compiler finds them. On an
+    immutable OS Homebrew is often the only way to get headers, so without this
+    every pkg-config check is a false negative.
+    """
+    env = os.environ.copy()
+    prefix = get_homebrew_prefix()
+    if prefix:
+        parts = [
+            os.path.join(prefix, "lib", "pkgconfig"),
+            os.path.join(prefix, "share", "pkgconfig"),
+        ]
+        existing = env.get("PKG_CONFIG_PATH", "")
+        if existing:
+            parts.append(existing)
+        env["PKG_CONFIG_PATH"] = ":".join(parts)
+
+    # The interpreter that would actually build C extensions for voice-mode --
+    # not whatever `python3` resolves to on PATH. Under `uv tool install` these
+    # differ: uv's managed CPython ships its own headers while the system
+    # python3 may have none, so probing PATH's python3 reports a false missing
+    # python3-devel.
+    env["VOICEMODE_PYTHON"] = sys.executable
+    return env
 
 
 def detect_platform() -> str:
@@ -107,12 +137,17 @@ def check_dependency(package: dict, platform_key: str) -> bool:
     # Use check_command if provided
     if "check_command" in package:
         try:
-            cmd = package["check_command"].split()
+            # shell=True (matching the standalone installer's checker) so a
+            # check can use quoting or a fallback such as `a --version || b
+            # --version`. The previous .split() broke both. Commands come from
+            # the bundled dependencies.yaml, not from user input.
             result = subprocess.run(
-                cmd,
+                package["check_command"],
+                shell=True,
                 capture_output=True,
                 timeout=5,
-                text=True
+                text=True,
+                env=_check_env()
             )
             installed = result.returncode == 0
             logger.debug(f"Check command for {package_name}: {installed}")

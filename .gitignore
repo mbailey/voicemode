@@ -127,3 +127,6 @@ voicemode-install-feedback.md
 
 # Local convenience symlink to voice-lab voices dir (per-developer, not shipped)
 /voices
+
+# Local fnox secret store -- never commit (contains encrypted API keys)
+fnox.toml

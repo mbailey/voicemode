@@ -17,6 +17,42 @@ class PlatformInfo:
     distribution: str  # debian, fedora, darwin, etc. (for yaml lookup)
     architecture: str  # arm64, x86_64
     is_wsl: bool = False
+    is_ostree: bool = False  # Fedora Atomic: Silverblue, Kinoite, Bazzite, Bluefin...
+
+
+def is_ostree_system() -> bool:
+    """Detect an rpm-ostree / Fedora Atomic system (Silverblue, Bazzite, Bluefin...).
+
+    These report ID=fedora in /etc/os-release but have a read-only /usr and no
+    working ``dnf install`` -- Bazzite ships a dnf shim that refuses install
+    outright. Packages are layered with ``rpm-ostree install`` (requires a
+    reboot) or, preferably, installed with Homebrew or in a distrobox.
+
+    /run/ostree-booted is created by ostree at boot and is the canonical marker.
+    """
+    return Path('/run/ostree-booted').exists() or Path('/sysroot/ostree').is_dir()
+
+
+def get_homebrew_prefix() -> Optional[Path]:
+    """Return the Homebrew prefix if Homebrew is installed, else None.
+
+    Homebrew on Linux is a first-class way to get development headers on an
+    immutable OS, since it installs under $HOME or /home/linuxbrew and needs
+    neither root nor a reboot.
+    """
+    brew = shutil.which('brew')
+    if not brew:
+        for candidate in (Path('/home/linuxbrew/.linuxbrew'), Path.home() / '.linuxbrew'):
+            if (candidate / 'bin' / 'brew').exists():
+                return candidate
+        return None
+    try:
+        result = subprocess.run(
+            [brew, '--prefix'], capture_output=True, text=True, check=True, timeout=10
+        )
+        return Path(result.stdout.strip())
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return None
 
 
 def detect_platform() -> PlatformInfo:
@@ -55,7 +91,8 @@ def detect_platform() -> PlatformInfo:
             os_name=distro_info['name'],
             distribution=distro_info['family'],
             architecture=architecture,
-            is_wsl=is_wsl
+            is_wsl=is_wsl,
+            is_ostree=is_ostree_system()
         )
     else:
         raise RuntimeError(f"Unsupported operating system: {os_type}")
@@ -103,8 +140,15 @@ def _detect_linux_distro() -> dict:
     raise RuntimeError("Unable to detect Linux distribution")
 
 
-def get_package_manager(distribution: str) -> str:
-    """Get the package manager command for the distribution."""
+def get_package_manager(distribution: str, is_ostree: bool = False) -> str:
+    """Get the package manager command for the distribution.
+
+    On Fedora Atomic (ostree) the answer is never ``dnf`` -- prefer Homebrew,
+    which needs no root and no reboot, and fall back to ``rpm-ostree``.
+    """
+    if distribution == 'fedora' and is_ostree:
+        return 'brew' if get_homebrew_prefix() else 'rpm-ostree'
+
     if distribution == 'darwin':
         return 'brew'
     elif distribution == 'debian':
@@ -141,6 +185,8 @@ def get_system_info() -> dict:
         'distribution': platform_info.distribution,
         'architecture': platform_info.architecture,
         'is_wsl': platform_info.is_wsl,
+        'is_ostree': platform_info.is_ostree,
+        'homebrew_prefix': str(get_homebrew_prefix() or ''),
         'python_version': platform.python_version(),
         'platform': platform.platform(),
     }
