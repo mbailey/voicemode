@@ -11,8 +11,8 @@ import pytest
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ.setdefault("CARTESIA_API_KEY", "test-cartesia-key")
 os.environ.setdefault("VOICEMODE_CARTESIA_VOICE_ID", "voice-abc")
-os.environ.setdefault("VOICEMODE_CARTESIA_MODEL", "sonic-3")
-os.environ.setdefault("VOICEMODE_CARTESIA_FALLBACK_MODEL", "sonic-3.6")
+os.environ.setdefault("VOICEMODE_CARTESIA_MODEL", "sonic-3.6")
+os.environ.setdefault("VOICEMODE_CARTESIA_FALLBACK_MODEL", "sonic-3")
 
 from voice_mode import cartesia_tts  # noqa: E402
 from voice_mode import config  # noqa: E402
@@ -22,8 +22,8 @@ from voice_mode import config  # noqa: E402
 def _patch_config(monkeypatch):
     monkeypatch.setattr(config, "CARTESIA_API_KEY", "test-cartesia-key")
     monkeypatch.setattr(config, "CARTESIA_VOICE_ID", "voice-abc")
-    monkeypatch.setattr(config, "CARTESIA_MODEL", "sonic-3")
-    monkeypatch.setattr(config, "CARTESIA_FALLBACK_MODEL", "sonic-3.6")
+    monkeypatch.setattr(config, "CARTESIA_MODEL", "sonic-3.6")
+    monkeypatch.setattr(config, "CARTESIA_FALLBACK_MODEL", "sonic-3")
 
 
 def _sse_lines(payloads):
@@ -36,7 +36,7 @@ def _sse_lines(payloads):
 async def test_synthesize_returns_bytes_on_200():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        assert body["model_id"] == "sonic-3"
+        assert body["model_id"] == "sonic-3.6"
         assert body["voice"]["id"] == "voice-abc"
         assert body["output_format"]["container"] == "wav"
         return httpx.Response(200, content=b"FAKE_WAV")
@@ -61,7 +61,7 @@ async def test_synthesize_falls_back_on_model_error():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         calls.append(body["model_id"])
-        if body["model_id"] == "sonic-3":
+        if body["model_id"] == "sonic-3.6":
             return httpx.Response(404, text='{"error":"model not found"}')
         return httpx.Response(200, content=b"OK")
 
@@ -76,7 +76,7 @@ async def test_synthesize_falls_back_on_model_error():
         result = await cartesia_tts.synthesize("hello")
 
     assert result == b"OK"
-    assert calls == ["sonic-3", "sonic-3.6"]
+    assert calls == ["sonic-3.6", "sonic-3"]
 
 
 @pytest.mark.asyncio
@@ -161,7 +161,7 @@ async def test_stream_falls_back_on_model_error():
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         calls.append(body["model_id"])
-        if body["model_id"] == "sonic-3":
+        if body["model_id"] == "sonic-3.6":
             return httpx.Response(400, text='{"error":"unknown model"}')
         return httpx.Response(
             200,
@@ -180,4 +180,4 @@ async def test_stream_falls_back_on_model_error():
         chunks = [c async for c in cartesia_tts.stream("hello")]
 
     assert chunks == [b"OK"]
-    assert calls == ["sonic-3", "sonic-3.6"]
+    assert calls == ["sonic-3.6", "sonic-3"]

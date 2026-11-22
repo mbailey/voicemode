@@ -21,8 +21,8 @@ length.
 
    CARTESIA_API_KEY=sk_car_...
    VOICEMODE_CARTESIA_VOICE_ID=<your-cartesia-voice-uuid>
-   VOICEMODE_CARTESIA_MODEL=sonic-3
-   VOICEMODE_CARTESIA_FALLBACK_MODEL=sonic-3.6
+   VOICEMODE_CARTESIA_MODEL=sonic-3.6
+   VOICEMODE_CARTESIA_FALLBACK_MODEL=sonic-3
    ```
 
 4. Restart your MCP client (or run `/mcp` → reconnect) so the new config is
@@ -52,8 +52,8 @@ with `VOICEMODE_CARTESIA_FALLBACK_MODEL`.
 | ----------------------------------- | --------- | ---------------------------------------------------------------- |
 | `CARTESIA_API_KEY`                  | —         | API key (required).                                              |
 | `VOICEMODE_CARTESIA_VOICE_ID`       | —         | Default voice id (required if no UUID is in `VOICEMODE_VOICES`). |
-| `VOICEMODE_CARTESIA_MODEL`          | `sonic-3` | Primary model.                                                   |
-| `VOICEMODE_CARTESIA_FALLBACK_MODEL` | `sonic-3.6` | Used if the primary model is rejected.                         |
+| `VOICEMODE_CARTESIA_MODEL`          | `sonic-3.6` | Primary model.                                                 |
+| `VOICEMODE_CARTESIA_FALLBACK_MODEL` | `sonic-3` | Used if the primary model is rejected.                           |
 
 ## Pricing & Limits
 
