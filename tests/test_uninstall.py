@@ -429,6 +429,35 @@ def test_credentials_report_names_the_real_file(home):
     assert any("~/data/voicemode/credentials" in l and "logout" in l for l in plan.report)
 
 
+@pytest.mark.parametrize("flags,fate", [
+    ({}, "is kept"),
+    ({"remove_models": True}, "is kept"),
+    ({"remove_all_data": True}, "is removed (--remove-all-data)"),
+])
+def test_credentials_report_says_what_the_plan_does(home, flags, fate):
+    """The Connect line never says 'kept' for a file the plan removes."""
+    seed_footprint(home)
+    cred = home / ".voicemode" / "credentials"
+    plan = un.build_plan(make_ctx(home), **flags)
+    removed = cred in {s.path for s in plan.removes}
+    assert removed == bool(flags.get("remove_all_data"))
+    lines = [l for l in plan.report if "VoiceMode Connect login" in l]
+    assert len(lines) == 1
+    assert f"~/.voicemode/credentials holds your tokens and {fate};" in lines[0]
+    assert "logout` BEFORE uninstalling" in lines[0]
+    assert ("is kept" in un.render(plan, dry_run=True)) is (not removed)
+
+
+def test_credentials_in_a_report_only_base_stay_kept_under_remove_all_data(home):
+    base = home / "Documents" / "stuff"           # not named voicemode: report-only
+    write(base / "credentials", "token")
+    plan = un.build_plan(make_ctx(home, env={"VOICEMODE_BASE_DIR": str(base)}),
+                         remove_all_data=True)
+    assert base / "credentials" not in {s.path for s in plan.removes}
+    assert any("~/Documents/stuff/credentials holds your tokens and is kept;" in l
+               for l in plan.report)
+
+
 def test_relative_base_is_report_only(home):
     seed_footprint(home)
     ctx = make_ctx(home, env={"VOICEMODE_BASE_DIR": "voicemode-data"})

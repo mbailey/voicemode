@@ -149,8 +149,10 @@ The plan lists each of these under **Left for you**. It never removes them itsel
 - **VoiceMode Connect login.** Run `voicemode connect auth logout` **before** you
   uninstall. It deletes your tokens from `~/.voicemode/credentials` (the default) or
   from the OS keychain (service `voicemode`, if you set
-  `VOICEMODE_CREDENTIAL_STORE=keyring`). It signs you out locally only. The command
-  never touches the keychain.
+  `VOICEMODE_CREDENTIAL_STORE=keyring`). It signs you out locally only. The plan's
+  line says whether the `credentials` file is kept (the default) or removed
+  (`--remove-all-data`, which treats it as your data). The command never touches the
+  keychain.
 - **The Claude Code plugin**, if you installed VoiceMode that way. See the
   [next section](#the-claude-code-plugin).
 - **Shared caches.** mlx-audio's models are in the Hugging Face hub cache

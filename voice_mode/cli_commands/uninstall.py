@@ -988,9 +988,15 @@ def _plan_reports(plan: Plan, ctx: Context) -> None:
                            "'voicemode'): run `voicemode connect auth logout` BEFORE "
                            "uninstalling")
     else:
+        # Runs after _plan_files, so the plan knows whether the file goes
+        # (--remove-all-data on a removable root). Never say "kept" for a
+        # file the plan removes.
+        removed = {_norm(s.path) for s in plan.removes}
         for cred in sorted({r / "credentials" for r in roots if _lexists(r / "credentials")}):
+            fate = ("is removed (--remove-all-data)" if _norm(cred) in removed
+                    else "is kept")
             plan.report.append(f"VoiceMode Connect login: {_tilde(cred, ctx.home)} holds "
-                               f"your tokens and is kept; run `voicemode connect auth "
+                               f"your tokens and {fate}; run `voicemode connect auth "
                                f"logout` BEFORE uninstalling")
     for var in CUSTOM_LOCATION_VARS:
         raw = ctx.env.get(var) or ""
