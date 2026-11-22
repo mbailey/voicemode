@@ -374,6 +374,36 @@ def test_base_set_by_project_config_is_report_only(home):
     assert any(str(base / "audio") in line for line in plan.report)
 
 
+def test_base_home_lists_no_unknowns_and_says_why(home):
+    """A BASE that fails R3 (here HOME itself) is skipped with one reason line;
+    whatever else lives there is never listed as VoiceMode's kept data."""
+    seed_footprint(home)
+    write(home / "Documents/taxes.pdf")
+    write(home / "bin/mytool")
+    write(home / "audio/a.wav")                     # a VoiceMode-shaped entry in BASE
+    write(home / "voices/clone.wav")                # clones in BASE: still listed as kept
+    ctx = make_ctx(home, env={"VOICEMODE_BASE_DIR": str(home)})
+    plan = un.build_plan(ctx)
+    kept = kept_paths(plan)
+    assert "Documents" not in kept and "bin/mytool" not in kept and ".voicemode" not in kept
+    assert "voices" in kept
+    assert any(l.startswith(f"VOICEMODE_BASE_DIR={home}:") and "never touched" in l
+               for l in plan.report)
+    assert any(str(home / "audio") in l and "not touched" in l for l in plan.report)
+    # ~/.voicemode itself is still handled as usual
+    assert ".voicemode/my-notes.txt" in kept
+    assert home / ".voicemode/services/voicemode" in {s.path for s in plan.removes}
+    out = un.render(plan, dry_run=True)
+    assert "~/Documents" not in out
+
+
+def test_credentials_report_names_the_real_file(home):
+    base = home / "data" / "voicemode"
+    write(base / "credentials", "token")
+    plan = un.build_plan(make_ctx(home, env={"VOICEMODE_BASE_DIR": str(base)}))
+    assert any("~/data/voicemode/credentials" in l and "logout" in l for l in plan.report)
+
+
 def test_relative_base_is_report_only(home):
     seed_footprint(home)
     ctx = make_ctx(home, env={"VOICEMODE_BASE_DIR": "voicemode-data"})

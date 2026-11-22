@@ -835,14 +835,21 @@ def _plan_files(plan: Plan, ctx: Context, remove_models: bool,
         if not root.is_dir():
             continue
         root_ok = root in plan.allowed_roots
+        if not root_ok:
+            # A BASE that fails R3 may be HOME, / or any directory: say once why
+            # it is skipped, and never list its unknown entries (they are not
+            # VoiceMode's "kept data", just whatever else lives there).
+            plan.report.append(f"VOICEMODE_BASE_DIR={root}: {base_reason}; VoiceMode's "
+                               f"entries there are listed here and never touched")
         for rel, path in _root_entries(root):
             cls = _classify(rel)
             if cls is None:
-                plan.kept.append((path, "not created by VoiceMode, as far as this "
-                                        "version knows"))
+                if root_ok:
+                    plan.kept.append((path, "not created by VoiceMode, as far as this "
+                                            "version knows"))
                 continue
             action = _decide(cls, remove_models, remove_all_data)
-            if action == "keep":
+            if action == "keep" and (root_ok or cls == CLONES):
                 note = {CLONES: "voice clones: never removed",
                         MODELS: "models (--remove-models removes these)"}.get(cls, "")
                 if cls == MODELS:
@@ -974,10 +981,11 @@ def _plan_reports(plan: Plan, ctx: Context) -> None:
         plan.report.append("VoiceMode Connect login in the OS keychain (service "
                            "'voicemode'): run `voicemode connect auth logout` BEFORE "
                            "uninstalling")
-    elif any(_lexists(r / "credentials") for r in roots):
-        plan.report.append("VoiceMode Connect login: ~/.voicemode/credentials holds your "
-                           "tokens and is kept; run `voicemode connect auth logout` BEFORE "
-                           "uninstalling")
+    else:
+        for cred in sorted({r / "credentials" for r in roots if _lexists(r / "credentials")}):
+            plan.report.append(f"VoiceMode Connect login: {_tilde(cred, ctx.home)} holds "
+                               f"your tokens and is kept; run `voicemode connect auth "
+                               f"logout` BEFORE uninstalling")
     for var in CUSTOM_LOCATION_VARS:
         raw = ctx.env.get(var) or ""
         if not raw:
