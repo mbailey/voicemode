@@ -30,6 +30,22 @@ from voice_mode.utils.gpu_detection import detect_gpu
 logger = logging.getLogger("voicemode")
 
 
+# NVIDIA's own installers (the runfile, and the distro repos NVIDIA publishes)
+# put the toolkit here and leave PATH alone, so `which nvcc` alone misses the
+# most common install.
+CUDA_DEFAULT_NVCC = "/usr/local/cuda/bin/nvcc"
+
+
+def find_nvcc() -> Optional[str]:
+    """Path to nvcc: on PATH, else NVIDIA's default /usr/local/cuda/bin."""
+    found = shutil.which("nvcc")
+    if found:
+        return found
+    if os.path.isfile(CUDA_DEFAULT_NVCC) and os.access(CUDA_DEFAULT_NVCC, os.X_OK):
+        return CUDA_DEFAULT_NVCC
+    return None
+
+
 def _nvcc_max_gcc_major() -> Optional[int]:
     """Highest GCC major version the installed nvcc will accept, if knowable.
 
@@ -37,7 +53,7 @@ def _nvcc_max_gcc_major() -> Optional[int]:
     flag, so read that instead of hardcoding a table that goes stale with every
     CUDA release.
     """
-    nvcc = shutil.which("nvcc")
+    nvcc = find_nvcc()
     if not nvcc:
         return None
     header = Path(nvcc).resolve().parent.parent / "include" / "crt" / "host_config.h"
@@ -101,6 +117,45 @@ def cuda_host_compiler_override() -> Tuple[Optional[str], Optional[str]]:
         f"`brew install gcc@{ceiling}` or `sudo dnf install gcc{ceiling}-c++`) "
         f"and reinstall, or use --no-gpu to build CPU-only."
     )
+
+
+def cuda_build_settings(build_env: Dict[str, str], nvcc: Optional[str]) -> list:
+    """CMake flags for a CUDA build, adjusting ``build_env`` in place.
+
+    - nvcc found only in /usr/local/cuda/bin goes on the build's PATH, so CMake
+      and ggml use the nvcc that was probed.
+    - A host compiler the user exported (CUDAHOSTCXX or NVCC_CCBIN) is kept as
+      is. Otherwise one nvcc accepts is picked when the default GCC is too new.
+    """
+    flags = ["-DGGML_CUDA=ON"]
+    if nvcc and not shutil.which("nvcc"):
+        cuda_bin = os.path.dirname(nvcc)
+        build_env["PATH"] = cuda_bin + os.pathsep + build_env.get("PATH", "")
+        logger.info(f"Using nvcc from {cuda_bin} (not on PATH)")
+
+    user_host_cxx = {
+        k: build_env[k] for k in ("CUDAHOSTCXX", "NVCC_CCBIN") if build_env.get(k)
+    }
+    if user_host_cxx:
+        logger.info(
+            "Keeping the CUDA host compiler you exported: "
+            + ", ".join(f"{k}={v}" for k, v in user_host_cxx.items())
+        )
+        return flags
+
+    host_cxx, host_cxx_problem = cuda_host_compiler_override()
+    if host_cxx:
+        # CMake uses CMAKE_CUDA_HOST_COMPILER for its own compile tests;
+        # NVCC_CCBIN covers nvcc invocations ggml makes outside CMake's
+        # CUDA language support. Set both so they cannot disagree.
+        logger.info(f"Using {host_cxx} as the CUDA host compiler")
+        flags.append(f"-DCMAKE_CUDA_HOST_COMPILER={host_cxx}")
+        build_env["CUDAHOSTCXX"] = host_cxx
+        build_env["NVCC_CCBIN"] = host_cxx
+    elif host_cxx_problem:
+        logger.warning(host_cxx_problem)
+        print(f"⚠️  {host_cxx_problem}")
+    return flags
 
 
 async def update_whisper_service_files(
@@ -556,6 +611,8 @@ async def whisper_install(
         # build when the CUDA toolkit is missing, but an explicit --use-gpu
         # should still be an error rather than silently ignored.
         gpu_auto_detected = use_gpu is None
+        cpu_only_note = None  # set when an auto-detected GPU falls back to CPU
+        nvcc = None
         if use_gpu is None:
             use_gpu, gpu_type = detect_gpu()
             logger.info(f"Auto-detected GPU: {gpu_type} (enabled: {use_gpu})")
@@ -617,7 +674,8 @@ async def whisper_install(
                 else:
                     missing_deps.append("gcc/make (install your distribution's build tools)")
 
-            if use_gpu and not shutil.which("nvcc") and gpu_auto_detected:
+            nvcc = find_nvcc() if use_gpu else None
+            if use_gpu and not nvcc and gpu_auto_detected:
                 # The GPU was auto-detected, not asked for. A missing CUDA
                 # toolkit is not a reason to refuse to install -- whisper.cpp
                 # builds and runs fine on CPU. Failing here strands anyone with
@@ -634,8 +692,13 @@ async def whisper_install(
                 )
                 use_gpu = False
                 gpu_type = "cpu"
+                cpu_only_note = (
+                    "Built CPU-only: a GPU was detected but the CUDA toolkit "
+                    "(nvcc) was not found on PATH or in /usr/local/cuda/bin. "
+                    "Install it and reinstall with --use-gpu for GPU acceleration."
+                )
 
-            if use_gpu and not shutil.which("nvcc"):
+            if use_gpu and not nvcc:
                 # Suggest distro-appropriate install command, or --no-gpu as alternative
                 if on_ostree:
                     # Layering the toolkit is unreliable (rpm-ostree struggles
@@ -733,20 +796,8 @@ async def whisper_install(
                 cmake_flags.append("-DWHISPER_COREML_ALLOW_FALLBACK=ON")
                 logger.info("Enabling Core ML support with fallback for Apple Silicon")
         elif is_linux and use_gpu:
-            cmake_flags.append("-DGGML_CUDA=ON")
-            host_cxx, host_cxx_problem = cuda_host_compiler_override()
-            if host_cxx:
-                # CMake uses CMAKE_CUDA_HOST_COMPILER for its own compile tests;
-                # NVCC_CCBIN covers nvcc invocations ggml makes outside CMake's
-                # CUDA language support. Set both so they cannot disagree.
-                logger.info(f"Using {host_cxx} as the CUDA host compiler")
-                cmake_flags.append(f"-DCMAKE_CUDA_HOST_COMPILER={host_cxx}")
-                build_env["CUDAHOSTCXX"] = host_cxx
-                build_env["NVCC_CCBIN"] = host_cxx
-            elif host_cxx_problem:
-                logger.warning(host_cxx_problem)
-                print(f"⚠️  {host_cxx_problem}")
-        
+            cmake_flags.extend(cuda_build_settings(build_env, nvcc))
+
         # Get number of CPU cores for parallel build
         cpu_count = os.cpu_count() or 4
         
@@ -906,7 +957,8 @@ async def whisper_install(
                 "systemd_service": service_update_result.get("service_path"),
                 "systemd_enabled": service_update_result.get("enabled", False),
                 "start_script": start_script_path,
-                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support. {systemd_message}{enable_message}{' (' + migration_msg + ')' if migration_msg else ''}"
+                "cpu_only_note": cpu_only_note,
+                "message": f"Successfully installed whisper.cpp {current_version} with {gpu_type} support. {systemd_message}{enable_message}{' (' + migration_msg + ')' if migration_msg else ''}{' ' + cpu_only_note if cpu_only_note else ''}"
             }
         
         else:

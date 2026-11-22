@@ -646,6 +646,8 @@ def service_install(service_name, force, model, use_gpu):
                 click.echo(f"✅ Whisper installed successfully")
                 if result.get('install_path'):
                     click.echo(f"   Install path: {result['install_path']}")
+                if result.get('cpu_only_note'):
+                    click.echo(f"⚠️  {result['cpu_only_note']}")
             else:
                 click.echo(f"❌ Whisper installation failed: {result.get('error', 'Unknown error')}")
                 _echo_missing_dependencies(result)
