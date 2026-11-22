@@ -144,7 +144,7 @@ CUSTOM_LOCATION_VARS = (
     "VOICEMODE_EVENT_LOG_DIR", "VOICEMODE_CONTROL_SOCKET",
     "VOICEMODE_VOICES_DIR", "VOICEMODE_MOUTH_DIR",
     "VOICEMODE_MOUTH_AUDIO_DIR", "VOICEMODE_MOUTH_SETTINGS",
-    "VOICEMODE_MOUTH_MAILBOX",
+    "VOICEMODE_MOUTH_MAILBOX", "VOICEMODE_MOUTH_LOG_DIR",
 )
 HOME_ROOT_FILES = ("voicemode_debug.log", "voicemode_trace.log", "voicemode_logs")
 HOME_ROOT_GLOBS = ("voice-mode-audio-*",)
@@ -424,6 +424,11 @@ def base_is_removable(ctx: Context) -> tuple[bool, str]:
         return False, "its name is not .voicemode or voicemode"
     if not _strictly_inside(base, ctx.home):
         return False, "it is not inside your home directory"
+    # Check 2 is lexical (RF2); _allowed later compares resolved paths, so a
+    # symlinked ancestor (~/link/voicemode, ~/link -> /elsewhere) would land
+    # removals outside HOME. Require the resolved BASE inside HOME too.
+    if not _real_inside(base, ctx.home):
+        return False, "it resolves (through a symlink) outside your home directory"
     if project_config_sets_base(ctx):
         return False, "it was set by a project .voicemode.env"
     return True, ""
@@ -949,15 +954,14 @@ def _plan_packages(plan: Plan, ctx: Context) -> None:
                                f"run `uv tool uninstall voice-mode` yourself")
     elif vm_tool.exists() and running_from_tool:
         plan.package = True
-    elif vm_tool.exists():
-        plan.report.append(
-            f"VoiceMode is running from {ctx.sys_prefix}, not the uv tool at "
-            f"{_tilde(vm_tool, ctx.home)}: run `uv tool uninstall voice-mode` to remove "
-            f"the tool too")
     if not running_from_tool:
+        also = ""
+        if inside and vm_tool.exists():
+            also = (f". The uv tool at {_tilde(vm_tool, ctx.home)} is a separate install: "
+                    f"run `uv tool uninstall voice-mode` to remove it too")
         plan.report.append(
             f"This VoiceMode runs from {ctx.sys_prefix} (not a uv tool install): "
-            f"remove it the way you installed it (pipx, a source checkout, ...)")
+            f"remove it the way you installed it (pipx, a source checkout, ...){also}")
 
     mlx_tool = tool_dir / "mlx-audio"
     if mlx_tool.exists():

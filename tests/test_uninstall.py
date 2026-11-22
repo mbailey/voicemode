@@ -360,6 +360,31 @@ def test_base_named_voicemode_inside_home_is_removable(home):
     assert base / "audio" in {s.path for s in plan.removes}
 
 
+def test_base_through_symlinked_ancestor_outside_home_is_report_only(home, tmp_path):
+    """Check 2 is lexical; a BASE whose ancestor links outside HOME must still
+    be report-only, or removals would land outside HOME (review O1)."""
+    outside = tmp_path / "elsewhere"
+    planted = write(outside / "voicemode" / "audio" / "keep.wav")
+    os.symlink(outside, home / "link")
+    base = home / "link" / "voicemode"
+    ctx = make_ctx(home, env={"VOICEMODE_BASE_DIR": str(base)})
+    removable, reason = un.base_is_removable(ctx)
+    assert not removable and "symlink" in reason
+    plan = un.build_plan(ctx, remove_all_data=True)
+    assert base not in plan.allowed_roots
+    assert not any(un._real_inside(s.path, outside) for s in plan.removes)
+    un.execute(plan, ctx, echo=lambda s: None)
+    assert planted.exists()
+
+
+def test_base_through_symlinked_ancestor_inside_home_is_removable(home):
+    real = home / "data"
+    write(real / "voicemode" / "audio" / "a.wav")
+    os.symlink(real, home / "link")
+    ctx = make_ctx(home, env={"VOICEMODE_BASE_DIR": str(home / "link" / "voicemode")})
+    assert un.base_is_removable(ctx) == (True, "")
+
+
 def test_base_set_by_project_config_is_report_only(home):
     base = home / "data" / "voicemode"
     write(base / "audio/a.wav")
@@ -470,7 +495,7 @@ def test_launchd_loaded_from_same_path_boots_out(home):
 
 
 def test_launchd_same_file_other_spelling(home, tmp_path):
-    plist = _darwin_whisper_only(home)
+    _darwin_whisper_only(home)
     alias = tmp_path / "alias-home"
     os.symlink(home, alias)
     other_spelling = alias / "Library/LaunchAgents/com.voicemode.whisper.plist"
@@ -627,6 +652,16 @@ def test_other_install_method_reported(home):
     plan = un.build_plan(make_ctx(home, sys_prefix=home / "src/voicemode/.venv"))
     assert not plan.package
     assert any("not a uv tool install" in l for l in plan.report)
+    # One line, naming the separate uv tool, not two near-duplicates (O3).
+    lines = [l for l in plan.report if str(home / "src/voicemode/.venv") in l]
+    assert len(lines) == 1
+    assert "uv tool uninstall voice-mode" in lines[0]
+
+
+def test_other_install_method_without_uv_tool_names_no_uv_step(home):
+    plan = un.build_plan(make_ctx(home, sys_prefix=home / "src/voicemode/.venv"))
+    lines = [l for l in plan.report if "not a uv tool install" in l]
+    assert len(lines) == 1 and "uv tool uninstall" not in lines[0]
 
 
 def test_mlx_audio_tool_only_with_marker(home):
@@ -975,7 +1010,7 @@ def test_completion_files_removed_when_bash_unsourced(home):
 @pytest.mark.parametrize("startup", [".bash_completion", ".bashrc", ".bashrc.d/50-voicemode.sh"])
 def test_bash_completion_kept_when_sourced(home, startup):
     seed_footprint(home)
-    write(home / startup, f'. "$HOME/.bash_completion.d/voicemode"\n')
+    write(home / startup, '. "$HOME/.bash_completion.d/voicemode"\n')
     ctx = make_ctx(home)
     plan = un.build_plan(ctx)
     assert home / ".bash_completion.d/voicemode" not in {s.path for s in plan.removes}
@@ -997,6 +1032,8 @@ def test_reports_credentials_custom_dirs_and_home_root(home, tmp_path):
     assert "voicemode_debug.log" in text
     plan2 = un.build_plan(make_ctx(home, env={"VOICEMODE_CREDENTIAL_STORE": "keyring"}))
     assert any("keychain" in l for l in plan2.report)
+    plan3 = un.build_plan(make_ctx(home, env={"VOICEMODE_MOUTH_LOG_DIR": str(tmp_path / "ml")}))
+    assert any("VOICEMODE_MOUTH_LOG_DIR" in l for l in plan3.report)
 
 
 # ---------------------------------------------------------------------------
