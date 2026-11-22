@@ -495,7 +495,6 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
         except BlockingIOError:
             os.close(lock_fd)
             return 0
-        (d / "player.pid").write_text(str(os.getpid()))
         idle_since = time.monotonic()
         ahead: dict = {"synth": None, "playing": None}
         guard = threading.Lock()
@@ -516,6 +515,10 @@ def serve(d: Optional[Path] = None, idle_exit_s: Optional[float] = None, poll_s:
                     return
 
         try:
+            # VM-2665: written INSIDE the try, so a TERM (sys.exit in the serve
+            # entry point) that lands right after still runs the finally that
+            # removes it, instead of leaving a stale player.pid.
+            (d / "player.pid").write_text(str(os.getpid()))
             while True:
                 f, held = _next(d, q)
                 if f is None and held:
