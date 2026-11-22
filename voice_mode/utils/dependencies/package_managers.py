@@ -35,7 +35,14 @@ RPM_TO_BREW = {
 # work -- it downloads large bottles and falls back to building from source.
 # The rust bottle alone is ~400MB, which exceeded 300s on an ordinary
 # connection and killed the install partway through with no useful error.
-BREW_INSTALL_TIMEOUT = 1800
+#
+# Everywhere, brew now gets the 600s apt and dnf already had. Only on Fedora
+# Atomic (OstreeBrewManager), where Homebrew is the sole install path and the
+# heavy formulae land, does it get 1800s. On macOS this call can run inside
+# the MCP server (whisper_install), where a hung brew blocks every voice tool
+# until it times out: that must never be half an hour.
+BREW_INSTALL_TIMEOUT = 600
+OSTREE_BREW_INSTALL_TIMEOUT = 1800
 
 
 def is_ostree_system() -> bool:
@@ -104,6 +111,8 @@ class PackageManager(ABC):
 class BrewManager(PackageManager):
     """Homebrew package manager (macOS)."""
 
+    install_timeout = BREW_INSTALL_TIMEOUT
+
     def check_available(self) -> bool:
         return shutil.which("brew") is not None
 
@@ -124,10 +133,10 @@ class BrewManager(PackageManager):
         cmd = ["brew", "install"] + package_names
         try:
             if verbose:
-                result = subprocess.run(cmd, text=True, timeout=BREW_INSTALL_TIMEOUT)
+                result = subprocess.run(cmd, text=True, timeout=self.install_timeout)
                 return result.returncode == 0, ""
             else:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=BREW_INSTALL_TIMEOUT)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.install_timeout)
                 return result.returncode == 0, result.stderr or result.stdout
         except (subprocess.SubprocessError, OSError) as e:
             return False, str(e)
@@ -205,7 +214,11 @@ class OstreeBrewManager(BrewManager):
     dependencies.yaml supplies Fedora RPM names, which are not Homebrew formula
     names -- `brew install portaudio-devel` fails outright, and `cargo` has no
     formula at all because it ships inside `rust`.
+
+    Homebrew is the only install path here, so it gets the long timeout.
     """
+
+    install_timeout = OSTREE_BREW_INSTALL_TIMEOUT
 
     def check_package(self, package_name: str) -> bool:
         formula = RPM_TO_BREW.get(package_name)

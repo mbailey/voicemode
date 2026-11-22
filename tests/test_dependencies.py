@@ -356,3 +356,23 @@ class TestCheckCommandInterpreter:
         with patch('voice_mode.utils.dependencies.checker.sys.executable', str(interpreter)):
             assert check_dependency(package, 'fedora') is True
         get_cache().clear()
+
+
+class TestBrewInstallTimeout:
+    """Brew's install timeout: 600s everywhere, 1800s only on Fedora Atomic.
+
+    On macOS brew can run inside the MCP server (whisper_install), where a hung
+    install blocks every voice tool until it times out (VM-2649).
+    """
+
+    @patch('voice_mode.utils.dependencies.package_managers.subprocess.run')
+    def test_plain_brew_gets_600s(self, mock_run):
+        mock_run.return_value = Mock(returncode=0, stdout='', stderr='')
+        BrewManager().install_packages(['portaudio'])
+        assert mock_run.call_args.kwargs['timeout'] == 600
+
+    @patch('voice_mode.utils.dependencies.package_managers.subprocess.run')
+    def test_ostree_brew_gets_1800s(self, mock_run):
+        mock_run.return_value = Mock(returncode=0, stdout='', stderr='')
+        OstreeBrewManager().install_packages(['portaudio-devel'])
+        assert mock_run.call_args.kwargs['timeout'] == 1800
