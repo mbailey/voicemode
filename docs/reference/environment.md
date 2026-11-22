@@ -71,7 +71,7 @@ are unaffected — they always use their profile's pinned model.
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
-| `VOICEMODE_STT_BASE_URLS` | Comma-separated STT service URLs | `https://api.openai.com/v1` | `http://localhost:2022/v1` |
+| `VOICEMODE_STT_BASE_URLS` | Comma-separated STT service URLs | `http://127.0.0.1:2022/v1,https://api.openai.com/v1` | `http://localhost:2022/v1` |
 | `VOICEMODE_STT_MODEL` | STT model sent to every non-OpenAI endpoint. When unset, a per-provider default applies (see below) | `whisper-1` (mlx-audio: `mlx-community/whisper-large-v3-turbo-asr-4bit`) | `whisper-1` |
 | `VOICEMODE_STT_MODELS` | Comma-separated STT models, one per `VOICEMODE_STT_BASE_URLS` entry (positional) | None | `whisper-1,mlx-community/whisper-large-v3-turbo-asr-4bit` |
 | `VOICEMODE_STT_PROMPT` | Vocabulary biasing for Whisper (names, terms) | None | `tmux, Tali, kubectl` |
@@ -162,12 +162,12 @@ MCP client so the new values are picked up.
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
-| `VOICEMODE_VAD_AGGRESSIVENESS` | VAD level (0-3). Lower levels, including 1, can treat room noise as speech so a turn may run until the listen duration cap. | `3` | `2` |
+| `VOICEMODE_VAD_AGGRESSIVENESS` | VAD level (0-3). Lower levels, including 1, can treat room noise as speech, so a turn may run until `VOICEMODE_DEFAULT_LISTEN_DURATION` is reached. | `3` | `2` |
 | `VOICEMODE_DISABLE_VAD` | Disable VAD | `false` | `true` |
 | `VOICEMODE_DISABLE_SILENCE_DETECTION` | Disable silence detection | `false` | `true` |
 | `VOICEMODE_SILENCE_THRESHOLD_MS` | Silence duration in milliseconds before stopping | `1000` | `2000` |
 | `VOICEMODE_MIN_RECORDING_DURATION` | Minimum recording (seconds) | `0.5` | `1.0` |
-| `VOICEMODE_DEFAULT_LISTEN_DURATION` | Default maximum listen duration (seconds) | `120.0` | `60.0` |
+| `VOICEMODE_DEFAULT_LISTEN_DURATION` | The longest a turn records before it stops, in seconds. This is yours to set; agents should not pass a number of their own. | `120.0` | `300.0` |
 
 ## File Storage
 

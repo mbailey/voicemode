@@ -75,6 +75,33 @@ class TestStopEventUpfront:
         assert len(audio) == 0
 
     @patch('voice_mode.tools.converse.VAD_AVAILABLE', True)
+    def test_already_cancelled_does_no_recording_work(self):
+        """VM-2633: the elapsed-time bound above only catches this on a host
+        where the first ``scipy.signal`` import is slow. Pin the contract
+        directly, with no timing: a pre-cancelled call must not import
+        scipy.signal (the VM-2254 import that PR #581 hoisted to the top of
+        the function) and must never open the input stream.
+
+        ``sys.modules['scipy'] = None`` makes any ``from scipy import signal``
+        raise ImportError, so reaching the import fails this test outright.
+        """
+        with patch('voice_mode.tools.converse.webrtcvad') as mock_webrtcvad, \
+             patch('voice_mode.tools.converse.sd') as mock_sd, \
+             patch('queue.Queue', return_value=_ForeverQueue()), \
+             patch.dict(sys.modules, {'scipy': None, 'scipy.signal': None}):
+            stop_event = threading.Event()
+            stop_event.set()
+
+            audio, speech_detected = record_audio_with_silence_detection(
+                max_duration=30.0, stop_event=stop_event,
+            )
+
+        mock_sd.InputStream.assert_not_called()
+        mock_webrtcvad.Vad.assert_not_called()
+        assert len(audio) == 0
+        assert speech_detected is False
+
+    @patch('voice_mode.tools.converse.VAD_AVAILABLE', True)
     def test_stop_event_none_is_a_no_op(self):
         """Default (stop_event=None) must not affect existing behaviour --
         the loop still exits via a normal path (here: a single chunk,
