@@ -195,7 +195,8 @@ voicemode uninstall              # print the plan, then ask before removing
 This removes VoiceMode's services, Claude Code hooks and MCP registration, and the
 `voice-mode` package. Models and your data are kept unless you add `--remove-models` or
 `--remove-all-data`. Voice clones are never removed. Installed the Claude Code plugin?
-Also run `claude plugin uninstall voicemode@voicemode`.
+Also run `claude plugin uninstall voicemode@voicemode`. Installed `voice-mode` with pipx or
+from source? Remove the package the way you installed it.
 
 See [Uninstalling VoiceMode](docs/reference/uninstall.md) for the full list of what it
 removes, keeps and leaves for you, and for Windows.
