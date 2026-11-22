@@ -167,16 +167,23 @@ VOICEMODE_CHIME_POST_DELAY=0.5  # Seconds after
 
 ### Voice Activity Detection
 
+These VAD and silence settings are loaded when the VoiceMode process starts
+(from `~/.voicemode/voicemode.env` or the environment). After changing the
+file, restart the VoiceMode server or MCP client for the new values to apply.
+
 ```bash
 # VAD Aggressiveness (0-3)
-# 0: Least aggressive (captures more)
+# 0: Least aggressive (captures more, including background noise)
+# 1: Still relatively loose — room noise may be classified as speech,
+#    so a pause may never be detected and the turn can run until the
+#    listen duration cap
 # 3: Most aggressive (filters more)
 VOICEMODE_VAD_AGGRESSIVENESS=3
 
-# Silence detection
-VOICEMODE_SILENCE_THRESHOLD=3.0     # Seconds of silence
-VOICEMODE_MIN_RECORDING_TIME=0.5    # Minimum recording
-VOICEMODE_MAX_RECORDING_TIME=120.0  # Maximum recording
+# Silence detection. The runtime setting is milliseconds:
+VOICEMODE_SILENCE_THRESHOLD_MS=1000  # Stop after this much silence
+VOICEMODE_MIN_RECORDING_DURATION=0.5 # Minimum recording (seconds)
+VOICEMODE_DEFAULT_LISTEN_DURATION=120.0  # Maximum listen / turn cap
 ```
 
 ### Multi-Agent Voice
