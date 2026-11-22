@@ -136,6 +136,39 @@ VOICEMODE_WHISPER_LANGUAGE=auto     # Language detection
 VOICEMODE_WHISPER_PORT=2022         # Server port
 ```
 
+##### Example: Parakeet via mlx-audio (Apple Silicon)
+
+[Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) is faster than
+Whisper on Apple Silicon and covers 25 European languages, English among them.
+The mlx-audio service serves it on port 8890. Put that endpoint first and keep
+whisper.cpp and OpenAI behind it as fallbacks:
+
+```bash
+# Serve it (port 8890)
+voicemode service install mlx-audio
+voicemode service start mlx-audio
+
+# ~/.voicemode/voicemode.env
+VOICEMODE_STT_BASE_URLS=http://127.0.0.1:8890/v1,http://127.0.0.1:2022/v1,https://api.openai.com/v1
+VOICEMODE_STT_MODEL=mlx-community/parakeet-tdt-0.6b-v3
+```
+
+What the code does with these two lines:
+
+- **Failover is by error, not by language.** VoiceMode tries the URLs in order
+  and moves on only when an endpoint is down or returns an error. It does not
+  detect a language that Parakeet lacks and send it to whisper. If you speak
+  such a language, put whisper.cpp first.
+- **`VOICEMODE_STT_MODEL` goes to every non-OpenAI endpoint**, so whisper.cpp
+  on port 2022 receives the Parakeet id too. whisper.cpp ignores it and uses
+  the model it loaded at startup. OpenAI always gets `whisper-1`.
+- To send the Parakeet id to mlx-audio alone, set it per endpoint instead.
+  The list is positional, so the first entry matches the first URL:
+  `VOICEMODE_STT_MODELS=mlx-community/parakeet-tdt-0.6b-v3`.
+
+The same example ships commented out in the `voicemode.env` that VoiceMode
+writes on first run.
+
 ### Audio Configuration
 
 ```bash

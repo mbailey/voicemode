@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- How to run speech-to-text on Parakeet, served by mlx-audio on Apple Silicon. It is
+  faster than Whisper there and covers 25 European languages, English among them. The
+  `voicemode.env` written on first run now carries a commented-out example: mlx-audio
+  first, whisper.cpp and OpenAI behind it. The configuration guide shows the same
+  example and explains that failover happens when an endpoint errors, not by language
+  (VM-2629).
+
 ## [9.1.0] - 2026-11-22
 
 ### Added
