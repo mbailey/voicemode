@@ -45,6 +45,22 @@ from voice_mode.control_channel import (
 from voice_mode.history_buffer import UtteranceRecord, get_history_buffer
 
 
+async def _until(pred, timeout=5.0, interval=0.005):
+    """Yield to the event loop until ``pred()`` holds; fail loudly on timeout.
+
+    VM-2661: these tests used a fixed ``await asyncio.sleep(0.1)`` as a
+    barrier, then asserted on progress. A slow CI runner (macOS 3.10, run
+    45034425069) had not consumed the last chunks inside 0.1s. Waiting on the
+    condition keeps the assertions exact without a timing guess.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not pred():
+        if loop.time() > deadline:
+            raise AssertionError(f"condition not met within {timeout}s")
+        await asyncio.sleep(interval)
+
+
 # --------------------------------------------------------------------------
 # Fixtures / helpers
 # --------------------------------------------------------------------------
@@ -237,7 +253,7 @@ class TestPlayCachedUtterance:
         mock_stream.write.side_effect = on_write
         with patch.object(streaming.sd, "OutputStream", return_value=mock_stream):
             task = asyncio.create_task(play_cached_utterance(record))
-            await asyncio.sleep(0.1)
+            await _until(lambda: len(writes) >= 1)
             assert not task.done()                 # held on the pause
             assert len(writes) == 1
 
@@ -321,7 +337,7 @@ class TestStreamTransportInterrupt:
             task = asyncio.create_task(
                 stream_pcm_audio(text="hi", openai_client=client, request_params={})
             )
-            await asyncio.sleep(0.1)
+            await _until(lambda: resp.consumed == [0, 1, 2, 3])
             assert not task.done()                  # drained, now held for resume
 
             get_control_state().request_skip_back()
@@ -401,7 +417,7 @@ class TestStreamTransportInterrupt:
             task = asyncio.create_task(
                 stream_pcm_audio(text="resume me", openai_client=client, request_params={})
             )
-            await asyncio.sleep(0.1)
+            await _until(lambda: resp.consumed == [0, 1, 2, 3, 4])
             # Provider already fully drained while paused; only chunks 0,1 played.
             assert not task.done()
             assert resp.consumed == [0, 1, 2, 3, 4]
