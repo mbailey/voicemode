@@ -1165,3 +1165,47 @@ def test_whisper_uninstall_alias_warning_text():
     assert "voicemode whisper service uninstall" in r.output
     assert "to remove all of VoiceMode, use 'voicemode uninstall'" in r.output
     assert "service uninstall whisper" not in r.output
+
+
+# ---------------------------------------------------------------------------
+# Docs (do-002): docs/reference/uninstall.md tracks the code
+# ---------------------------------------------------------------------------
+
+DOC = Path(__file__).resolve().parent.parent / "docs" / "reference" / "uninstall.md"
+
+
+def test_windows_refusal_points_at_the_docs_windows_section(home):
+    ctx = make_ctx(home, system="Windows")
+    r = _invoke(ctx, ["--dry-run"])
+    assert r.exit_code == 2
+    assert "docs/reference/uninstall.md#windows" in " ".join(r.output.split())
+    # the anchor exists: mkdocs and GitHub both slug "## Windows" to #windows
+    assert "\n## Windows\n" in DOC.read_text()
+
+
+def test_docs_name_every_footprint_item_the_code_knows():
+    """Every name the plan can act on or report is on the page.
+
+    A name added to the code without the docs fails here, so the footprint
+    list cannot silently drift from what the dry run prints.
+    """
+    doc = DOC.read_text()
+    names = set(ENTRY.rstrip("/") for ENTRY in un.ENTRIES)
+    names |= {f"com.voicemode.{s}.plist" for s in
+              ("whisper", "kokoro", "serve", "mlx-audio")}
+    names |= {f"{label}.plist" for label in un.MACOS_LEGACY_LABELS}
+    names |= set(un.MACOS_GENERIC_PLISTS) | set(un.LINUX_GENERIC_UNITS)
+    names |= {f"voicemode-{s}.service" for s in ("whisper", "kokoro", "serve")}
+    names |= {"kokoro-fastapi-*.service", "default.target.wants"}
+    names |= set(un.MCP_NAMES)
+    names |= {un.COMPLETION_ZSH, un.COMPLETION_FISH, un.COMPLETION_BASH}
+    names |= set(un.BASH_STARTUP_FILES) | set(un.BASH_STARTUP_DIRS)
+    names |= set(un.CUSTOM_LOCATION_VARS)
+    names |= set(un.HOME_ROOT_FILES) | set(un.HOME_ROOT_GLOBS)
+    names |= {"voicemode.env.uninstalled", "uv tool uninstall voice-mode",
+              "uv tool uninstall mlx-audio", "uv cache clean voice-mode",
+              "voicemode connect auth logout", "claude plugin uninstall voicemode@voicemode",
+              "-s local", "--dry-run", "--yes", "--remove-models", "--remove-all-data"}
+    for name in sorted(names):
+        bare = name.lstrip(".")         # ".voicemode.env" is written `.voicemode.env`
+        assert name in doc or bare in doc, f"{name!r} is not in {DOC.name}"

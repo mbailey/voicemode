@@ -200,6 +200,14 @@ voicemode transcribe < audio.wav
 voicemode transcribe --timestamps < recording.wav
 ```
 
+### uninstall
+Remove VoiceMode from this machine. Prints the full plan first, then asks.
+```bash
+voicemode uninstall [--dry-run] [-y|--yes] [--remove-models] [--remove-all-data]
+```
+Models and your data are kept unless you ask, and voice clones are never removed. See
+[Uninstalling VoiceMode](uninstall.md) for everything it removes and keeps.
+
 ## Diagnostic Commands
 
 ### diag

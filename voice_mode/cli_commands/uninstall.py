@@ -150,7 +150,9 @@ HOME_ROOT_FILES = ("voicemode_debug.log", "voicemode_trace.log", "voicemode_logs
 HOME_ROOT_GLOBS = ("voice-mode-audio-*",)
 
 PROBE_TIMEOUT = 30
-DOCS = "docs/reference/uninstall.md (https://voice-mode.readthedocs.io)"
+# The page, as published. voicemode.dev does not serve the reference pages
+# (measured 2026-11-23: /reference/cli/ is a 404), so link the GitHub copy.
+DOCS = "https://github.com/mbailey/voicemode/blob/master/docs/reference/uninstall.md"
 
 
 # ---------------------------------------------------------------------------
@@ -1319,7 +1321,7 @@ def remove_package(plan: Plan, ctx: Context, errors: list[str],
 def refusal(ctx: Context) -> Optional[str]:
     if ctx.system == "Windows":
         return ("voicemode uninstall does not support Windows yet. "
-                f"See {DOCS} for the manual steps.")
+                f"See {DOCS}#windows for the manual steps.")
     if ctx.uid == 0:
         return ("Refusing to run as root: an uninstall under sudo could reach root's "
                 "services and files. Run it as the user who installed VoiceMode.")

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `voicemode uninstall` removes VoiceMode from your home directory on macOS and Linux.
+  It prints the full plan before it changes anything: `--dry-run` shows it and stops,
+  and a real run asks first (or takes `--yes`). It stops and removes VoiceMode's
+  services, removes its Claude Code hooks and MCP registration, and removes the
+  `voice-mode` package last. It backs up your config and keeps your models and data
+  unless you add `--remove-models` or `--remove-all-data`. Voice clones are never
+  removed. Anything it can't safely remove, like the Claude Code plugin or shared
+  caches, it lists with the command to run. The new
+  [uninstall page](docs/reference/uninstall.md) lists everything VoiceMode installs.
+  Thanks @joshmedeski for asking (#497, VM-2625).
+
 ### Documentation
 
 - How to run speech-to-text on Parakeet, served by mlx-audio on Apple Silicon. It is
