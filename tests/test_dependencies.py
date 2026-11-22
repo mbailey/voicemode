@@ -189,3 +189,26 @@ class TestPackageManagerSelection:
 
         with pytest.raises(RuntimeError, match="No supported package manager found"):
             get_package_manager()
+
+    @patch('voice_mode.utils.dependencies.checker.detect_platform', return_value='wsl-debian')
+    @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available', return_value=True)
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available', return_value=False)
+    @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available', return_value=True)
+    def test_wsl_prefers_apt_over_an_installed_brew(self, mock_apt, mock_dnf, mock_brew, mock_platform):
+        """On WSL the native manager wins: Homebrew there reports apt
+        packages as missing (PR #320)."""
+        assert isinstance(get_package_manager(), AptManager)
+
+    @patch('voice_mode.utils.dependencies.checker.detect_platform', return_value='wsl-fedora')
+    @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available', return_value=True)
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available', return_value=True)
+    @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available', return_value=False)
+    def test_wsl_fedora_prefers_dnf_over_an_installed_brew(self, mock_apt, mock_dnf, mock_brew, mock_platform):
+        assert isinstance(get_package_manager(), DnfManager)
+
+    @patch('voice_mode.utils.dependencies.checker.detect_platform', return_value='debian')
+    @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available', return_value=True)
+    @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available', return_value=True)
+    def test_off_wsl_the_order_is_unchanged(self, mock_apt, mock_brew, mock_platform):
+        """Only WSL changes: elsewhere Homebrew is still asked first."""
+        assert isinstance(get_package_manager(), BrewManager)
