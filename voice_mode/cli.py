@@ -1153,8 +1153,9 @@ def whisper_install_alias(ctx, install_dir, model, use_gpu, force, version, auto
 @click.confirmation_option(prompt='Are you sure you want to uninstall Whisper?')
 @click.pass_context
 def whisper_uninstall_alias(ctx, remove_models, remove_all_data):
-    """(Deprecated) Uninstall Whisper. Use 'voicemode service uninstall whisper' instead."""
-    click.secho("⚠️  Deprecated: Use 'voicemode service uninstall whisper' instead", fg='yellow', err=True)
+    """(Deprecated) Uninstall Whisper only: use 'voicemode whisper service uninstall'. To remove all of VoiceMode: 'voicemode uninstall'."""
+    click.secho("⚠️  Deprecated: for Whisper only, use 'voicemode whisper service uninstall'; "
+                "to remove all of VoiceMode, use 'voicemode uninstall'", fg='yellow', err=True)
     ctx.forward(whisper_service_uninstall, remove_models=remove_models, remove_all_data=remove_all_data)
 
 
@@ -1557,6 +1558,7 @@ from voice_mode.cli_commands import claude as claude_cmd
 from voice_mode.cli_commands import soundfonts as soundfonts_cmd
 from voice_mode.cli_commands import autofocus as autofocus_cmd
 from voice_mode.cli_commands import conch as conch_cmd
+from voice_mode.cli_commands import uninstall as uninstall_cmd
 
 # Add exchanges to main CLI
 voice_mode_main_cli.add_command(exchanges_cmd.exchanges)
@@ -1574,6 +1576,9 @@ voice_mode_main_cli.add_command(autofocus_cmd.autofocus)
 
 # Add conch management commands
 voice_mode_main_cli.add_command(conch_cmd.conch)
+
+# Add the uninstall command (VM-2625; closes #497)
+voice_mode_main_cli.add_command(uninstall_cmd.uninstall)
 
 # Add the /mcp self-reconnect command (VM-1727). Lives in a top-level,
 # MCP-independent module so it imports and runs when the voicemode server is
