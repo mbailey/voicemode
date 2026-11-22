@@ -290,3 +290,65 @@ class TestBrewNameTranslation:
         formulae, unmappable = translate_to_brew(['portaudio', 'no-such-package'])
         assert formulae == ['portaudio']
         assert unmappable == ['no-such-package']
+
+
+class TestCheckCommandInterpreter:
+    """check_commands name the interpreter as "${VOICEMODE_PYTHON:-python3}".
+
+    Unquoted, a space in sys.executable (``/home/Jane Doe/...``) splits the word
+    under ``shell=True``, the probe exits 127, and the package reads as missing
+    forever (VM-2621 review, VM-2649).
+    """
+
+    YAMLS = (
+        'voice_mode/dependencies.yaml',
+        'installer/voicemode_install/dependencies.yaml',
+    )
+
+    @staticmethod
+    def _check_commands(path):
+        import pathlib
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        data = yaml.safe_load((root / path).read_text())
+
+        def walk(node):
+            if isinstance(node, dict):
+                if 'check_command' in node:
+                    yield node['name'], node['check_command']
+                for value in node.values():
+                    yield from walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    yield from walk(value)
+
+        return list(walk(data))
+
+    @pytest.mark.parametrize('path', YAMLS)
+    def test_interpreter_is_quoted_and_never_bare(self, path):
+        commands = self._check_commands(path)
+        python_probes = [(n, c) for n, c in commands if ' -c ' in c and 'python' in c]
+        assert {n for n, _ in python_probes} >= {'python3-devel', 'portaudio'}
+        for name, command in python_probes:
+            assert command.startswith('"${VOICEMODE_PYTHON:-python3}" '), (name, command)
+
+    @pytest.mark.skipif(__import__('sys').platform == 'win32', reason='POSIX shell expansion')
+    def test_a_space_in_the_interpreter_path_still_runs(self, tmp_path):
+        import os
+        import sys
+        from voice_mode.utils.dependencies.cache import get_cache
+
+        spaced = tmp_path / 'Jane Doe'
+        spaced.mkdir()
+        interpreter = spaced / 'python'
+        os.symlink(sys.executable, interpreter)
+
+        get_cache().clear()
+        package = {
+            'name': 'vm2649-spaced-interpreter-probe',
+            'check_command': '"${VOICEMODE_PYTHON:-python3}" -c "import sys; sys.exit(0)"',
+        }
+        with patch('voice_mode.utils.dependencies.checker.sys.executable', str(interpreter)):
+            assert check_dependency(package, 'fedora') is True
+        get_cache().clear()

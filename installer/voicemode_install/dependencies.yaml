@@ -143,7 +143,8 @@ voicemode:
         - name: python3-devel
           description: Python development headers (needed for building extensions)
           required: true
-          check_command: ${VOICEMODE_PYTHON:-python3} -c "import os, sys, sysconfig; sys.exit(0 if os.path.exists(sysconfig.get_path('include') + '/Python.h') else 1)"
+          check_command: >-
+            "${VOICEMODE_PYTHON:-python3}" -c "import os, sys, sysconfig; sys.exit(0 if os.path.exists(sysconfig.get_path('include') + '/Python.h') else 1)"
           note: Required for compiling webrtcvad (C extension used for silence detection). Probes for Python.h rather than the RPM, so uv-managed CPython and Fedora Atomic are handled.
 
         - name: gcc
@@ -167,7 +168,8 @@ voicemode:
         - name: portaudio
           description: PortAudio library (for sounddevice runtime)
           required: true
-          check_command: python3 -c "import ctypes.util, sys; sys.exit(0 if ctypes.util.find_library('portaudio') else 1)"
+          check_command: >-
+            "${VOICEMODE_PYTHON:-python3}" -c "import ctypes.util, sys; sys.exit(0 if ctypes.util.find_library('portaudio') else 1)"
           note: sounddevice dlopens libportaudio at runtime via cffi, so test for the loadable library rather than the RPM.
 
         - name: portaudio-devel
