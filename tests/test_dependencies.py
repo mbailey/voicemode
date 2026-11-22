@@ -235,10 +235,14 @@ class TestPackageManagerSelection:
 
     @patch('voice_mode.utils.dependencies.checker.detect_platform', return_value='debian')
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available', return_value=True)
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available', return_value=False)
     @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available', return_value=True)
-    def test_off_wsl_native_still_beats_brew(self, mock_apt, mock_brew, mock_platform, _ostree, _sys):
-        """PR #517: native first on every non-Atomic Linux, not only WSL."""
+    def test_off_wsl_native_still_beats_brew(self, mock_apt, mock_dnf, mock_brew, mock_platform, _ostree, _sys):
+        """PR #517 widens #320: native first on every non-Atomic Linux, not
+        only WSL. The WSL tests above keep their detect_platform patches to
+        show the answer no longer depends on WSL detection."""
         assert isinstance(get_package_manager(), AptManager)
+
 
 @patch('voice_mode.utils.dependencies.package_managers.platform.system', return_value='Linux')
 @patch('voice_mode.utils.dependencies.package_managers.is_ostree_system', return_value=True)
