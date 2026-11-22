@@ -546,31 +546,56 @@ def service_health(service_name):
 
     \b
     Checks if the service is responding on its expected port:
-      whisper    Port 2022
-      kokoro     Port 8880
-      voicemode  Port 8765 (configurable via VOICEMODE_SERVE_PORT)
+      whisper    Port 2022, GET /health
+      kokoro     Port 8880, GET /health
+      mlx-audio  Port 8890, GET /v1/models (VOICEMODE_MLX_AUDIO_PORT)
+      voicemode  Port 8765, accepting connections (VOICEMODE_SERVE_PORT)
     """
+    service_name = service_name.lower()
     if service_name == 'whisper':
         port = 2022
         display_name = 'Whisper'
     elif service_name == 'kokoro':
         port = 8880
         display_name = 'Kokoro'
+    elif service_name == 'mlx-audio':
+        from voice_mode.config import MLX_AUDIO_PORT
+        _http_health('mlx-audio', MLX_AUDIO_PORT, '/v1/models')
+        return
+    elif service_name == 'voicemode':
+        # `voicemode serve` has no health route, and its endpoints may sit
+        # behind auth, so "healthy" here means the port accepts connections.
+        from voice_mode.config import SERVE_PORT
+        import socket
+        try:
+            with socket.create_connection(('127.0.0.1', SERVE_PORT), timeout=5):
+                pass
+            click.echo(f"✅ VoiceMode is listening on port {SERVE_PORT}")
+        except OSError:
+            click.echo(f"❌ VoiceMode not responding on port {SERVE_PORT}")
+        return
     else:
         click.echo(f"❌ Unknown service: {service_name}")
         sys.exit(1)
         return
 
+    _http_health(display_name, port, '/health')
+
+
+def _http_health(display_name, port, path):
+    """Report whether a service answers GET <path> on 127.0.0.1:<port>."""
     import subprocess
     try:
         result = subprocess.run(
-            ["curl", "-s", f"http://127.0.0.1:{port}/health"],
+            ["curl", "-s", f"http://127.0.0.1:{port}{path}"],
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
             import json
             try:
                 health_data = json.loads(result.stdout)
+                if not isinstance(health_data, dict):
+                    health_data = {}
                 click.echo(f"✅ {display_name} is responding")
                 click.echo(f"   Status: {health_data.get('status', 'unknown')}")
                 if 'uptime' in health_data:
