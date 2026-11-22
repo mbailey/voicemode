@@ -19,6 +19,16 @@ class PlatformInfo:
     is_wsl: bool = False
     is_ostree: bool = False  # Fedora Atomic: Silverblue, Kinoite, Bazzite, Bluefin...
 
+    @property
+    def is_fedora_atomic(self) -> bool:
+        """True only for an ostree host in the Fedora family.
+
+        is_ostree alone is not enough: Endless OS (Debian family) and the
+        arch/suse ostree variants are ostree too, and the Atomic path's
+        Homebrew / rpm-ostree advice is Fedora's.
+        """
+        return self.is_ostree and self.distribution == 'fedora'
+
 
 def is_ostree_system() -> bool:
     """Detect an rpm-ostree / Fedora Atomic system (Silverblue, Bazzite, Bluefin...).

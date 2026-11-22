@@ -41,7 +41,7 @@ class PackageInstaller:
         # would be obtained -- brew, rpm-ostree, or skipped entirely -- so let
         # _install_ostree report that itself rather than printing a flat list
         # that hides the routing.
-        if self.dry_run and not self.platform.is_ostree:
+        if self.dry_run and not self.platform.is_fedora_atomic:
             print(f"[DRY RUN] Would install: {', '.join(package_names)}")
             return True
 
@@ -50,9 +50,10 @@ class PackageInstaller:
                 return self._install_homebrew(package_names)
             elif self.platform.distribution == 'debian':
                 return self._install_apt(package_names)
-            elif self.platform.is_ostree:
+            elif self.platform.is_fedora_atomic:
                 # Must precede the plain 'fedora' branch: Atomic variants report
-                # ID=fedora but dnf install cannot work there.
+                # ID=fedora but dnf install cannot work there. Other ostree
+                # families (Endless OS is Debian) never reach the Atomic path.
                 return self._install_ostree(package_names)
             elif self.platform.distribution == 'fedora':
                 return self._install_dnf(package_names)
