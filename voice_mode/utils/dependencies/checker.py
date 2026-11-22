@@ -11,7 +11,7 @@ import time
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
-from .package_managers import get_package_manager, get_homebrew_prefix, is_ostree_system
+from .package_managers import get_package_manager, get_homebrew_prefix
 from .cache import get_cache
 
 logger = logging.getLogger(__name__)
