@@ -71,7 +71,7 @@ are unaffected — they always use their profile's pinned model.
 
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
-| `VOICEMODE_STT_BASE_URLS` | Comma-separated STT service URLs | `https://api.openai.com/v1` | `http://localhost:2022/v1` |
+| `VOICEMODE_STT_BASE_URLS` | Comma-separated STT service URLs | `http://127.0.0.1:2022/v1,https://api.openai.com/v1` | `http://localhost:2022/v1` |
 | `VOICEMODE_STT_MODEL` | STT model sent to every non-OpenAI endpoint. When unset, a per-provider default applies (see below) | `whisper-1` (mlx-audio: `mlx-community/whisper-large-v3-turbo-asr-4bit`) | `whisper-1` |
 | `VOICEMODE_STT_MODELS` | Comma-separated STT models, one per `VOICEMODE_STT_BASE_URLS` entry (positional) | None | `whisper-1,mlx-community/whisper-large-v3-turbo-asr-4bit` |
 | `VOICEMODE_STT_PROMPT` | Vocabulary biasing for Whisper (names, terms) | None | `tmux, Tali, kubectl` |
