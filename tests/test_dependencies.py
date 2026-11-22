@@ -376,3 +376,17 @@ class TestBrewInstallTimeout:
         mock_run.return_value = Mock(returncode=0, stdout='', stderr='')
         OstreeBrewManager().install_packages(['portaudio-devel'])
         assert mock_run.call_args.kwargs['timeout'] == 1800
+
+
+@pytest.mark.parametrize('path', TestCheckCommandInterpreter.YAMLS)
+@pytest.mark.parametrize('family, name', [('debian', 'libasound2-dev'), ('fedora', 'alsa-lib-devel')])
+def test_core_alsa_headers_are_optional_in_both_copies(path, family, name):
+    """simpleaudio is gone (VM-2438); #541 updated only voice_mode's copy (VM-2649)."""
+    import pathlib
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    data = yaml.safe_load((root / path).read_text())
+    [pkg] = [p for p in data['voicemode']['core'][family]['packages'] if p['name'] == name]
+    assert pkg['required'] is False
+    assert 'simpleaudio' not in pkg.get('note', '') or 'no longer' in pkg['note']
