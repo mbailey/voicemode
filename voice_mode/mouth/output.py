@@ -113,8 +113,8 @@ class DeviceOut:
     A blocking ``stream.write`` can wait forever when CoreAudio stops pulling
     (Cora's review of 598e54dd, 20:16): the player hangs, the queue stalls and
     no ``said`` is written. Here ``write`` waits at most ``lost_after_s`` for
-    room in the queue, and ``drain`` at most the audio still queued plus
-    ``lost_after_s``; past either, ``DeviceLost``. ``frames_played`` counts
+    room in the queue, and ``drain`` at most ``lost_after_s`` between two
+    pulls; past either, ``DeviceLost``. ``frames_played`` counts
     what the device actually pulled, not what was handed over.
     """
 
@@ -203,11 +203,18 @@ class DeviceOut:
         self.frames_queued += len(block)
 
     def drain(self) -> None:
+        # Lost when the device has not pulled for lost_after_s, as in write():
+        # judged on progress, not on a total wall-clock budget. A budget of
+        # "audio left + lost_after_s" assumes the device pulls in real time,
+        # so a late or jittery stream that was still pulling got cut and
+        # logged as "stopped pulling" (VM-2617).
         self.draining = True
-        left = (self.frames_queued - self.frames_played) / self.sample_rate
-        deadline = time.monotonic() + left + self.lost_after_s
+        seen, since = self.frames_played, time.monotonic()
         while self.frames_played < self.frames_queued:
-            if time.monotonic() > deadline:
+            now = time.monotonic()
+            if self.frames_played != seen:
+                seen, since = self.frames_played, now
+            elif now - since > self.lost_after_s:
                 raise DeviceLost(f"{self.name!r} stopped pulling with "
                                  f"{(self.frames_queued - self.frames_played) / self.sample_rate:.2f}s left")
             time.sleep(0.01)

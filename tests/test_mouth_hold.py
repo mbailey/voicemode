@@ -295,7 +295,12 @@ def test_now_skips_the_beat(box, ears, monkeypatch):
 
 
 LONG = "one two three four five six seven eight nine ten " * 6   # ~20 s on the silence backend
-MID = "one two three four five six seven eight nine ten " * 2    # ~7 s: long enough to talk over
+# MID is long enough to talk over: each test's partial lands in its first second,
+# and the player looks for a barge on every 50 ms block, so ~2 s of the line is
+# still to play after it. It was this line twice (~6.5 s): under timer coalescing
+# (macOS CI, `taskpolicy -c background`) the sleep-paced null device took over
+# 15 s of wall time for that, and join(15) returned before the said (VM-2617).
+MID = "one two three four five six seven eight nine ten "        # ~3.3 s
 
 
 def _saying(box, text=None):

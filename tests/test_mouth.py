@@ -104,11 +104,31 @@ def test_one_at_a_time_oldest_first(box):
     assert order == [("saying", a["utt"]), ("said", a["utt"]), ("saying", b["utt"]), ("said", b["utt"])]
 
 
-def test_stop_cuts_within_a_block_and_flushes_the_queue(box):
+def _stop_once_played(monkeypatch, blocks=8):
+    """An Event set once the null device has PLAYED ``blocks`` 50 ms blocks.
+
+    Wait on it, then stop: not after a sleep. Under timer coalescing (macOS
+    CI, VM-2617) the player thread oversleeps, the null device runs dry and
+    restarts its clock, so a sleep's worth of wall time is less audio. The
+    played amount is what a cut-at bound is about, so sync on that (the
+    pattern VM-2605 used for the stall test)."""
+    played = threading.Event()
+    real_write = output.NullOut.write
+
+    def write(self, block):
+        real_write(self, block)
+        if self.frames_played >= blocks * 1200:
+            played.set()
+    monkeypatch.setattr(output.NullOut, "write", write)
+    return played
+
+
+def test_stop_cuts_within_a_block_and_flushes_the_queue(box, monkeypatch):
+    played = _stop_once_played(monkeypatch)
     long = say("word " * 20)          # ~6.7 s
     queued = say("never heard")
     th = run_player(box.d)
-    time.sleep(0.5)
+    assert played.wait(5)             # 8 blocks played: 0.4 s, less 0.05 s latency
     mouth.stop()
     th.join(5)
     got = lines(box.logs)
@@ -200,7 +220,13 @@ def test_text_at_cuts_back_to_a_word():
 # -- a device that stops taking audio mid-play (Cora's review, 20:16) ---------
 
 class PullingSd(FakeSd):
-    """A fake PortAudio whose stream pulls in real time, until ``stall`` is set."""
+    """A fake PortAudio whose stream pulls in real time, until ``stall`` is set.
+
+    Real time on the stream's own clock, as hardware is: each wake it pulls
+    every block ``time.monotonic()`` says is owed. One pull per
+    ``time.sleep(block)`` drifted: a late sleep was never made up, and under
+    timer coalescing (macOS CI, VM-2617) the "healthy" device pulled at
+    25-35% of real time."""
 
     def __init__(self):
         self.stall = threading.Event()
@@ -223,10 +249,13 @@ class PullingSd(FakeSd):
             def start(s):
                 def loop():
                     buf = np.zeros((1200, channels), dtype="float32")
+                    t0, pulled = time.monotonic(), 0
                     while s.run:
-                        if not fake.stall.is_set():
-                            callback(buf, 1200, None, None)
-                            s.peak = np.maximum(s.peak, np.abs(buf).max(axis=0))
+                        while s.run and pulled * 1200 / samplerate <= time.monotonic() - t0:
+                            if not fake.stall.is_set():
+                                callback(buf, 1200, None, None)
+                                s.peak = np.maximum(s.peak, np.abs(buf).max(axis=0))
+                            pulled += 1
                         time.sleep(1200 / samplerate)
                 threading.Thread(target=loop, daemon=True).start()
 
@@ -241,9 +270,10 @@ class PullingSd(FakeSd):
 
 @pytest.fixture
 def fake_device(monkeypatch):
+    # The production lost_after_s (1.0): a healthy device is judged by the
+    # same rule it meets live. Only the stall test shortens it, to be fast.
     sd = PullingSd()
     monkeypatch.setattr(output, "_sd", lambda: sd)
-    monkeypatch.setattr(output.DeviceOut, "lost_after_s", 0.3)
     return sd
 
 
@@ -261,6 +291,7 @@ def test_a_device_that_stops_pulling_is_lost_not_a_hang(box, fake_device, monkey
     # changes how much a sleep's worth is. Not after N callbacks either: the
     # stream pulls before the first write, and how many of those come back
     # empty is timing.
+    monkeypatch.setattr(output.DeviceOut, "lost_after_s", 0.3)  # only so the stall is found fast
     real_cb = output.DeviceOut._callback
 
     def callback(self, outdata, frames, t, status):
@@ -502,6 +533,66 @@ def test_a_slow_synthesis_is_logged_as_underrun_on_a_device(monkeypatch):
     assert out.frames_played == 20 * 1200
 
 
+def _drain_on_a_fake_clock(monkeypatch, pull_every_s, pulls):
+    """Drain 4 queued blocks (0.2 s) from a DeviceOut whose clock is fake.
+
+    ``drain``'s own ``time.sleep`` advances the clock, and the device pulls one
+    block every ``pull_every_s`` of it, ``pulls`` times, then never again. No
+    real sleep anywhere, so no timer slack can move the result (VM-2617)."""
+    import numpy as np
+    monkeypatch.delenv("VOICEMODE_MOUTH_REBUFFER_S", raising=False)
+
+    class Stream:
+        latency = 0.0
+
+        def __init__(self, **kw):
+            pass
+
+        def start(self):
+            pass
+
+        def abort(self):
+            pass
+
+        def close(self):
+            pass
+    monkeypatch.setattr(output, "_sd", lambda: SimpleNamespace(OutputStream=Stream))
+    monkeypatch.setattr(output, "resolve", lambda name: (0, name))
+    monkeypatch.setattr(output.DeviceOut, "lost_after_s", 0.3)
+    out = output.DeviceOut("MacBook Pro Speakers", 24000)
+    for _ in range(4):
+        out.write(np.full(1200, 0.5, dtype=np.float32))
+    buf = np.zeros((1200, 1), dtype="float32")
+    clock = SimpleNamespace(now=100.0, next_pull=100.0 + pull_every_s, pulls=0)
+
+    def sleep(dt):
+        clock.now += dt
+        while clock.pulls < pulls and clock.now >= clock.next_pull:
+            out._callback(buf, 1200, None, None)
+            clock.pulls += 1
+            clock.next_pull += pull_every_s
+    monkeypatch.setattr(output, "time", SimpleNamespace(monotonic=lambda: clock.now, sleep=sleep))
+    return out, clock
+
+
+def test_drain_waits_for_a_slow_device_that_is_still_pulling(monkeypatch):
+    # One block per 0.25 s: 0.2 s of audio takes 1.0 s, twice the old budget
+    # (audio left + lost_after_s = 0.5 s), but no gap reaches lost_after_s.
+    out, clock = _drain_on_a_fake_clock(monkeypatch, pull_every_s=0.25, pulls=4)
+    out.drain()
+    assert out.frames_played == out.frames_queued == 4 * 1200
+    assert clock.now >= 100.0 + 4 * 0.25
+
+
+def test_drain_finds_a_device_that_stops_pulling_lost(monkeypatch):
+    out, clock = _drain_on_a_fake_clock(monkeypatch, pull_every_s=0.05, pulls=2)
+    with pytest.raises(output.DeviceLost, match="stopped pulling with 0.10s left"):
+        out.drain()
+    # Lost lost_after_s after the last pull (seen within one 10 ms poll), not before.
+    last_pull = 100.0 + 2 * 0.05
+    assert last_pull + 0.3 < clock.now <= last_pull + 0.3 + 0.03
+
+
 def test_rebuffer_turns_many_stutters_into_few_pauses(box, fake_device, monkeypatch, tmp_path):
     plain = _slow_on_device(box, monkeypatch)
     monkeypatch.setenv("VOICEMODE_MOUTH_REBUFFER_S", "0.3")
@@ -541,15 +632,40 @@ def test_now_interrupts_only_the_line_playing(box):
     assert order == [a["utt"], c["utt"], b["utt"]]
 
 
-def test_amend_rewrites_a_queued_line_even_if_prefetched(box):
-    a, b = say("word " * 10), say("the old words")
+def test_amend_rewrites_a_queued_line_even_if_prefetched(box, monkeypatch):
+    # Amend once b's prefetch has FINISHED, not after a sleep: under timer
+    # coalescing (macOS CI, `taskpolicy -c background`) a sleep says nothing
+    # about what the player has done. And keep the audio short: the null
+    # device is paced by sleeps too, so there the player took 8.1-10.7 s of
+    # wall time for the old 4.2 s of audio and join(8) returned before b's
+    # said (VM-2617 fix-002). ``a`` only has to outlast the amend, which now
+    # follows the prefetch by milliseconds.
+    b_prefetched = threading.Event()
+    real_run = player.Synth._run
+
+    def run(self):
+        real_run(self)
+        if self.finished and self.item["text"] == "the old words":
+            b_prefetched.set()
+    monkeypatch.setattr(player.Synth, "_run", run)
+    synthesised = {}                     # utt -> the text of the synthesis that played
+    real_play_one = player.play_one
+
+    def play_one(item, d, synth=None, prefetched=False):
+        synthesised[item["utt"]] = synth.item["text"] if synth else None
+        return real_play_one(item, d, synth, prefetched)
+    monkeypatch.setattr(player, "play_one", play_one)
+
+    a, b = say("word " * 4), say("the old words")
     th = run_player(box.d)
-    time.sleep(0.3)                       # b is prefetched by now (silence synthesises at once)
-    mouth.amend(b["utt"], "the new words")
+    assert b_prefetched.wait(5), "b was never prefetched"
+    mouth.amend(b["utt"], "the new words")   # raises if b were already playing
     th.join(8)
+    assert not th.is_alive(), "the player was still playing after 8 s"
     saying_b = next(r for r in lines(box.logs) if r["kind"] == "saying" and r["utt"] == b["utt"])
     assert saying_b["text"] == "the new words"
     assert _said(box.logs)[b["utt"]]["text_played_est"] == "the new words"
+    assert synthesised[b["utt"]] == "the new words"   # the stale prefetch was dropped
 
 
 def test_amend_refuses_a_line_already_playing(box):
@@ -612,11 +728,12 @@ def test_play_a_section_of_a_file(box, tmp_path):
 
 
 @needs_ffmpeg
-def test_a_sound_is_cut_by_stop_like_a_line(box, tmp_path):
+def test_a_sound_is_cut_by_stop_like_a_line(box, tmp_path, monkeypatch):
+    played = _stop_once_played(monkeypatch)
     wav = _tone_wav(tmp_path / "long.wav", seconds=3.0)
     mouth.play(str(wav), device="null", spawn=False)
     th = run_player(box.d)
-    time.sleep(0.5)
+    assert played.wait(5)             # 8 blocks played: 0.4 s, less 0.05 s latency
     mouth.stop()
     th.join(5)
     said = next(r for r in lines(box.logs) if r["kind"] == "said")
