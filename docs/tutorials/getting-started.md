@@ -172,6 +172,29 @@ echo "Kokoro ready"
 
 Learn more: [Whisper Setup Guide](../guides/whisper-setup.md) | [Kokoro Setup Guide](../guides/kokoro-setup.md)
 
+### Windows
+
+Microphone input on native Windows requires the LiveKit transport. The `local`
+transport captures the microphone to a temporary WAV file, which fails on
+Windows with `WinError 32` (temp file locking). LiveKit streams the microphone
+over WebRTC instead and bypasses the bug entirely.
+
+Services that must be running:
+
+- **LiveKit**: `ws://127.0.0.1:7880` — required for Windows mic input
+- **Whisper**: `http://127.0.0.1:2022` — STT
+- **Kokoro**: `http://127.0.0.1:8880` — TTS
+
+No special parameters are needed: the default `transport="auto"` detects
+LiveKit on port 7880 and uses it automatically. `transport="local"` fails on
+native Windows; `transport="livekit"` forces LiveKit and errors if the server
+is not running.
+
+The Whisper server must expose the OpenAI-compatible
+`/v1/audio/transcriptions` endpoint — a whisper.cpp build that only serves the
+native `/inference` path will not transcribe. See
+[Whisper Setup Guide](../guides/whisper-setup.md#running-the-server).
+
 ## Configuration
 
 VoiceMode works out of the box with sensible defaults. To customize:

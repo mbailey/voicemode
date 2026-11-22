@@ -74,6 +74,10 @@ This recovery technique allows you to retrieve the transcription without asking 
 **Symptoms:** Garbled or robotic voice output
 **Quick Fix:** Verify audio format with `voicemode config get VOICEMODE_TTS_AUDIO_FORMAT`
 
+### 6. Microphone Fails on Native Windows (WinError 32)
+**Symptoms:** Listening never captures audio on Windows; errors mention `WinError 32` or a temp file in use
+**Quick Fix:** Run a LiveKit server (`ws://127.0.0.1:7880`). The `local` transport records to a temporary WAV file, which Windows file locking rejects — LiveKit streams the microphone over WebRTC instead. The default `transport="auto"` detects LiveKit automatically; do not force `transport="local"`.
+
 ## Troubleshooting by Category
 
 ### Voice Interaction Issues
@@ -94,6 +98,7 @@ This recovery technique allows you to retrieve the transcription without asking 
 
 ### Audio Device Problems
 - **Microphone Access** - Permissions and detection (coming soon)
+- **Windows Microphone Input** - `local` transport fails with `WinError 32`; run LiveKit on port 7880 and let `transport="auto"` select it
 - **WSL2 Audio** - Windows Subsystem for Linux (coming soon)
 - **macOS Permissions** - Privacy settings (coming soon)
 

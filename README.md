@@ -191,6 +191,7 @@ environment.systemPackages = [
 | Problem | Solution |
 |---------|----------|
 | No microphone access | Check terminal/app permissions. WSL2 needs pulseaudio packages. |
+| Mic input fails on Windows | Native Windows needs LiveKit running (port 7880); `local` transport hits `WinError 32` |
 | UV not found | Run `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | OpenAI API error | Verify `OPENAI_API_KEY` is set correctly |
 | No audio output | Check system audio settings and available devices |
