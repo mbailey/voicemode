@@ -15,11 +15,13 @@
 # - Ubuntu/Debian: libportaudio2, ffmpeg
 # - Fedora: portaudio, ffmpeg
 #
-# **Required (build tools - for webrtcvad and simpleaudio):**
-# - Ubuntu/Debian: python3-dev, gcc, libasound2-dev
-# - Fedora: python3-devel, gcc, alsa-lib-devel
-# - Note: webrtcvad is a Python C extension used for silence detection. It must be compiled during installation.
-#   simpleaudio is a Python C extension used for audio playback. It requires ALSA headers to compile.
+# **Required (build tools - for webrtcvad):**
+# - Ubuntu/Debian: python3-dev, gcc
+# - Fedora: python3-devel, gcc
+# - Note: webrtcvad is a Python C extension used for silence detection. It must be compiled during installation
+#   where no prebuilt webrtcvad-wheels wheel fits.
+#   simpleaudio was dropped (VM-2438): nothing imported it, and on Apple Silicon it had no wheel, so it
+#   forced a compiler onto every Mac. ALSA headers (libasound2-dev, alsa-lib-devel) are now optional.
 #   Testing confirmed: Only gcc is required for core, g++/gcc-c++ not needed.
 #
 # **Optional (build from source):**
@@ -101,9 +103,9 @@ voicemode:
 
         - name: libasound2-dev
           description: ALSA development files (audio support)
-          required: true
+          required: false
           # Don't use check_command - let it use _check_apt_package which properly checks dpkg output
-          note: Required for compiling simpleaudio (C extension used for audio playback)
+          note: Was needed only to compile simpleaudio, which VoiceMode no longer uses (VM-2438)
 
         - name: libasound2-plugins
           description: ALSA plugins for PulseAudio
@@ -143,8 +145,9 @@ voicemode:
         - name: python3-devel
           description: Python development headers (needed for building extensions)
           required: true
-          check_command: rpm -q python3-devel
-          note: Required for compiling webrtcvad (C extension used for silence detection)
+          check_command: >-
+            "${VOICEMODE_PYTHON:-python3}" -c "import os, sys, sysconfig; sys.exit(0 if os.path.exists(sysconfig.get_path('include') + '/Python.h') else 1)"
+          note: Required for compiling webrtcvad (C extension used for silence detection). Probes for Python.h rather than the RPM, so uv-managed CPython and Fedora Atomic are handled.
 
         - name: gcc
           description: C compiler (needed for building Python extensions)
@@ -160,32 +163,34 @@ voicemode:
 
         - name: alsa-lib-devel
           description: ALSA development files (audio support)
-          required: true
-          check_command: rpm -q alsa-lib-devel
-          note: Required for compiling simpleaudio (C extension used for audio playback)
+          required: false
+          check_command: pkg-config --exists alsa
+          note: Was needed only to compile simpleaudio, which VoiceMode no longer uses (VM-2438)
 
         - name: portaudio
           description: PortAudio library (for sounddevice runtime)
           required: true
-          check_command: rpm -q portaudio
+          check_command: >-
+            "${VOICEMODE_PYTHON:-python3}" -c "import ctypes.util, sys; sys.exit(0 if ctypes.util.find_library('portaudio') else 1)"
+          note: sounddevice dlopens libportaudio at runtime via cffi, so test for the loadable library rather than the RPM.
 
         - name: portaudio-devel
           description: PortAudio development files
           required: false
-          check_command: rpm -q portaudio-devel
-          note: Optional - only needed for building, not runtime
+          check_command: pkg-config --exists portaudio-2.0
+          note: Optional - only needed for building, not runtime. sounddevice uses cffi ABI mode and needs no PortAudio headers.
 
         - name: pulseaudio
           description: PulseAudio sound server
           required: wsl  # Required for WSL, optional for native Linux
-          check_command: pulseaudio --version
-          note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
+          check_command: pulseaudio --version || pactl --version
+          note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops. Modern Fedora ships PipeWire, which provides the PulseAudio interface without the pulseaudio binary, so accept pactl too.
 
         - name: pulseaudio-utils
           description: PulseAudio utilities
           required: wsl  # Required for WSL, optional for native Linux
-          check_command: rpm -q pulseaudio-utils
-          note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops.
+          check_command: pactl --version
+          note: Essential for WSL2 audio. Usually pre-installed on native Linux desktops. Tests for the pactl binary, which PipeWire also provides (pipewire-pulseaudio), rather than the RPM.
 
         - name: ffmpeg
           description: Audio/video processing

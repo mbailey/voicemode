@@ -546,30 +546,56 @@ def service_health(service_name):
 
     \b
     Checks if the service is responding on its expected port:
-      whisper    Port 2022
-      kokoro     Port 8880
-      voicemode  Port 8765 (configurable via VOICEMODE_SERVE_PORT)
+      whisper    Port 2022, GET /health
+      kokoro     Port 8880, GET /health
+      mlx-audio  Port 8890, GET /v1/models (VOICEMODE_MLX_AUDIO_PORT)
+      voicemode  Port 8765, accepting connections (VOICEMODE_SERVE_PORT)
     """
+    service_name = service_name.lower()
     if service_name == 'whisper':
         port = 2022
         display_name = 'Whisper'
     elif service_name == 'kokoro':
         port = 8880
         display_name = 'Kokoro'
+    elif service_name == 'mlx-audio':
+        from voice_mode.config import MLX_AUDIO_PORT
+        _http_health('mlx-audio', MLX_AUDIO_PORT, '/v1/models')
+        return
+    elif service_name == 'voicemode':
+        # `voicemode serve` has no health route, and its endpoints may sit
+        # behind auth, so "healthy" here means the port accepts connections.
+        from voice_mode.config import SERVE_PORT
+        import socket
+        try:
+            with socket.create_connection(('127.0.0.1', SERVE_PORT), timeout=5):
+                pass
+            click.echo(f"✅ VoiceMode is listening on port {SERVE_PORT}")
+        except OSError:
+            click.echo(f"❌ VoiceMode not responding on port {SERVE_PORT}")
+        return
     else:
         click.echo(f"❌ Unknown service: {service_name}")
+        sys.exit(1)
         return
 
+    _http_health(display_name, port, '/health')
+
+
+def _http_health(display_name, port, path):
+    """Report whether a service answers GET <path> on 127.0.0.1:<port>."""
     import subprocess
     try:
         result = subprocess.run(
-            ["curl", "-s", f"http://127.0.0.1:{port}/health"],
+            ["curl", "-s", f"http://127.0.0.1:{port}{path}"],
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0:
             import json
             try:
                 health_data = json.loads(result.stdout)
+                if not isinstance(health_data, dict):
+                    health_data = {}
                 click.echo(f"✅ {display_name} is responding")
                 click.echo(f"   Status: {health_data.get('status', 'unknown')}")
                 if 'uptime' in health_data:
@@ -606,8 +632,12 @@ def _echo_missing_dependencies(result):
 @service.command('install')
 @click.argument('service_name', type=click.Choice(VALID_SERVICES, case_sensitive=False), metavar='SERVICE')
 @click.option('--force', '-f', is_flag=True, help='Force reinstall even if already installed')
+@click.option('--model', default=None, help='Whisper model to download (whisper only)')
+@click.option('--use-gpu/--no-gpu', default=None,
+              help='Enable or disable GPU support (whisper only). --no-gpu builds CPU-only '
+                   'and needs no CUDA toolkit.')
 @click.help_option('-h', '--help')
-def service_install(service_name, force):
+def service_install(service_name, force, model, use_gpu):
     """Install a voice service.
 
     \b
@@ -625,16 +655,28 @@ def service_install(service_name, force):
     """
     if service_name == 'whisper':
         from voice_mode.tools.whisper.install import whisper_install
-        result = asyncio.run(getattr(whisper_install, 'fn', whisper_install)(force_reinstall=force))
+        # whisper_install accepts model and use_gpu, but this command previously
+        # passed neither -- so --no-gpu, which the CUDA error message tells the
+        # user to run, did not exist, and the standalone installer's
+        # `service install whisper --model X` was an unknown option.
+        kwargs = {'force_reinstall': force}
+        if model is not None:
+            kwargs['model'] = model
+        if use_gpu is not None:
+            kwargs['use_gpu'] = use_gpu
+        result = asyncio.run(getattr(whisper_install, 'fn', whisper_install)(**kwargs))
         # Handle dict result from tool
         if isinstance(result, dict):
             if result.get("success"):
                 click.echo(f"✅ Whisper installed successfully")
                 if result.get('install_path'):
                     click.echo(f"   Install path: {result['install_path']}")
+                if result.get('cpu_only_note'):
+                    click.echo(f"⚠️  {result['cpu_only_note']}")
             else:
                 click.echo(f"❌ Whisper installation failed: {result.get('error', 'Unknown error')}")
                 _echo_missing_dependencies(result)
+                sys.exit(1)
         else:
             click.echo(result)
     elif service_name == 'kokoro':
@@ -648,6 +690,7 @@ def service_install(service_name, force):
             else:
                 click.echo(f"❌ Kokoro installation failed: {result.get('error', 'Unknown error')}")
                 _echo_missing_dependencies(result)
+                sys.exit(1)
         else:
             click.echo(result)
     elif service_name == 'voicemode':
@@ -660,6 +703,7 @@ def service_install(service_name, force):
         else:
             click.echo(f"❌ VoiceMode installation failed: {result.get('error', 'Unknown error')}")
             _echo_missing_dependencies(result)
+            sys.exit(1)
     elif service_name == 'mlx-audio':
         from voice_mode.tools.mlx_audio.install import mlx_audio_install
         result = asyncio.run(mlx_audio_install(force_reinstall=force))
@@ -675,10 +719,12 @@ def service_install(service_name, force):
             else:
                 click.echo(f"❌ mlx-audio installation failed: {result.get('error', 'Unknown error')}")
                 _echo_missing_dependencies(result)
+                sys.exit(1)
         else:
             click.echo(result)
     else:
         click.echo(f"❌ Unknown service: {service_name}")
+        sys.exit(1)
 
 
 # ============================================================================

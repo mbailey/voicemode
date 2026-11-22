@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Fedora Atomic (Silverblue, Kinoite, Bazzite, Bluefin) is supported. These systems are
+  detected by `/run/ostree-booted`, where `dnf install` cannot work. Dependencies install
+  through Homebrew (no root, no reboot), with Fedora package names translated to Homebrew
+  formulae. Anything Homebrew lacks prints the `rpm-ostree install` command and the
+  `distrobox` alternative. `python3-devel` is skipped there: `uv tool install` builds
+  against uv's own Python, which ships its headers. For CUDA, the advice is NVIDIA's
+  runfile, which installs into the writable `/usr/local`. Thanks @Sallvainian (#517).
+- `voicemode service install whisper` accepts `--model` and `--use-gpu/--no-gpu`. The CUDA
+  error already told you to use `--no-gpu`, and the standalone installer already passed
+  `--model`; neither existed. Thanks @Sallvainian (#517).
+
+### Changed
+
+- **`voicemode service install` exits 1 when the install fails.** It printed the error
+  and exited 0, so scripts (and the standalone installer) reported success. On Apple
+  Silicon this switches on `install.sh`'s fallback from mlx-audio to Kokoro when the
+  mlx-audio install fails, which has never run before. Thanks @Sallvainian (#517).
+- `voice-mode-install` exits 1 when a service fails to install, and its summary names each
+  failed component with the command to retry it. It said "Installation Complete!" and
+  exited 0. Thanks @Sallvainian (#517).
+- On every Linux, not only WSL (#320), the distribution's package manager (dnf, apt) is now
+  asked before Homebrew: the dependency list gives distribution package names, which
+  Homebrew cannot resolve. If you have Homebrew beside dnf or apt, dependencies now install
+  with the native manager (and sudo). macOS always uses Homebrew. Thanks @Sallvainian
+  (#517, VM-2649).
+- Whisper on Linux: when a GPU is auto-detected but no CUDA toolkit is found (on `PATH` or
+  in `/usr/local/cuda/bin`), Whisper builds CPU-only instead of refusing to install, and
+  the final message says so. An explicit `--use-gpu` still stops with an error. Thanks
+  @Sallvainian (#517, VM-2649).
+- Homebrew installs time out after 10 minutes, as apt and dnf do (was 5); on Fedora Atomic,
+  where large formulae such as `rust` come through Homebrew, after 30. Thanks @Sallvainian
+  (#517, VM-2649).
+
+### Fixed
+
+- Dependency checks test for what is actually used, not for an RPM: `Python.h` for the
+  interpreter that builds the extensions, a loadable `libportaudio`, `pkg-config` for
+  headers (with Homebrew's pkgconfig directories on the search path), and `pactl`, which
+  PipeWire provides, for PulseAudio. On Bazzite the old checks reported every core
+  dependency missing on a working install. This applies to `voicemode deps` and to the
+  standalone installer. Thanks @Sallvainian (#517, VM-2649).
+- CUDA builds of Whisper pick a host compiler that nvcc accepts when the distribution's
+  default GCC is too new (Fedora 44's GCC 16 against CUDA 13.3). The limit is read from
+  CUDA's own headers. A `CUDAHOSTCXX` or `NVCC_CCBIN` you exported is left alone. Thanks
+  @Sallvainian (#517, VM-2649).
+- A failed Whisper build shows the cmake error instead of `'str' object has no attribute
+  'decode'`. Three other error handlers (the Kokoro installer, the sounddevice stderr
+  redirect and exchange tailing) no longer raise over the error they report. Thanks
+  @Sallvainian (#517).
+- `voicemode service health voicemode` and `voicemode service health mlx-audio` check the
+  service instead of answering "Unknown service" (VM-2649).
+- The standalone installer no longer installs the ALSA headers (`libasound2-dev`,
+  `alsa-lib-devel`) that only simpleaudio needed. Its copy of the dependency list was
+  missed when simpleaudio was dropped (VM-2438, VM-2649).
+
 ### Documentation
 
 - How to run speech-to-text on Parakeet, served by mlx-audio on Apple Silicon. It is

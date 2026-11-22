@@ -7,7 +7,27 @@ from typing import List, Optional
 
 import yaml
 
-from .system import PlatformInfo, check_command_exists
+import os
+import sys
+
+from .system import PlatformInfo, check_command_exists, get_homebrew_prefix
+
+
+# Fedora RPM name -> Homebrew formula, for systems where the dependency was
+# satisfied with Homebrew rather than the distro package manager. Only names
+# that genuinely exist in homebrew-core are listed; anything absent here simply
+# falls through and is reported missing.
+RPM_TO_BREW = {
+    'alsa-lib-devel': 'alsa-lib',
+    'portaudio': 'portaudio',
+    'portaudio-devel': 'portaudio',
+    'SDL2-devel': 'sdl2',
+    'ffmpeg': 'ffmpeg',
+    'cmake': 'cmake',
+    'make': 'make',
+    'rust': 'rust',
+    'cargo': 'rust',
+}
 
 
 @dataclass
@@ -121,6 +141,29 @@ class DependencyChecker:
             # Fallback: check if command exists
             return check_command_exists(package_name)
 
+    def _check_env(self) -> dict:
+        """Environment for check commands, with Homebrew's pkgconfig dir added.
+
+        Homebrew is not on pkg-config's default search path on Linux, so a
+        header installed with ``brew install alsa-lib`` is invisible to a bare
+        ``pkg-config --exists alsa`` even though the compiler would find it.
+        On an immutable OS Homebrew is the main way to get headers at all, so
+        without this every pkg-config check reports a false negative.
+        """
+        env = os.environ.copy()
+        prefix = get_homebrew_prefix()
+        if prefix:
+            existing = env.get('PKG_CONFIG_PATH', '')
+            brew_pc = [str(prefix / 'lib' / 'pkgconfig'), str(prefix / 'share' / 'pkgconfig')]
+            env['PKG_CONFIG_PATH'] = ':'.join([p for p in brew_pc + [existing] if p])
+
+        # The interpreter that would actually build C extensions -- not whatever
+        # `python3` resolves to on PATH. uv's managed CPython ships its own
+        # headers while the system python3 may have none, so probing PATH's
+        # python3 reports a false missing python3-devel.
+        env['VOICEMODE_PYTHON'] = sys.executable
+        return env
+
     def _run_check_command(self, command: str) -> bool:
         """Run a check command and return whether it succeeded."""
         try:
@@ -129,7 +172,8 @@ class DependencyChecker:
                 shell=True,
                 capture_output=True,
                 check=True,
-                timeout=5
+                timeout=5,
+                env=self._check_env()
             )
             return True
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -170,7 +214,12 @@ class DependencyChecker:
             return False
 
     def _check_dnf_package(self, package_name: str) -> bool:
-        """Check if a dnf/yum package is installed."""
+        """Check if a dnf/yum package is installed.
+
+        Falls back to Homebrew: on Fedora Atomic the RPM is often absent
+        because the dependency was satisfied with ``brew install`` instead,
+        which ``rpm -q`` cannot see.
+        """
         try:
             subprocess.run(
                 ['rpm', '-q', package_name],
@@ -179,7 +228,12 @@ class DependencyChecker:
             )
             return True
         except (subprocess.CalledProcessError, FileNotFoundError):
-            return False
+            pass
+
+        brew_formula = RPM_TO_BREW.get(package_name)
+        if brew_formula and get_homebrew_prefix():
+            return self._check_homebrew_package(brew_formula)
+        return False
 
     def get_missing_packages(self, packages: List[PackageInfo]) -> List[PackageInfo]:
         """Filter to only required packages that are not installed."""

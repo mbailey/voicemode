@@ -8,7 +8,10 @@ from voice_mode.utils.dependencies.package_managers import (
     BrewManager,
     AptManager,
     DnfManager,
-    get_package_manager
+    OstreeBrewManager,
+    RpmOstreeManager,
+    get_package_manager,
+    translate_to_brew,
 )
 
 
@@ -148,19 +151,31 @@ class TestPackageManagers:
         assert manager.check_package("ffmpeg") is True
 
 
+@patch('voice_mode.utils.dependencies.package_managers.platform.system', return_value='Linux')
+@patch('voice_mode.utils.dependencies.package_managers.is_ostree_system', return_value=False)
 class TestPackageManagerSelection:
-    """Test automatic package manager selection."""
+    """Test automatic package manager selection on a traditional Linux distro.
+
+    Both the OS and the ostree probe are pinned so these assert the intended
+    branch on any host. Without that, they read the machine they run on: on a
+    Fedora Atomic host the ostree branch returns before the dnf/apt/brew list is
+    ever consulted, and on macOS the Darwin branch does.
+    """
 
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
-    def test_get_package_manager_brew(self, mock_brew):
-        """Test getting Brew manager when available."""
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
+    @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available')
+    def test_get_package_manager_brew(self, mock_apt, mock_dnf, mock_brew, _ostree, _sys):
+        """Brew is the fallback when no native package manager is present."""
         mock_brew.return_value = True
+        mock_dnf.return_value = False
+        mock_apt.return_value = False
         manager = get_package_manager()
         assert isinstance(manager, BrewManager)
 
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
-    def test_get_package_manager_dnf(self, mock_dnf, mock_brew):
+    def test_get_package_manager_dnf(self, mock_dnf, mock_brew, _ostree, _sys):
         """Test getting DNF manager when Brew not available."""
         mock_brew.return_value = False
         mock_dnf.return_value = True
@@ -169,8 +184,20 @@ class TestPackageManagerSelection:
 
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
+    def test_dnf_preferred_over_brew(self, mock_dnf, mock_brew, _ostree, _sys):
+        """The native manager wins when both are installed.
+
+        dependencies.yaml supplies distro package names, so preferring Homebrew
+        would hand it names it cannot resolve on a machine that has both.
+        """
+        mock_brew.return_value = True
+        mock_dnf.return_value = True
+        assert isinstance(get_package_manager(), DnfManager)
+
+    @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available')
-    def test_get_package_manager_apt(self, mock_apt, mock_dnf, mock_brew):
+    def test_get_package_manager_apt(self, mock_apt, mock_dnf, mock_brew, _ostree, _sys):
         """Test getting APT manager when others not available."""
         mock_brew.return_value = False
         mock_dnf.return_value = False
@@ -181,7 +208,7 @@ class TestPackageManagerSelection:
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available')
     @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available')
-    def test_get_package_manager_none_available(self, mock_apt, mock_dnf, mock_brew):
+    def test_get_package_manager_none_available(self, mock_apt, mock_dnf, mock_brew, _ostree, _sys):
         """Test error when no package manager is available."""
         mock_brew.return_value = False
         mock_dnf.return_value = False
@@ -194,7 +221,7 @@ class TestPackageManagerSelection:
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available', return_value=True)
     @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available', return_value=False)
     @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available', return_value=True)
-    def test_wsl_prefers_apt_over_an_installed_brew(self, mock_apt, mock_dnf, mock_brew, mock_platform):
+    def test_wsl_prefers_apt_over_an_installed_brew(self, mock_apt, mock_dnf, mock_brew, mock_platform, _ostree, _sys):
         """On WSL the native manager wins: Homebrew there reports apt
         packages as missing (PR #320)."""
         assert isinstance(get_package_manager(), AptManager)
@@ -203,12 +230,163 @@ class TestPackageManagerSelection:
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available', return_value=True)
     @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available', return_value=True)
     @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available', return_value=False)
-    def test_wsl_fedora_prefers_dnf_over_an_installed_brew(self, mock_apt, mock_dnf, mock_brew, mock_platform):
+    def test_wsl_fedora_prefers_dnf_over_an_installed_brew(self, mock_apt, mock_dnf, mock_brew, mock_platform, _ostree, _sys):
         assert isinstance(get_package_manager(), DnfManager)
 
     @patch('voice_mode.utils.dependencies.checker.detect_platform', return_value='debian')
     @patch('voice_mode.utils.dependencies.package_managers.BrewManager.check_available', return_value=True)
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available', return_value=False)
     @patch('voice_mode.utils.dependencies.package_managers.AptManager.check_available', return_value=True)
-    def test_off_wsl_the_order_is_unchanged(self, mock_apt, mock_brew, mock_platform):
-        """Only WSL changes: elsewhere Homebrew is still asked first."""
-        assert isinstance(get_package_manager(), BrewManager)
+    def test_off_wsl_native_still_beats_brew(self, mock_apt, mock_dnf, mock_brew, mock_platform, _ostree, _sys):
+        """PR #517 widens #320: native first on every non-Atomic Linux, not
+        only WSL. The WSL tests above keep their detect_platform patches to
+        show the answer no longer depends on WSL detection."""
+        assert isinstance(get_package_manager(), AptManager)
+
+
+@patch('voice_mode.utils.dependencies.package_managers.platform.system', return_value='Linux')
+@patch('voice_mode.utils.dependencies.package_managers.is_ostree_system', return_value=True)
+class TestPackageManagerSelectionOstree:
+    """Selection on Fedora Atomic (Silverblue, Kinoite, Bazzite, Bluefin).
+
+    `dnf install` can never succeed there -- /usr is read-only and Bazzite ships
+    a dnf shim that refuses it -- so DnfManager must never be selected even
+    though `dnf` is on PATH.
+    """
+
+    @patch('voice_mode.utils.dependencies.package_managers.get_homebrew_prefix')
+    def test_ostree_with_homebrew(self, mock_prefix, _ostree, _sys):
+        """Homebrew is the install path when present: no root, no reboot."""
+        mock_prefix.return_value = '/home/linuxbrew/.linuxbrew'
+        assert isinstance(get_package_manager(), OstreeBrewManager)
+
+    @patch('voice_mode.utils.dependencies.package_managers.get_homebrew_prefix')
+    def test_ostree_without_homebrew(self, mock_prefix, _ostree, _sys):
+        """Without Homebrew, fall back to the manager that explains the options."""
+        mock_prefix.return_value = None
+        assert isinstance(get_package_manager(), RpmOstreeManager)
+
+    @patch('voice_mode.utils.dependencies.package_managers.get_homebrew_prefix')
+    @patch('voice_mode.utils.dependencies.package_managers.DnfManager.check_available',
+           return_value=True)
+    def test_ostree_never_selects_dnf(self, _dnf, mock_prefix, _ostree, _sys):
+        """dnf on PATH must not win on Atomic -- installing with it cannot work."""
+        mock_prefix.return_value = None
+        assert not isinstance(get_package_manager(), DnfManager)
+
+
+class TestBrewNameTranslation:
+    """dependencies.yaml uses Fedora RPM names; Homebrew formulae differ."""
+
+    def test_devel_suffix_is_stripped(self):
+        """`brew install portaudio-devel` fails -- the formula is `portaudio`."""
+        formulae, unmappable = translate_to_brew(['portaudio-devel', 'alsa-lib-devel'])
+        assert formulae == ['portaudio', 'alsa-lib']
+        assert unmappable == []
+
+    def test_cargo_and_rust_collapse_to_one_formula(self):
+        """cargo has no formula of its own; it ships inside rust."""
+        formulae, unmappable = translate_to_brew(['cargo', 'rust'])
+        assert formulae == ['rust']
+        assert unmappable == []
+
+    def test_unmappable_names_are_reported_not_guessed(self):
+        formulae, unmappable = translate_to_brew(['portaudio', 'no-such-package'])
+        assert formulae == ['portaudio']
+        assert unmappable == ['no-such-package']
+
+
+class TestCheckCommandInterpreter:
+    """check_commands name the interpreter as "${VOICEMODE_PYTHON:-python3}".
+
+    Unquoted, a space in sys.executable (``/home/Jane Doe/...``) splits the word
+    under ``shell=True``, the probe exits 127, and the package reads as missing
+    forever (VM-2621 review, VM-2649).
+    """
+
+    YAMLS = (
+        'voice_mode/dependencies.yaml',
+        'installer/voicemode_install/dependencies.yaml',
+    )
+
+    @staticmethod
+    def _check_commands(path):
+        import pathlib
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        data = yaml.safe_load((root / path).read_text())
+
+        def walk(node):
+            if isinstance(node, dict):
+                if 'check_command' in node:
+                    yield node['name'], node['check_command']
+                for value in node.values():
+                    yield from walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    yield from walk(value)
+
+        return list(walk(data))
+
+    @pytest.mark.parametrize('path', YAMLS)
+    def test_interpreter_is_quoted_and_never_bare(self, path):
+        commands = self._check_commands(path)
+        python_probes = [(n, c) for n, c in commands if ' -c ' in c and 'python' in c]
+        assert {n for n, _ in python_probes} >= {'python3-devel', 'portaudio'}
+        for name, command in python_probes:
+            assert command.startswith('"${VOICEMODE_PYTHON:-python3}" '), (name, command)
+
+    @pytest.mark.skipif(__import__('sys').platform == 'win32', reason='POSIX shell expansion')
+    def test_a_space_in_the_interpreter_path_still_runs(self, tmp_path):
+        import os
+        import sys
+        from voice_mode.utils.dependencies.cache import get_cache
+
+        spaced = tmp_path / 'Jane Doe'
+        spaced.mkdir()
+        interpreter = spaced / 'python'
+        os.symlink(sys.executable, interpreter)
+
+        get_cache().clear()
+        package = {
+            'name': 'vm2649-spaced-interpreter-probe',
+            'check_command': '"${VOICEMODE_PYTHON:-python3}" -c "import sys; sys.exit(0)"',
+        }
+        with patch('voice_mode.utils.dependencies.checker.sys.executable', str(interpreter)):
+            assert check_dependency(package, 'fedora') is True
+        get_cache().clear()
+
+
+class TestBrewInstallTimeout:
+    """Brew's install timeout: 600s everywhere, 1800s only on Fedora Atomic.
+
+    On macOS brew can run inside the MCP server (whisper_install), where a hung
+    install blocks every voice tool until it times out (VM-2649).
+    """
+
+    @patch('voice_mode.utils.dependencies.package_managers.subprocess.run')
+    def test_plain_brew_gets_600s(self, mock_run):
+        mock_run.return_value = Mock(returncode=0, stdout='', stderr='')
+        BrewManager().install_packages(['portaudio'])
+        assert mock_run.call_args.kwargs['timeout'] == 600
+
+    @patch('voice_mode.utils.dependencies.package_managers.subprocess.run')
+    def test_ostree_brew_gets_1800s(self, mock_run):
+        mock_run.return_value = Mock(returncode=0, stdout='', stderr='')
+        OstreeBrewManager().install_packages(['portaudio-devel'])
+        assert mock_run.call_args.kwargs['timeout'] == 1800
+
+
+@pytest.mark.parametrize('path', TestCheckCommandInterpreter.YAMLS)
+@pytest.mark.parametrize('family, name', [('debian', 'libasound2-dev'), ('fedora', 'alsa-lib-devel')])
+def test_core_alsa_headers_are_optional_in_both_copies(path, family, name):
+    """simpleaudio is gone (VM-2438); #541 updated only voice_mode's copy (VM-2649)."""
+    import pathlib
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    data = yaml.safe_load((root / path).read_text())
+    [pkg] = [p for p in data['voicemode']['core'][family]['packages'] if p['name'] == name]
+    assert pkg['required'] is False
+    assert 'simpleaudio' not in pkg.get('note', '') or 'no longer' in pkg['note']
