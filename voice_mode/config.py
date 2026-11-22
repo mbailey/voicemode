@@ -278,13 +278,20 @@ VOICEMODE_VOICES=af_sky
 # Recording & Voice Activity Detection
 #############
 
+# These Recording & VAD values are read when the VoiceMode process starts.
+# Editing this file does not take effect until you restart the VoiceMode
+# server or MCP client.
+
 # Default maximum listening duration in seconds (default: 120)
 # VOICEMODE_DEFAULT_LISTEN_DURATION=120.0
 
 # Disable silence detection for noisy environments (true/false)
 # VOICEMODE_DISABLE_SILENCE_DETECTION=false
 
-# VAD aggressiveness level 0-3, higher = more strict (default: 3)
+# VAD aggressiveness level 0-3, higher = more strict (default: 3).
+# Lower levels (0 and 1) are more likely to treat room noise as speech,
+# which can keep the silence timer at zero so a turn runs until the
+# listen duration cap.
 # VOICEMODE_VAD_AGGRESSIVENESS=3
 
 # Silence threshold in milliseconds before stopping (default: 1000)

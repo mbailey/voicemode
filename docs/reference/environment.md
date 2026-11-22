@@ -151,14 +151,18 @@ Supported formats: `pcm`, `opus`, `mp3`, `wav`, `flac`, `aac`
 
 ## Voice Activity Detection
 
+These VAD and silence settings are read when the VoiceMode process starts.
+After editing `~/.voicemode/voicemode.env`, restart the VoiceMode server or
+MCP client so the new values are picked up.
+
 | Variable | Description | Default | Example |
 |----------|-------------|---------|---------|
-| `VOICEMODE_VAD_AGGRESSIVENESS` | VAD level (0-3) | `3` | `3` |
+| `VOICEMODE_VAD_AGGRESSIVENESS` | VAD level (0-3). Lower levels, including 1, can treat room noise as speech so a turn may run until the listen duration cap. | `3` | `2` |
 | `VOICEMODE_DISABLE_VAD` | Disable VAD | `false` | `true` |
 | `VOICEMODE_DISABLE_SILENCE_DETECTION` | Disable silence detection | `false` | `true` |
-| `VOICEMODE_SILENCE_THRESHOLD` | Silence duration (seconds) | `3.0` | `5.0` |
-| `VOICEMODE_MIN_RECORDING_TIME` | Minimum recording (seconds) | `0.5` | `1.0` |
-| `VOICEMODE_MAX_RECORDING_TIME` | Maximum recording (seconds) | `120.0` | `60.0` |
+| `VOICEMODE_SILENCE_THRESHOLD_MS` | Silence duration in milliseconds before stopping | `1000` | `2000` |
+| `VOICEMODE_MIN_RECORDING_DURATION` | Minimum recording (seconds) | `0.5` | `1.0` |
+| `VOICEMODE_DEFAULT_LISTEN_DURATION` | Default maximum listen duration (seconds) | `120.0` | `60.0` |
 
 ## File Storage
 
