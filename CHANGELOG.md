@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `voicemode service install whisper` accepts `--model` and `--use-gpu/--no-gpu`. The CUDA
   error already told you to use `--no-gpu`, and the standalone installer already passed
   `--model`; neither existed. Thanks @Sallvainian (#517).
+- `VOICEMODE_STT_TRANSLATE=true` sends speech to each STT endpoint's
+  `/v1/audio/translations` instead of `/v1/audio/transcriptions`, so a reply spoken
+  in any language comes back as English text (Whisper's translate-to-English
+  task). The source language is auto-detected — `VOICEMODE_WHISPER_LANGUAGE` is
+  not sent while it is on (#240).
 
 ### Changed
 

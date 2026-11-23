@@ -13,7 +13,8 @@ from .openai_error_parser import OpenAIErrorParser
 from .provider_discovery import is_local_provider
 
 from .config import (
-    TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, WHISPER_LANGUAGE,
+    TTS_BASE_URLS, STT_BASE_URLS, OPENAI_API_KEY, STT_PROMPT, STT_TRANSLATE,
+    WHISPER_LANGUAGE,
     STT_RETRY_ATTEMPTS, STT_RETRY_BACKOFF, STT_RETRY_BACKOFF_MAX,
     TTS_VOICE_SUBSTITUTION,
     STT_TIMEOUT, STT_TIMEOUT_LOCAL,
@@ -634,6 +635,13 @@ async def simple_stt_failover(
     # Log STT request details
     logger.info("STT: Starting speech-to-text conversion")
     logger.info(f"  Available endpoints: {STT_BASE_URLS}")
+    # VOICEMODE_STT_TRANSLATE: call each endpoint's /audio/translations instead
+    # of /audio/transcriptions so speech in any language comes back in English.
+    # Kept outside the loop so the failure entries below can always name the
+    # path that was called, even when an endpoint fails before the request.
+    endpoint_path = "translations" if STT_TRANSLATE else "transcriptions"
+    if STT_TRANSLATE:
+        logger.info("  Using translations endpoint (/audio/translations): output always English")
     if file_size_bytes > 0:
         logger.info(f"  Audio file size: {file_size_bytes / 1024:.1f}KB")
 
@@ -686,13 +694,25 @@ async def simple_stt_failover(
             if STT_PROMPT:
                 transcription_kwargs["prompt"] = STT_PROMPT
 
+            # VOICEMODE_STT_TRANSLATE: call the endpoint's /audio/translations
+            # instead of /audio/transcriptions so speech in any language comes
+            # back in English. The translations API takes no `language`
+            # parameter -- the source language is auto-detected and the output
+            # is always English -- so WHISPER_LANGUAGE is never sent while it
+            # is on.
+            create_stt = getattr(client.audio, endpoint_path).create
+
             # Handle language parameter based on provider
+            # - translations endpoint (VOICEMODE_STT_TRANSLATE): never sent;
+            #   the API has no `language` parameter
             # - whisper.cpp: needs "auto" explicitly (default is "en")
             # - OpenAI API: omit for auto-detect (doesn't accept "auto")
             # - mlx-audio: omit for auto-detect (VM-2342). It does not treat
             #   "auto" as a language: 0.5.7 maps it to <|endoftext|> and skips
             #   detection; only an unset language detects (VM-2334).
-            if WHISPER_LANGUAGE and WHISPER_LANGUAGE != "auto":
+            if STT_TRANSLATE:
+                pass  # translations auto-detects the source language
+            elif WHISPER_LANGUAGE and WHISPER_LANGUAGE != "auto":
                 # Explicit language set - pass to all providers
                 transcription_kwargs["language"] = WHISPER_LANGUAGE
             elif (
@@ -716,7 +736,7 @@ async def simple_stt_failover(
             attempt = 0
             while True:
                 try:
-                    transcription = await client.audio.transcriptions.create(**transcription_kwargs)
+                    transcription = await create_stt(**transcription_kwargs)
                     break
                 except Exception as e:
                     if attempt < retries and _is_transient_stt_error(e):
@@ -734,7 +754,7 @@ async def simple_stt_failover(
                     if _auto_language_may_be_rejected(e, transcription_kwargs, provider_type):
                         fallback_kwargs = {k: v for k, v in transcription_kwargs.items() if k != "language"}
                         try:
-                            transcription = await client.audio.transcriptions.create(**fallback_kwargs)
+                            transcription = await create_stt(**fallback_kwargs)
                         except Exception as fallback_error:
                             logger.debug(f"STT retry without language failed on {base_url}: {fallback_error}")
                             raise e
@@ -781,7 +801,7 @@ async def simple_stt_failover(
             # Parse OpenAI errors for better user feedback
             error_details = None
             if provider_type == "openai":
-                full_endpoint = f"{base_url}/audio/transcriptions" if not base_url.endswith("/v1") else f"{base_url}/audio/transcriptions"
+                full_endpoint = f"{base_url}/audio/{endpoint_path}"
                 error_details = OpenAIErrorParser.parse_error(e, endpoint=full_endpoint)
                 # Log the user-friendly error message
                 if error_details.get('title'):
@@ -791,7 +811,7 @@ async def simple_stt_failover(
 
             # Track the failure, classified (VM-2342): an HTTP 4xx means the
             # server ANSWERED, which is not a connection failure.
-            full_endpoint = f"{base_url}/audio/transcriptions" if not base_url.endswith("/v1") else f"{base_url}/audio/transcriptions"
+            full_endpoint = f"{base_url}/audio/{endpoint_path}"
             status_code, endpoint_error_type = _classify_stt_failure(e)
             connection_errors.append({
                 "endpoint": full_endpoint,

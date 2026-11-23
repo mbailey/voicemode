@@ -134,6 +134,10 @@ VOICEMODE_STT_BASE_URLS=http://127.0.0.1:2022/v1,https://api.openai.com/v1
 VOICEMODE_WHISPER_MODEL=large-v2    # Model size
 VOICEMODE_WHISPER_LANGUAGE=auto     # Language detection
 VOICEMODE_WHISPER_PORT=2022         # Server port
+
+# Translations endpoint: speech in any language comes back in English
+# (uses /v1/audio/translations instead of /v1/audio/transcriptions)
+VOICEMODE_STT_TRANSLATE=false
 ```
 
 ##### Example: Parakeet via mlx-audio (Apple Silicon)

@@ -231,6 +231,31 @@ If a word is still misrecognized after adding it to the prompt, try including it
 (`voicemode://docs/troubleshooting`, or
 [on GitHub](https://github.com/mbailey/voicemode/blob/master/docs/troubleshooting/index.md))
 
+## Translated Speech (STT Translate)
+
+### VOICEMODE_STT_TRANSLATE
+**Type:** environment variable (boolean, optional, default `false`)
+
+Send captured speech to each STT endpoint's `/v1/audio/translations` instead of
+`/v1/audio/transcriptions`. The translations endpoint always answers in
+English, whatever language was spoken — so you can speak to the assistant in a
+non-English language and have your words arrive as English text, ready to
+answer.
+
+```bash
+export VOICEMODE_STT_TRANSLATE=true
+```
+
+**Notes:**
+
+- The endpoint is part of the OpenAI-compatible audio spec (OpenAI, Groq, and
+  OpenAI-compatible local servers).
+- The translations API has no `language` parameter — the source language is
+  auto-detected — so `VOICEMODE_WHISPER_LANGUAGE` is not sent while this is on.
+- An endpoint that does not serve the translations path fails like any other
+  STT error, and the chain fails over to the next `VOICEMODE_STT_BASE_URLS`
+  entry.
+
 ## Audio Format & Feedback
 
 ### audio_format
