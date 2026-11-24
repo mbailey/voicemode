@@ -3893,6 +3893,18 @@ async def _converse_core(
 
                 # If speak-only mode, return success after TTS
                 if not wait_for_response:
+                    # #570: a skip_back pressed mid-utterance drained it into the
+                    # history buffer and cut playback; replay it here too, or the
+                    # line goes silent and the press is dropped. Speak-only has
+                    # no listen loop, so a skip_back after the replay is consumed
+                    # by the same drain.
+                    await _drain_skip_back(control_state, 0)
+                    control_snapshot = control_state.snapshot()
+                    if control_snapshot.is_stopped:
+                        logger.info("Converse stopped via control channel during skip-back replay")
+                        success = True
+                        return _build_control_stop_result(control_snapshot, timings)
+
                     # Format timing info for speak-only mode
                     timing_info = ""
                     if tts_success and tts_metrics:
