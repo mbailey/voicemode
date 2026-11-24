@@ -601,6 +601,45 @@ class TestSingleMessageListenPathLogsAudioFile:
 
 
 # ---------------------------------------------------------------------------
+# #591: the exchange log's silence_detection.vad_aggressiveness must be the
+# level the call recorded with, not always the config default.
+# ---------------------------------------------------------------------------
+
+class TestSingleMessageListenPathLogsVadLevel:
+    async def _logged_vad(self, **converse_kwargs):
+        def _record(*_a, **_k):
+            return (np.zeros(2400, dtype=np.int16), True)
+
+        async def _stt(*_a, **_k):
+            return {"text": "forty two", "provider": "whisper-local"}
+
+        fake_logger = MagicMock()
+        with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=_fake_tts_ok), \
+             patch("voice_mode.tools.converse.play_audio_feedback", new=_noop_feedback), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=_record), \
+             patch("voice_mode.tools.converse.speech_to_text", new=_stt), \
+             patch("voice_mode.tools.converse.get_conversation_logger", return_value=fake_logger), \
+             patch("voice_mode.tools.converse.VAD_AGGRESSIVENESS", 3), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            await _converse_fn()(
+                message="What is the answer?",
+                wait_for_response=True,
+                skip_conch=True,
+                **converse_kwargs,
+            )
+
+        fake_logger.log_stt.assert_called_once()
+        return fake_logger.log_stt.call_args.kwargs["silence_detection"]["vad_aggressiveness"]
+
+    async def test_logs_the_per_call_level(self):
+        assert await self._logged_vad(vad_aggressiveness=1) == 1
+
+    async def test_logs_the_config_default_without_a_per_call_level(self):
+        assert await self._logged_vad() == 3
+
+
+# ---------------------------------------------------------------------------
 # Repeat / wait re-listens: gained control-channel awareness (follow-up commit)
 # ---------------------------------------------------------------------------
 

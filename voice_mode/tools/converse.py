@@ -4207,7 +4207,8 @@ async def _converse_core(
                         timing=stt_timing_str,
                         silence_detection={
                             "enabled": not (DISABLE_SILENCE_DETECTION or disable_silence_detection),
-                            "vad_aggressiveness": VAD_AGGRESSIVENESS,
+                            "vad_aggressiveness": (vad_aggressiveness if vad_aggressiveness is not None
+                                                   else VAD_AGGRESSIVENESS),
                             "silence_threshold_ms": SILENCE_THRESHOLD_MS
                         },
                         # Add timing metrics
