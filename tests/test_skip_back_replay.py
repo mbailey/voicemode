@@ -777,6 +777,66 @@ class TestConverseSkipBack:
         assert record_calls["n"] == 2          # ...and we listened again afterwards
         assert isinstance(result, str)
 
+    async def test_skip_back_in_speak_only_replays(self):
+        """#570: speak-only (wait_for_response=False) still honours a skip_back.
+
+        The speak-only branch returned before the replay loop, so a press
+        mid-utterance cut the audio (drained into the buffer) and the pending
+        skip_back was never consumed: silence, then "spoken successfully".
+        """
+        _populate_buffer("older", "current")     # "current" is newest
+
+        async def fake_tts(*_a, **_k):
+            get_control_state().request_skip_back()
+            metrics = {"ttfa": 0.1, "generation": 0.2, "playback": 0.3}
+            return True, metrics, {"provider": "kokoro", "voice": "af_sky"}
+
+        replayed = []
+
+        async def fake_replay(record, control_state=None):
+            replayed.append(record.text)
+            return REPLAY_COMPLETED
+
+        record_spy = MagicMock(side_effect=AssertionError("speak-only must not record"))
+
+        with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=fake_tts), \
+             patch("voice_mode.streaming.play_cached_utterance", new=fake_replay), \
+             patch("voice_mode.tools.converse.record_audio_with_silence_detection", new=record_spy), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="The answer is 42.", wait_for_response=False
+            )
+
+        assert replayed == ["current"]
+        assert "spoken successfully" in result
+        assert get_control_state().take_transport_request() is None
+
+    async def test_stop_during_speak_only_replay_returns_stop_result(self):
+        """A stop pressed during a speak-only replay ends the call as a stop."""
+        _populate_buffer("current")
+
+        async def fake_tts(*_a, **_k):
+            get_control_state().request_skip_back()
+            return True, {"ttfa": 0.1, "generation": 0.2, "playback": 0.3}, {
+                "provider": "kokoro", "voice": "af_sky"
+            }
+
+        async def fake_replay(record, control_state=None):
+            get_control_state().request_stop()
+            return REPLAY_STOPPED
+
+        with patch("voice_mode.tools.converse.text_to_speech_with_failover", new=fake_tts), \
+             patch("voice_mode.streaming.play_cached_utterance", new=fake_replay), \
+             patch("voice_mode.config.TTS_BASE_URLS", ["https://api.openai.com/v1"]), \
+             patch("voice_mode.config.OPENAI_API_KEY", "test-api-key"):
+            result = await _converse_fn()(
+                message="The answer is 42.", wait_for_response=False
+            )
+
+        assert "spoken successfully" not in result
+        assert "stop" in result.lower()
+
 
 # --------------------------------------------------------------------------
 # VM-1763: skip_forward pressed DURING a skip_back replay must barge at the
