@@ -18,7 +18,7 @@ except ImportError:
     from importlib_resources import files
 
 from voice_mode.server import mcp
-from voice_mode.config import SERVICE_AUTO_ENABLE, DEFAULT_WHISPER_MODEL, WHISPER_PORT
+from voice_mode.config import SERVICE_AUTO_ENABLE, DEFAULT_WHISPER_MODEL
 from voice_mode.utils.services.whisper_helpers import download_whisper_model
 from voice_mode.utils.version_helpers import (
     get_git_tags, get_latest_stable_tag, get_current_version,
@@ -26,6 +26,10 @@ from voice_mode.utils.version_helpers import (
 )
 from voice_mode.utils.migration_helpers import auto_migrate_if_needed
 from voice_mode.utils.gpu_detection import detect_gpu
+from voice_mode.utils.coerce import coerce_bool
+from voice_mode.utils.services.checkout_guard import (
+    WHISPER_UPSTREAMS, check_own_checkout, git_env
+)
 
 logger = logging.getLogger("voicemode")
 
@@ -163,11 +167,13 @@ async def update_whisper_service_files(
     voicemode_dir: str,
     auto_enable: Optional[bool] = None
 ) -> Dict[str, Any]:
-    """Update service files (plist/systemd) for whisper service.
-    
-    This function updates the service files without reinstalling whisper itself.
-    It ensures paths are properly expanded and templates are up to date.
-    
+    """Update the start script and service file (plist/systemd) for whisper.
+
+    Updates them without reinstalling whisper itself: the start script goes to
+    ``<install_dir>/bin``, and the service file comes from
+    ``create_service_file("whisper")``, the same single source of truth kokoro
+    and ``enable_service`` use.
+
     Returns:
         Dict with success status and details about what was updated
     """
@@ -284,160 +290,61 @@ exec "$SERVER_BIN" \\
         f.write(template_content)
     os.chmod(start_script_path, 0o755)
     
-    # Update service files based on platform
-    if system == "Darwin":
-        logger.info("Updating launchagent for whisper-server...")
-        launchagents_dir = os.path.expanduser("~/Library/LaunchAgents")
-        os.makedirs(launchagents_dir, exist_ok=True)
-        
-        # Create log directory
-        log_dir = os.path.join(voicemode_dir, 'logs', 'whisper')
-        os.makedirs(log_dir, exist_ok=True)
-        
-        plist_name = "com.voicemode.whisper.plist"
-        plist_path = os.path.join(launchagents_dir, plist_name)
-        
-        # Load plist template
-        source_template = Path(__file__).parent.parent.parent.parent / "templates" / "launchd" / "com.voicemode.whisper.plist"
-        if source_template.exists():
-            logger.info(f"Loading plist template from source: {source_template}")
-            plist_content = source_template.read_text()
-        else:
-            template_resource = files("voice_mode.templates.launchd").joinpath("com.voicemode.whisper.plist")
-            plist_content = template_resource.read_text()
-            logger.info("Loaded plist template from package resources")
-        
-        # Replace placeholders with expanded paths
-        plist_content = plist_content.replace("{START_SCRIPT_PATH}", start_script_path)
-        plist_content = plist_content.replace("{LOG_DIR}", os.path.join(voicemode_dir, 'logs'))
-        plist_content = plist_content.replace("{INSTALL_DIR}", install_dir)
-        
-        # Unload if already loaded (ignore errors)
-        try:
-            subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
-        except:
-            pass
-        
-        # Write updated plist
-        with open(plist_path, 'w') as f:
-            f.write(plist_content)
-        
+    if system not in ("Darwin", "Linux"):
+        result["error"] = f"Unsupported platform: {system}"
+        return result
+
+    # Service file: create_service_file() is the single source of truth, as for
+    # kokoro. It points at ~/.voicemode/services/whisper/bin/start-whisper-server.sh.
+    from voice_mode.tools.service import create_service_file, enable_service
+
+    try:
+        service_path, content = create_service_file("whisper")
+
+        # Unload if already loaded (macOS only, ignore errors)
+        if system == "Darwin":
+            try:
+                subprocess.run(["launchctl", "unload", str(service_path)], capture_output=True)
+            except Exception:
+                pass
+
+        service_path.parent.mkdir(parents=True, exist_ok=True)
+        service_path.write_text(content)
+
         result["success"] = True
         result["updated"] = True
-        result["plist_path"] = plist_path
         result["start_script"] = start_script_path
-        
-        # Handle auto_enable if specified
-        if auto_enable is None:
-            auto_enable = SERVICE_AUTO_ENABLE
-        
-        if auto_enable:
-            logger.info("Auto-enabling whisper service...")
-            from voice_mode.tools.service import enable_service
-            enable_result = await enable_service("whisper")
-            if "✅" in enable_result:
-                result["enabled"] = True
-            else:
-                logger.warning(f"Auto-enable failed: {enable_result}")
-                result["enabled"] = False
-    
-    elif system == "Linux":
-        logger.info("Updating systemd user service for whisper-server...")
-        systemd_user_dir = os.path.expanduser("~/.config/systemd/user")
-        os.makedirs(systemd_user_dir, exist_ok=True)
-
-        # Create log directory
-        log_dir = os.path.join(voicemode_dir, 'logs', 'whisper')
-        os.makedirs(log_dir, exist_ok=True)
-
-        service_name = "voicemode-whisper.service"
-        service_path = os.path.join(systemd_user_dir, service_name)
-
-        # Load systemd service template
-        source_template = Path(__file__).parent.parent.parent.parent / "templates" / "systemd" / "voicemode-whisper.service"
-        if source_template.exists():
-            logger.info(f"Loading systemd template from source: {source_template}")
-            service_content = source_template.read_text()
+        if system == "Darwin":
+            result["plist_path"] = str(service_path)
         else:
+            result["service_path"] = str(service_path)
             try:
-                template_resource = files("voice_mode.templates.systemd").joinpath("voicemode-whisper.service")
-                service_content = template_resource.read_text()
-                logger.info("Loaded systemd template from package resources")
-            except Exception as e:
-                logger.warning(f"Failed to load template: {e}. Using fallback inline template.")
-                # Fallback inline template if loading fails
-                service_content = f"""# voicemode-whisper.service v1.1.0
-# Last updated: 2025-11-12
-# Uses unified startup script for dynamic model selection
+                subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+            except subprocess.CalledProcessError as e:
+                # Still a success: the file was written.
+                logger.warning(f"Failed to reload systemd: {e}")
 
-[Unit]
-Description=Whisper.cpp Speech Recognition Server
-After=network.target
-
-[Service]
-Type=simple
-ExecStart={{START_SCRIPT_PATH}}
-# Wait for service to be ready by checking health endpoint
-ExecStartPost=/bin/sh -c 'while ! curl -sf http://127.0.0.1:{{WHISPER_PORT}}/health >/dev/null 2>&1; do echo "Waiting for Whisper to be ready..."; sleep 1; done; echo "Whisper is ready!"'
-Restart=on-failure
-RestartSec=10
-WorkingDirectory={{INSTALL_DIR}}
-StandardOutput=append:{{LOG_DIR}}/whisper/whisper.out.log
-StandardError=append:{{LOG_DIR}}/whisper/whisper.err.log
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/cuda/bin"
-
-[Install]
-WantedBy=default.target
-"""
-
-        # Replace placeholders with expanded paths
-        service_content = service_content.replace("{START_SCRIPT_PATH}", start_script_path)
-        service_content = service_content.replace("{LOG_DIR}", os.path.join(voicemode_dir, 'logs'))
-        service_content = service_content.replace("{INSTALL_DIR}", install_dir)
-        service_content = service_content.replace("{WHISPER_PORT}", str(WHISPER_PORT))
-
-        # Write systemd service file
-        with open(service_path, 'w') as f:
-            f.write(service_content)
-        
-        # Reload systemd
-        try:
-            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
-            result["success"] = True
-            result["updated"] = True
-            result["service_path"] = service_path
-            result["start_script"] = start_script_path
-        except subprocess.CalledProcessError as e:
-            logger.warning(f"Failed to reload systemd: {e}")
-            result["success"] = True  # Still consider it success if file was written
-            result["updated"] = True
-            result["service_path"] = service_path
-            result["start_script"] = start_script_path
-        
-        # Handle auto_enable if specified
         if auto_enable is None:
             auto_enable = SERVICE_AUTO_ENABLE
-        
+
         if auto_enable:
             logger.info("Auto-enabling whisper service...")
-            from voice_mode.tools.service import enable_service
             enable_result = await enable_service("whisper")
             if "✅" in enable_result:
                 result["enabled"] = True
             else:
                 logger.warning(f"Auto-enable failed: {enable_result}")
                 result["enabled"] = False
-    
-    else:
+
+    except Exception as e:
         result["success"] = False
-        result["error"] = f"Unsupported platform: {system}"
-    
+        result["error"] = str(e)
+
     return result
 
 
 @mcp.tool()
 async def whisper_install(
-    install_dir: Optional[str] = None,
     model: str = DEFAULT_WHISPER_MODEL,
     no_model: Union[bool, str] = False,
     use_gpu: Optional[Union[bool, str]] = None,
@@ -455,7 +362,6 @@ async def whisper_install(
     for 2-3x better performance (no Python dependencies or Xcode required!).
 
     Args:
-        install_dir: Directory to install whisper.cpp (default: ~/.voicemode/whisper.cpp)
         model: Whisper model to download (tiny, base, small, medium, large-v2, large-v3, etc.)
                Default is base for good balance of speed and accuracy (142MB).
                On Apple Silicon, also downloads pre-built Core ML model.
@@ -470,6 +376,45 @@ async def whisper_install(
     Returns:
         Installation status with paths and configuration details
     """
+    # The install directory is not a tool parameter: the installer deletes and
+    # git-resets it, so only a human at the CLI may choose another one.
+    return await install_whisper(
+        model=model,
+        no_model=no_model,
+        use_gpu=use_gpu,
+        force_reinstall=force_reinstall,
+        auto_enable=auto_enable,
+        version=version,
+        skip_core_ml=skip_core_ml,
+        skip_deps=skip_deps,
+    )
+
+
+async def install_whisper(
+    install_dir: Optional[str] = None,
+    model: str = DEFAULT_WHISPER_MODEL,
+    no_model: Union[bool, str] = False,
+    use_gpu: Optional[Union[bool, str]] = None,
+    force_reinstall: Union[bool, str] = False,
+    auto_enable: Optional[Union[bool, str]] = None,
+    version: str = "latest",
+    skip_core_ml: Union[bool, str] = False,
+    skip_deps: Union[bool, str] = False
+) -> Dict[str, Any]:
+    """Install whisper.cpp: the body of the ``whisper_install`` tool.
+
+    ``install_dir`` (default ~/.voicemode/services/whisper) is for the CLI's
+    ``--install-dir``. Whatever it is, it is only deleted or git-reset when it
+    is the top level of a whisper.cpp checkout (``check_own_checkout``).
+    """
+    # MCP clients may send bools as strings, and "false" is truthy.
+    no_model = bool(coerce_bool(no_model, default=False))
+    use_gpu = coerce_bool(use_gpu)  # None (or unrecognised): auto-detect
+    force_reinstall = bool(coerce_bool(force_reinstall, default=False))
+    auto_enable = coerce_bool(auto_enable)
+    skip_core_ml = bool(coerce_bool(skip_core_ml, default=False))
+    skip_deps = bool(coerce_bool(skip_deps, default=False))
+
     try:
         # Check for and migrate old installations
         migration_msg = auto_migrate_if_needed("whisper")
@@ -737,8 +682,12 @@ async def whisper_install(
                 "message": "Please install missing dependencies and try again"
             }
         
-        # Remove existing installation if force_reinstall
+        # Remove existing installation if force_reinstall -- only ever our own
+        # whisper.cpp checkout, never just any directory we were handed.
         if force_reinstall and os.path.exists(install_dir):
+            refusal = check_own_checkout(install_dir, WHISPER_UPSTREAMS)
+            if refusal:
+                return {"success": False, "error": refusal}
             logger.info(f"Removing existing installation at {install_dir}")
             shutil.rmtree(install_dir)
         
@@ -750,16 +699,22 @@ async def whisper_install(
             ], check=True)
             # Checkout the specific version
             if not checkout_version(Path(install_dir), version):
-                shutil.rmtree(install_dir)
+                if check_own_checkout(install_dir, WHISPER_UPSTREAMS) is None:
+                    shutil.rmtree(install_dir)
                 return {
                     "success": False,
                     "error": f"Failed to checkout version {version}"
                 }
         else:
             logger.info(f"Using existing whisper.cpp directory, switching to version {version}...")
+            # git walks up from cwd: in a subdirectory of another repo, reset
+            # and clean would discard that repo's work. Only our own checkout.
+            refusal = check_own_checkout(install_dir, WHISPER_UPSTREAMS)
+            if refusal:
+                return {"success": False, "error": refusal}
             # Clean any local changes and checkout the version
-            subprocess.run(["git", "reset", "--hard"], cwd=install_dir, check=True)
-            subprocess.run(["git", "clean", "-fd"], cwd=install_dir, check=True)
+            subprocess.run(["git", "reset", "--hard"], cwd=install_dir, check=True, env=git_env())
+            subprocess.run(["git", "clean", "-fd"], cwd=install_dir, check=True, env=git_env())
             if not checkout_version(Path(install_dir), version):
                 return {
                     "success": False,

@@ -654,7 +654,7 @@ def service_install(service_name, force, model, use_gpu):
       voicemode service install mlx-audio
     """
     if service_name == 'whisper':
-        from voice_mode.tools.whisper.install import whisper_install
+        from voice_mode.tools.whisper.install import install_whisper
         # whisper_install accepts model and use_gpu, but this command previously
         # passed neither -- so --no-gpu, which the CUDA error message tells the
         # user to run, did not exist, and the standalone installer's
@@ -664,7 +664,7 @@ def service_install(service_name, force, model, use_gpu):
             kwargs['model'] = model
         if use_gpu is not None:
             kwargs['use_gpu'] = use_gpu
-        result = asyncio.run(getattr(whisper_install, 'fn', whisper_install)(**kwargs))
+        result = asyncio.run(install_whisper(**kwargs))
         # Handle dict result from tool
         if isinstance(result, dict):
             if result.get("success"):
@@ -680,8 +680,8 @@ def service_install(service_name, force, model, use_gpu):
         else:
             click.echo(result)
     elif service_name == 'kokoro':
-        from voice_mode.tools.kokoro.install import kokoro_install
-        result = asyncio.run(getattr(kokoro_install, 'fn', kokoro_install)(force_reinstall=force))
+        from voice_mode.tools.kokoro.install import install_kokoro
+        result = asyncio.run(install_kokoro(force_reinstall=force))
         if isinstance(result, dict):
             if result.get("success"):
                 click.echo(f"✅ Kokoro installed successfully")
@@ -853,8 +853,8 @@ def health():
 @click.option('--skip-deps', is_flag=True, help='Skip dependency checks (for advanced users)')
 def install(install_dir, port, force, version, auto_enable, skip_deps):
     """Install kokoro-fastapi TTS service."""
-    from voice_mode.tools.kokoro.install import kokoro_install
-    result = asyncio.run(getattr(kokoro_install, 'fn', kokoro_install)(
+    from voice_mode.tools.kokoro.install import install_kokoro
+    result = asyncio.run(install_kokoro(
         install_dir=install_dir,
         port=port,
         force_reinstall=force,
@@ -1024,8 +1024,8 @@ def whisper_service_health():
 @click.option('--skip-deps', is_flag=True, help='Skip dependency checks (for advanced users)')
 def whisper_service_install(install_dir, model, use_gpu, force, version, auto_enable, skip_deps):
     """Install whisper.cpp STT service with automatic system detection."""
-    from voice_mode.tools.whisper.install import whisper_install
-    result = asyncio.run(getattr(whisper_install, 'fn', whisper_install)(
+    from voice_mode.tools.whisper.install import install_whisper
+    result = asyncio.run(install_whisper(
         install_dir=install_dir,
         model=model,
         use_gpu=use_gpu,
