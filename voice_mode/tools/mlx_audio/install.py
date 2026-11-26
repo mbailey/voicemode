@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from voice_mode.config import SERVICE_AUTO_ENABLE
+from voice_mode.utils.coerce import coerce_bool as _coerce_bool
 
 logger = logging.getLogger("voicemode")
 
@@ -95,19 +96,6 @@ MLX_AUDIO_EXTRAS: List[str] = [
 def _is_apple_silicon() -> bool:
     """True when running on macOS arm64 (Apple Silicon)."""
     return platform.system() == "Darwin" and platform.machine() == "arm64"
-
-
-def _coerce_bool(value: Union[bool, str, None]) -> Optional[bool]:
-    """Permissive bool coercion for MCP/CLI string args."""
-    if value is None or isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in ("true", "1", "yes", "y", "on"):
-            return True
-        if normalized in ("false", "0", "no", "n", "off"):
-            return False
-    return None
 
 
 def _coerce_int(value: Union[int, str], default: int) -> int:
