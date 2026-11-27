@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **The Whisper and Kokoro installers only delete or reset their own checkout.** The
+  `whisper_install` and `kokoro_install` MCP tools took a caller-supplied `install_dir`.
+  With `force_reinstall` they ran `shutil.rmtree` on it, and even without it they ran
+  `git reset --hard` and `git clean -fd` there. A caller that could reach these tools (for
+  example an agent steered by prompt injection) could delete any directory the user can
+  write to. The tools are off by default: only `converse` and `service` load, unless
+  `VOICEMODE_TOOLS_ENABLED` names them or `VOICEMODE_TOOLS_DISABLED` is set to anything.
+  Now:
+  - the MCP tools no longer take `install_dir`; the CLI keeps `--install-dir`;
+  - before any delete or reset, the directory must be the top of a git checkout whose
+    origin is the expected upstream, or nothing is touched and the install fails;
+  - the Whisper service file is written from the shared template, not by string
+    replacement into the path.
+
+  Severity Moderate (CVSS 3.1 6.8). Thanks @Jeffy123-zhu (GHSA-p44f-9cm9-57r8, VM-2673).
+- String booleans passed to these tools are read as booleans: `force_reinstall="false"` is
+  false. An empty `auto_enable` for mlx-audio now means off.
+
 ### Added
 
 - Fedora Atomic (Silverblue, Kinoite, Bazzite, Bluefin) is supported. These systems are
