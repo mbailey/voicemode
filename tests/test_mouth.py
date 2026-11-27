@@ -426,6 +426,27 @@ def test_a_term_leaves_no_stale_pid(tmp_path):
     assert not (d / "player.pid").exists()
 
 
+def test_a_term_just_after_the_pid_is_written_still_removes_it(box, monkeypatch):
+    """VM-2665: a TERM that lands right after player.pid is written must still
+    run serve's cleanup. The write used to sit outside the try whose finally
+    removes the file, so a TERM in that window left a stale pid (macOS 3.10 CI,
+    run 45071121303). Deterministic: the TERM is simulated as SystemExit raised
+    the moment the pid file has been written, which is what the serve
+    entry point's handler (sys.exit(0)) does."""
+    real_write = Path.write_text
+
+    def write_then_term(self, data, *a, **kw):
+        n = real_write(self, data, *a, **kw)
+        if self.name == "player.pid":
+            raise SystemExit(0)
+        return n
+
+    monkeypatch.setattr(Path, "write_text", write_then_term)
+    with pytest.raises(SystemExit):
+        player.serve(d=box.d, idle_exit_s=0.3)
+    assert not (box.d / "player.pid").exists()
+
+
 # -- underruns: synthesis slower than real time (21:05-21:08, measured) ---------
 
 class Slow:
