@@ -6,13 +6,13 @@
     "url": "https://github.com/mbailey/voicemode",
     "source": "github"
   },
-  "version": "9.1.0",
+  "version": "9.2.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "voice-mode",
-      "version": "9.1.0",
+      "version": "9.2.0",
       "transport": {
         "type": "stdio"
       },
