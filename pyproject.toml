@@ -76,6 +76,12 @@ test = [
 scripts = [
     "flask>=3.0.0",
 ]
+# Optional end-of-turn detection (VOICEMODE_TURN_DETECTOR=smart-turn):
+# Pipecat's Smart Turn v3.2 on the CPU through transcribe.cpp.
+smart-turn = [
+    "transcribe-cpp>=0.5.1",
+    "huggingface-hub>=0.23.0",
+]
 docs = [
     "mkdocs>=1.5.0",
     # VM-1667: dropped the [imaging] extra (pillow + cairosvg) — it only

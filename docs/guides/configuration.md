@@ -219,6 +219,30 @@ VOICEMODE_MIN_RECORDING_DURATION=0.5 # Minimum recording (seconds)
 VOICEMODE_DEFAULT_LISTEN_DURATION=120.0  # Maximum listen / turn cap
 ```
 
+#### Smart Turn (optional)
+
+A long silence threshold lets you pause mid-sentence, but every reply then
+waits for it. Smart Turn removes that trade-off. At each short pause,
+[Smart Turn v3.2](https://github.com/pipecat-ai/smart-turn) from Pipecat
+listens to how you sound and decides if you have finished. If you have,
+recording stops at once. If you only paused, recording continues. The model
+is 8M parameters, supports 23 languages, and runs on the CPU in about 30 ms
+through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp).
+
+```bash
+uv tool install 'voice-mode[smart-turn]'
+```
+
+```bash
+VOICEMODE_TURN_DETECTOR=smart-turn
+VOICEMODE_SILENCE_THRESHOLD_MS=3000  # Still ends a turn the model keeps open
+VOICEMODE_SMART_TURN_PAUSE_MS=200    # Pause before the model is asked
+```
+
+The model downloads from the Hugging Face Hub on first use (32 MB). If the
+package or the model is not available, VoiceMode logs a warning and uses the
+silence threshold only.
+
 ### Multi-Agent Voice
 
 When running multiple voice agents (e.g. separate Claude Code sessions in
