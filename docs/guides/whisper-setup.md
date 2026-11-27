@@ -179,6 +179,8 @@ Key options:
 
 **Note**: When using VoiceMode's managed service, threads are auto-detected based on your CPU cores. The `--convert` flag is required for VoiceMode to work correctly with various audio formats.
 
+**Windows:** VoiceMode sends STT requests to the OpenAI-compatible `/v1/audio/transcriptions` endpoint (the `--inference-path` shown above). A whisper.cpp build that only serves the native `/inference` path will not transcribe — use a build or server mode that exposes the OpenAI-compatible endpoint.
+
 ### Service Management
 
 #### macOS (LaunchAgent)

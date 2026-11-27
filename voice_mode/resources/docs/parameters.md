@@ -338,6 +338,12 @@ Transport method selection.
 - `local` - Direct microphone access
 - `livekit` - Room-based communication
 
+**Windows:** On native Windows, `local` fails with `WinError 32` — the
+microphone is captured to a temporary WAV file, which Windows file locking
+rejects. Run a LiveKit server (`ws://127.0.0.1:7880`) and leave the default
+`auto`: it detects LiveKit and selects it automatically. `livekit` forces
+LiveKit and errors when the server is not running.
+
 ### room_name
 **Type:** string (optional)
 LiveKit room name.

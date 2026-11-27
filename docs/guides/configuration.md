@@ -383,6 +383,9 @@ the mode entirely rather than special-casing it further.
 
 ### LiveKit Configuration
 
+Room-based audio transport. Required for microphone input on native Windows —
+the `local` transport's temp-file capture fails there with `WinError 32`.
+
 ```bash
 # Server settings
 LIVEKIT_URL=ws://127.0.0.1:7880

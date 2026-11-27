@@ -124,6 +124,9 @@
 
 2. Check LiveKit room configuration
 3. Verify microphone permissions
+4. On native Windows, do **not** force `transport="local"` — its temp WAV
+   file capture fails with `WinError 32` (file locking). Run a LiveKit server
+   on port 7880; the default `transport="auto"` selects it automatically.
 
 ### Timeout issues
 
