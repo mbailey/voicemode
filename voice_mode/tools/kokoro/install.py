@@ -17,6 +17,10 @@ from voice_mode.utils.version_helpers import (
     checkout_version, is_version_installed
 )
 from voice_mode.utils.migration_helpers import auto_migrate_if_needed
+from voice_mode.utils.coerce import coerce_bool
+from voice_mode.utils.services.checkout_guard import (
+    KOKORO_UPSTREAMS, check_own_checkout, git_env
+)
 
 logger = logging.getLogger("voicemode")
 
@@ -92,7 +96,6 @@ async def update_kokoro_service_files(
 
 @mcp.tool()
 async def kokoro_install(
-    install_dir: Optional[str] = None,
     models_dir: Optional[str] = None,
     port: Union[int, str] = 8880,
     auto_start: Union[bool, str] = True,
@@ -116,7 +119,6 @@ async def kokoro_install(
     that causes the last 1-2 seconds of audio to be silently dropped.
 
     Args:
-        install_dir: Directory to install kokoro-fastapi (default: ~/.voicemode/services/kokoro)
         models_dir: Directory for Kokoro models (default: ~/.voicemode/kokoro-models) - not currently used
         port: Port to configure for the service (default: 8880)
         auto_start: Start the service after installation (ignored on macOS, uses launchd instead)
@@ -129,6 +131,44 @@ async def kokoro_install(
     Returns:
         Installation status with service configuration details
     """
+    # The install directory is not a tool parameter: the installer deletes and
+    # git-resets it, so only a human at the CLI may choose another one.
+    return await install_kokoro(
+        models_dir=models_dir,
+        port=port,
+        auto_start=auto_start,
+        install_models=install_models,
+        force_reinstall=force_reinstall,
+        auto_enable=auto_enable,
+        version=version,
+        skip_deps=skip_deps,
+    )
+
+
+async def install_kokoro(
+    install_dir: Optional[str] = None,
+    models_dir: Optional[str] = None,
+    port: Union[int, str] = 8880,
+    auto_start: Union[bool, str] = True,
+    install_models: Union[bool, str] = True,
+    force_reinstall: Union[bool, str] = False,
+    auto_enable: Optional[Union[bool, str]] = None,
+    version: str = "latest",
+    skip_deps: Union[bool, str] = False
+) -> Dict[str, Any]:
+    """Install kokoro-fastapi: the body of the ``kokoro_install`` tool.
+
+    ``install_dir`` (default ~/.voicemode/services/kokoro) is for the CLI's
+    ``--install-dir``. Whatever it is, it is only deleted or git-reset when it
+    is the top level of a Kokoro-FastAPI checkout (``check_own_checkout``).
+    """
+    # MCP clients may send bools as strings, and "false" is truthy.
+    auto_start = bool(coerce_bool(auto_start, default=True))
+    install_models = bool(coerce_bool(install_models, default=True))
+    force_reinstall = bool(coerce_bool(force_reinstall, default=False))
+    skip_deps = bool(coerce_bool(skip_deps, default=False))
+    auto_enable = coerce_bool(auto_enable)
+
     try:
         # Convert port to integer if provided as string
         if isinstance(port, str):
@@ -307,8 +347,12 @@ async def kokoro_install(
             # Add UV to PATH for this session
             os.environ["PATH"] = f"{os.path.expanduser('~/.cargo/bin')}:{os.environ['PATH']}"
         
-        # Remove existing installation if force_reinstall
+        # Remove existing installation if force_reinstall -- only ever our own
+        # Kokoro-FastAPI checkout, never just any directory we were handed.
         if force_reinstall and os.path.exists(install_dir):
+            refusal = check_own_checkout(install_dir, KOKORO_UPSTREAMS)
+            if refusal:
+                return {"success": False, "error": refusal}
             logger.info(f"Removing existing installation at {install_dir}")
             shutil.rmtree(install_dir)
         
@@ -320,16 +364,22 @@ async def kokoro_install(
             ], check=True)
             # Checkout the specific version
             if not checkout_version(Path(install_dir), version):
-                shutil.rmtree(install_dir)
+                if check_own_checkout(install_dir, KOKORO_UPSTREAMS) is None:
+                    shutil.rmtree(install_dir)
                 return {
                     "success": False,
                     "error": f"Failed to checkout version {version}"
                 }
         else:
             logger.info(f"Using existing kokoro-fastapi directory, switching to version {version}...")
+            # git walks up from cwd: in a subdirectory of another repo, reset
+            # and clean would discard that repo's work. Only our own checkout.
+            refusal = check_own_checkout(install_dir, KOKORO_UPSTREAMS)
+            if refusal:
+                return {"success": False, "error": refusal}
             # Clean any local changes and checkout the version
-            subprocess.run(["git", "reset", "--hard"], cwd=install_dir, check=True)
-            subprocess.run(["git", "clean", "-fd"], cwd=install_dir, check=True)
+            subprocess.run(["git", "reset", "--hard"], cwd=install_dir, check=True, env=git_env())
+            subprocess.run(["git", "clean", "-fd"], cwd=install_dir, check=True, env=git_env())
             if not checkout_version(Path(install_dir), version):
                 return {
                     "success": False,
