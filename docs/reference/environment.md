@@ -168,6 +168,10 @@ MCP client so the new values are picked up.
 | `VOICEMODE_SILENCE_THRESHOLD_MS` | Silence duration in milliseconds before stopping | `1000` | `2000` |
 | `VOICEMODE_MIN_RECORDING_DURATION` | Minimum recording (seconds) | `0.5` | `1.0` |
 | `VOICEMODE_DEFAULT_LISTEN_DURATION` | The longest a turn records before it stops, in seconds. This is yours to set; agents should not pass a number of their own. | `120.0` | `300.0` |
+| `VOICEMODE_TURN_DETECTOR` | How a turn ends: `silence`, or `smart-turn` (Pipecat's Smart Turn v3.2 decides at each pause; needs `voice-mode[smart-turn]`). The silence threshold still ends a turn the model keeps open. | `silence` | `smart-turn` |
+| `VOICEMODE_SMART_TURN_PAUSE_MS` | Pause in milliseconds before Smart Turn is asked | `200` | `300` |
+| `VOICEMODE_SMART_TURN_THRESHOLD` | Probability (0-1) at which Smart Turn ends the turn | `0.5` | `0.7` |
+| `VOICEMODE_SMART_TURN_MODEL` | Smart Turn model: a `.gguf` path, or `<org>/<repo>/<file>` on the Hugging Face Hub | `handy-computer/smart-turn-v3.2-gguf/smart-turn-v3.2-F32.gguf` | `~/models/smart-turn-v3.2-Q8_0.gguf` |
 
 ## File Storage
 

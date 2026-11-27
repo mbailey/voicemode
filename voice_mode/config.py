@@ -312,6 +312,22 @@ VOICEMODE_VOICES=af_sky
 # Initial silence grace period before VAD starts (default: 1.0)
 # VOICEMODE_INITIAL_SILENCE_GRACE_PERIOD=1.0
 
+# End-of-turn detection: silence or smart-turn (default: silence).
+# smart-turn asks Pipecat's Smart Turn v3.2 model at each short pause whether
+# you have finished, so it stops fast when you are done and keeps listening
+# when you only pause. VOICEMODE_SILENCE_THRESHOLD_MS still ends the turn.
+# Needs the extra: uv tool install 'voice-mode[smart-turn]'
+# VOICEMODE_TURN_DETECTOR=silence
+
+# Pause in milliseconds before Smart Turn is asked (default: 200)
+# VOICEMODE_SMART_TURN_PAUSE_MS=200
+
+# Probability at which Smart Turn ends the turn, 0-1 (default: the model's, 0.5)
+# VOICEMODE_SMART_TURN_THRESHOLD=0.5
+
+# Smart Turn model: a .gguf path or <org>/<repo>/<file> on the Hugging Face Hub
+# VOICEMODE_SMART_TURN_MODEL=handy-computer/smart-turn-v3.2-gguf/smart-turn-v3.2-F32.gguf
+
 # Audio feedback chime timing
 # Silence before chime in seconds - helps Bluetooth devices wake up (default: 0.1)
 # VOICEMODE_CHIME_LEADING_SILENCE=0.1
@@ -1009,6 +1025,17 @@ SILENCE_THRESHOLD_MS = int(os.getenv("VOICEMODE_SILENCE_THRESHOLD_MS", "1000")) 
 MIN_RECORDING_DURATION = float(os.getenv("VOICEMODE_MIN_RECORDING_DURATION", "0.5"))  # Minimum 0.5s recording
 VAD_CHUNK_DURATION_MS = 30  # VAD frame size (must be 10, 20, or 30ms)
 INITIAL_SILENCE_GRACE_PERIOD = float(os.getenv("VOICEMODE_INITIAL_SILENCE_GRACE_PERIOD", "1"))  # No initial silence grace period by default
+
+# End-of-turn detection: "silence" (default) or "smart-turn" (see voice_mode/smart_turn.py).
+# With smart-turn, VOICEMODE_SILENCE_THRESHOLD_MS still ends a turn the model keeps open.
+TURN_DETECTOR = os.getenv("VOICEMODE_TURN_DETECTOR", "silence").strip().lower()
+SMART_TURN_MODEL = os.getenv(
+    "VOICEMODE_SMART_TURN_MODEL",
+    "handy-computer/smart-turn-v3.2-gguf/smart-turn-v3.2-F32.gguf",
+)
+SMART_TURN_PAUSE_MS = int(os.getenv("VOICEMODE_SMART_TURN_PAUSE_MS", "200"))
+_smart_turn_threshold = os.getenv("VOICEMODE_SMART_TURN_THRESHOLD", "").strip()
+SMART_TURN_THRESHOLD = float(_smart_turn_threshold) if _smart_turn_threshold else None  # None: the model's default (0.5)
 
 # Default listen duration for converse tool
 DEFAULT_LISTEN_DURATION = float(os.getenv("VOICEMODE_DEFAULT_LISTEN_DURATION", "120.0"))  # Default 120s listening time

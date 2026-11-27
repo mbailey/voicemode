@@ -99,6 +99,7 @@ from voice_mode.core import (
     play_system_audio
 )
 from voice_mode.audio_player import NonBlockingAudioPlayer
+from voice_mode.smart_turn import make_gate as make_turn_gate
 from voice_mode.statistics_tracking import track_voice_interaction
 from voice_mode.utils import (
     get_event_logger,
@@ -1514,6 +1515,11 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
         speech_detected = False
         stop_recording = False
 
+        # Optional Smart Turn: None unless VOICEMODE_TURN_DETECTOR=smart-turn and
+        # the model loads. Loaded here, before the input stream opens.
+        turn_gate = make_turn_gate()
+        speech_start_index = 0
+
         # Use a queue for thread-safe communication
         import queue
         audio_queue = queue.Queue()
@@ -1665,6 +1671,7 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                                     logger.info(f"[VAD_DEBUG] STATE CHANGE: WAITING_FOR_SPEECH -> SPEECH_ACTIVE at t={recording_duration:.1f}s")
                                 speech_detected = True
                                 silence_duration_ms = 0
+                                speech_start_index = len(chunks) - 1
                             # No timeout in this state - just keep waiting
                             # The only exit is speech detection or max_duration
                         else:
@@ -1672,6 +1679,8 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                             if is_speech:
                                 # SPEECH_ACTIVE state - reset silence counter
                                 silence_duration_ms = 0
+                                if turn_gate is not None:
+                                    turn_gate.on_speech()
                             else:
                                 # SILENCE_AFTER_SPEECH state - accumulate silence
                                 silence_duration_ms += VAD_CHUNK_DURATION_MS
@@ -1688,6 +1697,11 @@ def record_audio_with_silence_detection(max_duration: float, disable_silence_det
                                     if VAD_DEBUG:
                                         logger.info(f"[VAD_DEBUG] STOP: silence_duration={silence_duration_ms}ms >= threshold={SILENCE_THRESHOLD_MS}ms")
                                         logger.info(f"[VAD_DEBUG] STOP: recording_duration={recording_duration:.1f}s >= min_duration={effective_min_duration}s")
+                                    stop_recording = True
+                                elif (turn_gate is not None
+                                      and recording_duration >= effective_min_duration
+                                      and turn_gate.turn_ended(silence_duration_ms, chunks[speech_start_index:])):
+                                    logger.info(f"✓ Smart Turn ended the turn after {recording_duration:.1f}s of recording")
                                     stop_recording = True
                                 elif VAD_DEBUG and recording_duration < effective_min_duration:
                                     if int(recording_duration * 1000) % 500 == 0:  # Log every 500ms

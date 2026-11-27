@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Optional Smart Turn end-of-turn detection.** Set `VOICEMODE_TURN_DETECTOR=smart-turn`
+  and install `voice-mode[smart-turn]`. At each short pause, Pipecat's Smart Turn v3.2
+  decides from your voice whether you have finished. Recording stops at once when you are
+  done and continues when you only paused, so you can set a long
+  `VOICEMODE_SILENCE_THRESHOLD_MS` without slow replies. The model runs on the CPU in
+  about 30 ms through transcribe.cpp. The default stays the silence threshold.
 - Fedora Atomic (Silverblue, Kinoite, Bazzite, Bluefin) is supported. These systems are
   detected by `/run/ostree-booted`, where `dnf install` cannot work. Dependencies install
   through Homebrew (no root, no reboot), with Fedora package names translated to Homebrew
