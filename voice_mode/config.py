@@ -169,6 +169,14 @@ def load_voicemode_env():
 # Example: VOICEMODE_STT_PROMPT=tmux, Tali, kubectl, VoiceMode
 # VOICEMODE_STT_PROMPT=
 
+# Use the translations endpoint (/v1/audio/translations) instead of
+# transcriptions for STT - speech in any language comes back as English text.
+# The endpoint takes no language parameter (source language is auto-detected,
+# output is always English), so VOICEMODE_WHISPER_LANGUAGE is not sent while
+# this is on. Applies to every STT endpoint in the chain; an endpoint that
+# does not serve translations fails like any other STT error and fails over.
+# VOICEMODE_STT_TRANSLATE=false
+
 # STT transient-retry for LOCAL endpoints (VM-926) - local whisper.cpp times out
 # transiently and recovers on retry. Retry the same endpoint on transient failure
 # (timeout / connection reset / 5xx) with exponential backoff before giving up.
@@ -839,6 +847,15 @@ TTS_MODEL_DEFAULT = "tts-1"
 # STT prompt for vocabulary biasing (helps with specialized terminology)
 # See: https://platform.openai.com/docs/guides/speech-to-text#prompting
 STT_PROMPT = os.getenv("VOICEMODE_STT_PROMPT", "")
+
+# Use the OpenAI-compatible translations endpoint (/v1/audio/translations)
+# instead of transcriptions for STT. Translations always answers in English,
+# whatever language was spoken, so a non-English reply comes back ready for
+# the assistant to answer. Off by default. The endpoint takes no `language`
+# parameter (the source language is auto-detected), so
+# VOICEMODE_WHISPER_LANGUAGE is not sent while this is on. See
+# simple_failover.simple_stt_failover.
+STT_TRANSLATE = env_bool("VOICEMODE_STT_TRANSLATE", False)
 
 # STT transient-retry configuration (VM-926). Local whisper.cpp DOES time out
 # transiently and recovers on retry, so a LOCAL STT endpoint gets a small,

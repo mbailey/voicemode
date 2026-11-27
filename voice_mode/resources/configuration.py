@@ -282,6 +282,8 @@ async def environment_variables() -> str:
         ("VOICEMODE_TTS_TRAILING_SILENCE", "Trailing silence (s) appended to opus TTS output to prevent tail clipping"),
         # STT Prompt for vocabulary biasing
         ("VOICEMODE_STT_PROMPT", "Vocabulary hints for Whisper (names, technical terms)"),
+        # STT translations endpoint
+        ("VOICEMODE_STT_TRANSLATE", "Use /v1/audio/translations - speech in any language returns English (true/false)"),
         # STT Models
         ("VOICEMODE_STT_MODEL", "Default STT model (e.g. whisper-1)"),
         ("VOICEMODE_STT_MODELS", "Comma-separated list of STT models for failover"),

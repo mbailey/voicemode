@@ -75,6 +75,7 @@ are unaffected — they always use their profile's pinned model.
 | `VOICEMODE_STT_MODEL` | STT model sent to every non-OpenAI endpoint. When unset, a per-provider default applies (see below) | `whisper-1` (mlx-audio: `mlx-community/whisper-large-v3-turbo-asr-4bit`) | `whisper-1` |
 | `VOICEMODE_STT_MODELS` | Comma-separated STT models, one per `VOICEMODE_STT_BASE_URLS` entry (positional) | None | `whisper-1,mlx-community/whisper-large-v3-turbo-asr-4bit` |
 | `VOICEMODE_STT_PROMPT` | Vocabulary biasing for Whisper (names, terms) | None | `tmux, Tali, kubectl` |
+| `VOICEMODE_STT_TRANSLATE` | Call `/v1/audio/translations` instead of `/v1/audio/transcriptions` — speech in any language comes back in English | `false` | `true` |
 | `VOICEMODE_STT_TIMEOUT` | STT request timeout in seconds, all endpoints | `60` | `30` |
 | `VOICEMODE_STT_TIMEOUT_LOCAL` | STT request timeout for local endpoints only; size it to your measured worst-case transcription (scales with audio length, CPU vs GPU) | `VOICEMODE_STT_TIMEOUT` | `15` |
 
@@ -89,6 +90,15 @@ HTTP 500 "Processor not found" on a stock Hugging Face cache. Every other
 endpoint gets `whisper-1`. With `VOICEMODE_WHISPER_LANGUAGE=auto`, mlx-audio is
 sent no `language` at all, so it detects the language; whisper.cpp still gets
 `auto`.
+
+Set `VOICEMODE_STT_TRANSLATE=true` to call each endpoint's
+`/v1/audio/translations` instead of `/v1/audio/transcriptions`: speech in any
+language comes back in English (Whisper's translate-to-English task), which is
+useful when you speak to the assistant in a non-English language. The
+translations API has no `language` parameter — the source language is
+auto-detected — so `VOICEMODE_WHISPER_LANGUAGE` is not sent while it is on. An
+endpoint that does not serve the translations path fails like any other STT
+error and the chain fails over to the next one.
 
 For a worked example that puts Parakeet on mlx-audio first, with whisper.cpp
 and OpenAI as fallbacks, see
